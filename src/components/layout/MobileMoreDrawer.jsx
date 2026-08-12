@@ -42,8 +42,8 @@ export default function MobileMoreDrawer({ open, onClose }) {
               onClick={onClose}
               className={({ isActive }) =>
                 `flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-center text-[11px] font-semibold ${
-                  isActive
-                    ? 'border-blue-200 bg-blue-50 text-blue-800'
+                 isActive
+                    ? 'border-moss-200 bg-moss-50 text-moss-800'
                     : 'border-ink-100 text-ink-500 hover:bg-ink-50'
                 }`
               }

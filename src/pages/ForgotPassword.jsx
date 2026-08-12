@@ -19,18 +19,24 @@ export default function ForgotPassword() {
         handleCodeInApp: true,
       });
       setSent(true);
-    } catch (err) {
+} catch (err) {
+      // FIX: previously every error EXCEPT invalid-email/too-many-requests
+      // silently showed "sent" — including real failures (unauthorized
+      // continue URL, network errors, misconfigured project), which is
+      // why resets appeared to silently vanish. Only auth/user-not-found
+      // is safe to mask as success; everything else now shows a real
+      // message, and every error is logged so DevTools shows the cause.
+      console.error('[FlowBiz] sendPasswordResetEmail failed:', err.code || err.name, err.message);
       const message =
-        err.code === 'auth/invalid-email'      ? 'Please enter a valid email address.' :
-        err.code === 'auth/too-many-requests'  ? 'Too many requests. Please wait a bit before trying again.' :
-        null;
-      if (message) {
-        setError(message);
-      } else {
-        // auth/user-not-found and anything else: show the same success
-        // state as a real send, so this page can't be used to probe
-        // which emails have accounts.
+        err.code === 'auth/invalid-email'             ? 'Please enter a valid email address.' :
+        err.code === 'auth/too-many-requests'         ? 'Too many requests. Please wait a bit before trying again.' :
+        err.code === 'auth/unauthorized-continue-uri' ? 'This site is not yet authorized to send reset links. Please contact support.' :
+        err.code === 'auth/user-not-found'            ? null :
+        "Couldn't send the reset email. Please try again in a moment.";
+      if (message === null) {
         setSent(true);
+      } else {
+        setError(message);
       }
     } finally {
       setSubmitting(false);

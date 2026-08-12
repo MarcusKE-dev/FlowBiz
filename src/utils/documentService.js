@@ -1,8 +1,6 @@
 import { jsPDF } from 'jspdf';
 import { formatKES } from './currency';
 import { formatDateTime } from './dateRanges';
-import { httpsCallable } from 'firebase/functions';
-import { functions } from '../firebase';
 
 export async function loadImageAsDataUrl(url) {
     if (!url) return null;
@@ -147,15 +145,33 @@ export async function printInvoice(creditSale, settings) {
     window.open(doc.output('bloburl'), '_blank');
 }
 
-export async function sendWhatsAppDocument(sale, settings, phone) {
-    if (!navigator.onLine) {
-        throw new Error("You're offline. The document was saved. Connect to the internet to send it.");
-    }
-    const sendWa = httpsCallable(functions, 'sendWhatsAppDocument');
-    await sendWa({
-        documentType: sale.isCredit ? 'invoice' : 'receipt',
-        saleId: sale.id,
-        phone,
-        businessId: settings.businessId
-    });
+function normalizeKenyanPhone(rawPhone) {
+    let digits = String(rawPhone || '').replace(/[^\d]/g, '');
+    if (!digits) return '';
+    if (digits.startsWith('0')) digits = '254' + digits.slice(1);
+    else if (!digits.startsWith('254') && digits.length === 9) digits = '254' + digits;
+    return digits;
+}
+
+function buildWhatsAppMessage(sale, settings) {
+    const shopName = settings.shopName || 'FlowBiz Store';
+    const label = sale.isCredit ? 'Invoice' : 'Receipt';
+    const amountDue = sale.isCredit ? (sale.remainingBalance ?? sale.totalAmount) : sale.totalAmount;
+    const lines = [
+        `*${shopName}*`,
+        `${label} — ${sale.quantity} × ${sale.productName}`,
+        `Total: ${formatKES(sale.totalAmount)}`,
+    ];
+    if (sale.isCredit) lines.push(`Amount due: ${formatKES(amountDue)}`);
+    if (settings.phone) lines.push(`Contact: ${settings.phone}`);
+    lines.push('', sale.isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!');
+    return lines.join('\n');
+}
+
+export function sendWhatsAppDocument(sale, settings, phone) {
+    const digits = normalizeKenyanPhone(phone);
+    if (!digits) throw new Error('Enter a valid phone number.');
+    const message = buildWhatsAppMessage(sale, settings);
+    const url = `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
 }

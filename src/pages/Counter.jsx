@@ -277,7 +277,7 @@ export default function Counter() {
         onClose={() => setCompletedSale(null)}
       />
 
-      <ProductFormModal
+<ProductFormModal
         open={prodModal}
         onClose={()=>{setProdModal(false);setEditProd(null);setPrefillBarcode(null);}}
         onSave={handleProductSave}
@@ -286,6 +286,7 @@ export default function Counter() {
         prefillBarcode={prefillBarcode}
         onAddSupplier={() => setSupplierModal(true)}
         newSupplierId={newSupplierId}
+        productCount={products.length}
       />
       <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
       <ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" (×${pendingVoid?.quantity}) will be restored.`} confirmLabel="Void sale" danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />

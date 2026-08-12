@@ -154,7 +154,7 @@ export default function Purchases() {
       <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
       <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
 
-      <ProductFormModal
+<ProductFormModal
         open={productModal}
         onClose={()=>{setProductModal(false);setPrefillBarcode(null);}}
         onSave={async (data) => {
@@ -170,6 +170,7 @@ export default function Purchases() {
         prefillBarcode={prefillBarcode}
         onAddSupplier={() => setSupplierModal(true)}
         newSupplierId={newSupplierId}
+        productCount={products.length}
         simplifiedForPurchase
       />
       <SupplierFormModal open={supplierModal} onClose={()=>setSupplierModal(false)} onSave={handleSupplierSave} />

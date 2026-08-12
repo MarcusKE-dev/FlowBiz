@@ -55,15 +55,15 @@
      profit) elsewhere in the app; blue is now the one color that means
      "primary interactive action", matching every .btn-primary / focused
      .input across the whole app in this one place. */
-  .btn-primary   { @apply btn bg-blue-600  text-white   hover:bg-blue-700  active:bg-blue-800; }
+.btn-primary   { @apply btn bg-moss-600  text-white   hover:bg-moss-700  active:bg-moss-800; }
   .btn-secondary { @apply btn bg-ink-100   text-ink-800 hover:bg-ink-200   active:bg-ink-300; }
   .btn-danger    { @apply btn bg-rust-600  text-white   hover:bg-rust-700  active:bg-rust-800; }
   .btn-outline   { @apply btn border border-ink-200 text-ink-700 hover:bg-ink-50 active:bg-ink-100; }
 
   .input {
     @apply w-full rounded-lg border border-ink-200 bg-white px-3 py-2.5 text-sm text-ink-900
-           placeholder:text-ink-300 focus:outline-none focus:ring-2 focus:ring-blue-500
-           focus:border-blue-500 min-h-[44px];
+           placeholder:text-ink-300 focus:outline-none focus:ring-2 focus:ring-moss-500
+           focus:border-moss-500 min-h-[44px];
   }
   .label  { @apply block text-xs font-semibold uppercase tracking-wide text-ink-500 mb-1.5; }
   .card   { @apply bg-white rounded-xl2 border border-ink-100 shadow-sm; }

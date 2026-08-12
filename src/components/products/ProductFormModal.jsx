@@ -10,11 +10,14 @@ const empty = {
   lowStockThreshold: '5', supplierId: '', barcode: '', description: '',
 };
 
+// FIX: Free plan product limit.
+const FREE_PLAN_PRODUCT_LIMIT = 100;
+
 export default function ProductFormModal({
    open, onClose, onSave, suppliers, initialProduct, prefillBarcode, onAddSupplier, newSupplierId,
-simplifiedForPurchase = false,
+simplifiedForPurchase = false, productCount = 0,
  }) {
-  const { businessId } = useAuth();
+  const { businessId, isPro } = useAuth();
   const [form, setForm] = useState(empty);
   const [categories, setCategories] = useState([]);
   const [showAddCategory, setShowAddCategory] = useState(false);
@@ -93,8 +96,14 @@ simplifiedForPurchase = false,
     if (!form.category) return toast.error('Please select or add a category.');
     if (!simplifiedForPurchase && Number(form.costPrice) < 0) return toast.error('Cost price cannot be negative.');
     if (Number(form.sellingPrice) <= 0) return toast.error('Selling price must be greater than zero.');
-    if (!initialProduct && !simplifiedForPurchase && Number(form.stock) < 0) return toast.error('Stock cannot be negative.');
+   if (!initialProduct && !simplifiedForPurchase && Number(form.stock) < 0) return toast.error('Stock cannot be negative.');
 
+    // FIX: Free plan capped at FREE_PLAN_PRODUCT_LIMIT active products —
+    // only blocks NEW products, never editing an existing one.
+    if (!initialProduct && !isPro && productCount >= FREE_PLAN_PRODUCT_LIMIT) {
+      toast.error(`Free plan is limited to ${FREE_PLAN_PRODUCT_LIMIT} products. Upgrade to FlowBiz Pro to add more.`);
+      return;
+    }
 
     setBusy(true);
     try {

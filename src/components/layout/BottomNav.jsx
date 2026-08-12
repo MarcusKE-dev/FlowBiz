@@ -35,8 +35,7 @@ export default function BottomNav() {
             end={item.to === '/'}
             className={({ isActive }) =>
               `flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold ${
-                isActive ? 'text-blue-700' : 'text-ink-400'
-              }`
+              isActive ? 'text-moss-700' : 'text-ink-400'              }`
             }
           >
             <Icon name={item.icon} />

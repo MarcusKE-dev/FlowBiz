@@ -18,8 +18,7 @@ export default function Sidebar() {
       </div>
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
         {items.map(item => (
-          <NavLink key={item.to} to={item.to} end={item.to==='/'} className={({isActive}) => `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${isActive ? 'bg-blue-50 text-blue-800' : 'text-ink-500 hover:bg-ink-50 hover:text-ink-800'}`}>
-            <Icon name={item.icon} />{item.label}
+<NavLink key={item.to} to={item.to} end={item.to==='/'} className={({isActive}) => `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${isActive ? 'bg-moss-50 text-moss-800' : 'text-ink-500 hover:bg-ink-50 hover:text-ink-800'}`}>            <Icon name={item.icon} />{item.label}
           </NavLink>
         ))}
       </nav>

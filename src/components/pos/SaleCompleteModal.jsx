@@ -2,7 +2,6 @@ import { useState } from 'react';
 import Modal from '../common/Modal';
 import { generateReceiptPDF, printReceipt, generateInvoicePDF, printInvoice, sendWhatsAppDocument } from '../../utils/documentService';
 import { useSettings } from '../../hooks/useSettings';
-import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatKES } from '../../utils/currency';
 import { Printer, Download, MessageCircle } from 'lucide-react';
@@ -11,9 +10,7 @@ import toast from 'react-hot-toast';
 export default function SaleCompleteModal({ open, sale, onClose }) {
   const { settings } = useSettings();
   const { isPro } = useAuth();
-  const online = useOnlineStatus();
   const [phone, setPhone] = useState(sale?.customerPhone || '');
-  const [sending, setSending] = useState(false);
 
   if (!sale) return null;
 
@@ -31,24 +28,16 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
     else generateReceiptPDF(sale, settings);
   };
 
-  const handleWhatsApp = async () => {
+const handleWhatsApp = () => {
     if (!isPro) { toast.error("WhatsApp integration requires FlowBiz Pro."); return; }
-    if (!online) {
-      toast.error(`You're offline. The ${docLabel.toLowerCase()} was saved. Connect to the internet to send it.`);
-      return;
-    }
     if (!phone.trim()) {
       toast.error("Please enter a valid customer phone number.");
       return;
     }
-    setSending(true);
     try {
-      await sendWhatsAppDocument(sale, settings, phone.trim());
-      toast.success(`${docLabel} sent successfully via WhatsApp.`);
+      sendWhatsAppDocument(sale, settings, phone.trim());
     } catch (e) {
-      toast.error(`Couldn't send ${docLabel.toLowerCase()}. ` + e.message);
-    } finally {
-      setSending(false);
+      toast.error(e.message);
     }
   };
 
@@ -89,8 +78,8 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
               onChange={e => setPhone(e.target.value)} 
               disabled={sending}
             />
-            <button className="btn-primary flex items-center justify-center gap-2" onClick={handleWhatsApp} disabled={sending}>
-              <MessageCircle className="h-4 w-4" /> Send
+              <button className="btn-primary flex items-center justify-center gap-2" onClick={handleWhatsApp}>
+              <MessageCircle className="h-4 w-4" /> Send via WhatsApp
             </button>
           </div>
         </div>
