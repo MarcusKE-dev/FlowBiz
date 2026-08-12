@@ -1,8 +1,7 @@
 name = "flowbiz-api"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
-pages_build_output_dir = "dist"
-account_id = "be182201e98a3eb163c1490fa28783e6"
+
 # Secrets — set these with `wrangler secret put <NAME>`, NEVER written here:
 #   FIREBASE_SERVICE_ACCOUNT_JSON   (the full service-account JSON, as one string)
 #   PAYSTACK_SECRET_KEY
