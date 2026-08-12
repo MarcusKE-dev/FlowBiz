@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Modal from '../common/Modal';
 import { generateReceiptPDF, printReceipt, generateInvoicePDF, printInvoice, sendWhatsAppDocument } from '../../utils/documentService';
 import { useSettings } from '../../hooks/useSettings';
@@ -11,6 +11,15 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
   const { settings } = useSettings();
   const { isPro } = useAuth();
   const [phone, setPhone] = useState(sale?.customerPhone || '');
+
+  // Keep phone input synced when a new sale is opened
+  useEffect(() => {
+    if (sale?.customerPhone) {
+      setPhone(sale.customerPhone);
+    } else {
+      setPhone('');
+    }
+  }, [sale]);
 
   if (!sale) return null;
 
@@ -28,7 +37,7 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
     else generateReceiptPDF(sale, settings);
   };
 
-const handleWhatsApp = () => {
+  const handleWhatsApp = () => {
     if (!isPro) { toast.error("WhatsApp integration requires FlowBiz Pro."); return; }
     if (!phone.trim()) {
       toast.error("Please enter a valid customer phone number.");
@@ -44,7 +53,8 @@ const handleWhatsApp = () => {
   return (
     <Modal open={open} onClose={onClose} title={sale.isCredit ? 'Credit Sale Recorded' : 'Sale Complete'}>
       <div className="space-y-4">
-        <div className={`flex flex-col items-center justify-center py-4 rounded-xl2 border ${sale.isCredit ? 'bg-rust-50 border-rust-200' : 'bg-moss-50 border-moss-200'}`}>
+        {/* Fixed rounded-xl2 to rounded-2xl */}
+        <div className={`flex flex-col items-center justify-center py-4 rounded-2xl border ${sale.isCredit ? 'bg-rust-50 border-rust-200' : 'bg-moss-50 border-moss-200'}`}>
           <div className={`h-10 w-10 rounded-full flex items-center justify-center mb-2 ${sale.isCredit ? 'bg-rust-100 text-rust-700' : 'bg-moss-100 text-moss-700'}`}>
             {sale.isCredit ? '⏳' : '✓'}
           </div>
@@ -76,9 +86,8 @@ const handleWhatsApp = () => {
               placeholder="Customer Phone" 
               value={phone} 
               onChange={e => setPhone(e.target.value)} 
-              disabled={sending}
             />
-              <button className="btn-primary flex items-center justify-center gap-2" onClick={handleWhatsApp}>
+            <button className="btn-primary flex items-center justify-center gap-2" onClick={handleWhatsApp}>
               <MessageCircle className="h-4 w-4" /> Send via WhatsApp
             </button>
           </div>
