@@ -9,6 +9,6 @@ compatibility_date = "2025-01-01"
 
 [vars]
 FIREBASE_PROJECT_ID = "swiftstock-bc6a3"
-ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
+ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://flowbiz.pages.dev"
 WHATSAPP_PHONE_NUMBER_ID = "your-whatsapp-phone-number-id"
-PAYSTACK_CALLBACK_URL = "https://your-flowbiz-domain.example.com/pro"
+PAYSTACK_CALLBACK_URL = "https://flowbiz.pages.dev/pro"
