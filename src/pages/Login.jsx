@@ -53,7 +53,13 @@ finally {
         <form onSubmit={handle} className="card space-y-4 p-6">
           {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
           <div><label className="label">Email</label><input type="email" required className="input" placeholder="owner@yourbusiness.co.ke" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" /></div>
-          <div><label className="label">Password</label><input type="password" required className="input" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" /></div>
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="label !mb-0">Password</label>
+              <Link to="/forgot-password" className="text-xs font-semibold text-moss-400 hover:underline mb-1.5">Forgot password?</Link>
+            </div>
+            <input type="password" required className="input" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" />
+          </div>
           <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting?'Signing in…':'Sign in'}</button>
         </form>
         <p className="text-center text-sm text-ink-400">New to FlowBiz? <Link to="/setup" className="font-semibold text-moss-400 hover:underline">Create a business</Link></p>

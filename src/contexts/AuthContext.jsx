@@ -51,10 +51,6 @@ export function AuthProvider({ children }) {
   const [authError, setAuthError] = useState(null);
   const [accountRemoved, setAccountRemoved] = useState(false);
   const [sessionRevoked, setSessionRevoked] = useState(false);
-  // FIX: tracked as its own state — Firebase Auth's user.emailVerified
-  // only updates in memory after calling reload(); it does not fire a
-  // fresh onAuthStateChanged event, so we can't just read it off
-  // firebaseUser on every render.
   const [emailVerified, setEmailVerified] = useState(false);
 
   const profileUnsubRef = useRef(null);
@@ -101,7 +97,7 @@ export function AuthProvider({ children }) {
     });
   }, []);
 
-  const loadProfile = useCallback((user) => {
+  const loadProfile = useCallback((user, retryCount = 0) => {
     stopListeners();
     setAuthError(null);
     setAccountRemoved(false);
@@ -115,8 +111,6 @@ export function AuthProvider({ children }) {
       return;
     }
 
-    // Seed emailVerified from the Firebase user immediately, so
-    // ProtectedRoute doesn't briefly see `false` before any refresh runs.
     setEmailVerified(!!user.emailVerified);
     setLoading(true);
     const userRef = doc(db, 'users', user.uid);
@@ -156,6 +150,25 @@ export function AuthProvider({ children }) {
         }
       },
       (err) => {
+        // FIX: right after createUserWithEmailAndPassword (or any fresh
+        // sign-in), Firestore's listener can attach a beat before the
+        // fresh ID token is fully live on this connection, producing a
+        // ONE-TIME permission-denied even though the rules and the
+        // document are both completely fine. Firestore does not
+        // auto-retry a listener after an explicit permission-denied (it
+        // does retry plain network errors), so without this the app was
+        // permanently stuck on "Profile unavailable" right after a
+        // successful signup — even though the account and business were
+        // created correctly. Auto-retry a few times with backoff before
+        // ever surfacing this as a real error.
+        if (err.code === 'permission-denied' && retryCount < 3) {
+          const delay = 700 * (retryCount + 1);
+          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying in ${delay}ms (attempt ${retryCount + 1}/3)`);
+          setTimeout(() => {
+            if (auth.currentUser?.uid === user.uid) loadProfile(user, retryCount + 1);
+          }, delay);
+          return;
+        }
         console.error(`[FlowBiz] onSnapshot(users/${user.uid}) failed:`, err.code || err.name, err.message);
         setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
         setProfile(null);
@@ -176,16 +189,12 @@ export function AuthProvider({ children }) {
   const logout = () => { stopListeners(); return fbSignOut(auth); };
   const resendVerificationEmail = async () => {
     if (!auth.currentUser) throw new Error('Not signed in.');
-    await sendEmailVerification(auth.currentUser);
+    await sendEmailVerification(auth.currentUser, {
+      url: `${window.location.origin}/auth/action`,
+      handleCodeInApp: true,
+    });
   };
 
-  // THE MISSING FUNCTION — ProtectedRoute.jsx calls this on focus, on tab
-  // visibility change, on a 5s poll, and when the user clicks "I've
-  // verified — check now". It never existed here before, which is why
-  // you got "refreshEmailVerification is not a function". reload()
-  // re-fetches this user's latest state from Firebase Auth (including
-  // emailVerified) into auth.currentUser; we copy that into React state
-  // and return it so callers know immediately whether it's verified.
   const refreshEmailVerification = useCallback(async () => {
     if (!auth.currentUser) return false;
     try {

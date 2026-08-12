@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 const Setup      = lazy(() => import('../pages/Setup'));
 const Login      = lazy(() => import('../pages/Login'));
+const ForgotPassword = lazy(() => import('../pages/ForgotPassword'));
 const JoinStaff  = lazy(() => import('../pages/JoinStaff'));
 const AuthAction = lazy(() => import('../pages/AuthAction'));
 const Dashboard  = lazy(() => import('../pages/Dashboard'));
@@ -52,10 +53,11 @@ export default function AppRouter() {
       <Routes>
         <Route path="/setup" element={<PublicOnly><Setup /></PublicOnly>} />
         <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
+        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
         <Route path="/join/:inviteId" element={<JoinStaff />} />
-        {/* Not wrapped in ProtectedRoute or PublicOnly — this must work
-            whether the person is currently signed in (verifying their own
-            email) or not signed in at all (opened on a different device). */}
+        {/* Not wrapped in ProtectedRoute or PublicOnly — must work
+            whether the person is currently signed in or not, and covers
+            both email verification and password reset links. */}
         <Route path="/auth/action" element={<AuthAction />} />
 
         <Route path="/"             element={<Page adminOnly><Dashboard /></Page>} />
