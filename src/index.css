@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Prevent double-tap zoom on interactive elements — smooth POS experience */
+  * {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    box-sizing: border-box;
+  }
+
+  html {
+    @apply font-sans text-ink-900;
+    /* Prevent iOS bounce / overscroll that breaks fixed bottom nav */
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-sand m-0 p-0;
+    overscroll-behavior: none;
+    /* Safe area insets for notched phones */
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left:   env(safe-area-inset-left);
+    padding-right:  env(safe-area-inset-right);
+  }
+
+  h1, h2, h3, h4 { @apply font-display; }
+
+  /* Smooth scrolling for all scrollable areas */
+  * { scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
+
+  /* Remove iOS input shadows */
+  input, select, textarea, button {
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  /* Minimum touch target for all interactive elements */
+  button, a, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold
+           transition-colors disabled:opacity-40 disabled:cursor-not-allowed
+           min-h-[44px] active:scale-95;
+  }
+  /* REDESIGN: primary action color moved from green (moss) to blue — green
+     stays reserved for success/positive-status meaning (paid, active,
+     profit) elsewhere in the app; blue is now the one color that means
+     "primary interactive action", matching every .btn-primary / focused
+     .input across the whole app in this one place. */
+  .btn-primary   { @apply btn bg-blue-600  text-white   hover:bg-blue-700  active:bg-blue-800; }
+  .btn-secondary { @apply btn bg-ink-100   text-ink-800 hover:bg-ink-200   active:bg-ink-300; }
+  .btn-danger    { @apply btn bg-rust-600  text-white   hover:bg-rust-700  active:bg-rust-800; }
+  .btn-outline   { @apply btn border border-ink-200 text-ink-700 hover:bg-ink-50 active:bg-ink-100; }
+
+  .input {
+    @apply w-full rounded-lg border border-ink-200 bg-white px-3 py-2.5 text-sm text-ink-900
+           placeholder:text-ink-300 focus:outline-none focus:ring-2 focus:ring-blue-500
+           focus:border-blue-500 min-h-[44px];
+  }
+  .label  { @apply block text-xs font-semibold uppercase tracking-wide text-ink-500 mb-1.5; }
+  .card   { @apply bg-white rounded-xl2 border border-ink-100 shadow-sm; }
+  .badge  { @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+
+  /* Bottom nav safe area support on iOS notched devices */
+  .bottom-nav-safe {
+    padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
+  }
+}

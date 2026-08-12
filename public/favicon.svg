@@ -1,0 +1,19 @@
+<svg width="512" height="512" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0" y="0" width="100" height="100" rx="22" fill="#1E4B3A"/>
+
+  <!-- Monitor bezel -->
+  <rect x="14" y="18" width="72" height="50" rx="8" fill="#F6F1E7"/>
+  <!-- Screen (dark, so the glyphs read like a lit dashboard) -->
+  <rect x="19" y="23" width="62" height="34" rx="5" fill="#1E4B3A"/>
+  <!-- Stand -->
+  <rect x="44" y="68" width="12" height="8" fill="#F6F1E7"/>
+  <rect x="32" y="76" width="36" height="7" rx="3.5" fill="#F6F1E7"/>
+
+  <!-- Dollar sign -->
+  <text x="29" y="49" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="700" fill="#F6F1E7" text-anchor="middle">$</text>
+
+  <!-- Ascending bars -->
+  <rect x="52" y="46" width="7" height="8" rx="2.5" fill="#F6F1E7"/>
+  <rect x="62" y="39" width="7" height="15" rx="2.5" fill="#F6F1E7"/>
+  <rect x="72" y="31" width="7" height="23" rx="2.5" fill="#F6F1E7"/>
+</svg>
