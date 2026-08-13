@@ -11,6 +11,8 @@ import LoadingSpinner from '../components/common/LoadingSpinner';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import ScannerModal from '../components/scanner/ScannerModal';
 import ScanFab from '../components/scanner/ScanFab';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
 export default function StockTake() {
   const { profile, businessId } = useAuth();
@@ -65,9 +67,10 @@ export default function StockTake() {
         });
       }
 
-      await batch.commit();
+      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+      if (error) throw error;
 
-      toast.success(`Stock take saved — ${changed.length} product(s) adjusted`);
+      toast.success(queuedOffline ? `Stock take queued offline.` : `Stock take saved — ${changed.length} product(s) adjusted`);
       setCounts({});
       setReasons({});
     } catch (err) {
@@ -162,9 +165,10 @@ export default function StockTake() {
         title="Save stock take?"
         message={`${changed.length} product(s) will be updated to match your physical count.`}
         confirmLabel={saving ? 'Saving…' : 'Save'}
+        confirmDisabled={saving}
         onConfirm={handleSave}
         onCancel={() => setConfirm(false)}
       />
     </div>
   );
-}s
+}
