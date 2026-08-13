@@ -1,9 +1,6 @@
 import { useEffect, useState } from 'react';
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { db, storage } from '../firebase';
+import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { resetBusinessData } from '../utils/businessReset';
 import { restoreProduct, permanentlyDeleteProduct, cleanupOrphanedBarcodeIndexes } from '../utils/products';
@@ -43,6 +40,7 @@ export default function Settings() {
 
   const settingsRef = businessId ? doc(db, 'businessSettings', businessId) : null;
 
+  
   function compressImage(file, maxDimension = 480, quality = 0.75) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -62,6 +60,14 @@ export default function Settings() {
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
     img.src = url;
+  });
+}
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
   });
 }
 
@@ -107,15 +113,17 @@ const handleSave = async e => {
       // upload of the (now compressed) image must not block saving the
       // rest of Business Information, which has nothing to do with it.
       if (logoFile) {
-        try {
-          const compressed = await compressImage(logoFile, 480, 0.75);
-          const fileRef = ref(storage, `businesses/${businessId}/logo_${Date.now()}`);
-          await uploadBytes(fileRef, compressed);
-          finalLogoUrl = await getDownloadURL(fileRef);
-        } catch (logoErr) {
-          toast.error(`Logo upload failed, but the rest of your settings will still be saved: ${logoErr.message}`);
-        }
-      }
+  try {
+    const compressed = await compressImage(logoFile, 480, 0.75);
+    if (compressed.size > 700 * 1024) {
+      toast.error('Logo is still too large after compression — try a simpler image.');
+    } else {
+      finalLogoUrl = await blobToDataUrl(compressed);
+    }
+  } catch (logoErr) {
+    toast.error(`Logo processing failed, but the rest of your settings will still be saved: ${logoErr.message}`);
+  }
+}
 
       await setDoc(settingsRef, { 
         shopName: shopName.trim(), 
