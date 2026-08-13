@@ -101,7 +101,7 @@ const [deleting, setDeleting] = useState(false);
     if (error) { toast.error(friendlyErrorMessage(error)); return; }
     if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
     setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+    toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Supplier added');
   };
 
   return (
