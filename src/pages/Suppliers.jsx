@@ -58,7 +58,13 @@ const [deleting, setDeleting] = useState(false);
     setModal(false); setEditing(null);
   };
 
-  const handleDel = async () => {
+const handleDel = async () => {
+    const stillExists = suppliers.some((s) => s.id === pendDel.id);
+    if (!stillExists) {
+      toast.success('Already removed.');
+      setPendDel(null);
+      return;
+    }
     const balance = owedMap[pendDel.id] || 0;
     if (balance > 0.005) {
       toast.error(`Can't remove "${pendDel.name}" — they still have an outstanding balance of ${formatKES(balance)}. Pay it off first.`);

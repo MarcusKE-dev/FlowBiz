@@ -130,29 +130,29 @@ export default function Users() {
       {loading || invitesLoading ? <LoadingSpinner /> : (
         <div className="card divide-y divide-ink-100">
           {users.map(u => (
-            <div key={u.id} className="flex items-center justify-between px-4 py-3 gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-ink-800">
-                  {u.displayName || u.email?.split('@')[0] || 'Unnamed'}
-                  {u.id === profile?.uid && <span className="text-xs font-normal text-ink-400"> (you)</span>}
-                </p>
-                <p className="text-xs text-ink-400 truncate">{u.email || 'No email'}</p>
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <span className={`badge ${u.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{u.role || '—'}</span>
-                <span className={`badge ${u.active !== false ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>{u.active !== false ? 'Active' : 'Deactivated'}</span>
-                <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => setPendToggle(u)}>
-                  {u.active !== false ? 'Deactivate' : 'Reactivate'}
-                </button>
-                {u.id === profile?.uid ? (
-                  <span className="text-xs text-ink-300 px-2 hidden sm:inline">You</span>
-                ) : (
-                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Remove account" onClick={() => setPendDelete(u)}>
-                    <Trash2 className="h-4 w-4" strokeWidth={1.75} />
-                  </button>
-                )}
-              </div>
-            </div>
+<div key={u.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+  <div className="min-w-0 flex-1">
+    <p className="font-semibold text-ink-800 truncate">
+      {u.displayName || u.email?.split('@')[0] || 'Unnamed'}
+      {u.id === profile?.uid && <span className="text-xs font-normal text-ink-400"> (you)</span>}
+    </p>
+    <p className="text-xs text-ink-400 truncate">{u.email || 'No email'}</p>
+  </div>
+  <div className="flex flex-wrap items-center gap-2">
+    <span className={`badge ${u.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{u.role || '—'}</span>
+    <span className={`badge ${u.active !== false ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>{u.active !== false ? 'Active' : 'Deactivated'}</span>
+    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => setPendToggle(u)}>
+      {u.active !== false ? 'Deactivate' : 'Reactivate'}
+    </button>
+    {u.id === profile?.uid ? (
+      <span className="text-xs text-ink-300 px-2">You</span>
+    ) : (
+      <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Remove account" onClick={() => setPendDelete(u)}>
+        <Trash2 className="h-4 w-4" strokeWidth={1.75} />
+      </button>
+    )}
+  </div>
+</div>
           ))}
         </div>
       )}

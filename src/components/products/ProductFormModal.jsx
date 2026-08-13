@@ -4,6 +4,7 @@ import Modal from '../common/Modal';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
+import { raceWithTimeout } from '../../utils/offlineWrite';
 
 const empty = {
   name: '', category: '', costPrice: '', sellingPrice: '', stock: '',
@@ -23,6 +24,7 @@ simplifiedForPurchase = false, productCount = 0,
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [savingCategory, setSavingCategory] = useState(false);
 
   // MULTI-TENANT CHANGE: categories used to live in a single global
   // settings/categories doc shared by every business in the project.
@@ -74,20 +76,20 @@ simplifiedForPurchase = false, productCount = 0,
 
   const set = (f) => (e) => setForm((p) => ({ ...p, [f]: e.target.value }));
 
-  const handleAddCategory = async () => {
+const handleAddCategory = async () => {
     const trimmed = newCategoryName.trim();
-    if (!trimmed) return;
+    if (!trimmed || savingCategory) return;
     if (categories.some(c => c.toLowerCase() === trimmed.toLowerCase())) { toast.error('Category already exists.'); return; }
     const updated = [...categories, trimmed];
-    try {
-      await setDoc(doc(db, 'businessSettings', businessId), { categories: updated }, { merge: true });
-      setForm(prev => ({ ...prev, category: trimmed }));
-      setShowAddCategory(false);
-      setNewCategoryName('');
-      toast.success('Category added');
-    } catch (err) {
-      toast.error('Failed to add category: ' + err.message);
-    }
+    setSavingCategory(true);
+    const write = setDoc(doc(db, 'businessSettings', businessId), { categories: updated }, { merge: true });
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    setSavingCategory(false);
+    if (error) { toast.error('Failed to add category: ' + error.message); return; }
+    setForm(prev => ({ ...prev, category: trimmed }));
+    setShowAddCategory(false);
+    setNewCategoryName('');
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Category added');
   };
 
   const handle = async (e) => {
@@ -149,18 +151,18 @@ simplifiedForPurchase = false, productCount = 0,
               <option value="" disabled>— Select Category —</option>
               {categories.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
-            {showAddCategory ? (
-              <div className="mt-2 space-y-2 rounded-lg bg-ink-50 p-2.5">
-                <label className="text-[11px] font-semibold text-ink-700 uppercase tracking-wide">New Category</label>
-                <input className="input !py-1 !min-h-0 text-xs" value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="e.g. Fruits" disabled={busy} autoFocus />
-                <div className="flex gap-1.5 justify-end">
-                  <button type="button" className="btn-secondary !py-1 !px-2.5 !min-h-0 text-xs" onClick={() => { setShowAddCategory(false); setNewCategoryName(''); }} disabled={busy}>Cancel</button>
-                  <button type="button" className="btn-primary !py-1 !px-2.5 !min-h-0 text-xs" onClick={handleAddCategory} disabled={busy}>Save</button>
+              {showAddCategory ? (
+                <div className="mt-2 space-y-2 rounded-lg bg-ink-50 p-2.5">
+                  <label className="text-[11px] font-semibold text-ink-700 uppercase tracking-wide">New Category</label>
+                  <input className="input !py-1 !min-h-0 text-xs" value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="e.g. Fruits" disabled={busy || savingCategory} autoFocus />
+                  <div className="flex gap-1.5 justify-end">
+                    <button type="button" className="btn-secondary !py-1 !px-2.5 !min-h-0 text-xs" onClick={() => { setShowAddCategory(false); setNewCategoryName(''); }} disabled={busy || savingCategory}>Cancel</button>
+                    <button type="button" className="btn-primary !py-1 !px-2.5 !min-h-0 text-xs" onClick={handleAddCategory} disabled={busy || savingCategory}>{savingCategory ? 'Saving…' : 'Save'}</button>
+                  </div>
                 </div>
-              </div>
-            ) : (
-             <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={() => setShowAddCategory(true)} disabled={busy}>+ Add Category</button>
-            )}
+              ) : (
+                <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={() => setShowAddCategory(true)} disabled={busy}>+ Add Category</button>
+              )}
           </div>
           {!simplifiedForPurchase && (
            <div>

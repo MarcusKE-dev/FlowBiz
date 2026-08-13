@@ -1,5 +1,6 @@
 import { collection, doc, writeBatch, updateDoc, deleteField, serverTimestamp, getDoc, getDocs, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
+import { raceWithTimeout } from './offlineWrite';
 
 export async function permanentlyDeleteProduct(productId, barcode, businessId) {
   if (!businessId) throw new Error('permanentlyDeleteProduct() called with no businessId');
@@ -43,10 +44,8 @@ export async function createProduct(data, businessId) {
   if (!businessId) throw new Error('createProduct() called with no businessId');
   const barcode = data.barcode ? String(data.barcode).trim() : null;
   const newProductRef = doc(collection(db, 'products'));
-
-  // Offline-safe code generation
   const internalCode = `FB-${Math.floor(Date.now() / 1000).toString().slice(-6)}`;
-  
+
   const batch = writeBatch(db);
   batch.set(newProductRef, {
     ...data,
@@ -61,9 +60,11 @@ export async function createProduct(data, businessId) {
   if (barcode) {
     batch.set(barcodeIndexRef(businessId, barcode), { businessId, barcode, productId: newProductRef.id });
   }
-  await batch.commit();
 
-  return { id: newProductRef.id };
+  const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+  if (error) throw error;
+
+  return { id: newProductRef.id, queuedOffline };
 }
 
 export async function updateProduct(productId, data, previousBarcode, businessId) {
@@ -71,19 +72,22 @@ export async function updateProduct(productId, data, previousBarcode, businessId
   const nextBarcode = data.barcode ? String(data.barcode).trim() : null;
   const prevBarcode = previousBarcode ? String(previousBarcode).trim() : null;
   const productRef = doc(db, 'products', productId);
-
   const { stock, businessId: _ignored, ...updatePayload } = data;
 
   const batch = writeBatch(db);
   batch.update(productRef, { ...updatePayload, barcode: nextBarcode || null, updatedAt: serverTimestamp() });
-  
+
   if (prevBarcode && prevBarcode !== nextBarcode) {
     batch.delete(barcodeIndexRef(businessId, prevBarcode));
   }
   if (nextBarcode && nextBarcode !== prevBarcode) {
     batch.set(barcodeIndexRef(businessId, nextBarcode), { businessId, barcode: nextBarcode, productId });
   }
-  await batch.commit();
+
+  const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+  if (error) throw error;
+
+  return { queuedOffline };
 }
 
 export async function softDeleteProduct(productId) {

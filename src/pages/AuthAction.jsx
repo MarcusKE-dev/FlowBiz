@@ -1,17 +1,42 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { applyActionCode, verifyPasswordResetCode, confirmPasswordReset, reload } from 'firebase/auth';
+import { applyActionCode, verifyPasswordResetCode, confirmPasswordReset, reload, checkActionCode } from 'firebase/auth';
 import { auth } from '../firebase';
 
 export default function AuthAction() {
   const [searchParams] = useSearchParams();
-  const mode = searchParams.get('mode');
+  const urlMode = searchParams.get('mode');
   const oobCode = searchParams.get('oobCode');
 
-  if (mode === 'resetPassword') {
+  const [resolvedMode, setResolvedMode] = useState(urlMode || null);
+  const [checkingMode, setCheckingMode] = useState(!urlMode && !!oobCode);
+
+  useEffect(() => {
+    if (urlMode || !oobCode) return;
+    let cancelled = false;
+    checkActionCode(auth, oobCode)
+      .then((info) => {
+        if (cancelled) return;
+        setResolvedMode(info.operation === 'PASSWORD_RESET' ? 'resetPassword' : 'verifyEmail');
+      })
+      .catch(() => { if (!cancelled) setResolvedMode('verifyEmail'); })
+      .finally(() => { if (!cancelled) setCheckingMode(false); });
+    return () => { cancelled = true; };
+  }, [urlMode, oobCode]);
+
+  if (checkingMode) {
+    return (
+      <Shell>
+        <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
+        <p className="text-sm text-ink-500">Checking your link…</p>
+      </Shell>
+    );
+  }
+
+  if (resolvedMode === 'resetPassword') {
     return <ResetPasswordPanel oobCode={oobCode} />;
   }
-  return <VerifyEmailPanel mode={mode} oobCode={oobCode} />;
+  return <VerifyEmailPanel mode={resolvedMode} oobCode={oobCode} />;
 }
 
 function Shell({ children }) {
@@ -26,7 +51,7 @@ function Shell({ children }) {
 }
 
 function VerifyEmailPanel({ mode, oobCode }) {
-  const [status, setStatus] = useState('working'); // working | success | error
+  const [status, setStatus] = useState('working');
   const [message, setMessage] = useState('');
 
   useEffect(() => {
@@ -43,12 +68,6 @@ function VerifyEmailPanel({ mode, oobCode }) {
         } catch (err) {
           if (cancelled) return;
           const code = err.code || '';
-          // FIX: a "code already used" error is exactly what you'd see if
-          // this link was already consumed elsewhere — e.g. an email
-          // provider's link-safety scanner opening it before the person
-          // clicked it. If this browser is signed in and the server now
-          // shows the account as verified, the goal was already achieved
-          // — treat it as success instead of an error.
           if (code === 'auth/invalid-action-code' && auth.currentUser) {
             try {
               await reload(auth.currentUser);
@@ -69,12 +88,6 @@ function VerifyEmailPanel({ mode, oobCode }) {
         return;
       }
 
-      // FIX: no oobCode present. This legitimately happens when Firebase's
-      // OWN generic hosted verification page completed the verification
-      // first, and its "Continue" button lands here as a plain link with
-      // no code attached (the code was already consumed on Firebase's
-      // side). Rather than assuming failure, check the real, current
-      // server-side verification state before showing an error.
       if (auth.currentUser) {
         try {
           await reload(auth.currentUser);
@@ -125,7 +138,7 @@ function VerifyEmailPanel({ mode, oobCode }) {
 }
 
 function ResetPasswordPanel({ oobCode }) {
-  const [status, setStatus] = useState('checking'); // checking | ready | success | error
+  const [status, setStatus] = useState('checking');
   const [message, setMessage] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

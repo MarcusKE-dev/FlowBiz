@@ -160,10 +160,15 @@ const handleVoid = async () => {
     finally { setVoiding(false); setPendingVoid(null); }
   };
 
-  const handleProductSave = async (data) => {
+const handleProductSave = async (data) => {
     try {
-      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
-      else { await createProduct(data, businessId); toast.success('Product added'); }
+      if (editProduct) {
+        const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
+      } else {
+        const { queuedOffline } = await createProduct(data, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      }
       setEditProd(null);
       setProdModal(false);
       setPrefillBarcode(null);

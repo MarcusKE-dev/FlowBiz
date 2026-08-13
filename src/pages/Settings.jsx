@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { resetBusinessData } from '../utils/businessReset';
@@ -109,32 +111,32 @@ const handleSave = async e => {
     try {
       let finalLogoUrl = logoUrl;
 
-      // Logo upload gets its OWN try/catch (Issue 8): a slow/failed
-      // upload of the (now compressed) image must not block saving the
-      // rest of Business Information, which has nothing to do with it.
       if (logoFile) {
-  try {
-    const compressed = await compressImage(logoFile, 480, 0.75);
-    if (compressed.size > 700 * 1024) {
-      toast.error('Logo is still too large after compression — try a simpler image.');
-    } else {
-      finalLogoUrl = await blobToDataUrl(compressed);
-    }
-  } catch (logoErr) {
-    toast.error(`Logo processing failed, but the rest of your settings will still be saved: ${logoErr.message}`);
-  }
-}
+        try {
+          const compressed = await compressImage(logoFile, 480, 0.75);
+          if (compressed.size > 700 * 1024) {
+            toast.error('Logo is still too large after compression — try a simpler image.');
+          } else {
+            finalLogoUrl = await blobToDataUrl(compressed);
+          }
+        } catch (logoErr) {
+          toast.error(`Logo processing failed, but the rest of your settings will still be saved: ${logoErr.message}`);
+        }
+      }
 
-      await setDoc(settingsRef, { 
+      const write = setDoc(settingsRef, { 
         shopName: shopName.trim(), 
         phone: phone.trim(),
         email: email.trim(),
         address: address.trim(),
         logoUrl: finalLogoUrl,
       }, { merge: true });
-      
+
+      const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+      if (error) throw error;
+
       setLogoUrl(finalLogoUrl);
-      toast.success('Business information saved'); 
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Business information saved');
       setLogoFile(null);
     } catch (err) { 
       toast.error(err.message); 
@@ -143,16 +145,13 @@ const handleSave = async e => {
     }
   };
 
-  const handleSavePermissions = async () => {
+const handleSavePermissions = async () => {
     setSavingPermissions(true);
-    try {
-      await setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
-      toast.success('Permissions saved');
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setSavingPermissions(false);
-    }
+    const write = setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    setSavingPermissions(false);
+    if (error) { toast.error(error.message); return; }
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Permissions saved');
   };
 
   const handleReset = async () => {

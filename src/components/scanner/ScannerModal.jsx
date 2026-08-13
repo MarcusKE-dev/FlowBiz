@@ -47,7 +47,7 @@ const { videoRef, status, torchOn, torchSupported, toggleTorch, retry } = useCam
           <ScannerMessage
             icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
             title="Camera permission needed"
-            body="FlowBiz needs camera access to scan barcodes. Please allow camera access in your browser settings, then try again."
+            body="Your browser is blocking camera access for FlowBiz. Tap the padlock or (i) icon next to the address bar → Permissions → Camera → Allow, then come back and try again. On some phones this is under Chrome menu (⋮) → Settings → Site settings → flowbiz.pages.dev."
             action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
           />
         )}

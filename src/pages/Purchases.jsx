@@ -154,15 +154,15 @@ const handleSupplierSave = async (supplierData) => {
 <ProductFormModal
         open={productModal}
         onClose={()=>{setProductModal(false);setPrefillBarcode(null);}}
-        onSave={async (data) => {
-          try {
-            const { id } = await createProduct(data, businessId);
-            setForm(p=>({...p, productId: id}));
-            setProductModal(false);
-            setPrefillBarcode(null);
-            toast.success('Product added');
-          } catch (err) { toast.error(friendlyErrorMessage(err)); }
-        }}
+onSave={async (data) => {
+  try {
+    const { id, queuedOffline } = await createProduct(data, businessId);
+    setForm(p=>({...p, productId: id}));
+    setProductModal(false);
+    setPrefillBarcode(null);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+  } catch (err) { toast.error(friendlyErrorMessage(err)); }
+}}
         suppliers={suppliers}
         prefillBarcode={prefillBarcode}
         onAddSupplier={() => setSupplierModal(true)}

@@ -17,6 +17,8 @@ import { formatKES } from '../utils/currency';
 import { formatDateTime } from '../utils/dateRanges';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
 export default function CustomerDetail() {
   const { customerId } = useParams();
@@ -40,7 +42,7 @@ export default function CustomerDetail() {
     .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded')
     .reduce((acc,cs) => acc + (Number(cs.remainingBalance) || 0), 0);
 
-  const handleRepayment = async ({ amount, method, mpesaCode }) => {
+const handleRepayment = async ({ amount, method, mpesaCode }) => {
     const openSales = [...creditSales]
       .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded' && (Number(cs.remainingBalance) || 0) > 0.005)
       .sort((a,b) => (a.soldAt?.toMillis?.() ?? 0) - (b.soldAt?.toMillis?.() ?? 0));
@@ -72,8 +74,11 @@ export default function CustomerDetail() {
           recordedByName: profile.displayName,
         });
       }
-      await batch.commit();
-      toast.success(`Recorded ${formatKES(amount)} repayment`);
+      const commit = batch.commit();
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : `Recorded ${formatKES(amount)} repayment`);
+      if (queuedOffline) commit.catch((err) => toast.error(`A repayment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
     } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
   };
 

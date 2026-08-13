@@ -55,14 +55,14 @@ export default function Products() {
 
   const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
 
-  const handleSave = async (data) => {
+const handleSave = async (data) => {
     try {
       if (editing) {
-        await updateProduct(editing.id, data, editing.barcode, businessId);
-        toast.success('Product updated');
+        const { queuedOffline } = await updateProduct(editing.id, data, editing.barcode, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
       } else {
-        await createProduct(data, businessId);
-        toast.success('Product added');
+        const { queuedOffline } = await createProduct(data, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
       }
       closeFormModal();
     } catch (err) { toast.error(friendlyErrorMessage(err)); }
@@ -123,12 +123,13 @@ const handleDel = async () => {
                     <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
                   </div>
                 </div>
-                <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
-                  <div>
-                    <span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span>
-                  </div>
-                  <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
+              <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
+                <div className="space-x-3">
+                  <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
+                  <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
                 </div>
+                <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
+              </div>
               </div>
             ))}
           </div>
