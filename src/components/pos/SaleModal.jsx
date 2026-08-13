@@ -3,6 +3,8 @@ import toast from 'react-hot-toast';
 import Modal from '../common/Modal';
 import { formatKES } from '../../utils/currency';
 import { Banknote, Smartphone, BookOpen } from 'lucide-react';
+import { raceWithTimeout } from '../../utils/offlineWrite';
+import { friendlyErrorMessage } from '../../utils/errorMessages';
 
 const METHODS = [
   { id: 'Cash',   label: 'Cash',   Icon: Banknote   },
@@ -34,20 +36,30 @@ export default function SaleModal({ open, product, customers, onClose, onConfirm
   const needsCustomer  = method === 'Credit' && !customerId && !(newMode && newName.trim());
   const canSubmit = Number(quantity) > 0 && !exceedsStock && Number(price) >= 0 && !needsMpesaCode && !needsCustomer && !submitting;
 
-  const handleConfirm = async () => {
+const handleConfirm = async () => {
     setSubmitting(true);
     try {
-      let saleRecord;
-      if (method === 'Credit') {
-        let cId = customerId, cName = customers.find(c=>c.id===customerId)?.name, cPhone = customers.find(c=>c.id===customerId)?.phone;
-        if (newMode) { const cr = await onCreateCustomer({ name: newName.trim(), phone: newPhone.trim() }); cId=cr.id; cName=cr.name; cPhone=cr.phone; }
-        saleRecord = await onConfirmCredit({ product, quantity: Number(quantity), soldPricePerUnit: Number(price), customerId: cId, customerName: cName, customerPhone: cPhone });
-      } else {
-        saleRecord = await onConfirmSale({ product, quantity: Number(quantity), soldPricePerUnit: Number(price), paymentMethod: method, mpesaCode: method === 'M-Pesa' ? mpesaCode.trim() : null });
+      let cId = customerId, cName = customers.find(c=>c.id===customerId)?.name, cPhone = customers.find(c=>c.id===customerId)?.phone;
+      if (method === 'Credit' && newMode) {
+        const cr = await onCreateCustomer({ name: newName.trim(), phone: newPhone.trim() });
+        cId = cr.id; cName = cr.name; cPhone = cr.phone;
       }
-      onClose(saleRecord);
+
+      const { record, commit } = method === 'Credit'
+        ? onConfirmCredit({ product, quantity: Number(quantity), soldPricePerUnit: Number(price), customerId: cId, customerName: cName, customerPhone: cPhone })
+        : onConfirmSale({ product, quantity: Number(quantity), soldPricePerUnit: Number(price), paymentMethod: method, mpesaCode: method === 'M-Pesa' ? mpesaCode.trim() : null });
+
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+      if (queuedOffline) {
+        toast.success("Sale saved — it'll sync once you're back online.");
+        commit.catch((err) => toast.error(`A sale from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+      }
+      onClose(record);
     } catch (err) {
-      toast.error(err.message); 
+      toast.error(friendlyErrorMessage(err, {
+        overrides: { 'permission-denied': "That didn't go through — the stock may have just changed, or today's session may have been closed. Please refresh and try again." },
+      }));
     } finally { setSubmitting(false); }
   };
 

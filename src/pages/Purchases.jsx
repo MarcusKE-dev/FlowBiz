@@ -17,6 +17,8 @@ import ScannerModal from '../components/scanner/ScannerModal';
 import ScanFab from '../components/scanner/ScanFab';
 import { formatKES } from '../utils/currency';
 import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
 const empty = { supplierId:'', productId:'', quantity:'', costPricePerUnit:'', paymentStatus:'paid', paymentMethod:'Cash', mpesaCode:'' };
 
@@ -94,17 +96,16 @@ export default function Purchases() {
       await batch.commit();
       toast.success('Purchase recorded and stock updated');
       setForm(empty);
-    } catch(err) { toast.error(err.message); } finally { setBusy(false); }
+    } catch(err) {toast.error(friendlyErrorMessage(err)); } finally { setBusy(false); }
   };
 
-  const handleSupplierSave = async (data) => {
-    try {
-      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
-      setNewSupplierId(ref.id);
-      setForm(p=>({...p, supplierId: ref.id}));
-      setSupplierModal(false);
-      toast.success('Supplier added');
-    } catch(err) { toast.error(err.message); }
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
   };
 
   return (
@@ -164,7 +165,7 @@ export default function Purchases() {
             setProductModal(false);
             setPrefillBarcode(null);
             toast.success('Product added');
-          } catch (err) { toast.error(err.message); }
+          } catch (err) { toast.error(friendlyErrorMessage(err)); }
         }}
         suppliers={suppliers}
         prefillBarcode={prefillBarcode}

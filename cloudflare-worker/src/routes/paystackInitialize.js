@@ -67,5 +67,4 @@ export async function handlePaystackInitialize(request, env) {
     initializedBy: caller.uid,
   });
 
-  return json({ authorization_url: paystackData.data.authorization_url, reference });
-}
+return json({ authorization_url: paystackData.data.authorization_url, access_code: paystackData.data.access_code, reference });}

@@ -15,6 +15,8 @@ import RepaymentModal from '../components/debtors/RepaymentModal';
 import RefundModal from '../components/debtors/RefundModal';
 import { formatKES } from '../utils/currency';
 import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
 export default function CustomerDetail() {
   const { customerId } = useParams();
@@ -72,7 +74,7 @@ export default function CustomerDetail() {
       }
       await batch.commit();
       toast.success(`Recorded ${formatKES(amount)} repayment`);
-    } catch (err) { toast.error(err.message); throw err; }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
   };
 
   const handleCancel = async (cs) => {
@@ -90,7 +92,7 @@ export default function CustomerDetail() {
       });
       await batch.commit();
       toast.success('Credit sale cancelled and stock restored.');
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
   };
 
   const handleRefund = async (cs, { method }) => {
@@ -115,7 +117,7 @@ export default function CustomerDetail() {
       await batch.commit();
       toast.success('Sale refunded and stock restored.');
       setRefundTarget(null);
-    } catch (err) { toast.error(err.message); throw err; }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
   };
 
   if (custLoad || credLoad) return <LoadingSpinner />;

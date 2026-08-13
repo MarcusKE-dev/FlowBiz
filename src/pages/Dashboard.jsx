@@ -24,6 +24,8 @@ import ScanFab from '../components/scanner/ScanFab';
 import { formatKES } from '../utils/currency';
 import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
 import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
 function StatCard({ label, value, tone = 'text-ink-900', sub }) {
   return (
@@ -154,17 +156,17 @@ export default function Dashboard() {
     try {
       if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
       else { await createProduct(data, businessId); toast.success('Product added'); }
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
   };
 
-  const handleSupplierSave = async (supplierData) => {
-    try {
-      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-      setNewSupplierId(ref.id);
-      setSupplierModal(false);
-      toast.success('Supplier added');
-    } catch (err) { toast.error(err.message); }
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
   };
 
   const handleScanDetected = (code) => {

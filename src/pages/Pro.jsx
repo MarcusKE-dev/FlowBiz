@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { auth } from '../firebase';
 import toast from 'react-hot-toast';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
@@ -11,27 +12,30 @@ export default function Pro() {
   const [loading, setLoading] = useState(false);
 
   // FIX: Shifted from missing Firebase Function to the existing Cloudflare Worker API
-  const handleSubscribe = async () => {
+const handleSubscribe = async () => {
     setLoading(true);
     try {
       const idToken = await auth.currentUser.getIdToken(true);
       const response = await fetch(`${FLOWBIZ_API_URL}/api/paystack/initialize`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        }
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
       });
-      
       const data = await response.json();
-      
-      if (data?.authorization_url) {
+
+      if (data?.access_code && window.PaystackPop) {
+        const popup = new window.PaystackPop();
+        popup.resumeTransaction(data.access_code, {
+          onSuccess: () => toast.success('Payment received — activating your subscription…'),
+          onCancel: () => toast('Payment cancelled.'),
+        });
+      } else if (data?.authorization_url) {
+        // Fallback if the Paystack script hasn't loaded yet.
         window.location.href = data.authorization_url;
       } else {
         toast.error(data?.error || "Couldn't initialize payment. Please try again.");
       }
     } catch (err) {
-      toast.error(err.message || 'Payment initiation failed.');
+      toast.error(friendlyErrorMessage(err, { fallback: 'Payment initiation failed.' }));
     } finally {
       setLoading(false);
     }

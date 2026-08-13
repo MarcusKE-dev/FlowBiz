@@ -1,40 +1,67 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from '../components/common/ProtectedRoute';
 import AppShell from '../components/layout/AppShell';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import { useAuth } from '../contexts/AuthContext';
+import { prefetchRoutes } from './routePrefetch';
 
-const Setup      = lazy(() => import('../pages/Setup'));
-const Login      = lazy(() => import('../pages/Login'));
-const ForgotPassword = lazy(() => import('../pages/ForgotPassword'));
-const JoinStaff  = lazy(() => import('../pages/JoinStaff'));
-const AuthAction = lazy(() => import('../pages/AuthAction'));
-const Dashboard  = lazy(() => import('../pages/Dashboard'));
-const Counter    = lazy(() => import('../pages/Counter'));
-const Customers  = lazy(() => import('../pages/Customers'));
-const CustomerDetail = lazy(() => import('../pages/CustomerDetail'));
-const Expenses   = lazy(() => import('../pages/Expenses'));
-const Purchases  = lazy(() => import('../pages/Purchases'));
-const Products   = lazy(() => import('../pages/Products'));
-const Suppliers  = lazy(() => import('../pages/Suppliers'));
-const StockTake  = lazy(() => import('../pages/StockTake'));
-const Reports    = lazy(() => import('../pages/Reports'));
-const CloseDay   = lazy(() => import('../pages/CloseDay'));
-const Users      = lazy(() => import('../pages/Users'));
-const Settings   = lazy(() => import('../pages/Settings'));
-const HelpGuide  = lazy(() => import('../pages/HelpGuide'));
-const Pro        = lazy(() => import('../pages/Pro'));
-const AdvancedAnalytics = lazy(() => import('../pages/AdvancedAnalytics'));
-const InventoryIntelligence = lazy(() => import('../pages/InventoryIntelligence'));
+// Defined once, reused by both lazy() and the prefetcher below — calling
+// the same import() specifier twice is free (the module system dedupes
+// it), so the prefetcher just warms the same chunks lazy() will need.
+const routeLoaders = {
+  setup: () => import('../pages/Setup'),
+  login: () => import('../pages/Login'),
+  forgotPassword: () => import('../pages/ForgotPassword'),
+  joinStaff: () => import('../pages/JoinStaff'),
+  authAction: () => import('../pages/AuthAction'),
+  dashboard: () => import('../pages/Dashboard'),
+  counter: () => import('../pages/Counter'),
+  customers: () => import('../pages/Customers'),
+  customerDetail: () => import('../pages/CustomerDetail'),
+  expenses: () => import('../pages/Expenses'),
+  purchases: () => import('../pages/Purchases'),
+  products: () => import('../pages/Products'),
+  suppliers: () => import('../pages/Suppliers'),
+  stockTake: () => import('../pages/StockTake'),
+  reports: () => import('../pages/Reports'),
+  closeDay: () => import('../pages/CloseDay'),
+  users: () => import('../pages/Users'),
+  settings: () => import('../pages/Settings'),
+  helpGuide: () => import('../pages/HelpGuide'),
+  pro: () => import('../pages/Pro'),
+  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
+  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
+};
+
+const Setup      = lazy(routeLoaders.setup);
+const Login      = lazy(routeLoaders.login);
+const ForgotPassword = lazy(routeLoaders.forgotPassword);
+const JoinStaff  = lazy(routeLoaders.joinStaff);
+const AuthAction = lazy(routeLoaders.authAction);
+const Dashboard  = lazy(routeLoaders.dashboard);
+const Counter    = lazy(routeLoaders.counter);
+const Customers  = lazy(routeLoaders.customers);
+const CustomerDetail = lazy(routeLoaders.customerDetail);
+const Expenses   = lazy(routeLoaders.expenses);
+const Purchases  = lazy(routeLoaders.purchases);
+const Products   = lazy(routeLoaders.products);
+const Suppliers  = lazy(routeLoaders.suppliers);
+const StockTake  = lazy(routeLoaders.stockTake);
+const Reports    = lazy(routeLoaders.reports);
+const CloseDay   = lazy(routeLoaders.closeDay);
+const Users      = lazy(routeLoaders.users);
+const Settings   = lazy(routeLoaders.settings);
+const HelpGuide  = lazy(routeLoaders.helpGuide);
+const Pro        = lazy(routeLoaders.pro);
+const AdvancedAnalytics = lazy(routeLoaders.advancedAnalytics);
+const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
 
 function Page({ children, adminOnly = false }) {
   return (
     <ProtectedRoute adminOnly={adminOnly}>
       <AppShell>
-        <Suspense fallback={<LoadingSpinner />}>
-          {children}
-        </Suspense>
+        <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>
       </AppShell>
     </ProtectedRoute>
   );
@@ -47,17 +74,26 @@ function PublicOnly({ children }) {
   return children;
 }
 
+function RoutePrefetcher() {
+  const { firebaseUser, isAdmin } = useAuth();
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
+    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
+    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
+  }, [firebaseUser, isAdmin]);
+  return null;
+}
+
 export default function AppRouter() {
   return (
     <Suspense fallback={<LoadingSpinner label="Starting FlowBiz…" />}>
+      <RoutePrefetcher />
       <Routes>
         <Route path="/setup" element={<PublicOnly><Setup /></PublicOnly>} />
         <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
         <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
         <Route path="/join/:inviteId" element={<JoinStaff />} />
-        {/* Not wrapped in ProtectedRoute or PublicOnly — must work
-            whether the person is currently signed in or not, and covers
-            both email verification and password reset links. */}
         <Route path="/auth/action" element={<AuthAction />} />
 
         <Route path="/"             element={<Page adminOnly><Dashboard /></Page>} />

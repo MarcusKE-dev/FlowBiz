@@ -18,7 +18,7 @@ export default function ScannerModal({ open, onClose, onDetected }) {
     onDetected(text);
   }, [paused, onDetected]);
 
-  const { videoRef, status, torchOn, torchSupported, toggleTorch } = useCameraScanner({
+const { videoRef, status, torchOn, torchSupported, toggleTorch, retry } = useCameraScanner({
     onDetected: handleDetected,
     active: open && !paused,
   });
@@ -48,6 +48,7 @@ export default function ScannerModal({ open, onClose, onDetected }) {
             icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
             title="Camera permission needed"
             body="FlowBiz needs camera access to scan barcodes. Please allow camera access in your browser settings, then try again."
+            action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
           />
         )}
 
@@ -64,6 +65,7 @@ export default function ScannerModal({ open, onClose, onDetected }) {
             icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
             title="Camera unavailable"
             body="No usable camera was found on this device. You can still find the product by searching its name or code."
+            action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
           />
         )}
       </div>
@@ -83,12 +85,13 @@ export default function ScannerModal({ open, onClose, onDetected }) {
   );
 }
 
-function ScannerMessage({ icon, title, body }) {
+function ScannerMessage({ icon, title, body, action }) {
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
       {icon}
       <p className="font-display text-base font-bold text-white">{title}</p>
       <p className="text-sm text-white/70">{body}</p>
+      {action}
     </div>
   );
 }

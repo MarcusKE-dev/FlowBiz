@@ -6,16 +6,9 @@ import { BrowserMultiFormatReader } from '@zxing/browser';
 const DEV = import.meta.env.DEV;
 const devLog = (...args) => { if (DEV) console.log('[Scanner]', ...args); };
 const devError = (...args) => { if (DEV) console.error('[Scanner]', ...args); };
+const [retryToken, setRetryToken] = useState(0);
+const retry = useCallback(() => setRetryToken((t) => t + 1), []);
 
-// ROOT CAUSE (Android): `navigator.mediaDevices` only exists in a "secure
-// context" — https:, localhost/127.0.0.1, or file:. Serving the dev server
-// with `vite --host` and opening it on a phone via the LAN IP
-// (http://192.168.x.x:5173) is NOT a secure context on Android Chrome, so
-// `navigator.mediaDevices` is `undefined` there. That's why no permission
-// dialog ever appears and the failure is instant — the code never reaches
-// getUserMedia at all. Desktop testing typically goes through
-// http://localhost:5173, which IS exempted from the secure-context
-// requirement, which is why it worked there and nowhere else.
 function getInsecureContextReason() {
   if (typeof window === 'undefined') return null;
   if (window.isSecureContext) return null;
@@ -182,7 +175,7 @@ export function useCameraScanner({ onDetected, active }) {
       cancelled = true;
       stop();
     };
-  }, [active, onDetected, stop]);
+  }, [active, onDetected, stop, retryToken]);
 
   const toggleTorch = useCallback(async () => {
     const track = streamRef.current?.getVideoTracks?.()[0];
@@ -199,5 +192,4 @@ export function useCameraScanner({ onDetected, active }) {
     }
   }, [torchOn, torchSupported]);
 
-  return { videoRef, status, torchOn, torchSupported, toggleTorch };
-}
+return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };}

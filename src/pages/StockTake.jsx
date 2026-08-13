@@ -71,7 +71,7 @@ export default function StockTake() {
       setCounts({});
       setReasons({});
     } catch (err) {
-      toast.error(err.message);
+      toast.error(friendlyErrorMessage(err));
     } finally {
       setSaving(false);
       setConfirm(false);

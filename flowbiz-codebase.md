@@ -151,14 +151,17 @@ src/
     Users.jsx
   router/
     AppRouter.jsx
+    routePrefetch.js
   utils/
     businessReset.js
     csvExport.js
     currency.js
     dateRanges.js
     documentService.js
+    errorMessages.js
     financials.js
     financials.test.js
+    offlineWrite.js
     products.js
     scannerService.js
   App.jsx
@@ -183,6 +186,103 @@ vite.config.js
 ````
 
 # Files
+
+## File: src/router/routePrefetch.js
+````javascript
+const idle = typeof requestIdleCallback === 'function'
+  ? requestIdleCallback
+  : (fn) => setTimeout(fn, 200);
+
+export function prefetchRoutes(loaders) {
+  if (!navigator.onLine) return;
+  // Respect Data Saver — never spend someone's mobile data on
+  // speculative background fetches if they've asked sites not to.
+  if (navigator.connection?.saveData) return;
+
+  loaders.forEach((load, i) => {
+    idle(() => { load().catch(() => {}); }, { timeout: 2000 + i * 500 });
+  });
+}
+````
+
+## File: src/utils/errorMessages.js
+````javascript
+// Central place to turn raw Firebase/network error codes into copy a
+// shop owner or cashier can actually act on. Never shows a raw
+// "FirebaseError: ..." string or an internal code to the user — the
+// original error is still logged to the console for debugging.
+const MESSAGES = {
+  'permission-denied': "You're not allowed to do that. If you think this is a mistake, check with your business owner.",
+  'unauthenticated': 'Your session has expired. Please sign in again.',
+  'unavailable': "Can't reach the server right now. Check your connection and try again.",
+  'deadline-exceeded': 'That took too long to complete. Please try again.',
+  'resource-exhausted': "We're getting too many requests right now. Please wait a moment and try again.",
+  'not-found': "That record couldn't be found, it may have been deleted or moved.",
+  'already-exists': 'That already exists.',
+  'cancelled': 'That was cancelled before it could finish.',
+  'aborted': 'That could not be completed, please try again.',
+  'internal': 'Something went wrong on our end. Please try again.',
+  'auth/network-request-failed': 'Please check your internet connection and try again.',
+  'auth/too-many-requests': 'Too many attempts. Please wait a bit before trying again.',
+  'auth/user-disabled': 'This account has been disabled. Please contact your business owner.',
+  'storage/unauthorized': "You're not allowed to upload that file.",
+  'storage/canceled': 'The upload was cancelled.',
+  'storage/quota-exceeded': 'Storage limit reached, please contact support.',
+};
+
+export function friendlyErrorMessage(err, options = {}) {
+  const { fallback = 'Something went wrong. Please try again.', overrides = {} } = options;
+  const code = err?.code || '';
+  if (overrides[code]) return overrides[code];
+  if (MESSAGES[code]) return MESSAGES[code];
+
+  const raw = err?.message || '';
+  if (/offline|failed to fetch|networkerror/i.test(raw)) {
+    return "Can't reach the server, check your internet connection and try again.";
+  }
+  // A raw Firestore/Firebase SDK error string — never show that verbatim.
+  if (/^Firebase|Missing or insufficient permissions|\[code=/i.test(raw)) {
+    console.error('[FlowBiz] Unmapped error:', err);
+    return fallback;
+  }
+  // Anything else is almost certainly one of FlowBiz's OWN thrown
+  // messages ("Enter a valid phone number.", "Amount exceeds the
+  // outstanding balance...") — those are already written for people.
+  return raw || fallback;
+}
+````
+
+## File: src/utils/offlineWrite.js
+````javascript
+// Resolves within `timeoutMs` no matter what: with the real
+// success/failure if the write settles in time, or with
+// `{ queuedOffline: true }` if it's still pending once the timeout
+// hits. The original promise keeps running in the background so the
+// caller can still react if it eventually fails for real.
+export function raceWithTimeout(promise, timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; resolve({ queuedOffline: true }); }
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ queuedOffline: false, value });
+      },
+      (err) => {
+        clearTimeout(timer);
+        if (!settled) { settled = true; resolve({ queuedOffline: false, error: err }); }
+        // else: caller already moved on optimistically — it attaches
+        // its own .catch() to the original promise for this case.
+      }
+    );
+  });
+}
+````
 
 ## File: cloudflare-worker/src/lib/cors.js
 ````javascript
@@ -671,8 +771,7 @@ export async function handlePaystackInitialize(request, env) {
     initializedBy: caller.uid,
   });
 
-  return json({ authorization_url: paystackData.data.authorization_url, reference });
-}
+return json({ authorization_url: paystackData.data.authorization_url, access_code: paystackData.data.access_code, reference });}
 ````
 
 ## File: cloudflare-worker/src/routes/paystackWebhook.js
@@ -1183,13 +1282,13 @@ export default function MiniLineChart({ data, height = 140, colorClassName = 'te
 ## File: src/components/common/ConfirmDialog.jsx
 ````javascript
 import { useEffect } from 'react';
-export default function ConfirmDialog({ open, title, message, confirmLabel = 'Confirm', danger = false, onConfirm, onCancel }) {
+export default function ConfirmDialog({ open, title, message, confirmLabel = 'Confirm', danger = false, confirmDisabled = false, onConfirm, onCancel }) {
   useEffect(() => {
     if (!open) return;
-    const handleKey = e => { if (e.key === 'Escape') onCancel(); };
+    const handleKey = e => { if (e.key === 'Escape' && !confirmDisabled) onCancel(); };
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
-  }, [open, onCancel]);
+  }, [open, onCancel, confirmDisabled]);
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink-950/60 p-4 sm:items-center" role="alertdialog" aria-modal="true">
@@ -1197,8 +1296,8 @@ export default function ConfirmDialog({ open, title, message, confirmLabel = 'Co
         <h3 className="font-display text-base font-bold text-ink-900">{title}</h3>
         {message && <p className="mt-2 text-sm text-ink-500">{message}</p>}
         <div className="mt-5 flex justify-end gap-2">
-          <button className="btn-secondary" onClick={onCancel}>Cancel</button>
-          <button className={danger ? 'btn-danger' : 'btn-primary'} onClick={onConfirm}>{confirmLabel}</button>
+          <button className="btn-secondary" onClick={onCancel} disabled={confirmDisabled}>Cancel</button>
+          <button className={danger ? 'btn-danger' : 'btn-primary'} onClick={onConfirm} disabled={confirmDisabled}>{confirmLabel}</button>
         </div>
       </div>
     </div>
@@ -1639,131 +1738,6 @@ export default function AppShell({ children }) {
 }
 ````
 
-## File: src/components/layout/BottomNav.jsx
-````javascript
-import { useState } from 'react';
-import { NavLink } from 'react-router-dom';
-import * as Lucide from 'lucide-react';
-import { Menu } from 'lucide-react';
-import { NAV_ITEMS, MOBILE_PRIMARY } from './navConfig';
-import { useAuth } from '../../contexts/AuthContext';
-import { useSettings } from '../../hooks/useSettings';
-import MobileMoreDrawer from './MobileMoreDrawer';
-
-export default function BottomNav() {
-  const { isAdmin } = useAuth();
-  const { settings } = useSettings();
-  const [moreOpen, setMoreOpen] = useState(false);
-
-  const allowedPaths = MOBILE_PRIMARY[isAdmin ? 'admin' : 'cashier'];
-  const items = allowedPaths
-    .map((path) => NAV_ITEMS.find((item) => item.to === path))
-    .filter(Boolean)
-    .filter((item) => item.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses);
-
-  const Icon = ({ name, className = 'h-5 w-5' }) => {
-    const Component = Lucide[name] || Lucide.Circle;
-    return <Component className={className} strokeWidth={1.75} />;
-  };
-
-  return (
-    <>
-      {/* Position/visibility unchanged — stays fixed to the bottom on
-          mobile (lg:hidden), only the active-tab color moved to blue. */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-ink-100 bg-white/95 backdrop-blur lg:hidden">
-        {items.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.to === '/'}
-            className={({ isActive }) =>
-              `flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold ${
-                isActive ? 'text-blue-700' : 'text-ink-400'
-              }`
-            }
-          >
-            <Icon name={item.icon} />
-            {item.label}
-          </NavLink>
-        ))}
-        <button
-          onClick={() => setMoreOpen(true)}
-          className="flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold text-ink-400"
-        >
-          <Menu className="h-5 w-5" strokeWidth={1.75} />
-          More
-        </button>
-      </nav>
-
-      <MobileMoreDrawer open={moreOpen} onClose={() => setMoreOpen(false)} />
-    </>
-  );
-}
-````
-
-## File: src/components/layout/MobileMoreDrawer.jsx
-````javascript
-import { NavLink } from 'react-router-dom';
-import * as Lucide from 'lucide-react';
-import { NAV_ITEMS } from './navConfig';
-import { useAuth } from '../../contexts/AuthContext';
-import { useSettings } from '../../hooks/useSettings';
-import { X } from 'lucide-react';
-
-const Icon = ({ name, className = 'h-5 w-5' }) => {
-  const Component = Lucide[name] || Lucide.Circle;
-  return <Component className={className} strokeWidth={1.75} />;
-};
-
-// Full page list for phones — the sidebar is desktop-only (lg:flex), and the
-// bottom bar only fits a handful of shortcuts, so this covers everything else
-// (Products, Purchases, Suppliers, Stock Take, Users, etc.) behind one button.
-export default function MobileMoreDrawer({ open, onClose }) {
-  const { isAdmin } = useAuth();
-  const { settings } = useSettings();
-
-  const items = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin).filter(
-    (item) => item.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses
-  );
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 lg:hidden">
-      <div className="absolute inset-0 bg-ink-950/50" onClick={onClose} />
-      <div className="absolute inset-x-0 bottom-0 max-h-[80vh] overflow-y-auto rounded-t-xl2 bg-white p-4 pb-8 shadow-xl">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-display text-base font-bold text-ink-900">All pages</h2>
-          <button onClick={onClose} className="p-1.5 rounded text-ink-400 hover:bg-ink-50 hover:text-ink-700">
-            <X className="h-5 w-5" strokeWidth={1.75} />
-          </button>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          {items.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              onClick={onClose}
-              className={({ isActive }) =>
-                `flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-center text-[11px] font-semibold ${
-                  isActive
-                    ? 'border-blue-200 bg-blue-50 text-blue-800'
-                    : 'border-ink-100 text-ink-500 hover:bg-ink-50'
-                }`
-              }
-            >
-              <Icon name={item.icon} />
-              {item.label}
-            </NavLink>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-````
-
 ## File: src/components/layout/navConfig.js
 ````javascript
 export const NAV_ITEMS = [
@@ -1784,38 +1758,6 @@ export const MOBILE_PRIMARY = {
   admin:   ['/', '/counter', '/customers', '/reports', '/settings'],
   cashier: ['/counter', '/customers', '/expenses'],
 };
-````
-
-## File: src/components/layout/Sidebar.jsx
-````javascript
-import { NavLink } from 'react-router-dom';
-import * as Lucide from 'lucide-react';
-import { NAV_ITEMS } from './navConfig';
-import { useAuth } from '../../contexts/AuthContext';
-import { useSettings } from '../../hooks/useSettings';
-const Icon = ({ name, className='h-5 w-5' }) => { const C = Lucide[name]||Lucide.Circle; return <C className={className} strokeWidth={1.75} />; };
-export default function Sidebar() {
-  const { isAdmin } = useAuth();
-  const { settings } = useSettings();
-  const items = NAV_ITEMS
-    .filter(i => !i.adminOnly || isAdmin)
-    .filter(i => i.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses);
-  return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r border-ink-100 bg-white lg:flex">
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-ink-100">
-        <img src="/icons/icon-72.png" alt="FlowBiz" className="h-9 w-9 rounded-lg" />
-        <div><p className="font-display text-sm font-bold leading-tight text-ink-900">FlowBiz</p><p className="text-[11px] leading-tight text-ink-400">Business Manager</p></div>
-      </div>
-      <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
-        {items.map(item => (
-          <NavLink key={item.to} to={item.to} end={item.to==='/'} className={({isActive}) => `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${isActive ? 'bg-blue-50 text-blue-800' : 'text-ink-500 hover:bg-ink-50 hover:text-ink-800'}`}>
-            <Icon name={item.icon} />{item.label}
-          </NavLink>
-        ))}
-      </nav>
-    </aside>
-  );
-}
 ````
 
 ## File: src/components/layout/TopHeader.jsx
@@ -1932,114 +1874,6 @@ export default function ProductGrid({ products, onSelect, isAdmin=false, onEdit 
 }
 ````
 
-## File: src/components/pos/SaleCompleteModal.jsx
-````javascript
-import { useState } from 'react';
-import Modal from '../common/Modal';
-import { generateReceiptPDF, printReceipt, generateInvoicePDF, printInvoice, sendWhatsAppDocument } from '../../utils/documentService';
-import { useSettings } from '../../hooks/useSettings';
-import { useOnlineStatus } from '../../hooks/useOnlineStatus';
-import { useAuth } from '../../contexts/AuthContext';
-import { formatKES } from '../../utils/currency';
-import { Printer, Download, MessageCircle } from 'lucide-react';
-import toast from 'react-hot-toast';
-
-export default function SaleCompleteModal({ open, sale, onClose }) {
-  const { settings } = useSettings();
-  const { isPro } = useAuth();
-  const online = useOnlineStatus();
-  const [phone, setPhone] = useState(sale?.customerPhone || '');
-  const [sending, setSending] = useState(false);
-
-  if (!sale) return null;
-
-  const docLabel = sale.isCredit ? 'Invoice' : 'Receipt';
-
-  const handlePrint = () => {
-    if (!isPro) { toast.error(`Professional printing requires FlowBiz Pro.`); return; }
-    if (sale.isCredit) printInvoice(sale, settings);
-    else printReceipt(sale, settings);
-  };
-
-  const handleDownload = () => {
-    if (!isPro) { toast.error(`Professional ${docLabel.toLowerCase()}s require FlowBiz Pro.`); return; }
-    if (sale.isCredit) generateInvoicePDF(sale, settings);
-    else generateReceiptPDF(sale, settings);
-  };
-
-  const handleWhatsApp = async () => {
-    if (!isPro) { toast.error("WhatsApp integration requires FlowBiz Pro."); return; }
-    if (!online) {
-      toast.error(`You're offline. The ${docLabel.toLowerCase()} was saved. Connect to the internet to send it.`);
-      return;
-    }
-    if (!phone.trim()) {
-      toast.error("Please enter a valid customer phone number.");
-      return;
-    }
-    setSending(true);
-    try {
-      await sendWhatsAppDocument(sale, settings, phone.trim());
-      toast.success(`${docLabel} sent successfully via WhatsApp.`);
-    } catch (e) {
-      toast.error(`Couldn't send ${docLabel.toLowerCase()}. ` + e.message);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  return (
-    <Modal open={open} onClose={onClose} title={sale.isCredit ? 'Credit Sale Recorded' : 'Sale Complete'}>
-      <div className="space-y-4">
-        <div className={`flex flex-col items-center justify-center py-4 rounded-xl2 border ${sale.isCredit ? 'bg-rust-50 border-rust-200' : 'bg-moss-50 border-moss-200'}`}>
-          <div className={`h-10 w-10 rounded-full flex items-center justify-center mb-2 ${sale.isCredit ? 'bg-rust-100 text-rust-700' : 'bg-moss-100 text-moss-700'}`}>
-            {sale.isCredit ? '⏳' : '✓'}
-          </div>
-          <h2 className={`font-display font-bold ${sale.isCredit ? 'text-rust-700' : 'text-moss-800'}`}>
-            {sale.isCredit ? 'Credit sale recorded' : 'Sale recorded successfully'}
-          </h2>
-          <p className="text-sm font-semibold mt-2 text-ink-800">{sale.quantity} × {sale.productName}</p>
-          {sale.isCredit && sale.customerName && <p className="text-xs text-ink-500">{sale.customerName}</p>}
-          <p className="text-lg font-bold text-ink-900">{formatKES(sale.totalAmount)}</p>
-          <p className={`text-xs mt-1 font-semibold ${sale.isCredit ? 'text-rust-600' : 'text-ink-500'}`}>
-            {sale.isCredit ? 'Payment Status: Unpaid' : sale.paymentMethod}
-          </p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          <button className="btn-outline flex items-center justify-center gap-2" onClick={handlePrint}>
-            <Printer className="h-4 w-4" /> Print {docLabel}
-          </button>
-          <button className="btn-outline flex items-center justify-center gap-2" onClick={handleDownload}>
-            <Download className="h-4 w-4" /> Download {docLabel}
-          </button>
-        </div>
-
-        <div className="rounded-lg border border-ink-100 p-3 space-y-2">
-          <label className="label">WhatsApp {docLabel}</label>
-          <div className="flex gap-2">
-            <input 
-              className="input flex-1" 
-              placeholder="Customer Phone" 
-              value={phone} 
-              onChange={e => setPhone(e.target.value)} 
-              disabled={sending}
-            />
-            <button className="btn-primary flex items-center justify-center gap-2" onClick={handleWhatsApp} disabled={sending}>
-              <MessageCircle className="h-4 w-4" /> Send
-            </button>
-          </div>
-        </div>
-
-        <div className="pt-2 border-t border-ink-100">
-          <button className="btn-secondary w-full" onClick={onClose}>Cancel</button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-````
-
 ## File: src/components/pos/SaleModal.jsx
 ````javascript
 import { useEffect, useState } from 'react';
@@ -2047,6 +1881,8 @@ import toast from 'react-hot-toast';
 import Modal from '../common/Modal';
 import { formatKES } from '../../utils/currency';
 import { Banknote, Smartphone, BookOpen } from 'lucide-react';
+import { raceWithTimeout } from '../../utils/offlineWrite';
+import { friendlyErrorMessage } from '../../utils/errorMessages';
 
 const METHODS = [
   { id: 'Cash',   label: 'Cash',   Icon: Banknote   },
@@ -2078,20 +1914,30 @@ export default function SaleModal({ open, product, customers, onClose, onConfirm
   const needsCustomer  = method === 'Credit' && !customerId && !(newMode && newName.trim());
   const canSubmit = Number(quantity) > 0 && !exceedsStock && Number(price) >= 0 && !needsMpesaCode && !needsCustomer && !submitting;
 
-  const handleConfirm = async () => {
+const handleConfirm = async () => {
     setSubmitting(true);
     try {
-      let saleRecord;
-      if (method === 'Credit') {
-        let cId = customerId, cName = customers.find(c=>c.id===customerId)?.name, cPhone = customers.find(c=>c.id===customerId)?.phone;
-        if (newMode) { const cr = await onCreateCustomer({ name: newName.trim(), phone: newPhone.trim() }); cId=cr.id; cName=cr.name; cPhone=cr.phone; }
-        saleRecord = await onConfirmCredit({ product, quantity: Number(quantity), soldPricePerUnit: Number(price), customerId: cId, customerName: cName, customerPhone: cPhone });
-      } else {
-        saleRecord = await onConfirmSale({ product, quantity: Number(quantity), soldPricePerUnit: Number(price), paymentMethod: method, mpesaCode: method === 'M-Pesa' ? mpesaCode.trim() : null });
+      let cId = customerId, cName = customers.find(c=>c.id===customerId)?.name, cPhone = customers.find(c=>c.id===customerId)?.phone;
+      if (method === 'Credit' && newMode) {
+        const cr = await onCreateCustomer({ name: newName.trim(), phone: newPhone.trim() });
+        cId = cr.id; cName = cr.name; cPhone = cr.phone;
       }
-      onClose(saleRecord);
+
+      const { record, commit } = method === 'Credit'
+        ? onConfirmCredit({ product, quantity: Number(quantity), soldPricePerUnit: Number(price), customerId: cId, customerName: cName, customerPhone: cPhone })
+        : onConfirmSale({ product, quantity: Number(quantity), soldPricePerUnit: Number(price), paymentMethod: method, mpesaCode: method === 'M-Pesa' ? mpesaCode.trim() : null });
+
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+      if (queuedOffline) {
+        toast.success("Sale saved — it'll sync once you're back online.");
+        commit.catch((err) => toast.error(`A sale from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+      }
+      onClose(record);
     } catch (err) {
-      toast.error(err.message); 
+      toast.error(friendlyErrorMessage(err, {
+        overrides: { 'permission-denied': "That didn't go through — the stock may have just changed, or today's session may have been closed. Please refresh and try again." },
+      }));
     } finally { setSubmitting(false); }
   };
 
@@ -2166,225 +2012,6 @@ export default function SaleModal({ open, product, customers, onClose, onConfirm
 }
 ````
 
-## File: src/components/products/ProductFormModal.jsx
-````javascript
-import { useEffect, useState } from 'react';
-import toast from 'react-hot-toast';
-import Modal from '../common/Modal';
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { db } from '../../firebase';
-import { useAuth } from '../../contexts/AuthContext';
-
-const empty = {
-  name: '', category: '', costPrice: '', sellingPrice: '', stock: '',
-  lowStockThreshold: '5', supplierId: '', barcode: '', description: '',
-};
-
-export default function ProductFormModal({
-   open, onClose, onSave, suppliers, initialProduct, prefillBarcode, onAddSupplier, newSupplierId,
-simplifiedForPurchase = false,
- }) {
-  const { businessId } = useAuth();
-  const [form, setForm] = useState(empty);
-  const [categories, setCategories] = useState([]);
-  const [showAddCategory, setShowAddCategory] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  // MULTI-TENANT CHANGE: categories used to live in a single global
-  // settings/categories doc shared by every business in the project.
-  // They now live inside this business's own businessSettings/{businessId}
-  // document, alongside shopName and cashierCanRecordExpenses.
-  useEffect(() => {
-    if (!open || !businessId) return;
-    const unsub = onSnapshot(doc(db, 'businessSettings', businessId), (snap) => {
-      if (snap.exists() && snap.data().categories) {
-        setCategories(snap.data().categories);
-      } else {
-        const defaults = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
-        setCategories(defaults);
-        setDoc(doc(db, 'businessSettings', businessId), { categories: defaults }, { merge: true }).catch(console.error);
-      }
-    });
-    return unsub;
-  }, [open, businessId]);
-
-  useEffect(() => {
-    setBusy(false);
-    if (open) {
-      if (initialProduct) {
-        setForm({
-          ...empty, ...initialProduct,
-          costPrice: initialProduct.costPrice ?? '',
-          sellingPrice: initialProduct.sellingPrice ?? '',
-          stock: initialProduct.stock ?? '',
-          lowStockThreshold: initialProduct.lowStockThreshold ?? '5',
-          supplierId: initialProduct.supplierId ?? '',
-          barcode: initialProduct.barcode ?? '',
-          description: initialProduct.description ?? '',
-        });
-      } else {
-        setForm({ ...empty, barcode: prefillBarcode || '', category: categories[0] || '' });
-      }
-    }
-  }, [initialProduct, prefillBarcode, open]);
-
-  useEffect(() => {
-    if (open && !initialProduct && !form.category && categories.length > 0) {
-      setForm(prev => ({ ...prev, category: categories[0] }));
-    }
-  }, [categories, open, initialProduct, form.category]);
-
-  useEffect(() => {
-    if (newSupplierId) setForm((prev) => ({ ...prev, supplierId: newSupplierId }));
-  }, [newSupplierId]);
-
-  const set = (f) => (e) => setForm((p) => ({ ...p, [f]: e.target.value }));
-
-  const handleAddCategory = async () => {
-    const trimmed = newCategoryName.trim();
-    if (!trimmed) return;
-    if (categories.some(c => c.toLowerCase() === trimmed.toLowerCase())) { toast.error('Category already exists.'); return; }
-    const updated = [...categories, trimmed];
-    try {
-      await setDoc(doc(db, 'businessSettings', businessId), { categories: updated }, { merge: true });
-      setForm(prev => ({ ...prev, category: trimmed }));
-      setShowAddCategory(false);
-      setNewCategoryName('');
-      toast.success('Category added');
-    } catch (err) {
-      toast.error('Failed to add category: ' + err.message);
-    }
-  };
-
-  const handle = async (e) => {
-    e.preventDefault();
-    if (!form.name.trim()) return;
-    if (!form.category) return toast.error('Please select or add a category.');
-    if (!simplifiedForPurchase && Number(form.costPrice) < 0) return toast.error('Cost price cannot be negative.');
-    if (Number(form.sellingPrice) <= 0) return toast.error('Selling price must be greater than zero.');
-    if (!initialProduct && !simplifiedForPurchase && Number(form.stock) < 0) return toast.error('Stock cannot be negative.');
-
-
-    setBusy(true);
-    try {
-      await onSave({
-        name: form.name.trim(),
-        category: form.category,
-        costPrice: simplifiedForPurchase ? 0 : Number(form.costPrice),
-        sellingPrice: Number(form.sellingPrice),
-        stock: initialProduct ? initialProduct.stock : (simplifiedForPurchase ? 0 : Number(form.stock)),
-       lowStockThreshold: simplifiedForPurchase ? 5 : (Number(form.lowStockThreshold) || 5),
-        supplierId: simplifiedForPurchase ? null : (form.supplierId || null),
-        barcode: form.barcode.trim() || null,
-        description: form.description.trim(),
-      });
-    } catch (err) {
-      setBusy(false);
-    }
-  };
-
-  const handleClose = () => { if (!busy) onClose(); };
-
-  return (
-    <Modal open={open} onClose={handleClose} title={initialProduct ? 'Edit product' : 'Add product'}>
-      <form onSubmit={handle} className="space-y-3">
-        <div><label className="label">Product name</label><input className="input" value={form.name} onChange={set('name')} disabled={busy} required /></div>
-
-        {initialProduct?.internalCode && (
-          <div className="rounded-lg bg-ink-50 px-3 py-2 text-xs text-ink-500">
-            Internal code: <span className="font-mono font-semibold text-ink-700">{initialProduct.internalCode}</span>
-          </div>
-        )}
-
-        <div>
-          <label className="label">Barcode <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
-          <input className="input font-mono" value={form.barcode} onChange={set('barcode')} placeholder="Scan or type manufacturer barcode" disabled={busy} />
-          {!initialProduct && <p className="mt-1 text-xs text-ink-400">Leave blank if this product doesn't have a manufacturer barcode.</p>}
-        </div>
-
-        <div className={simplifiedForPurchase ? '' : 'grid grid-cols-2 gap-3'}>
-          <div>
-            <label className="label">Category</label>
-            <select className="input" value={form.category} onChange={set('category')} disabled={busy} required>
-              <option value="" disabled>— Select Category —</option>
-              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-            {showAddCategory ? (
-              <div className="mt-2 space-y-2 rounded-lg bg-ink-50 p-2.5">
-                <label className="text-[11px] font-semibold text-ink-700 uppercase tracking-wide">New Category</label>
-                <input className="input !py-1 !min-h-0 text-xs" value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="e.g. Fruits" disabled={busy} autoFocus />
-                <div className="flex gap-1.5 justify-end">
-                  <button type="button" className="btn-secondary !py-1 !px-2.5 !min-h-0 text-xs" onClick={() => { setShowAddCategory(false); setNewCategoryName(''); }} disabled={busy}>Cancel</button>
-                  <button type="button" className="btn-primary !py-1 !px-2.5 !min-h-0 text-xs" onClick={handleAddCategory} disabled={busy}>Save</button>
-                </div>
-              </div>
-            ) : (
-             <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={() => setShowAddCategory(true)} disabled={busy}>+ Add Category</button>
-            )}
-          </div>
-          {!simplifiedForPurchase && (
-           <div>
-              <label className="label">Supplier</label>
-             <select className="input" value={form.supplierId} onChange={set('supplierId')} disabled={busy}>
-                <option value="">— None —</option>
-               {(suppliers || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-              {onAddSupplier && <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={onAddSupplier} disabled={busy}>+ Add new supplier</button>}
-            </div>
-          )}
-        </div>
-
-        {simplifiedForPurchase ? (
-          <div>
-            <label className="label">Selling price (KES)</label>
-            <input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required />
-            <p className="mt-1 text-xs text-ink-400">Stock starts at 0. Go back to the purchase form to record what was actually received and its cost.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Buying price (KES)</label><input type="number" min="0" step="0.01" className="input" value={form.costPrice} onChange={set('costPrice')} disabled={busy} required /></div>
-            <div><label className="label">Selling price (KES)</label><input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required /></div>
-          </div>
-        )}
-
-        {!simplifiedForPurchase && (
-         <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Stock qty</label>
-              <input type="number" min="0" className="input disabled:bg-ink-50 disabled:text-ink-400" value={form.stock} onChange={set('stock')} disabled={!!initialProduct || busy} required={!initialProduct} />
-              {initialProduct && <p className="mt-1 text-[11px] text-ink-400">Stock quantity is changed via Purchases, Sales, or Stock Take.</p>}
-            </div>
-            <div><label className="label">Low stock alert</label><input type="number" min="0" className="input" value={form.lowStockThreshold} onChange={set('lowStockThreshold')} disabled={busy} /></div>
-          </div>
-        )}
-
-        <div>
-          <label className="label">Description <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
-          <textarea className="input !min-h-[70px]" rows={2} value={form.description} onChange={set('description')} placeholder="Product details or specifications" disabled={busy} />
-        </div>
-
-        {Number(form.sellingPrice) > 0 && Number(form.costPrice) > 0 && Number(form.sellingPrice) <= Number(form.costPrice) && (
-          <p className="text-xs text-rust-600 font-medium">⚠️ Selling price is at or below cost — you'll make no profit on this item.</p>
-        )}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="btn-primary" disabled={busy}>
-            {busy ? (
-              <span className="flex items-center gap-1.5">
-                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                {initialProduct ? 'Saving...' : 'Adding Product...'}
-              </span>
-            ) : (initialProduct ? 'Save changes' : 'Add product')}
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-````
-
 ## File: src/components/scanner/ScanFab.jsx
 ````javascript
 // src/components/scanner/ScanFab.jsx
@@ -2427,7 +2054,7 @@ export default function ScannerModal({ open, onClose, onDetected }) {
     onDetected(text);
   }, [paused, onDetected]);
 
-  const { videoRef, status, torchOn, torchSupported, toggleTorch } = useCameraScanner({
+const { videoRef, status, torchOn, torchSupported, toggleTorch, retry } = useCameraScanner({
     onDetected: handleDetected,
     active: open && !paused,
   });
@@ -2457,6 +2084,7 @@ export default function ScannerModal({ open, onClose, onDetected }) {
             icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
             title="Camera permission needed"
             body="FlowBiz needs camera access to scan barcodes. Please allow camera access in your browser settings, then try again."
+            action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
           />
         )}
 
@@ -2473,6 +2101,7 @@ export default function ScannerModal({ open, onClose, onDetected }) {
             icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
             title="Camera unavailable"
             body="No usable camera was found on this device. You can still find the product by searching its name or code."
+            action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
           />
         )}
       </div>
@@ -2492,12 +2121,13 @@ export default function ScannerModal({ open, onClose, onDetected }) {
   );
 }
 
-function ScannerMessage({ icon, title, body }) {
+function ScannerMessage({ icon, title, body, action }) {
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
       {icon}
       <p className="font-display text-base font-bold text-white">{title}</p>
       <p className="text-sm text-white/70">{body}</p>
+      {action}
     </div>
   );
 }
@@ -2507,26 +2137,40 @@ function ScannerMessage({ icon, title, body }) {
 ````javascript
 import { useEffect, useState } from 'react';
 import Modal from '../common/Modal';
+
 const empty = { name:'', contactPerson:'', phone:'', email:'', address:'', notes:'' };
 export default function SupplierFormModal({ open, onClose, onSave, initialSupplier }) {
   const [form, setForm] = useState(empty);
-  useEffect(() => { setForm(initialSupplier ? {...empty,...initialSupplier} : empty); }, [initialSupplier, open]);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setForm(initialSupplier ? {...empty,...initialSupplier} : empty); setBusy(false); }, [initialSupplier, open]);
   const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
-  const handle = e => { e.preventDefault(); if (!form.name.trim()) return; onSave({...form,name:form.name.trim()}); };
+
+  const handle = async e => {
+    e.preventDefault();
+    if (!form.name.trim() || busy) return;
+    setBusy(true);
+    try {
+      await onSave({...form,name:form.name.trim()});
+    } catch (err) {
+      setBusy(false);
+    }
+  };
+  const handleClose = () => { if (!busy) onClose(); };
+
   return (
-    <Modal open={open} onClose={onClose} title={initialSupplier ? 'Edit supplier' : 'Add supplier'}>
+    <Modal open={open} onClose={handleClose} title={initialSupplier ? 'Edit supplier' : 'Add supplier'}>
       <form onSubmit={handle} className="space-y-3">
-        <div><label className="label">Business name</label><input className="input" value={form.name} onChange={set('name')} required /></div>
+        <div><label className="label">Business name</label><input className="input" value={form.name} onChange={set('name')} required disabled={busy} /></div>
         <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Contact person</label><input className="input" value={form.contactPerson} onChange={set('contactPerson')} /></div>
-          <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={set('phone')} placeholder="07xx xxx xxx" /></div>
+          <div><label className="label">Contact person</label><input className="input" value={form.contactPerson} onChange={set('contactPerson')} disabled={busy} /></div>
+          <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={set('phone')} placeholder="07xx xxx xxx" disabled={busy} /></div>
         </div>
-        <div><label className="label">Email</label><input type="email" className="input" value={form.email} onChange={set('email')} /></div>
-        <div><label className="label">Address</label><input className="input" value={form.address} onChange={set('address')} /></div>
-        <div><label className="label">Notes</label><textarea className="input" rows={2} value={form.notes} onChange={set('notes')} /></div>
+        <div><label className="label">Email</label><input type="email" className="input" value={form.email} onChange={set('email')} disabled={busy} /></div>
+        <div><label className="label">Address</label><input className="input" value={form.address} onChange={set('address')} disabled={busy} /></div>
+        <div><label className="label">Notes</label><textarea className="input" rows={2} value={form.notes} onChange={set('notes')} disabled={busy} /></div>
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn-primary">{initialSupplier ? 'Save changes' : 'Add supplier'}</button>
+          <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Saving…' : (initialSupplier ? 'Save changes' : 'Add supplier')}</button>
         </div>
       </form>
     </Modal>
@@ -2999,16 +2643,9 @@ import { BrowserMultiFormatReader } from '@zxing/browser';
 const DEV = import.meta.env.DEV;
 const devLog = (...args) => { if (DEV) console.log('[Scanner]', ...args); };
 const devError = (...args) => { if (DEV) console.error('[Scanner]', ...args); };
+const [retryToken, setRetryToken] = useState(0);
+const retry = useCallback(() => setRetryToken((t) => t + 1), []);
 
-// ROOT CAUSE (Android): `navigator.mediaDevices` only exists in a "secure
-// context" — https:, localhost/127.0.0.1, or file:. Serving the dev server
-// with `vite --host` and opening it on a phone via the LAN IP
-// (http://192.168.x.x:5173) is NOT a secure context on Android Chrome, so
-// `navigator.mediaDevices` is `undefined` there. That's why no permission
-// dialog ever appears and the failure is instant — the code never reaches
-// getUserMedia at all. Desktop testing typically goes through
-// http://localhost:5173, which IS exempted from the secure-context
-// requirement, which is why it worked there and nowhere else.
 function getInsecureContextReason() {
   if (typeof window === 'undefined') return null;
   if (window.isSecureContext) return null;
@@ -3175,7 +2812,7 @@ export function useCameraScanner({ onDetected, active }) {
       cancelled = true;
       stop();
     };
-  }, [active, onDetected, stop]);
+  }, [active, onDetected, stop, retryToken]);
 
   const toggleTorch = useCallback(async () => {
     const track = streamRef.current?.getVideoTracks?.()[0];
@@ -3192,8 +2829,7 @@ export function useCameraScanner({ onDetected, active }) {
     }
   }, [torchOn, torchSupported]);
 
-  return { videoRef, status, torchOn, torchSupported, toggleTorch };
-}
+return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };}
 ````
 
 ## File: src/hooks/useDailySession.js
@@ -3929,7 +3565,7 @@ export default function CloseDay() {
         closedAt:serverTimestamp(), closedBy:profile.uid,
       });
       toast.success('Day closed. See you tomorrow!');
-    } catch(err) { toast.error(err.message); } finally { setSubmit(false); }
+    } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setSubmit(false); }
   };
 
   if (isClosed) return (
@@ -3995,304 +3631,6 @@ function SRow({ label, value, variance }) {
 function Variance({ v }) {
   const tone = v===0?'text-moss-700':v<0?'text-rust-600':'text-amber-600';
   return <p className={`text-sm font-semibold ${tone}`}>{v===0?'✓ Matches exactly':v<0?`Shortage of ${formatKES(Math.abs(v))}`:`Surplus of ${formatKES(v)}`}</p>;
-}
-````
-
-## File: src/pages/Counter.jsx
-````javascript
-import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Trash2 } from 'lucide-react';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useDailySession } from '../hooks/useDailySession';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import ProductGrid from '../components/pos/ProductGrid';
-import SaleModal from '../components/pos/SaleModal';
-import SaleCompleteModal from '../components/pos/SaleCompleteModal';
-import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
-
-export default function Counter() {
-  const { profile, isAdmin, businessId } = useAuth();
-  const location = useLocation();
-  const navigate = useNavigate();
-  
-  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const salesQ     = useMemo(() => businessId ? tenantQuery('sales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
-  const creditSalesQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-
-  const { data: products,  loading: prodLoading }  = useFirestoreCollection(productsQ);
-  const { data: customers }                         = useFirestoreCollection(customersQ);
-  const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
-  const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
-  const { data: suppliers }                         = useFirestoreCollection(suppliersQ);
-  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
-
-  const [search, setSearch]           = useState('');
-  const [activeProduct, setActive]    = useState(null);
-  const [completedSale, setCompletedSale] = useState(null);
-  const [pendingVoid, setPendingVoid] = useState(null);
-  const [editProduct, setEditProd]    = useState(null);
-  const [prodModal, setProdModal]     = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [notFoundCode, setNotFoundCode] = useState(null);
-
-  useEffect(() => {
-    if (location.state?.autoScan && session && !isClosed) {
-      setScannerOpen(true);
-      navigate(location.pathname, { replace: true, state: {} });
-    }
-  }, [location, navigate, session, isClosed]);
-
-  const filtered = products.filter(p =>
-    p.name.toLowerCase().includes(search.toLowerCase()) ||
-    (p.barcode && p.barcode.includes(search.trim())) ||
-    (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
-  );
-
-  const mergedSales = useMemo(() => {
-    const list = [];
-    sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
-    creditSales.forEach(cs => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
-    return list.sort((a, b) => {
-      const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
-      const bTime = b.soldAt?.toMillis?.() ?? b.soldAt?.toDate?.()?.getTime?.() ?? new Date(b.soldAt || 0).getTime();
-      return bTime - aTime;
-    }).slice(0, 100);
-  }, [sales, creditSales]);
-
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
-    return { id:ref.id, name, phone };
-  };
-
-  // FIX: Replaced runTransaction with writeBatch(db) and increment() for perfect offline capability.
-  const handleSale = async ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
-    const productRef = doc(db, 'products', product.id);
-    const saleRef = doc(collection(db, 'sales'));
-    const saleData = withBusiness({
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit,
-      totalAmount: soldPricePerUnit * quantity,
-      profit: (soldPricePerUnit - product.costPrice) * quantity,
-      paymentMethod, mpesaCode: mpesaCode || null,
-      soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(saleRef, saleData);
-    await batch.commit();
-
-    return { id: saleRef.id, ...saleData, soldAt: new Date() };
-  };
-
-  // FIX: Replaced runTransaction with writeBatch(db) for Credit Sales.
-  const handleCredit = async ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
-    const productRef = doc(db, 'products', product.id);
-    const totalAmount = soldPricePerUnit * quantity;
-    const creditRef = doc(collection(db, 'creditSales'));
-    const creditData = withBusiness({
-      customerId, customerName, customerPhone: customerPhone || '',
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
-      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
-      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(creditRef, creditData);
-    await batch.commit();
-
-    return { id: creditRef.id, ...creditData, soldAt: new Date() };
-  };
-
-  // FIX: Voiding a Cash Sale now creates a 'refunds' document to correct CloseDay till shortages.
-  const handleVoid = async () => {
-    const sale = pendingVoid;
-    setPendingVoid(null);
-    try {
-      const batch = writeBatch(db);
-      const prodRef = doc(db, 'products', sale.productId);
-      const prodSnap = await getDoc(prodRef);
-
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(sale.quantity), updatedAt: serverTimestamp() });
-      } else {
-        toast('Product was deleted; sale voided without stock restoration.', { icon: '⚠️' });
-      }
-
-      batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
-
-      if (!sale.isCredit) {
-        const refundRef = doc(collection(db, 'refunds'));
-        batch.set(refundRef, withBusiness({
-          saleId: sale.id,
-          amount: sale.totalAmount,
-          method: sale.paymentMethod,
-          refundedAt: serverTimestamp(),
-          refundedBy: profile.uid,
-          refundedByName: profile.displayName
-        }, businessId));
-      }
-
-      await batch.commit();
-      if (prodSnap.exists()) toast.success('Sale voided and stock restored.');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handleProductSave = async (data) => {
-    try {
-      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
-      else { await createProduct(data, businessId); toast.success('Product added'); }
-      setEditProd(null);
-      setProdModal(false);
-      setPrefillBarcode(null);
-    } catch (err) {
-      toast.error(err.message);
-      throw err;
-    }
-  };
-
-  const handleSupplierSave = async (supplierData) => {
-    try {
-      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-      setNewSupplierId(ref.id);
-      setSupplierModal(false);
-      toast.success('Supplier added');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setActive(found);
-    else setNotFoundCode(code);
-  };
-
-  useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
-  });
-
-  if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
-  if (isClosed) return (
-    <div className="mx-auto max-w-sm pt-8 space-y-4 text-center">
-      <EmptyState title="Today's session is closed" description="Sales are locked. An owner can reopen to continue trading." />
-      {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>}
-    </div>
-  );
-  if (!session) return <OpenSessionPrompt onOpen={floats => openSession({ ...floats, openedBy:profile.uid })} />;
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Tap a product, or scan a barcode, to record a sale.</p></div>
-        {isAdmin && <button className="btn-outline text-xs" onClick={()=>{setEditProd(null);setPrefillBarcode(null);setProdModal(true);}}>+ Quick add product</button>}
-      </div>
-      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
-      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
-        <ProductGrid products={filtered} onSelect={setActive} isAdmin={isAdmin} />}
-
-      {isAdmin && (
-        <div className="mt-4">
-          <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Sales log (last 100)</h2>
-          {salesLoading || creditLoading ? <LoadingSpinner /> : mergedSales.length === 0 ? <EmptyState title="No sales recorded" /> : (
-            <div className="card divide-y divide-ink-100">
-              {mergedSales.map(s=>(
-                <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided?'opacity-40 line-through':''}`}>
-                  <div>
-                    <p className="font-medium text-ink-700">{s.quantity} × {s.productName} — {formatKES(s.totalAmount)}</p>
-                    <p className="text-xs text-ink-400">
-                      {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
-                      {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
-                    </p>
-                  </div>
-                  {!s.isVoided && !s.isCredit && isAdmin && (
-                    <button onClick={()=>setPendingVoid(s)} className="p-1 text-rust-400 hover:text-rust-600 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Void sale"><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
-                  )}
-                  {s.isCredit && isAdmin && (
-                    <Link to={`/customers/${s.customerId}`} className="btn-outline !py-1 !px-2.5 !min-h-0 text-xs text-ink-500 hover:text-ink-700">View Customer</Link>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!notFoundCode} onClose={()=>setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={()=>setNotFoundCode(null)}>Cancel</button>
-          {isAdmin ? (
-            <button className="btn-primary" onClick={()=>{ setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
-          ) : (
-            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
-          )}
-        </div>
-      </Modal>
-
-      <SaleModal 
-        open={!!activeProduct} 
-        product={activeProduct} 
-        customers={customers} 
-        onClose={(record) => {
-          setActive(null);
-          if (record && record.id) {
-            setCompletedSale(record);
-          }
-        }} 
-        onConfirmSale={handleSale} 
-        onConfirmCredit={handleCredit} 
-        onCreateCustomer={handleCreateCustomer} 
-      />
-      <SaleCompleteModal
-        open={!!completedSale}
-        sale={completedSale}
-        onClose={() => setCompletedSale(null)}
-      />
-
-      <ProductFormModal
-        open={prodModal}
-        onClose={()=>{setProdModal(false);setEditProd(null);setPrefillBarcode(null);}}
-        onSave={handleProductSave}
-        suppliers={suppliers}
-        initialProduct={editProduct}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-      />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-      <ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" (×${pendingVoid?.quantity}) will be restored.`} confirmLabel="Void sale" danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />
-    </div>
-  );
 }
 ````
 
@@ -4372,7 +3710,7 @@ export default function CustomerDetail() {
       }
       await batch.commit();
       toast.success(`Recorded ${formatKES(amount)} repayment`);
-    } catch (err) { toast.error(err.message); throw err; }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
   };
 
   const handleCancel = async (cs) => {
@@ -4390,7 +3728,7 @@ export default function CustomerDetail() {
       });
       await batch.commit();
       toast.success('Credit sale cancelled and stock restored.');
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
   };
 
   const handleRefund = async (cs, { method }) => {
@@ -4415,7 +3753,7 @@ export default function CustomerDetail() {
       await batch.commit();
       toast.success('Sale refunded and stock restored.');
       setRefundTarget(null);
-    } catch (err) { toast.error(err.message); throw err; }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
   };
 
   if (custLoad || credLoad) return <LoadingSpinner />;
@@ -4587,312 +3925,6 @@ export default function Customers() {
 }
 ````
 
-## File: src/pages/Dashboard.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useDailySession } from '../hooks/useDailySession';
-import { useFinancialsForRange } from '../hooks/useFinancials';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import Modal from '../components/common/Modal';
-import SaleModal from '../components/pos/SaleModal';
-import SaleCompleteModal from '../components/pos/SaleCompleteModal';
-import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
-import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
-
-function StatCard({ label, value, tone = 'text-ink-900', sub }) {
-  return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
-    </div>
-  );
-}
-
-export default function Dashboard() {
-  const { profile, isAdmin, businessId, isPro } = useAuth();
-  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
-  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
-
-  const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const { data: products } = useFirestoreCollection(productsQuery);
-  const { data: customers } = useFirestoreCollection(customersQuery);
-  const { data: suppliers } = useFirestoreCollection(suppliersQuery);
-
-  const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
-  const [activeProduct, setActiveProduct] = useState(null);
-  const [completedSale, setCompletedSale] = useState(null);
-  const [editProduct, setEditProd] = useState(null);
-  const [prodModal, setProdModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [notFoundCode, setNotFoundCode] = useState(null);
-
-  const [privacyMode, setPrivacyMode] = useState(() => {
-    try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
-    catch { return false; }
-  });
-
-  const togglePrivacyMode = () => {
-    setPrivacyMode((prev) => {
-      const next = !prev;
-      try { localStorage.setItem('flowbiz_dashboard_privacy', String(next)); }
-      catch (err) { console.error('Failed to save privacy mode setting', err); }
-      return next;
-    });
-  };
-
-  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
-
-  const dashboardCashReceived = summary.totalCashReceipts;
-  const dashboardMpesaReceived = summary.totalMpesaReceipts;
-  const dashboardExpenses = summary.totalExpenses;
-  const dashboardNetProfit = summary.netProfit;
-
-  const lowStock = products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
-  const totalInventoryValue = products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
-  const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
-  const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
-  const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
-
-  const recentActivity = useMemo(() => {
-    const list = [];
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      list.push({ id: `sale-${s.id}`, type: 'Sale', title: `${s.quantity} × ${s.productName}`, subtitle: `Sold by ${s.soldByName || 'Staff'}`, amount: s.totalAmount, method: s.paymentMethod, timestamp: s.soldAt, isPositive: true });
-    });
-    (repayments || []).forEach((r) => {
-      list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
-    });
-    return list.sort((a, b) => {
-      const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
-      const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
-      return bTime - aTime;
-    }).slice(0, 8);
-  }, [sales, repayments]);
-
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
-    return { id: ref.id, name, phone };
-  };
-
-  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
-  const handleConfirmSale = async ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
-    const productRef = doc(db, 'products', product.id);
-    const saleRef = doc(collection(db, 'sales'));
-    const saleData = withBusiness({
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit,
-      totalAmount: soldPricePerUnit * quantity,
-      profit: (soldPricePerUnit - product.costPrice) * quantity,
-      paymentMethod, mpesaCode: mpesaCode || null,
-      soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(saleRef, saleData);
-    await batch.commit();
-
-    return { id: saleRef.id, ...saleData, soldAt: new Date() };
-  };
-
-  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick Credit.
-  const handleConfirmCredit = async ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
-    const productRef = doc(db, 'products', product.id);
-    const totalAmount = soldPricePerUnit * quantity;
-    const creditRef = doc(collection(db, 'creditSales'));
-    const creditData = withBusiness({
-      customerId, customerName, customerPhone: customerPhone || '',
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
-      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
-      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(creditRef, creditData);
-    await batch.commit();
-
-    return { id: creditRef.id, ...creditData, soldAt: new Date() };
-  };
-
-  const handleProductSave = async (data) => {
-    try {
-      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
-      else { await createProduct(data, businessId); toast.success('Product added'); }
-    } catch (err) { toast.error(err.message); }
-    finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
-  };
-
-  const handleSupplierSave = async (supplierData) => {
-    try {
-      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-      setNewSupplierId(ref.id);
-      setSupplierModal(false);
-      toast.success('Supplier added');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setActiveProduct(found);
-    else setNotFoundCode(code);
-  };
-
-  useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
-  });
-
-  if (sessionLoading) return <LoadingSpinner label="Loading today's session…" />;
-
-  if (isClosed) {
-    return (
-      <div className="mx-auto max-w-sm space-y-4 text-center">
-        <EmptyState title="Day is closed" description="Sales are locked until you reopen the session or tomorrow starts." />
-        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen today's session</button>}
-      </div>
-    );
-  }
-  if (!session) {
-    return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
-  }
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
-          <div className="flex items-center gap-2 mt-1">
-            {isAdmin && (
-              <Link to="/pro" className={`badge text-[11px] font-bold transition-colors ${isPro ? 'bg-amber-100 text-amber-800' : 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800'}`}>
-                {isPro ? 'FlowBiz Pro ✓' : 'Explore FlowBiz Pro →'}
-              </Link>
-            )}
-            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
-          </div>
-        </div>
-        <button
-          onClick={togglePrivacyMode}
-          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
-          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
-        >
-          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
-        </button>
-      </div>
-
-      {isAdmin && (
-        <>
-          {financialsLoading ? <LoadingSpinner /> : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
-              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
-              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
-              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
-              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
-            </div>
-          )}
-          <div className="grid gap-3 sm:grid-cols-3">
-            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
-            <StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-blue-700 hover:underline">View customers →</Link>} />
-            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-blue-700 hover:underline">View products →</Link>} />
-          </div>
-        </>
-      )}
-
-      <div>
-        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
-        {recentActivity.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
-        ) : (
-          <div className="card divide-y divide-ink-100">
-            {recentActivity.map((act) => (
-              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
-                <div className="min-w-0 flex-1 pr-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
-                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
-                  </div>
-                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <SaleModal 
-        open={!!activeProduct} 
-        product={activeProduct} 
-        customers={customers} 
-        onClose={(record) => {
-          setActiveProduct(null);
-          if (record && record.id) setCompletedSale(record);
-        }} 
-        onConfirmSale={handleConfirmSale} 
-        onConfirmCredit={handleConfirmCredit} 
-        onCreateCustomer={handleCreateCustomer} 
-      />
-      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
-          {isAdmin ? (
-            <button className="btn-primary" onClick={() => { setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
-          ) : (
-            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
-          )}
-        </div>
-      </Modal>
-
-      <ProductFormModal
-        open={prodModal}
-        onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
-        onSave={handleProductSave}
-        suppliers={suppliers}
-        initialProduct={editProduct}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-      />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-    </div>
-  );
-}
-````
-
 ## File: src/pages/Expenses.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -4910,6 +3942,8 @@ import ExportCsvButton from '../components/common/ExportCsvButton';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
 import { formatKES } from '../utils/currency';
 import { formatDateTime, todayKey } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 const emptyForm = { description:'', category:EXPENSE_CATEGORIES[0], amount:'', paymentMethod:'Cash', mpesaCode:'' };
 
 export default function Expenses() {
@@ -4930,19 +3964,23 @@ export default function Expenses() {
   if (sLoad) return <LoadingSpinner />;
   if (!isAdmin && !settings.cashierCanRecordExpenses) return <EmptyState title="Expense recording is owner-only" description="Ask your owner to enable cashier expenses in Settings." />;
 
-  const handle = async e => {
+const handle = async e => {
     e.preventDefault();
     if (!form.description.trim()||!form.amount) return;
     if (form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa transaction code.'); return; }
     setBusy(true);
-    try {
-      await addDoc(tenantCollection('expenses'), withBusiness({
-        description:form.description.trim(), category:form.category, amount:Number(form.amount),
-        paymentMethod:form.paymentMethod, mpesaCode:form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
-        recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp(),
-      }, businessId));
-      toast.success('Expense recorded'); setForm(emptyForm);
-    } catch(err) { toast.error(err.message); } finally { setBusy(false); }
+    const write = addDoc(tenantCollection('expenses'), withBusiness({
+      description:form.description.trim(), category:form.category, amount:Number(form.amount),
+      paymentMethod:form.paymentMethod, mpesaCode:form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
+      recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp(),
+    }, businessId));
+
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    setBusy(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Expense saved — it'll sync once you're back online." : 'Expense recorded');
+    if (queuedOffline) write.catch((err) => toast.error(`An expense from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+    setForm(emptyForm);
   };
 
   const rows = expenses.map(e=>({ date:formatDateTime(e.recordedAt), description:e.description, category:e.category, amount:e.amount, paymentMethod:e.paymentMethod, mpesaCode:e.mpesaCode||'', recordedBy:e.recordedByName }));
@@ -4981,84 +4019,6 @@ export default function Expenses() {
           ))}
         </div>
       )}
-    </div>
-  );
-}
-````
-
-## File: src/pages/ForgotPassword.jsx
-````javascript
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { sendPasswordResetEmail } from 'firebase/auth';
-import { auth } from '../firebase';
-
-export default function ForgotPassword() {
-  const [email, setEmail] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [error, setError] = useState(null);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
-    setSubmitting(true);
-    try {
-      await sendPasswordResetEmail(auth, email.trim(), {
-        url: `${window.location.origin}/auth/action`,
-        handleCodeInApp: true,
-      });
-      setSent(true);
-    } catch (err) {
-      const message =
-        err.code === 'auth/invalid-email'      ? 'Please enter a valid email address.' :
-        err.code === 'auth/too-many-requests'  ? 'Too many requests. Please wait a bit before trying again.' :
-        null;
-      if (message) {
-        setError(message);
-      } else {
-        // auth/user-not-found and anything else: show the same success
-        // state as a real send, so this page can't be used to probe
-        // which emails have accounts.
-        setSent(true);
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-white">Reset your password</h1>
-            <p className="text-sm text-ink-400">Enter your account email and we'll send you a reset link.</p>
-          </div>
-        </div>
-
-        {sent ? (
-          <div className="card p-6 text-center space-y-3">
-            <div className="text-3xl">📧</div>
-            <p className="text-sm text-ink-600">If an account exists for <span className="font-semibold">{email.trim()}</span>, a password reset link is on its way. Check your inbox (and spam folder).</p>
-            <Link to="/login" className="btn-primary w-full">Back to sign in</Link>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="card space-y-4 p-6">
-            {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-            <div>
-              <label className="label">Email</label>
-              <input type="email" required className="input" placeholder="owner@yourbusiness.co.ke" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" autoFocus />
-            </div>
-            <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Sending…' : 'Send reset link'}</button>
-          </form>
-        )}
-
-        <p className="text-center text-sm text-ink-400">
-          Remembered it? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link>
-        </p>
-      </div>
     </div>
   );
 }
@@ -5751,27 +4711,30 @@ export default function Pro() {
   const [loading, setLoading] = useState(false);
 
   // FIX: Shifted from missing Firebase Function to the existing Cloudflare Worker API
-  const handleSubscribe = async () => {
+const handleSubscribe = async () => {
     setLoading(true);
     try {
       const idToken = await auth.currentUser.getIdToken(true);
       const response = await fetch(`${FLOWBIZ_API_URL}/api/paystack/initialize`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        }
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
       });
-      
       const data = await response.json();
-      
-      if (data?.authorization_url) {
+
+      if (data?.access_code && window.PaystackPop) {
+        const popup = new window.PaystackPop();
+        popup.resumeTransaction(data.access_code, {
+          onSuccess: () => toast.success('Payment received — activating your subscription…'),
+          onCancel: () => toast('Payment cancelled.'),
+        });
+      } else if (data?.authorization_url) {
+        // Fallback if the Paystack script hasn't loaded yet.
         window.location.href = data.authorization_url;
       } else {
         toast.error(data?.error || "Couldn't initialize payment. Please try again.");
       }
     } catch (err) {
-      toast.error(err.message || 'Payment initiation failed.');
+      toast.error(friendlyErrorMessage(err, { fallback: 'Payment initiation failed.' }));
     } finally {
       setLoading(false);
     }
@@ -5838,379 +4801,6 @@ export default function Pro() {
           </ul>
         </div>
       </div>
-    </div>
-  );
-}
-````
-
-## File: src/pages/Products.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { Pencil, Trash2, TrendingUp } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-
-export default function Products() {
-  const { businessId } = useAuth();
-  const productsQ = useMemo(
-    () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
-    [businessId]
-  );
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const { data: products, loading, error } = useFirestoreCollection(productsQ);
-  const { data: suppliers } = useFirestoreCollection(suppliersQ);
-  
-  const [search, setSearch] = useState('');
-  const [modal, setModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [editing, setEditing] = useState(null);
-  const [pendingDel, setPendingDel] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [scanFoundProduct, setScanFoundProduct] = useState(null);
-
-  const filtered = products.filter(
-    (p) =>
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.category.toLowerCase().includes(search.toLowerCase()) ||
-      (p.barcode && p.barcode.includes(search.trim())) ||
-      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
-  );
-  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
-
-  const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
-
-  const handleSave = async (data) => {
-    try {
-      if (editing) {
-        await updateProduct(editing.id, data, editing.barcode, businessId);
-        toast.success('Product updated');
-      } else {
-        await createProduct(data, businessId);
-        toast.success('Product added');
-      }
-      closeFormModal();
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handleSupplierSave = async (supplierData) => {
-    try {
-      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-      setNewSupplierId(ref.id);
-      setSupplierModal(false);
-      toast.success('Supplier added');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handleDel = async () => {
-    try { await softDeleteProduct(pendingDel.id); toast.success('Product archived'); }
-    catch (err) { toast.error(err.message); }
-    finally { setPendingDel(null); }
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setScanFoundProduct(found);
-    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
-  };
-
-  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
-
-  return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
-        <div className="flex gap-2">
-          <Link to="/inventory-intelligence" className="btn-outline">
-            <TrendingUp className="h-4 w-4" /> Intelligence
-          </Link>
-          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
-        </div>
-      </div>
-      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      <ErrorBanner message={error} />
-      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
-        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
-      ) : (
-        <>
-          <div className="space-y-2.5 sm:hidden">
-            {filtered.map((p) => (
-              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
-                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
-                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
-                  <div>
-                    <span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span>
-                  </div>
-                  <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="hidden sm:block card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {filtered.map((p) => (
-                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
-                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
-                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
-                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
-                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
-                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
-                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
-          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
-        </div>
-      </Modal>
-
-      <ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-      <ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel="Archive" danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />
-    </div>
-  );
-}
-````
-
-## File: src/pages/Purchases.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { doc, writeBatch, increment, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
-
-import toast from 'react-hot-toast';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
-
-const empty = { supplierId:'', productId:'', quantity:'', costPricePerUnit:'', paymentStatus:'paid', paymentMethod:'Cash', mpesaCode:'' };
-
-export default function Purchases() {
-  const { profile, businessId } = useAuth();
-  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt','desc'), limit(50)) : null, [businessId]);
-  const { data: products }  = useFirestoreCollection(productsQ);
-  const { data: suppliers } = useFirestoreCollection(suppliersQ);
-  const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
-  const [form, setForm] = useState(empty);
-  const [busy, setBusy] = useState(false);
-  const [productModal, setProductModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
-
-  const selProd = products.find(p=>p.id===form.productId);
-  const selSupp = suppliers.find(s=>s.id===form.supplierId);
-  const totalCost = (Number(form.quantity)||0)*(Number(form.costPricePerUnit)||0);
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) {
-      setForm(p => ({ ...p, productId: found.id }));
-      toast.success(`Selected ${found.name}`);
-    } else {
-      setPrefillBarcode(code);
-      setProductModal(true);
-    }
-  };
-
-  useHardwareScanner(handleScanDetected, { enabled: !productModal && !supplierModal && !scannerOpen });
-
-  const handle = async e => {
-    e.preventDefault();
-    if (!form.productId||!form.supplierId||!form.quantity||!form.costPricePerUnit) { toast.error('Fill in all fields.'); return; }
-    if (form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
-    setBusy(true);
-    try {
-      const qty   = Number(form.quantity);
-      const cost  = Number(form.costPricePerUnit);
-      const total = qty * cost;
-      const batch = writeBatch(db);
-      batch.update(doc(db,'products',form.productId), { stock:increment(qty), costPrice:cost, updatedAt:serverTimestamp() });
-      const purchRef = doc(collection(db,'purchases'));
-      batch.set(purchRef, withBusiness({
-        supplierId:form.supplierId,
-        supplierName:selSupp?.name||'',
-        productId:form.productId,
-        productName:selProd?.name||'',
-        quantity:qty,
-        costPricePerUnit:cost,
-        totalCost:total,
-        purchasedBy:profile.uid,
-        purchasedByName:profile.displayName,
-        purchasedAt:serverTimestamp(),
-        paymentStatus:form.paymentStatus==='paid'?'paid':'pending_supplier_credit',
-        paymentMethod:form.paymentStatus==='paid'?form.paymentMethod:null,
-        mpesaCode:form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
-      }, businessId));
-      if (form.paymentStatus==='paid') {
-        // NOTE: paid purchases are NOT recorded as an `expenses` doc.
-        // Cash/M-Pesa outflow for a paid purchase is already derived from
-        // this `purchases` doc directly in utils/financials.js
-        // (totalCashOutflows / totalMpesaOutflows), and the purchase gets
-        // exactly one Dashboard activity entry. Writing a second `expenses`
-        // doc here previously caused a duplicate "Stock Purchase" entry in
-        // Recent Activity and incorrectly listed inventory purchases as
-        // operating expenses on the Expenses page. 
-      }
-      await batch.commit();
-      toast.success('Purchase recorded and stock updated');
-      setForm(empty);
-    } catch(err) { toast.error(err.message); } finally { setBusy(false); }
-  };
-
-  const handleSupplierSave = async (data) => {
-    try {
-      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
-      setNewSupplierId(ref.id);
-      setForm(p=>({...p, supplierId: ref.id}));
-      setSupplierModal(false);
-      toast.success('Supplier added');
-    } catch(err) { toast.error(err.message); }
-  };
-
-  return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <h1 className="font-display text-xl font-bold text-ink-900">Record Purchase</h1>
-      <form onSubmit={handle} className="card space-y-3 p-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">Supplier</label>
-            <select className="input" value={form.supplierId} onChange={set('supplierId')} required>
-              <option value="">— Select —</option>
-              {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>setSupplierModal(true)}>+ Add new supplier</button>
-          </div>
-          <div>
-            <label className="label">Product</label>
-            <select className="input" value={form.productId} onChange={set('productId')} required>
-              <option value="">— Select —</option>
-              {products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>{setPrefillBarcode(null);setProductModal(true);}}>+ Add new product</button>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Qty received</label><input type="number" min="1" className="input" value={form.quantity} onChange={set('quantity')} required /></div>
-          <div><label className="label">Cost / unit (KES)</label><input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required /></div>
-        </div>
-        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm text-ink-600">Total cost: <span className="font-semibold">{formatKES(totalCost)}</span></div>
-        <div>
-          <label className="label">Payment status</label>
-          <div className="grid grid-cols-2 gap-2">
-            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'paid'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='paid'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Paid now</button>
-            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'credit'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='credit'?'border-rust-500 bg-rust-50 text-rust-700':'border-ink-200 text-ink-500'}`}>On credit</button>
-          </div>
-        </div>
-        {form.paymentStatus==='paid'&&(
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Paid via</label><select className="input" value={form.paymentMethod} onChange={set('paymentMethod')}><option>Cash</option><option>M-Pesa</option></select></div>
-            {form.paymentMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} /></div>}
-          </div>
-        )}
-        <button type="submit" className="btn-primary w-full" disabled={busy}>{busy?'Saving…':'Record purchase'}</button>
-      </form>
-      <h2 className="font-display text-sm font-bold text-ink-800">Recent purchases</h2>
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <ProductFormModal
-        open={productModal}
-        onClose={()=>{setProductModal(false);setPrefillBarcode(null);}}
-        onSave={async (data) => {
-          try {
-            const { id } = await createProduct(data, businessId);
-            setForm(p=>({...p, productId: id}));
-            setProductModal(false);
-            setPrefillBarcode(null);
-            toast.success('Product added');
-          } catch (err) { toast.error(err.message); }
-        }}
-        suppliers={suppliers}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        simplifiedForPurchase
-      />
-      <SupplierFormModal open={supplierModal} onClose={()=>setSupplierModal(false)} onSave={handleSupplierSave} />
-      {loading?<LoadingSpinner />:purchases.length===0?<EmptyState title="No purchases yet" />:(
-        <div className="card divide-y divide-ink-100">
-          {purchases.map(p=>(
-            <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
-              <div><p className="font-medium text-ink-700">{p.quantity} × {p.productName}</p><p className="text-xs text-ink-400">{p.supplierName} · {formatDateTime(p.purchasedAt)}</p></div>
-              <div className="text-right"><p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p><span className={`badge ${p.paymentStatus==='paid'?'bg-moss-100 text-moss-700':'bg-rust-100 text-rust-700'}`}>{p.paymentStatus==='paid'?'Paid':'On credit'}</span></div>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -7069,7 +5659,7 @@ export default function StockTake() {
       setCounts({});
       setReasons({});
     } catch (err) {
-      toast.error(err.message);
+      toast.error(friendlyErrorMessage(err));
     } finally {
       setSaving(false);
       setConfirm(false);
@@ -7185,6 +5775,8 @@ import Modal from '../components/common/Modal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
 import { formatKES } from '../utils/currency';
 import { computeSupplierBalances } from '../utils/financials';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
 export default function Suppliers() {
   const { profile, businessId } = useAuth();
@@ -7215,17 +5807,32 @@ export default function Suppliers() {
   );
   const totalOwed = owedList.reduce((a, o) => a + o.balance, 0);
 
+const [deleting, setDeleting] = useState(false);
+
   const handleSave = async data => {
-    try {
-      if (editing) { await updateDoc(doc(db,'suppliers',editing.id), data); toast.success('Supplier updated'); }
-      else { await addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId)); toast.success('Supplier added'); }
-      setModal(false); setEditing(null);
-    } catch(err) { toast.error(err.message); }
+    const write = editing
+      ? updateDoc(doc(db,'suppliers',editing.id), data)
+      : addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
+
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
+    setModal(false); setEditing(null);
   };
 
   const handleDel = async () => {
-    try { await deleteDoc(doc(db,'suppliers',pendDel.id)); toast.success('Supplier removed'); }
-    catch(err) { toast.error(err.message); } finally { setPendDel(null); }
+    const balance = owedMap[pendDel.id] || 0;
+    if (balance > 0.005) {
+      toast.error(`Can't remove "${pendDel.name}" — they still have an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
+      setPendDel(null);
+      return;
+    }
+    setDeleting(true);
+    const { queuedOffline, error } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
+    setDeleting(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
+    setPendDel(null);
   };
 
   const handlePay = async e => {
@@ -7236,16 +5843,27 @@ export default function Suppliers() {
     if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatKES(balance)}.`); return; }
     if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
     setPaying(true);
-    try {
-      const batch = writeBatch(db);
-      const expRef = doc(collection(db,'expenses'));
-      batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp() }, businessId));
-      const payRef = doc(collection(db,'supplierPayments'));
-      batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:serverTimestamp(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
-      await batch.commit();
-      toast.success(`Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
-      setPayModal(false); setPayAmt(''); setPayCode('');
-    } catch(err) { toast.error(err.message); } finally { setPaying(false); }
+    const batch = writeBatch(db);
+    const expRef = doc(collection(db,'expenses'));
+    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp() }, businessId));
+    const payRef = doc(collection(db,'supplierPayments'));
+    batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:serverTimestamp(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
+
+    const commit = batch.commit();
+    const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+    setPaying(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
+    if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+    setPayModal(false); setPayAmt(''); setPayCode('');
+  };
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
   };
 
   return (
@@ -7273,8 +5891,18 @@ export default function Suppliers() {
         </div>
       )}
       <SupplierFormModal open={modal} onClose={()=>{setModal(false);setEditing(null);}} onSave={handleSave} initialSupplier={editing} />
-      <ConfirmDialog open={!!pendDel} title="Remove supplier?" message={`"${pendDel?.name}" will be removed. Purchase records stay intact.`} confirmLabel="Remove" danger onConfirm={handleDel} onCancel={()=>setPendDel(null)} />
-      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
+<ConfirmDialog
+        open={!!pendDel}
+        title="Remove supplier?"
+        message={(owedMap[pendDel?.id]||0) > 0.005
+          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)} — pay it off first.`
+          : `"${pendDel?.name}" will be removed. Purchase records stay intact.`}
+        confirmLabel={deleting ? 'Removing…' : 'Remove'}
+        confirmDisabled={deleting}
+        danger
+        onConfirm={handleDel}
+        onCancel={()=>{ if (!deleting) setPendDel(null); }}
+      />      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
         <form onSubmit={handlePay} className="space-y-3">
           <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(owedMap[selSupp?.id]||0)}</span></div>
           <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
@@ -7352,13 +5980,13 @@ export default function Users() {
       const invite = await createStaffInvite({ displayName: newName.trim(), role: newRole });
       setFreshInvite({ id: invite.id, displayName: newName.trim(), role: newRole });
       setNewName('');
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setBusy(false); }
   };
 
   const handleCancelInvite = async () => {
     try { await cancelStaffInvite(pendCancelInvite.id); toast.success('Invite cancelled'); }
-    catch (err) { toast.error(err.message); }
+    catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setPendCancelInvite(null); }
   };
 
@@ -7371,7 +5999,7 @@ export default function Users() {
     try {
       await toggleMemberActive(pendToggle.id, pendToggle.active === false);
       toast.success(pendToggle.active !== false ? 'Account deactivated' : 'Account reactivated');
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setPendToggle(null); }
   };
 
@@ -7382,7 +6010,7 @@ export default function Users() {
       return;
     }
     try { await removeStaffAccount(pendDelete.id); toast.success('Account removed.'); }
-    catch (err) { toast.error(err.message); }
+    catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setPendDelete(null); }
   };
 
@@ -7670,171 +6298,6 @@ export function buildDateBuckets(start, end, granularity = 'day') {
     cursor = new Date(cursor.getTime() + stepMs);
   }
   return buckets;
-}
-````
-
-## File: src/utils/documentService.js
-````javascript
-import { jsPDF } from 'jspdf';
-import { formatKES } from './currency';
-import { formatDateTime } from './dateRanges';
-import { httpsCallable } from 'firebase/functions';
-import { functions } from '../firebase';
-
-export async function loadImageAsDataUrl(url) {
-    if (!url) return null;
-    try {
-        const response = await fetch(url);
-        const blob = await response.blob();
-        return await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-        });
-    } catch (err) {
-        console.error('Could not load business logo for PDF:', err);
-        return null;
-    }
-}
-
-async function buildDocument(data, settings, typeLabel) {
-    const doc = new jsPDF('p', 'mm', [80, 200]);
-    let y = 10;
-    const centerX = 40;
-
-    const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
-    if (logoDataUrl) {
-        try {
-            const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
-            doc.addImage(logoDataUrl, format, centerX - 9, y, 18, 18);
-            y += 21;
-        } catch (err) {
-            console.error('Could not embed business logo in PDF:', err);
-        }
-    }
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.text(settings.shopName || 'Business Receipt', centerX, y, { align: 'center' });
-    y += 6;
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    if (settings.phone) { 
-        doc.text(settings.phone, centerX, y, { align: 'center' }); 
-        y += 5; 
-    }
-    if (settings.email) { 
-        doc.text(settings.email, centerX, y, { align: 'center' }); 
-        y += 5; 
-    }
-    if (settings.address) { 
-        doc.text(settings.address, centerX, y, { align: 'center' }); 
-        y += 5; 
-    }
-
-    y += 4;
-    doc.setDrawColor(200, 200, 200);
-    doc.line(5, y, 75, y);
-    y += 7;
-
-    doc.setFont('helvetica', 'bold');
-    doc.text(typeLabel, centerX, y, { align: 'center' });
-    y += 8;
-
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Ref: ${data.id || 'N/A'}`, 5, y); y += 5;
-    doc.text(`Date: ${formatDateTime(data.soldAt || data.recordedAt || new Date())}`, 5, y); y += 5;
-    if (data.customerName) {
-        doc.text(`Customer: ${data.customerName}`, 5, y); y += 5;
-    }
-    if (data.isCredit) {
-        doc.text(`Status: ${data.status === 'partial' ? 'Partially Paid' : 'Unpaid'}`, 5, y); y += 5;
-    } else if (data.paymentMethod || data.method) {
-        doc.text(`Payment: ${data.paymentMethod || data.method}`, 5, y); y += 5;
-    }
-
-    y += 3;
-    doc.line(5, y, 75, y);
-    y += 7;
-
-    doc.setFont('helvetica', 'bold');
-    doc.text('Item', 5, y);
-    doc.text('Amount', 75, y, { align: 'right' });
-    y += 6;
-    
-    doc.setFont('helvetica', 'normal');
-    const itemName = data.productName || data.description || 'Item';
-    const splitName = doc.splitTextToSize(itemName, 45);
-    doc.text(splitName, 5, y);
-    
-    const amountStr = formatKES(data.totalAmount || data.amount || 0);
-    doc.text(amountStr, 75, y, { align: 'right' });
-    
-    y += (splitName.length * 4) + 2;
-    if (data.quantity) {
-        doc.setFontSize(8);
-        // FIX: Display selling price (@ soldPricePerUnit), not buying price
-        doc.text(`Qty: ${data.quantity} @ ${formatKES(data.soldPricePerUnit || 0)}`, 5, y);
-        y += 6;
-    }
-
-    y += 2;
-    doc.line(5, y, 75, y);
-    y += 7;
-
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    if (data.isCredit) {
-        doc.text('AMOUNT DUE:', 5, y);
-        doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), 75, y, { align: 'right' });
-    } else {
-        doc.text('TOTAL:', 5, y);
-        doc.text(amountStr, 75, y, { align: 'right' });
-    }
-
-    y += 15;
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'italic');
-    doc.text(data.isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!', centerX, y, { align: 'center' });
-
-    return doc;
-}
-
-export async function generateReceiptPDF(sale, settings) {
-    const doc = await buildDocument(sale, settings, 'RECEIPT');
-    doc.save(`receipt-${sale.id}.pdf`);
-}
-
-export async function printReceipt(sale, settings) {
-    const doc = await buildDocument(sale, settings, 'RECEIPT');
-    doc.autoPrint();
-    window.open(doc.output('bloburl'), '_blank');
-}
-
-export async function generateInvoicePDF(creditSale, settings) {
-    const doc = await buildDocument(creditSale, settings, 'INVOICE');
-    doc.save(`invoice-${creditSale.id}.pdf`);
-}
-
-export async function printInvoice(creditSale, settings) {
-    const doc = await buildDocument(creditSale, settings, 'INVOICE');
-    doc.autoPrint();
-    window.open(doc.output('bloburl'), '_blank');
-}
-
-export async function sendWhatsAppDocument(sale, settings, phone) {
-    if (!navigator.onLine) {
-        throw new Error("You're offline. The document was saved. Connect to the internet to send it.");
-    }
-    const sendWa = httpsCallable(functions, 'sendWhatsAppDocument');
-    await sendWa({
-        documentType: sale.isCredit ? 'invoice' : 'receipt',
-        saleId: sale.id,
-        phone,
-        businessId: settings.businessId
-    });
 }
 ````
 
@@ -8385,86 +6848,6 @@ if (import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true') {
 export default app;
 ````
 
-## File: src/index.css
-````css
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@layer base {
-  /* Prevent double-tap zoom on interactive elements — smooth POS experience */
-  * {
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
-    box-sizing: border-box;
-  }
-
-  html {
-    @apply font-sans text-ink-900;
-    /* Prevent iOS bounce / overscroll that breaks fixed bottom nav */
-    overscroll-behavior: none;
-    -webkit-text-size-adjust: 100%;
-  }
-
-  body {
-    @apply bg-sand m-0 p-0;
-    overscroll-behavior: none;
-    /* Safe area insets for notched phones */
-    padding-bottom: env(safe-area-inset-bottom);
-    padding-left:   env(safe-area-inset-left);
-    padding-right:  env(safe-area-inset-right);
-  }
-
-  h1, h2, h3, h4 { @apply font-display; }
-
-  /* Smooth scrolling for all scrollable areas */
-  * { scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
-
-  /* Remove iOS input shadows */
-  input, select, textarea, button {
-    -webkit-appearance: none;
-    appearance: none;
-  }
-
-  /* Minimum touch target for all interactive elements */
-  button, a, [role="button"] {
-    min-height: 44px;
-    min-width: 44px;
-  }
-}
-
-@layer components {
-  .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold
-           transition-colors disabled:opacity-40 disabled:cursor-not-allowed
-           min-h-[44px] active:scale-95;
-  }
-  /* REDESIGN: primary action color moved from green (moss) to blue — green
-     stays reserved for success/positive-status meaning (paid, active,
-     profit) elsewhere in the app; blue is now the one color that means
-     "primary interactive action", matching every .btn-primary / focused
-     .input across the whole app in this one place. */
-  .btn-primary   { @apply btn bg-blue-600  text-white   hover:bg-blue-700  active:bg-blue-800; }
-  .btn-secondary { @apply btn bg-ink-100   text-ink-800 hover:bg-ink-200   active:bg-ink-300; }
-  .btn-danger    { @apply btn bg-rust-600  text-white   hover:bg-rust-700  active:bg-rust-800; }
-  .btn-outline   { @apply btn border border-ink-200 text-ink-700 hover:bg-ink-50 active:bg-ink-100; }
-
-  .input {
-    @apply w-full rounded-lg border border-ink-200 bg-white px-3 py-2.5 text-sm text-ink-900
-           placeholder:text-ink-300 focus:outline-none focus:ring-2 focus:ring-blue-500
-           focus:border-blue-500 min-h-[44px];
-  }
-  .label  { @apply block text-xs font-semibold uppercase tracking-wide text-ink-500 mb-1.5; }
-  .card   { @apply bg-white rounded-xl2 border border-ink-100 shadow-sm; }
-  .badge  { @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold; }
-
-  /* Bottom nav safe area support on iOS notched devices */
-  .bottom-nav-safe {
-    padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
-  }
-}
-````
-
 ## File: src/main.jsx
 ````javascript
 import { StrictMode } from 'react';
@@ -8890,11 +7273,15 @@ service cloud.firestore {
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
     <title>FlowBiz | Business Manager</title>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script src="https://js.paystack.co/v2/inline.js"></script>
   </body>
 </html>
 ````
@@ -9245,6 +7632,389 @@ export default defineConfig(({ mode }) => ({
     }),
   ],
 }));
+````
+
+## File: src/components/layout/BottomNav.jsx
+````javascript
+import { useState } from 'react';
+import { NavLink } from 'react-router-dom';
+import * as Lucide from 'lucide-react';
+import { Menu } from 'lucide-react';
+import { NAV_ITEMS, MOBILE_PRIMARY } from './navConfig';
+import { useAuth } from '../../contexts/AuthContext';
+import { useSettings } from '../../hooks/useSettings';
+import MobileMoreDrawer from './MobileMoreDrawer';
+
+export default function BottomNav() {
+  const { isAdmin } = useAuth();
+  const { settings } = useSettings();
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  const allowedPaths = MOBILE_PRIMARY[isAdmin ? 'admin' : 'cashier'];
+  const items = allowedPaths
+    .map((path) => NAV_ITEMS.find((item) => item.to === path))
+    .filter(Boolean)
+    .filter((item) => item.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses);
+
+  const Icon = ({ name, className = 'h-5 w-5' }) => {
+    const Component = Lucide[name] || Lucide.Circle;
+    return <Component className={className} strokeWidth={1.75} />;
+  };
+
+  return (
+    <>
+      {/* Position/visibility unchanged — stays fixed to the bottom on
+          mobile (lg:hidden), only the active-tab color moved to blue. */}
+      <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-ink-100 bg-white/95 backdrop-blur lg:hidden">
+        {items.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.to === '/'}
+            className={({ isActive }) =>
+              `flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold ${
+              isActive ? 'text-moss-700' : 'text-ink-400'              }`
+            }
+          >
+            <Icon name={item.icon} />
+            {item.label}
+          </NavLink>
+        ))}
+        <button
+          onClick={() => setMoreOpen(true)}
+          className="flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold text-ink-400"
+        >
+          <Menu className="h-5 w-5" strokeWidth={1.75} />
+          More
+        </button>
+      </nav>
+
+      <MobileMoreDrawer open={moreOpen} onClose={() => setMoreOpen(false)} />
+    </>
+  );
+}
+````
+
+## File: src/components/layout/MobileMoreDrawer.jsx
+````javascript
+import { NavLink } from 'react-router-dom';
+import * as Lucide from 'lucide-react';
+import { NAV_ITEMS } from './navConfig';
+import { useAuth } from '../../contexts/AuthContext';
+import { useSettings } from '../../hooks/useSettings';
+import { X } from 'lucide-react';
+
+const Icon = ({ name, className = 'h-5 w-5' }) => {
+  const Component = Lucide[name] || Lucide.Circle;
+  return <Component className={className} strokeWidth={1.75} />;
+};
+
+// Full page list for phones — the sidebar is desktop-only (lg:flex), and the
+// bottom bar only fits a handful of shortcuts, so this covers everything else
+// (Products, Purchases, Suppliers, Stock Take, Users, etc.) behind one button.
+export default function MobileMoreDrawer({ open, onClose }) {
+  const { isAdmin } = useAuth();
+  const { settings } = useSettings();
+
+  const items = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin).filter(
+    (item) => item.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses
+  );
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 lg:hidden">
+      <div className="absolute inset-0 bg-ink-950/50" onClick={onClose} />
+      <div className="absolute inset-x-0 bottom-0 max-h-[80vh] overflow-y-auto rounded-t-xl2 bg-white p-4 pb-8 shadow-xl">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-display text-base font-bold text-ink-900">All pages</h2>
+          <button onClick={onClose} className="p-1.5 rounded text-ink-400 hover:bg-ink-50 hover:text-ink-700">
+            <X className="h-5 w-5" strokeWidth={1.75} />
+          </button>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {items.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === '/'}
+              onClick={onClose}
+              className={({ isActive }) =>
+                `flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-center text-[11px] font-semibold ${
+                 isActive
+                    ? 'border-moss-200 bg-moss-50 text-moss-800'
+                    : 'border-ink-100 text-ink-500 hover:bg-ink-50'
+                }`
+              }
+            >
+              <Icon name={item.icon} />
+              {item.label}
+            </NavLink>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+````
+
+## File: src/components/layout/Sidebar.jsx
+````javascript
+import { NavLink } from 'react-router-dom';
+import * as Lucide from 'lucide-react';
+import { NAV_ITEMS } from './navConfig';
+import { useAuth } from '../../contexts/AuthContext';
+import { useSettings } from '../../hooks/useSettings';
+const Icon = ({ name, className='h-5 w-5' }) => { const C = Lucide[name]||Lucide.Circle; return <C className={className} strokeWidth={1.75} />; };
+export default function Sidebar() {
+  const { isAdmin } = useAuth();
+  const { settings } = useSettings();
+  const items = NAV_ITEMS
+    .filter(i => !i.adminOnly || isAdmin)
+    .filter(i => i.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses);
+  return (
+    <aside className="hidden w-60 shrink-0 flex-col border-r border-ink-100 bg-white lg:flex">
+      <div className="flex items-center gap-3 px-5 py-5 border-b border-ink-100">
+        <img src="/icons/icon-72.png" alt="FlowBiz" className="h-9 w-9 rounded-lg" />
+        <div><p className="font-display text-sm font-bold leading-tight text-ink-900">FlowBiz</p><p className="text-[11px] leading-tight text-ink-400">Business Manager</p></div>
+      </div>
+      <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
+        {items.map(item => (
+<NavLink key={item.to} to={item.to} end={item.to==='/'} className={({isActive}) => `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${isActive ? 'bg-moss-50 text-moss-800' : 'text-ink-500 hover:bg-ink-50 hover:text-ink-800'}`}>            <Icon name={item.icon} />{item.label}
+          </NavLink>
+        ))}
+      </nav>
+    </aside>
+  );
+}
+````
+
+## File: src/components/products/ProductFormModal.jsx
+````javascript
+import { useEffect, useState } from 'react';
+import toast from 'react-hot-toast';
+import Modal from '../common/Modal';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { db } from '../../firebase';
+import { useAuth } from '../../contexts/AuthContext';
+
+const empty = {
+  name: '', category: '', costPrice: '', sellingPrice: '', stock: '',
+  lowStockThreshold: '5', supplierId: '', barcode: '', description: '',
+};
+
+// FIX: Free plan product limit.
+const FREE_PLAN_PRODUCT_LIMIT = 100;
+
+export default function ProductFormModal({
+   open, onClose, onSave, suppliers, initialProduct, prefillBarcode, onAddSupplier, newSupplierId,
+simplifiedForPurchase = false, productCount = 0,
+ }) {
+  const { businessId, isPro } = useAuth();
+  const [form, setForm] = useState(empty);
+  const [categories, setCategories] = useState([]);
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  // MULTI-TENANT CHANGE: categories used to live in a single global
+  // settings/categories doc shared by every business in the project.
+  // They now live inside this business's own businessSettings/{businessId}
+  // document, alongside shopName and cashierCanRecordExpenses.
+  useEffect(() => {
+    if (!open || !businessId) return;
+    const unsub = onSnapshot(doc(db, 'businessSettings', businessId), (snap) => {
+      if (snap.exists() && snap.data().categories) {
+        setCategories(snap.data().categories);
+      } else {
+        const defaults = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
+        setCategories(defaults);
+        setDoc(doc(db, 'businessSettings', businessId), { categories: defaults }, { merge: true }).catch(console.error);
+      }
+    });
+    return unsub;
+  }, [open, businessId]);
+
+  useEffect(() => {
+    setBusy(false);
+    if (open) {
+      if (initialProduct) {
+        setForm({
+          ...empty, ...initialProduct,
+          costPrice: initialProduct.costPrice ?? '',
+          sellingPrice: initialProduct.sellingPrice ?? '',
+          stock: initialProduct.stock ?? '',
+          lowStockThreshold: initialProduct.lowStockThreshold ?? '5',
+          supplierId: initialProduct.supplierId ?? '',
+          barcode: initialProduct.barcode ?? '',
+          description: initialProduct.description ?? '',
+        });
+      } else {
+        setForm({ ...empty, barcode: prefillBarcode || '', category: categories[0] || '' });
+      }
+    }
+  }, [initialProduct, prefillBarcode, open]);
+
+  useEffect(() => {
+    if (open && !initialProduct && !form.category && categories.length > 0) {
+      setForm(prev => ({ ...prev, category: categories[0] }));
+    }
+  }, [categories, open, initialProduct, form.category]);
+
+  useEffect(() => {
+    if (newSupplierId) setForm((prev) => ({ ...prev, supplierId: newSupplierId }));
+  }, [newSupplierId]);
+
+  const set = (f) => (e) => setForm((p) => ({ ...p, [f]: e.target.value }));
+
+  const handleAddCategory = async () => {
+    const trimmed = newCategoryName.trim();
+    if (!trimmed) return;
+    if (categories.some(c => c.toLowerCase() === trimmed.toLowerCase())) { toast.error('Category already exists.'); return; }
+    const updated = [...categories, trimmed];
+    try {
+      await setDoc(doc(db, 'businessSettings', businessId), { categories: updated }, { merge: true });
+      setForm(prev => ({ ...prev, category: trimmed }));
+      setShowAddCategory(false);
+      setNewCategoryName('');
+      toast.success('Category added');
+    } catch (err) {
+      toast.error('Failed to add category: ' + err.message);
+    }
+  };
+
+  const handle = async (e) => {
+    e.preventDefault();
+    if (!form.name.trim()) return;
+    if (!form.category) return toast.error('Please select or add a category.');
+    if (!simplifiedForPurchase && Number(form.costPrice) < 0) return toast.error('Cost price cannot be negative.');
+    if (Number(form.sellingPrice) <= 0) return toast.error('Selling price must be greater than zero.');
+   if (!initialProduct && !simplifiedForPurchase && Number(form.stock) < 0) return toast.error('Stock cannot be negative.');
+
+    // FIX: Free plan capped at FREE_PLAN_PRODUCT_LIMIT active products —
+    // only blocks NEW products, never editing an existing one.
+    if (!initialProduct && !isPro && productCount >= FREE_PLAN_PRODUCT_LIMIT) {
+      toast.error(`Free plan is limited to ${FREE_PLAN_PRODUCT_LIMIT} products. Upgrade to FlowBiz Pro to add more.`);
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await onSave({
+        name: form.name.trim(),
+        category: form.category,
+        costPrice: simplifiedForPurchase ? 0 : Number(form.costPrice),
+        sellingPrice: Number(form.sellingPrice),
+        stock: initialProduct ? initialProduct.stock : (simplifiedForPurchase ? 0 : Number(form.stock)),
+       lowStockThreshold: simplifiedForPurchase ? 5 : (Number(form.lowStockThreshold) || 5),
+        supplierId: simplifiedForPurchase ? null : (form.supplierId || null),
+        barcode: form.barcode.trim() || null,
+        description: form.description.trim(),
+      });
+    } catch (err) {
+      setBusy(false);
+    }
+  };
+
+  const handleClose = () => { if (!busy) onClose(); };
+
+  return (
+    <Modal open={open} onClose={handleClose} title={initialProduct ? 'Edit product' : 'Add product'}>
+      <form onSubmit={handle} className="space-y-3">
+        <div><label className="label">Product name</label><input className="input" value={form.name} onChange={set('name')} disabled={busy} required /></div>
+
+        {initialProduct?.internalCode && (
+          <div className="rounded-lg bg-ink-50 px-3 py-2 text-xs text-ink-500">
+            Internal code: <span className="font-mono font-semibold text-ink-700">{initialProduct.internalCode}</span>
+          </div>
+        )}
+
+        <div>
+          <label className="label">Barcode <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
+          <input className="input font-mono" value={form.barcode} onChange={set('barcode')} placeholder="Scan or type manufacturer barcode" disabled={busy} />
+          {!initialProduct && <p className="mt-1 text-xs text-ink-400">Leave blank if this product doesn't have a manufacturer barcode.</p>}
+        </div>
+
+        <div className={simplifiedForPurchase ? '' : 'grid grid-cols-2 gap-3'}>
+          <div>
+            <label className="label">Category</label>
+            <select className="input" value={form.category} onChange={set('category')} disabled={busy} required>
+              <option value="" disabled>— Select Category —</option>
+              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            {showAddCategory ? (
+              <div className="mt-2 space-y-2 rounded-lg bg-ink-50 p-2.5">
+                <label className="text-[11px] font-semibold text-ink-700 uppercase tracking-wide">New Category</label>
+                <input className="input !py-1 !min-h-0 text-xs" value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="e.g. Fruits" disabled={busy} autoFocus />
+                <div className="flex gap-1.5 justify-end">
+                  <button type="button" className="btn-secondary !py-1 !px-2.5 !min-h-0 text-xs" onClick={() => { setShowAddCategory(false); setNewCategoryName(''); }} disabled={busy}>Cancel</button>
+                  <button type="button" className="btn-primary !py-1 !px-2.5 !min-h-0 text-xs" onClick={handleAddCategory} disabled={busy}>Save</button>
+                </div>
+              </div>
+            ) : (
+             <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={() => setShowAddCategory(true)} disabled={busy}>+ Add Category</button>
+            )}
+          </div>
+          {!simplifiedForPurchase && (
+           <div>
+              <label className="label">Supplier</label>
+             <select className="input" value={form.supplierId} onChange={set('supplierId')} disabled={busy}>
+                <option value="">— None —</option>
+               {(suppliers || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              {onAddSupplier && <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={onAddSupplier} disabled={busy}>+ Add new supplier</button>}
+            </div>
+          )}
+        </div>
+
+        {simplifiedForPurchase ? (
+          <div>
+            <label className="label">Selling price (KES)</label>
+            <input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required />
+            <p className="mt-1 text-xs text-ink-400">Stock starts at 0. Go back to the purchase form to record what was actually received and its cost.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="label">Buying price (KES)</label><input type="number" min="0" step="0.01" className="input" value={form.costPrice} onChange={set('costPrice')} disabled={busy} required /></div>
+            <div><label className="label">Selling price (KES)</label><input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required /></div>
+          </div>
+        )}
+
+        {!simplifiedForPurchase && (
+         <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Stock qty</label>
+              <input type="number" min="0" className="input disabled:bg-ink-50 disabled:text-ink-400" value={form.stock} onChange={set('stock')} disabled={!!initialProduct || busy} required={!initialProduct} />
+              {initialProduct && <p className="mt-1 text-[11px] text-ink-400">Stock quantity is changed via Purchases, Sales, or Stock Take.</p>}
+            </div>
+            <div><label className="label">Low stock alert</label><input type="number" min="0" className="input" value={form.lowStockThreshold} onChange={set('lowStockThreshold')} disabled={busy} /></div>
+          </div>
+        )}
+
+        <div>
+          <label className="label">Description <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
+          <textarea className="input !min-h-[70px]" rows={2} value={form.description} onChange={set('description')} placeholder="Product details or specifications" disabled={busy} />
+        </div>
+
+        {Number(form.sellingPrice) > 0 && Number(form.costPrice) > 0 && Number(form.sellingPrice) <= Number(form.costPrice) && (
+          <p className="text-xs text-rust-600 font-medium">⚠️ Selling price is at or below cost — you'll make no profit on this item.</p>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy}>
+            {busy ? (
+              <span className="flex items-center gap-1.5">
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                {initialProduct ? 'Saving...' : 'Adding Product...'}
+              </span>
+            ) : (initialProduct ? 'Save changes' : 'Add product')}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
 ````
 
 ## File: src/contexts/AuthContext.jsx
@@ -9805,6 +8575,692 @@ function ResetPasswordPanel({ oobCode }) {
 }
 ````
 
+## File: src/pages/Counter.jsx
+````javascript
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Trash2 } from 'lucide-react';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useDailySession } from '../hooks/useDailySession';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import ProductGrid from '../components/pos/ProductGrid';
+import SaleModal from '../components/pos/SaleModal';
+import SaleCompleteModal from '../components/pos/SaleCompleteModal';
+import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+
+export default function Counter() {
+  const { profile, isAdmin, businessId } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  
+  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  const salesQ     = useMemo(() => businessId ? tenantQuery('sales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
+  const creditSalesQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+
+  const { data: products,  loading: prodLoading }  = useFirestoreCollection(productsQ);
+  const { data: customers }                         = useFirestoreCollection(customersQ);
+  const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
+  const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
+  const { data: suppliers }                         = useFirestoreCollection(suppliersQ);
+  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
+
+  const [search, setSearch]           = useState('');
+  const [activeProduct, setActive]    = useState(null);
+  const [completedSale, setCompletedSale] = useState(null);
+  const [pendingVoid, setPendingVoid] = useState(null);
+  const [editProduct, setEditProd]    = useState(null);
+  const [prodModal, setProdModal]     = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [notFoundCode, setNotFoundCode] = useState(null);
+
+  useEffect(() => {
+    if (location.state?.autoScan && session && !isClosed) {
+      setScannerOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location, navigate, session, isClosed]);
+
+  const filtered = products.filter(p =>
+    p.name.toLowerCase().includes(search.toLowerCase()) ||
+    (p.barcode && p.barcode.includes(search.trim())) ||
+    (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  const mergedSales = useMemo(() => {
+    const list = [];
+    sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
+    creditSales.forEach(cs => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
+    return list.sort((a, b) => {
+      const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
+      const bTime = b.soldAt?.toMillis?.() ?? b.soldAt?.toDate?.()?.getTime?.() ?? new Date(b.soldAt || 0).getTime();
+      return bTime - aTime;
+    }).slice(0, 100);
+  }, [sales, creditSales]);
+
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
+    return { id:ref.id, name, phone };
+  };
+
+  // FIX: Replaced runTransaction with writeBatch(db) and increment() for perfect offline capability.
+const handleSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
+    const productRef = doc(db, 'products', product.id);
+    const saleRef = doc(collection(db, 'sales'));
+    const saleData = withBusiness({
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit,
+      totalAmount: soldPricePerUnit * quantity,
+      profit: (soldPricePerUnit - product.costPrice) * quantity,
+      paymentMethod, mpesaCode: mpesaCode || null,
+      soldBy: profile.uid, soldByName: profile.displayName,
+      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(saleRef, saleData);
+
+    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
+    const productRef = doc(db, 'products', product.id);
+    const totalAmount = soldPricePerUnit * quantity;
+    const creditRef = doc(collection(db, 'creditSales'));
+    const creditData = withBusiness({
+      customerId, customerName, customerPhone: customerPhone || '',
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
+      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
+      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
+      isCredit: true
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(creditRef, creditData);
+
+    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  // FIX: Voiding a Cash Sale now creates a 'refunds' document to correct CloseDay till shortages.
+  const handleVoid = async () => {
+    const sale = pendingVoid;
+    setPendingVoid(null);
+    try {
+      const batch = writeBatch(db);
+      const prodRef = doc(db, 'products', sale.productId);
+      const prodSnap = await getDoc(prodRef);
+
+      if (prodSnap.exists()) {
+        batch.update(prodRef, { stock: increment(sale.quantity), updatedAt: serverTimestamp() });
+      } else {
+        toast('Product was deleted; sale voided without stock restoration.', { icon: '⚠️' });
+      }
+
+      batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
+
+      if (!sale.isCredit) {
+        const refundRef = doc(collection(db, 'refunds'));
+        batch.set(refundRef, withBusiness({
+          saleId: sale.id,
+          amount: sale.totalAmount,
+          method: sale.paymentMethod,
+          refundedAt: serverTimestamp(),
+          refundedBy: profile.uid,
+          refundedByName: profile.displayName
+        }, businessId));
+      }
+
+      await batch.commit();
+      if (prodSnap.exists()) toast.success('Sale voided and stock restored.');
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+  };
+
+  const handleProductSave = async (data) => {
+    try {
+      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
+      else { await createProduct(data, businessId); toast.success('Product added'); }
+      setEditProd(null);
+      setProdModal(false);
+      setPrefillBarcode(null);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+      throw err;
+    }
+  };
+
+  const handleSupplierSave = async (supplierData) => {
+    try {
+      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+      setNewSupplierId(ref.id);
+      setSupplierModal(false);
+      toast.success('Supplier added');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setActive(found);
+    else setNotFoundCode(code);
+  };
+
+  useHardwareScanner(handleScanDetected, {
+    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
+  });
+
+  if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
+  if (isClosed) return (
+    <div className="mx-auto max-w-sm pt-8 space-y-4 text-center">
+      <EmptyState title="Today's session is closed" description="Sales are locked. An owner can reopen to continue trading." />
+      {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>}
+    </div>
+  );
+  if (!session) return <OpenSessionPrompt onOpen={floats => openSession({ ...floats, openedBy:profile.uid })} />;
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Tap a product, or scan a barcode, to record a sale.</p></div>
+        {isAdmin && <button className="btn-outline text-xs" onClick={()=>{setEditProd(null);setPrefillBarcode(null);setProdModal(true);}}>+ Quick add product</button>}
+      </div>
+      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
+      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
+        <ProductGrid products={filtered} onSelect={setActive} isAdmin={isAdmin} />}
+
+      {isAdmin && (
+        <div className="mt-4">
+          <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Sales log (last 100)</h2>
+          {salesLoading || creditLoading ? <LoadingSpinner /> : mergedSales.length === 0 ? <EmptyState title="No sales recorded" /> : (
+            <div className="card divide-y divide-ink-100">
+              {mergedSales.map(s=>(
+                <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided?'opacity-40 line-through':''}`}>
+                  <div>
+                    <p className="font-medium text-ink-700">{s.quantity} × {s.productName} — {formatKES(s.totalAmount)}</p>
+                    <p className="text-xs text-ink-400">
+                      {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
+                      {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
+                    </p>
+                  </div>
+                  {!s.isVoided && !s.isCredit && isAdmin && (
+                    <button onClick={()=>setPendingVoid(s)} className="p-1 text-rust-400 hover:text-rust-600 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Void sale"><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
+                  )}
+                  {s.isCredit && isAdmin && (
+                    <Link to={`/customers/${s.customerId}`} className="btn-outline !py-1 !px-2.5 !min-h-0 text-xs text-ink-500 hover:text-ink-700">View Customer</Link>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!notFoundCode} onClose={()=>setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={()=>setNotFoundCode(null)}>Cancel</button>
+          {isAdmin ? (
+            <button className="btn-primary" onClick={()=>{ setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
+          ) : (
+            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
+          )}
+        </div>
+      </Modal>
+
+      <SaleModal 
+        open={!!activeProduct} 
+        product={activeProduct} 
+        customers={customers} 
+        onClose={(record) => {
+          setActive(null);
+          if (record && record.id) {
+            setCompletedSale(record);
+          }
+        }} 
+        onConfirmSale={handleSale} 
+        onConfirmCredit={handleCredit} 
+        onCreateCustomer={handleCreateCustomer} 
+      />
+      <SaleCompleteModal
+        open={!!completedSale}
+        sale={completedSale}
+        onClose={() => setCompletedSale(null)}
+      />
+
+<ProductFormModal
+        open={prodModal}
+        onClose={()=>{setProdModal(false);setEditProd(null);setPrefillBarcode(null);}}
+        onSave={handleProductSave}
+        suppliers={suppliers}
+        initialProduct={editProduct}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+      />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+      <ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" (×${pendingVoid?.quantity}) will be restored.`} confirmLabel="Void sale" danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />
+    </div>
+  );
+}
+````
+
+## File: src/pages/Dashboard.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useDailySession } from '../hooks/useDailySession';
+import { useFinancialsForRange } from '../hooks/useFinancials';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import Modal from '../components/common/Modal';
+import SaleModal from '../components/pos/SaleModal';
+import SaleCompleteModal from '../components/pos/SaleCompleteModal';
+import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
+import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
+
+function StatCard({ label, value, tone = 'text-ink-900', sub }) {
+  return (
+    <div className="card p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
+      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
+    </div>
+  );
+}
+
+export default function Dashboard() {
+  const { profile, isAdmin, businessId, isPro } = useAuth();
+  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
+  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
+
+  const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const { data: products } = useFirestoreCollection(productsQuery);
+  const { data: customers } = useFirestoreCollection(customersQuery);
+  const { data: suppliers } = useFirestoreCollection(suppliersQuery);
+
+  const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
+  const [activeProduct, setActiveProduct] = useState(null);
+  const [completedSale, setCompletedSale] = useState(null);
+  const [editProduct, setEditProd] = useState(null);
+  const [prodModal, setProdModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [notFoundCode, setNotFoundCode] = useState(null);
+
+  const [privacyMode, setPrivacyMode] = useState(() => {
+    try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
+    catch { return false; }
+  });
+
+  const togglePrivacyMode = () => {
+    setPrivacyMode((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('flowbiz_dashboard_privacy', String(next)); }
+      catch (err) { console.error('Failed to save privacy mode setting', err); }
+      return next;
+    });
+  };
+
+  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
+
+  const dashboardCashReceived = summary.totalCashReceipts;
+  const dashboardMpesaReceived = summary.totalMpesaReceipts;
+  const dashboardExpenses = summary.totalExpenses;
+  const dashboardNetProfit = summary.netProfit;
+
+  const lowStock = products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
+  const totalInventoryValue = products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
+  const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
+  const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
+  const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
+
+  const recentActivity = useMemo(() => {
+    const list = [];
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      list.push({ id: `sale-${s.id}`, type: 'Sale', title: `${s.quantity} × ${s.productName}`, subtitle: `Sold by ${s.soldByName || 'Staff'}`, amount: s.totalAmount, method: s.paymentMethod, timestamp: s.soldAt, isPositive: true });
+    });
+    (repayments || []).forEach((r) => {
+      list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
+    });
+    return list.sort((a, b) => {
+      const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
+      const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
+      return bTime - aTime;
+    }).slice(0, 8);
+  }, [sales, repayments]);
+
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
+    return { id: ref.id, name, phone };
+  };
+
+  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
+  const handleConfirmSale = async ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
+    const productRef = doc(db, 'products', product.id);
+    const saleRef = doc(collection(db, 'sales'));
+    const saleData = withBusiness({
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit,
+      totalAmount: soldPricePerUnit * quantity,
+      profit: (soldPricePerUnit - product.costPrice) * quantity,
+      paymentMethod, mpesaCode: mpesaCode || null,
+      soldBy: profile.uid, soldByName: profile.displayName,
+      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(saleRef, saleData);
+    await batch.commit();
+
+    return { id: saleRef.id, ...saleData, soldAt: new Date() };
+  };
+
+  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick Credit.
+  const handleConfirmCredit = async ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
+    const productRef = doc(db, 'products', product.id);
+    const totalAmount = soldPricePerUnit * quantity;
+    const creditRef = doc(collection(db, 'creditSales'));
+    const creditData = withBusiness({
+      customerId, customerName, customerPhone: customerPhone || '',
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
+      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
+      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
+      isCredit: true
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(creditRef, creditData);
+    await batch.commit();
+
+    return { id: creditRef.id, ...creditData, soldAt: new Date() };
+  };
+
+  const handleProductSave = async (data) => {
+    try {
+      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
+      else { await createProduct(data, businessId); toast.success('Product added'); }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
+  };
+
+  const handleSupplierSave = async (supplierData) => {
+    try {
+      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+      setNewSupplierId(ref.id);
+      setSupplierModal(false);
+      toast.success('Supplier added');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setActiveProduct(found);
+    else setNotFoundCode(code);
+  };
+
+  useHardwareScanner(handleScanDetected, {
+    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
+  });
+
+  if (sessionLoading) return <LoadingSpinner label="Loading today's session…" />;
+
+  if (isClosed) {
+    return (
+      <div className="mx-auto max-w-sm space-y-4 text-center">
+        <EmptyState title="Day is closed" description="Sales are locked until you reopen the session or tomorrow starts." />
+        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen today's session</button>}
+      </div>
+    );
+  }
+  if (!session) {
+    return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
+          <div className="flex items-center gap-2 mt-1">
+            {isAdmin && (
+<Link to="/pro" className={`badge text-[11px] font-bold transition-colors ${isPro ? 'bg-amber-100 text-amber-800' : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'}`}>                {isPro ? 'FlowBiz Pro ✓' : 'Explore FlowBiz Pro'}
+              </Link>
+            )}
+            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
+          </div>
+        </div>
+        <button
+          onClick={togglePrivacyMode}
+          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
+          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
+        >
+          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
+        </button>
+      </div>
+
+      {isAdmin && (
+        <>
+          {financialsLoading ? <LoadingSpinner /> : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
+              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
+              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
+              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
+              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
+<StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
+            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
+          </div>
+        </>
+      )}
+
+      <div>
+        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
+        {recentActivity.length === 0 ? (
+          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
+        ) : (
+          <div className="card divide-y divide-ink-100">
+            {recentActivity.map((act) => (
+              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
+                <div className="min-w-0 flex-1 pr-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
+                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
+                  </div>
+                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <SaleModal 
+        open={!!activeProduct} 
+        product={activeProduct} 
+        customers={customers} 
+        onClose={(record) => {
+          setActiveProduct(null);
+          if (record && record.id) setCompletedSale(record);
+        }} 
+        onConfirmSale={handleConfirmSale} 
+        onConfirmCredit={handleConfirmCredit} 
+        onCreateCustomer={handleCreateCustomer} 
+      />
+      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
+          {isAdmin ? (
+            <button className="btn-primary" onClick={() => { setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
+          ) : (
+            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
+          )}
+        </div>
+      </Modal>
+
+<ProductFormModal
+        open={prodModal}
+        onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
+        onSave={handleProductSave}
+        suppliers={suppliers}
+        initialProduct={editProduct}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+      />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+    </div>
+  );
+}
+````
+
+## File: src/pages/ForgotPassword.jsx
+````javascript
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '../firebase';
+
+export default function ForgotPassword() {
+  const [email, setEmail] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      await sendPasswordResetEmail(auth, email.trim(), {
+        url: `${window.location.origin}/auth/action`,
+        handleCodeInApp: true,
+      });
+      setSent(true);
+} catch (err) {
+      // FIX: previously every error EXCEPT invalid-email/too-many-requests
+      // silently showed "sent" — including real failures (unauthorized
+      // continue URL, network errors, misconfigured project), which is
+      // why resets appeared to silently vanish. Only auth/user-not-found
+      // is safe to mask as success; everything else now shows a real
+      // message, and every error is logged so DevTools shows the cause.
+      console.error('[FlowBiz] sendPasswordResetEmail failed:', err.code || err.name, err.message);
+      const message =
+        err.code === 'auth/invalid-email'             ? 'Please enter a valid email address.' :
+        err.code === 'auth/too-many-requests'         ? 'Too many requests. Please wait a bit before trying again.' :
+        err.code === 'auth/unauthorized-continue-uri' ? 'This site is not yet authorized to send reset links. Please contact support.' :
+        err.code === 'auth/user-not-found'            ? null :
+        "Couldn't send the reset email. Please try again in a moment.";
+      if (message === null) {
+        setSent(true);
+      } else {
+        setError(message);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="flex flex-col items-center text-center gap-3">
+          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
+          <div>
+            <h1 className="font-display text-2xl font-bold text-white">Reset your password</h1>
+            <p className="text-sm text-ink-400">Enter your account email and we'll send you a reset link.</p>
+          </div>
+        </div>
+
+        {sent ? (
+          <div className="card p-6 text-center space-y-3">
+            <div className="text-3xl">📧</div>
+            <p className="text-sm text-ink-600">If an account exists for <span className="font-semibold">{email.trim()}</span>, a password reset link is on its way. Check your inbox (and spam folder).</p>
+            <Link to="/login" className="btn-primary w-full">Back to sign in</Link>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="card space-y-4 p-6">
+            {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
+            <div>
+              <label className="label">Email</label>
+              <input type="email" required className="input" placeholder="owner@yourbusiness.co.ke" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" autoFocus />
+            </div>
+            <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Sending…' : 'Send reset link'}</button>
+          </form>
+        )}
+
+        <p className="text-center text-sm text-ink-400">
+          Remembered it? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link>
+        </p>
+      </div>
+    </div>
+  );
+}
+````
+
 ## File: src/pages/Login.jsx
 ````javascript
 import { useEffect, useState } from 'react';
@@ -9878,45 +9334,445 @@ finally {
 }
 ````
 
+## File: src/pages/Products.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { Pencil, Trash2, TrendingUp } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+
+export default function Products() {
+  const { businessId } = useAuth();
+  const productsQ = useMemo(
+    () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
+    [businessId]
+  );
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const { data: products, loading, error } = useFirestoreCollection(productsQ);
+  const { data: suppliers } = useFirestoreCollection(suppliersQ);
+  
+  const [search, setSearch] = useState('');
+  const [modal, setModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [pendingDel, setPendingDel] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanFoundProduct, setScanFoundProduct] = useState(null);
+
+  const filtered = products.filter(
+    (p) =>
+      p.name.toLowerCase().includes(search.toLowerCase()) ||
+      p.category.toLowerCase().includes(search.toLowerCase()) ||
+      (p.barcode && p.barcode.includes(search.trim())) ||
+      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  );
+  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
+
+  const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
+
+  const handleSave = async (data) => {
+    try {
+      if (editing) {
+        await updateProduct(editing.id, data, editing.barcode, businessId);
+        toast.success('Product updated');
+      } else {
+        await createProduct(data, businessId);
+        toast.success('Product added');
+      }
+      closeFormModal();
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+  };
+
+  const handleSupplierSave = async (supplierData) => {
+    try {
+      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+      setNewSupplierId(ref.id);
+      setSupplierModal(false);
+      toast.success('Supplier added');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const handleDel = async () => {
+    try { await softDeleteProduct(pendingDel.id); toast.success('Product archived'); }
+    catch (err) {toast.error(friendlyErrorMessage(err)); }
+    finally { setPendingDel(null); }
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setScanFoundProduct(found);
+    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
+  };
+
+  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
+        <div className="flex gap-2">
+          <Link to="/inventory-intelligence" className="btn-outline">
+            <TrendingUp className="h-4 w-4" /> Intelligence
+          </Link>
+          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
+        </div>
+      </div>
+      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <ErrorBanner message={error} />
+      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
+        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
+      ) : (
+        <>
+          <div className="space-y-2.5 sm:hidden">
+            {filtered.map((p) => (
+              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
+                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
+                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
+                  <div>
+                    <span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span>
+                  </div>
+                  <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden sm:block card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
+                </thead>
+                <tbody className="divide-y divide-ink-100">
+                  {filtered.map((p) => (
+                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
+                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
+                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
+                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
+                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
+                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
+                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1">
+                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
+          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
+        </div>
+      </Modal>
+
+<ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+      <ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel="Archive" danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />
+    </div>
+  );
+}
+````
+
+## File: src/pages/Purchases.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { doc, writeBatch, increment, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
+
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+
+const empty = { supplierId:'', productId:'', quantity:'', costPricePerUnit:'', paymentStatus:'paid', paymentMethod:'Cash', mpesaCode:'' };
+
+export default function Purchases() {
+  const { profile, businessId } = useAuth();
+  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt','desc'), limit(50)) : null, [businessId]);
+  const { data: products }  = useFirestoreCollection(productsQ);
+  const { data: suppliers } = useFirestoreCollection(suppliersQ);
+  const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
+  const [form, setForm] = useState(empty);
+  const [busy, setBusy] = useState(false);
+  const [productModal, setProductModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
+
+  const selProd = products.find(p=>p.id===form.productId);
+  const selSupp = suppliers.find(s=>s.id===form.supplierId);
+  const totalCost = (Number(form.quantity)||0)*(Number(form.costPricePerUnit)||0);
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) {
+      setForm(p => ({ ...p, productId: found.id }));
+      toast.success(`Selected ${found.name}`);
+    } else {
+      setPrefillBarcode(code);
+      setProductModal(true);
+    }
+  };
+
+  useHardwareScanner(handleScanDetected, { enabled: !productModal && !supplierModal && !scannerOpen });
+
+  const handle = async e => {
+    e.preventDefault();
+    if (!form.productId||!form.supplierId||!form.quantity||!form.costPricePerUnit) { toast.error('Fill in all fields.'); return; }
+    if (form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
+    setBusy(true);
+    try {
+      const qty   = Number(form.quantity);
+      const cost  = Number(form.costPricePerUnit);
+      const total = qty * cost;
+      const batch = writeBatch(db);
+      batch.update(doc(db,'products',form.productId), { stock:increment(qty), costPrice:cost, updatedAt:serverTimestamp() });
+      const purchRef = doc(collection(db,'purchases'));
+      batch.set(purchRef, withBusiness({
+        supplierId:form.supplierId,
+        supplierName:selSupp?.name||'',
+        productId:form.productId,
+        productName:selProd?.name||'',
+        quantity:qty,
+        costPricePerUnit:cost,
+        totalCost:total,
+        purchasedBy:profile.uid,
+        purchasedByName:profile.displayName,
+        purchasedAt:serverTimestamp(),
+        paymentStatus:form.paymentStatus==='paid'?'paid':'pending_supplier_credit',
+        paymentMethod:form.paymentStatus==='paid'?form.paymentMethod:null,
+        mpesaCode:form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
+      }, businessId));
+      if (form.paymentStatus==='paid') {
+        // NOTE: paid purchases are NOT recorded as an `expenses` doc.
+        // Cash/M-Pesa outflow for a paid purchase is already derived from
+        // this `purchases` doc directly in utils/financials.js
+        // (totalCashOutflows / totalMpesaOutflows), and the purchase gets
+        // exactly one Dashboard activity entry. Writing a second `expenses`
+        // doc here previously caused a duplicate "Stock Purchase" entry in
+        // Recent Activity and incorrectly listed inventory purchases as
+        // operating expenses on the Expenses page. 
+      }
+      await batch.commit();
+      toast.success('Purchase recorded and stock updated');
+      setForm(empty);
+    } catch(err) {toast.error(friendlyErrorMessage(err)); } finally { setBusy(false); }
+  };
+
+  const handleSupplierSave = async (data) => {
+    try {
+      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
+      setNewSupplierId(ref.id);
+      setForm(p=>({...p, supplierId: ref.id}));
+      setSupplierModal(false);
+      toast.success('Supplier added');
+    } catch(err) { toast.error(err.message); }
+  };
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4">
+      <h1 className="font-display text-xl font-bold text-ink-900">Record Purchase</h1>
+      <form onSubmit={handle} className="card space-y-3 p-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Supplier</label>
+            <select className="input" value={form.supplierId} onChange={set('supplierId')} required>
+              <option value="">— Select —</option>
+              {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>setSupplierModal(true)}>+ Add new supplier</button>
+          </div>
+          <div>
+            <label className="label">Product</label>
+            <select className="input" value={form.productId} onChange={set('productId')} required>
+              <option value="">— Select —</option>
+              {products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>{setPrefillBarcode(null);setProductModal(true);}}>+ Add new product</button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Qty received</label><input type="number" min="1" className="input" value={form.quantity} onChange={set('quantity')} required /></div>
+          <div><label className="label">Cost / unit (KES)</label><input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required /></div>
+        </div>
+        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm text-ink-600">Total cost: <span className="font-semibold">{formatKES(totalCost)}</span></div>
+        <div>
+          <label className="label">Payment status</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'paid'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='paid'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Paid now</button>
+            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'credit'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='credit'?'border-rust-500 bg-rust-50 text-rust-700':'border-ink-200 text-ink-500'}`}>On credit</button>
+          </div>
+        </div>
+        {form.paymentStatus==='paid'&&(
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="label">Paid via</label><select className="input" value={form.paymentMethod} onChange={set('paymentMethod')}><option>Cash</option><option>M-Pesa</option></select></div>
+            {form.paymentMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} /></div>}
+          </div>
+        )}
+        <button type="submit" className="btn-primary w-full" disabled={busy}>{busy?'Saving…':'Record purchase'}</button>
+      </form>
+      <h2 className="font-display text-sm font-bold text-ink-800">Recent purchases</h2>
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
+
+<ProductFormModal
+        open={productModal}
+        onClose={()=>{setProductModal(false);setPrefillBarcode(null);}}
+        onSave={async (data) => {
+          try {
+            const { id } = await createProduct(data, businessId);
+            setForm(p=>({...p, productId: id}));
+            setProductModal(false);
+            setPrefillBarcode(null);
+            toast.success('Product added');
+          } catch (err) { toast.error(friendlyErrorMessage(err)); }
+        }}
+        suppliers={suppliers}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+        simplifiedForPurchase
+      />
+      <SupplierFormModal open={supplierModal} onClose={()=>setSupplierModal(false)} onSave={handleSupplierSave} />
+      {loading?<LoadingSpinner />:purchases.length===0?<EmptyState title="No purchases yet" />:(
+        <div className="card divide-y divide-ink-100">
+          {purchases.map(p=>(
+            <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
+              <div><p className="font-medium text-ink-700">{p.quantity} × {p.productName}</p><p className="text-xs text-ink-400">{p.supplierName} · {formatDateTime(p.purchasedAt)}</p></div>
+              <div className="text-right"><p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p><span className={`badge ${p.paymentStatus==='paid'?'bg-moss-100 text-moss-700':'bg-rust-100 text-rust-700'}`}>{p.paymentStatus==='paid'?'Paid':'On credit'}</span></div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+````
+
 ## File: src/router/AppRouter.jsx
 ````javascript
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from '../components/common/ProtectedRoute';
 import AppShell from '../components/layout/AppShell';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import { useAuth } from '../contexts/AuthContext';
+import { prefetchRoutes } from './routePrefetch';
 
-const Setup      = lazy(() => import('../pages/Setup'));
-const Login      = lazy(() => import('../pages/Login'));
-const ForgotPassword = lazy(() => import('../pages/ForgotPassword'));
-const JoinStaff  = lazy(() => import('../pages/JoinStaff'));
-const AuthAction = lazy(() => import('../pages/AuthAction'));
-const Dashboard  = lazy(() => import('../pages/Dashboard'));
-const Counter    = lazy(() => import('../pages/Counter'));
-const Customers  = lazy(() => import('../pages/Customers'));
-const CustomerDetail = lazy(() => import('../pages/CustomerDetail'));
-const Expenses   = lazy(() => import('../pages/Expenses'));
-const Purchases  = lazy(() => import('../pages/Purchases'));
-const Products   = lazy(() => import('../pages/Products'));
-const Suppliers  = lazy(() => import('../pages/Suppliers'));
-const StockTake  = lazy(() => import('../pages/StockTake'));
-const Reports    = lazy(() => import('../pages/Reports'));
-const CloseDay   = lazy(() => import('../pages/CloseDay'));
-const Users      = lazy(() => import('../pages/Users'));
-const Settings   = lazy(() => import('../pages/Settings'));
-const HelpGuide  = lazy(() => import('../pages/HelpGuide'));
-const Pro        = lazy(() => import('../pages/Pro'));
-const AdvancedAnalytics = lazy(() => import('../pages/AdvancedAnalytics'));
-const InventoryIntelligence = lazy(() => import('../pages/InventoryIntelligence'));
+// Defined once, reused by both lazy() and the prefetcher below — calling
+// the same import() specifier twice is free (the module system dedupes
+// it), so the prefetcher just warms the same chunks lazy() will need.
+const routeLoaders = {
+  setup: () => import('../pages/Setup'),
+  login: () => import('../pages/Login'),
+  forgotPassword: () => import('../pages/ForgotPassword'),
+  joinStaff: () => import('../pages/JoinStaff'),
+  authAction: () => import('../pages/AuthAction'),
+  dashboard: () => import('../pages/Dashboard'),
+  counter: () => import('../pages/Counter'),
+  customers: () => import('../pages/Customers'),
+  customerDetail: () => import('../pages/CustomerDetail'),
+  expenses: () => import('../pages/Expenses'),
+  purchases: () => import('../pages/Purchases'),
+  products: () => import('../pages/Products'),
+  suppliers: () => import('../pages/Suppliers'),
+  stockTake: () => import('../pages/StockTake'),
+  reports: () => import('../pages/Reports'),
+  closeDay: () => import('../pages/CloseDay'),
+  users: () => import('../pages/Users'),
+  settings: () => import('../pages/Settings'),
+  helpGuide: () => import('../pages/HelpGuide'),
+  pro: () => import('../pages/Pro'),
+  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
+  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
+};
+
+const Setup      = lazy(routeLoaders.setup);
+const Login      = lazy(routeLoaders.login);
+const ForgotPassword = lazy(routeLoaders.forgotPassword);
+const JoinStaff  = lazy(routeLoaders.joinStaff);
+const AuthAction = lazy(routeLoaders.authAction);
+const Dashboard  = lazy(routeLoaders.dashboard);
+const Counter    = lazy(routeLoaders.counter);
+const Customers  = lazy(routeLoaders.customers);
+const CustomerDetail = lazy(routeLoaders.customerDetail);
+const Expenses   = lazy(routeLoaders.expenses);
+const Purchases  = lazy(routeLoaders.purchases);
+const Products   = lazy(routeLoaders.products);
+const Suppliers  = lazy(routeLoaders.suppliers);
+const StockTake  = lazy(routeLoaders.stockTake);
+const Reports    = lazy(routeLoaders.reports);
+const CloseDay   = lazy(routeLoaders.closeDay);
+const Users      = lazy(routeLoaders.users);
+const Settings   = lazy(routeLoaders.settings);
+const HelpGuide  = lazy(routeLoaders.helpGuide);
+const Pro        = lazy(routeLoaders.pro);
+const AdvancedAnalytics = lazy(routeLoaders.advancedAnalytics);
+const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
 
 function Page({ children, adminOnly = false }) {
   return (
     <ProtectedRoute adminOnly={adminOnly}>
       <AppShell>
-        <Suspense fallback={<LoadingSpinner />}>
-          {children}
-        </Suspense>
+        <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>
       </AppShell>
     </ProtectedRoute>
   );
@@ -9929,17 +9785,26 @@ function PublicOnly({ children }) {
   return children;
 }
 
+function RoutePrefetcher() {
+  const { firebaseUser, isAdmin } = useAuth();
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
+    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
+    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
+  }, [firebaseUser, isAdmin]);
+  return null;
+}
+
 export default function AppRouter() {
   return (
     <Suspense fallback={<LoadingSpinner label="Starting FlowBiz…" />}>
+      <RoutePrefetcher />
       <Routes>
         <Route path="/setup" element={<PublicOnly><Setup /></PublicOnly>} />
         <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
         <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
         <Route path="/join/:inviteId" element={<JoinStaff />} />
-        {/* Not wrapped in ProtectedRoute or PublicOnly — must work
-            whether the person is currently signed in or not, and covers
-            both email verification and password reset links. */}
         <Route path="/auth/action" element={<AuthAction />} />
 
         <Route path="/"             element={<Page adminOnly><Dashboard /></Page>} />
@@ -9967,22 +9832,371 @@ export default function AppRouter() {
 }
 ````
 
-## File: cloudflare-worker/wrangler.toml
-````toml
-name = "flowbiz-api"
-main = "src/index.js"
-compatibility_date = "2025-01-01"
+## File: src/utils/documentService.js
+````javascript
+import { jsPDF } from 'jspdf';
+import { formatKES } from './currency';
+import { formatDateTime } from './dateRanges';
 
-# Secrets — set these with `wrangler secret put <NAME>`, NEVER written here:
-#   FIREBASE_SERVICE_ACCOUNT_JSON   (the full service-account JSON, as one string)
-#   PAYSTACK_SECRET_KEY
-#   WHATSAPP_ACCESS_TOKEN
+export async function loadImageAsDataUrl(url) {
+    if (!url) return null;
+    try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    } catch (err) {
+        console.error('Could not load business logo for PDF:', err);
+        return null;
+    }
+}
 
-[vars]
-FIREBASE_PROJECT_ID = "swiftstock-bc6a3"
-ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
-WHATSAPP_PHONE_NUMBER_ID = "your-whatsapp-phone-number-id"
-PAYSTACK_CALLBACK_URL = "https://your-flowbiz-domain.example.com/pro"
+async function buildDocument(data, settings, typeLabel) {
+    const doc = new jsPDF('p', 'mm', [80, 200]);
+    let y = 10;
+    const centerX = 40;
+
+    const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
+    if (logoDataUrl) {
+        try {
+            const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
+            doc.addImage(logoDataUrl, format, centerX - 9, y, 18, 18);
+            y += 21;
+        } catch (err) {
+            console.error('Could not embed business logo in PDF:', err);
+        }
+    }
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text(settings.shopName || 'Business Receipt', centerX, y, { align: 'center' });
+    y += 6;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    if (settings.phone) { 
+        doc.text(settings.phone, centerX, y, { align: 'center' }); 
+        y += 5; 
+    }
+    if (settings.email) { 
+        doc.text(settings.email, centerX, y, { align: 'center' }); 
+        y += 5; 
+    }
+    if (settings.address) { 
+        doc.text(settings.address, centerX, y, { align: 'center' }); 
+        y += 5; 
+    }
+
+    y += 4;
+    doc.setDrawColor(200, 200, 200);
+    doc.line(5, y, 75, y);
+    y += 7;
+
+    doc.setFont('helvetica', 'bold');
+    doc.text(typeLabel, centerX, y, { align: 'center' });
+    y += 8;
+
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Ref: ${data.id || 'N/A'}`, 5, y); y += 5;
+    doc.text(`Date: ${formatDateTime(data.soldAt || data.recordedAt || new Date())}`, 5, y); y += 5;
+    if (data.customerName) {
+        doc.text(`Customer: ${data.customerName}`, 5, y); y += 5;
+    }
+    if (data.isCredit) {
+        doc.text(`Status: ${data.status === 'partial' ? 'Partially Paid' : 'Unpaid'}`, 5, y); y += 5;
+    } else if (data.paymentMethod || data.method) {
+        doc.text(`Payment: ${data.paymentMethod || data.method}`, 5, y); y += 5;
+    }
+
+    y += 3;
+    doc.line(5, y, 75, y);
+    y += 7;
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Item', 5, y);
+    doc.text('Amount', 75, y, { align: 'right' });
+    y += 6;
+    
+    doc.setFont('helvetica', 'normal');
+    const itemName = data.productName || data.description || 'Item';
+    const splitName = doc.splitTextToSize(itemName, 45);
+    doc.text(splitName, 5, y);
+    
+    const amountStr = formatKES(data.totalAmount || data.amount || 0);
+    doc.text(amountStr, 75, y, { align: 'right' });
+    
+    y += (splitName.length * 4) + 2;
+    if (data.quantity) {
+        doc.setFontSize(8);
+        // FIX: Display selling price (@ soldPricePerUnit), not buying price
+        doc.text(`Qty: ${data.quantity} @ ${formatKES(data.soldPricePerUnit || 0)}`, 5, y);
+        y += 6;
+    }
+
+    y += 2;
+    doc.line(5, y, 75, y);
+    y += 7;
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    if (data.isCredit) {
+        doc.text('AMOUNT DUE:', 5, y);
+        doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), 75, y, { align: 'right' });
+    } else {
+        doc.text('TOTAL:', 5, y);
+        doc.text(amountStr, 75, y, { align: 'right' });
+    }
+
+    y += 15;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'italic');
+    doc.text(data.isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!', centerX, y, { align: 'center' });
+
+    return doc;
+}
+
+export async function generateReceiptPDF(sale, settings) {
+    const doc = await buildDocument(sale, settings, 'RECEIPT');
+    doc.save(`receipt-${sale.id}.pdf`);
+}
+
+export async function printReceipt(sale, settings) {
+    const doc = await buildDocument(sale, settings, 'RECEIPT');
+    doc.autoPrint();
+    window.open(doc.output('bloburl'), '_blank');
+}
+
+export async function generateInvoicePDF(creditSale, settings) {
+    const doc = await buildDocument(creditSale, settings, 'INVOICE');
+    doc.save(`invoice-${creditSale.id}.pdf`);
+}
+
+export async function printInvoice(creditSale, settings) {
+    const doc = await buildDocument(creditSale, settings, 'INVOICE');
+    doc.autoPrint();
+    window.open(doc.output('bloburl'), '_blank');
+}
+
+function normalizeKenyanPhone(rawPhone) {
+    let digits = String(rawPhone || '').replace(/[^\d]/g, '');
+    if (!digits) return '';
+    if (digits.startsWith('0')) digits = '254' + digits.slice(1);
+    else if (!digits.startsWith('254') && digits.length === 9) digits = '254' + digits;
+    return digits;
+}
+
+function buildWhatsAppMessage(sale, settings) {
+    const shopName = settings.shopName || 'FlowBiz Store';
+    const label = sale.isCredit ? 'Invoice' : 'Receipt';
+    const amountDue = sale.isCredit ? (sale.remainingBalance ?? sale.totalAmount) : sale.totalAmount;
+    const lines = [
+        `*${shopName}*`,
+        `${label} — ${sale.quantity} × ${sale.productName}`,
+        `Total: ${formatKES(sale.totalAmount)}`,
+    ];
+    if (sale.isCredit) lines.push(`Amount due: ${formatKES(amountDue)}`);
+    if (settings.phone) lines.push(`Contact: ${settings.phone}`);
+    lines.push('', sale.isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!');
+    return lines.join('\n');
+}
+
+export function sendWhatsAppDocument(sale, settings, phone) {
+    const digits = normalizeKenyanPhone(phone);
+    if (!digits) throw new Error('Enter a valid phone number.');
+    const message = buildWhatsAppMessage(sale, settings);
+    const url = `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+}
+````
+
+## File: src/index.css
+````css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Prevent double-tap zoom on interactive elements — smooth POS experience */
+  * {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    box-sizing: border-box;
+  }
+
+  html {
+    @apply font-sans text-ink-900;
+    /* Prevent iOS bounce / overscroll that breaks fixed bottom nav */
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-sand m-0 p-0;
+    overscroll-behavior: none;
+    /* Safe area insets for notched phones */
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left:   env(safe-area-inset-left);
+    padding-right:  env(safe-area-inset-right);
+  }
+
+  h1, h2, h3, h4 { @apply font-display; }
+
+  /* Smooth scrolling for all scrollable areas */
+  * { scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
+
+  /* Remove iOS input shadows */
+  input, select, textarea, button {
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  /* Minimum touch target for all interactive elements */
+  button, a, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold
+           transition-colors disabled:opacity-40 disabled:cursor-not-allowed
+           min-h-[44px] active:scale-95;
+  }
+  /* REDESIGN: primary action color moved from green (moss) to blue — green
+     stays reserved for success/positive-status meaning (paid, active,
+     profit) elsewhere in the app; blue is now the one color that means
+     "primary interactive action", matching every .btn-primary / focused
+     .input across the whole app in this one place. */
+.btn-primary   { @apply btn bg-moss-600  text-white   hover:bg-moss-700  active:bg-moss-800; }
+  .btn-secondary { @apply btn bg-ink-100   text-ink-800 hover:bg-ink-200   active:bg-ink-300; }
+  .btn-danger    { @apply btn bg-rust-600  text-white   hover:bg-rust-700  active:bg-rust-800; }
+  .btn-outline   { @apply btn border border-ink-200 text-ink-700 hover:bg-ink-50 active:bg-ink-100; }
+
+  .input {
+    @apply w-full rounded-lg border border-ink-200 bg-white px-3 py-2.5 text-sm text-ink-900
+           placeholder:text-ink-300 focus:outline-none focus:ring-2 focus:ring-moss-500
+           focus:border-moss-500 min-h-[44px];
+  }
+  .label  { @apply block text-xs font-semibold uppercase tracking-wide text-ink-500 mb-1.5; }
+  .card   { @apply bg-white rounded-xl2 border border-ink-100 shadow-sm; }
+  .badge  { @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+
+  /* Bottom nav safe area support on iOS notched devices */
+  .bottom-nav-safe {
+    padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
+  }
+}
+````
+
+## File: src/components/pos/SaleCompleteModal.jsx
+````javascript
+import { useState, useEffect } from 'react';
+import Modal from '../common/Modal';
+import { generateReceiptPDF, printReceipt, generateInvoicePDF, printInvoice, sendWhatsAppDocument } from '../../utils/documentService';
+import { useSettings } from '../../hooks/useSettings';
+import { useAuth } from '../../contexts/AuthContext';
+import { formatKES } from '../../utils/currency';
+import { Printer, Download, MessageCircle } from 'lucide-react';
+import toast from 'react-hot-toast';
+
+export default function SaleCompleteModal({ open, sale, onClose }) {
+  const { settings } = useSettings();
+  const { isPro } = useAuth();
+  const [phone, setPhone] = useState(sale?.customerPhone || '');
+
+  // Keep phone input synced when a new sale is opened
+  useEffect(() => {
+    if (sale?.customerPhone) {
+      setPhone(sale.customerPhone);
+    } else {
+      setPhone('');
+    }
+  }, [sale]);
+
+  if (!sale) return null;
+
+  const docLabel = sale.isCredit ? 'Invoice' : 'Receipt';
+
+  const handlePrint = () => {
+    if (!isPro) { toast.error(`Professional printing requires FlowBiz Pro.`); return; }
+    if (sale.isCredit) printInvoice(sale, settings);
+    else printReceipt(sale, settings);
+  };
+
+  const handleDownload = () => {
+    if (!isPro) { toast.error(`Professional ${docLabel.toLowerCase()}s require FlowBiz Pro.`); return; }
+    if (sale.isCredit) generateInvoicePDF(sale, settings);
+    else generateReceiptPDF(sale, settings);
+  };
+
+  const handleWhatsApp = () => {
+    if (!isPro) { toast.error("WhatsApp integration requires FlowBiz Pro."); return; }
+    if (!phone.trim()) {
+      toast.error("Please enter a valid customer phone number.");
+      return;
+    }
+    try {
+      sendWhatsAppDocument(sale, settings, phone.trim());
+    } catch (e) {
+      toast.error(e.message);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={sale.isCredit ? 'Credit Sale Recorded' : 'Sale Complete'}>
+      <div className="space-y-4">
+        {/* Fixed rounded-xl2 to rounded-2xl */}
+        <div className={`flex flex-col items-center justify-center py-4 rounded-2xl border ${sale.isCredit ? 'bg-rust-50 border-rust-200' : 'bg-moss-50 border-moss-200'}`}>
+          <div className={`h-10 w-10 rounded-full flex items-center justify-center mb-2 ${sale.isCredit ? 'bg-rust-100 text-rust-700' : 'bg-moss-100 text-moss-700'}`}>
+            {sale.isCredit ? '⏳' : '✓'}
+          </div>
+          <h2 className={`font-display font-bold ${sale.isCredit ? 'text-rust-700' : 'text-moss-800'}`}>
+            {sale.isCredit ? 'Credit sale recorded' : 'Sale recorded successfully'}
+          </h2>
+          <p className="text-sm font-semibold mt-2 text-ink-800">{sale.quantity} × {sale.productName}</p>
+          {sale.isCredit && sale.customerName && <p className="text-xs text-ink-500">{sale.customerName}</p>}
+          <p className="text-lg font-bold text-ink-900">{formatKES(sale.totalAmount)}</p>
+          <p className={`text-xs mt-1 font-semibold ${sale.isCredit ? 'text-rust-600' : 'text-ink-500'}`}>
+            {sale.isCredit ? 'Payment Status: Unpaid' : sale.paymentMethod}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <button className="btn-outline flex items-center justify-center gap-2" onClick={handlePrint}>
+            <Printer className="h-4 w-4" /> Print {docLabel}
+          </button>
+          <button className="btn-outline flex items-center justify-center gap-2" onClick={handleDownload}>
+            <Download className="h-4 w-4" /> Download {docLabel}
+          </button>
+        </div>
+
+        <div className="rounded-lg border border-ink-100 p-3 space-y-2">
+          <label className="label">WhatsApp {docLabel}</label>
+          <div className="flex gap-2">
+            <input 
+              className="input flex-1" 
+              placeholder="Customer Phone" 
+              value={phone} 
+              onChange={e => setPhone(e.target.value)} 
+            />
+            <button className="btn-primary flex items-center justify-center gap-2" onClick={handleWhatsApp}>
+              <MessageCircle className="h-4 w-4" /> Send via WhatsApp
+            </button>
+          </div>
+        </div>
+
+        <div className="pt-2 border-t border-ink-100">
+          <button className="btn-secondary w-full" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 ````
 
 ## File: src/demo/localAuth.js
@@ -10051,4 +10265,22 @@ export async function verifyPasswordResetCode() {
 export async function confirmPasswordReset() {
   return Promise.resolve();
 }
+````
+
+## File: cloudflare-worker/wrangler.toml
+````toml
+name = "flowbiz-api"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# Secrets — set these with `wrangler secret put <NAME>`, NEVER written here:
+#   FIREBASE_SERVICE_ACCOUNT_JSON   (the full service-account JSON, as one string)
+#   PAYSTACK_SECRET_KEY
+#   WHATSAPP_ACCESS_TOKEN
+
+[vars]
+FIREBASE_PROJECT_ID = "swiftstock-bc6a3"
+ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://flowbiz.pages.dev"
+WHATSAPP_PHONE_NUMBER_ID = "your-whatsapp-phone-number-id"
+PAYSTACK_CALLBACK_URL = "https://flowbiz.pages.dev/pro"
 ````

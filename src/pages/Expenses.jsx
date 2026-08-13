@@ -13,6 +13,8 @@ import ExportCsvButton from '../components/common/ExportCsvButton';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
 import { formatKES } from '../utils/currency';
 import { formatDateTime, todayKey } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 const emptyForm = { description:'', category:EXPENSE_CATEGORIES[0], amount:'', paymentMethod:'Cash', mpesaCode:'' };
 
 export default function Expenses() {
@@ -33,19 +35,23 @@ export default function Expenses() {
   if (sLoad) return <LoadingSpinner />;
   if (!isAdmin && !settings.cashierCanRecordExpenses) return <EmptyState title="Expense recording is owner-only" description="Ask your owner to enable cashier expenses in Settings." />;
 
-  const handle = async e => {
+const handle = async e => {
     e.preventDefault();
     if (!form.description.trim()||!form.amount) return;
     if (form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa transaction code.'); return; }
     setBusy(true);
-    try {
-      await addDoc(tenantCollection('expenses'), withBusiness({
-        description:form.description.trim(), category:form.category, amount:Number(form.amount),
-        paymentMethod:form.paymentMethod, mpesaCode:form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
-        recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp(),
-      }, businessId));
-      toast.success('Expense recorded'); setForm(emptyForm);
-    } catch(err) { toast.error(err.message); } finally { setBusy(false); }
+    const write = addDoc(tenantCollection('expenses'), withBusiness({
+      description:form.description.trim(), category:form.category, amount:Number(form.amount),
+      paymentMethod:form.paymentMethod, mpesaCode:form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
+      recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp(),
+    }, businessId));
+
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    setBusy(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Expense saved — it'll sync once you're back online." : 'Expense recorded');
+    if (queuedOffline) write.catch((err) => toast.error(`An expense from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+    setForm(emptyForm);
   };
 
   const rows = expenses.map(e=>({ date:formatDateTime(e.recordedAt), description:e.description, category:e.category, amount:e.amount, paymentMethod:e.paymentMethod, mpesaCode:e.mpesaCode||'', recordedBy:e.recordedByName }));

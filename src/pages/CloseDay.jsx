@@ -12,6 +12,8 @@ import ErrorBanner from '../components/common/ErrorBanner';
 import { formatKES } from '../utils/currency';
 import { startOfDay, endOfDay } from '../utils/dateRanges';
 import { computeExpectedTillBalances } from '../utils/financials';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
 export default function CloseDay() {
   const { profile } = useAuth();
@@ -43,24 +45,26 @@ export default function CloseDay() {
 
   const handleClose = async () => {
     setSubmit(true);
-    try {
-      await updateDoc(doc(db,'dailySessions',sessionId), {
-        totalCashSales:           summary.totalCashSales,
-        totalMpesaSales:          summary.totalMpesaSales,
-        totalCreditSales:         summary.totalCreditSales,
-        totalDebtRepaymentsCash:  summary.totalDebtRepaymentsCash,
+try {
+      const write = updateDoc(doc(db,'dailySessions',sessionId), {
+        totalCashSales: summary.totalCashSales,
+        totalMpesaSales: summary.totalMpesaSales,
+        totalCreditSales: summary.totalCreditSales,
+        totalDebtRepaymentsCash: summary.totalDebtRepaymentsCash,
         totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
-        totalExpensesCash:        summary.totalExpensesCash,
-        totalExpensesMpesa:       summary.totalExpensesMpesa,
-        totalRefundsCash:         summary.totalRefundsCash,
-        totalRefundsMpesa:        summary.totalRefundsMpesa,
+        totalExpensesCash: summary.totalExpensesCash,
+        totalExpensesMpesa: summary.totalExpensesMpesa,
+        totalRefundsCash: summary.totalRefundsCash,
+        totalRefundsMpesa: summary.totalRefundsMpesa,
         expectedCashAtClose, actualCashAtClose:Number(cash)||0,
         expectedMpesaAtClose, actualMpesaAtClose:Number(mpesa)||0,
         cashVariance:cashVar, mpesaVariance:mpesaVar,
         closedAt:serverTimestamp(), closedBy:profile.uid,
       });
-      toast.success('Day closed. See you tomorrow!');
-    } catch(err) { toast.error(err.message); } finally { setSubmit(false); }
+      const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+      if (error) throw error;
+      toast.success(queuedOffline ? "Day closed offline. It'll sync later!" : 'Day closed. See you tomorrow!');
+    } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setSubmit(false); }
   };
 
   if (isClosed) return (

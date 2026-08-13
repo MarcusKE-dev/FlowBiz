@@ -19,6 +19,8 @@ import SupplierFormModal from '../components/suppliers/SupplierFormModal';
 import ScannerModal from '../components/scanner/ScannerModal';
 import ScanFab from '../components/scanner/ScanFab';
 import { formatKES } from '../utils/currency';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
 export default function Products() {
   const { businessId } = useAuth();
@@ -39,6 +41,8 @@ export default function Products() {
   const [prefillBarcode, setPrefillBarcode] = useState(null);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanFoundProduct, setScanFoundProduct] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
 
   const filtered = products.filter(
     (p) =>
@@ -61,22 +65,23 @@ export default function Products() {
         toast.success('Product added');
       }
       closeFormModal();
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
   };
-
-  const handleSupplierSave = async (supplierData) => {
-    try {
-      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-      setNewSupplierId(ref.id);
-      setSupplierModal(false);
-      toast.success('Supplier added');
-    } catch (err) { toast.error(err.message); }
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
   };
-
-  const handleDel = async () => {
-    try { await softDeleteProduct(pendingDel.id); toast.success('Product archived'); }
-    catch (err) { toast.error(err.message); }
-    finally { setPendingDel(null); }
+const handleDel = async () => {
+    setDeleting(true);
+    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id), 4000);
+    setDeleting(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
+    setPendingDel(null);
   };
 
   const handleScanDetected = (code) => {
@@ -170,7 +175,6 @@ export default function Products() {
       </Modal>
 
 <ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-      <ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel="Archive" danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />
-    </div>
+<ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    </div>
   );
 }

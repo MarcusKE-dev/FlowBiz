@@ -8,6 +8,8 @@ import { tenantQuery } from '../lib/tenant';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import Modal from '../components/common/Modal';
 import ConfirmDialog from '../components/common/ConfirmDialog';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
 export default function Users() {
   const { createStaffInvite, cancelStaffInvite, removeStaffAccount, toggleMemberActive, profile, businessId, isPro } = useAuth();
@@ -52,13 +54,13 @@ export default function Users() {
       const invite = await createStaffInvite({ displayName: newName.trim(), role: newRole });
       setFreshInvite({ id: invite.id, displayName: newName.trim(), role: newRole });
       setNewName('');
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setBusy(false); }
   };
 
   const handleCancelInvite = async () => {
     try { await cancelStaffInvite(pendCancelInvite.id); toast.success('Invite cancelled'); }
-    catch (err) { toast.error(err.message); }
+    catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setPendCancelInvite(null); }
   };
 
@@ -71,7 +73,7 @@ export default function Users() {
     try {
       await toggleMemberActive(pendToggle.id, pendToggle.active === false);
       toast.success(pendToggle.active !== false ? 'Account deactivated' : 'Account reactivated');
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setPendToggle(null); }
   };
 
@@ -82,7 +84,7 @@ export default function Users() {
       return;
     }
     try { await removeStaffAccount(pendDelete.id); toast.success('Account removed.'); }
-    catch (err) { toast.error(err.message); }
+    catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setPendDelete(null); }
   };
 

@@ -25,6 +25,8 @@ import ScannerModal from '../components/scanner/ScannerModal';
 import ScanFab from '../components/scanner/ScanFab';
 import { formatKES } from '../utils/currency';
 import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
 export default function Counter() {
   const { profile, isAdmin, businessId } = useAuth();
@@ -55,6 +57,7 @@ export default function Counter() {
   const [prefillBarcode, setPrefillBarcode] = useState(null);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [notFoundCode, setNotFoundCode] = useState(null);
+  const [voiding, setVoiding] = useState(false);
 
   useEffect(() => {
     if (location.state?.autoScan && session && !isClosed) {
@@ -86,7 +89,7 @@ export default function Counter() {
   };
 
   // FIX: Replaced runTransaction with writeBatch(db) and increment() for perfect offline capability.
-  const handleSale = async ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
+const handleSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
     const productRef = doc(db, 'products', product.id);
     const saleRef = doc(collection(db, 'sales'));
     const saleData = withBusiness({
@@ -102,13 +105,11 @@ export default function Counter() {
     const batch = writeBatch(db);
     batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
     batch.set(saleRef, saleData);
-    await batch.commit();
 
-    return { id: saleRef.id, ...saleData, soldAt: new Date() };
+    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
   };
 
-  // FIX: Replaced runTransaction with writeBatch(db) for Credit Sales.
-  const handleCredit = async ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
+  const handleCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
     const productRef = doc(db, 'products', product.id);
     const totalAmount = soldPricePerUnit * quantity;
     const creditRef = doc(collection(db, 'creditSales'));
@@ -124,15 +125,14 @@ export default function Counter() {
     const batch = writeBatch(db);
     batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
     batch.set(creditRef, creditData);
-    await batch.commit();
 
-    return { id: creditRef.id, ...creditData, soldAt: new Date() };
+    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
   };
 
   // FIX: Voiding a Cash Sale now creates a 'refunds' document to correct CloseDay till shortages.
-  const handleVoid = async () => {
+const handleVoid = async () => {
     const sale = pendingVoid;
-    setPendingVoid(null);
+    setVoiding(true);
     try {
       const batch = writeBatch(db);
       const prodRef = doc(db, 'products', sale.productId);
@@ -140,8 +140,6 @@ export default function Counter() {
 
       if (prodSnap.exists()) {
         batch.update(prodRef, { stock: increment(sale.quantity), updatedAt: serverTimestamp() });
-      } else {
-        toast('Product was deleted; sale voided without stock restoration.', { icon: '⚠️' });
       }
 
       batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
@@ -149,18 +147,17 @@ export default function Counter() {
       if (!sale.isCredit) {
         const refundRef = doc(collection(db, 'refunds'));
         batch.set(refundRef, withBusiness({
-          saleId: sale.id,
-          amount: sale.totalAmount,
-          method: sale.paymentMethod,
-          refundedAt: serverTimestamp(),
-          refundedBy: profile.uid,
-          refundedByName: profile.displayName
+          saleId: sale.id, amount: sale.totalAmount, method: sale.paymentMethod,
+          refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName
         }, businessId));
       }
 
-      await batch.commit();
-      if (prodSnap.exists()) toast.success('Sale voided and stock restored.');
-    } catch (err) { toast.error(err.message); }
+      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+      if (error) throw error;
+      
+      toast.success(queuedOffline ? 'Sale voided offline.' : (prodSnap.exists() ? 'Sale voided and stock restored.' : 'Sale voided (product was deleted, no stock restored).'));
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setVoiding(false); setPendingVoid(null); }
   };
 
   const handleProductSave = async (data) => {
@@ -171,18 +168,18 @@ export default function Counter() {
       setProdModal(false);
       setPrefillBarcode(null);
     } catch (err) {
-      toast.error(err.message);
+      toast.error(friendlyErrorMessage(err));
       throw err;
     }
   };
 
-  const handleSupplierSave = async (supplierData) => {
-    try {
-      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-      setNewSupplierId(ref.id);
-      setSupplierModal(false);
-      toast.success('Supplier added');
-    } catch (err) { toast.error(err.message); }
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
   };
 
   const handleScanDetected = (code) => {
@@ -289,7 +286,6 @@ export default function Counter() {
         productCount={products.length}
       />
       <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-      <ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" (×${pendingVoid?.quantity}) will be restored.`} confirmLabel="Void sale" danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />
-    </div>
+<ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" (×${pendingVoid?.quantity}) will be restored.`} confirmLabel={voiding ? "Voiding..." : "Void sale"} confirmDisabled={voiding} danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />    </div>
   );
 }
