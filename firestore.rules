@@ -107,7 +107,6 @@ service cloud.firestore {
     match /sessions/{sessionId} {
       allow create: if isStaff() && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == myBusinessId();
 
-      // FIX: Added 'resource == null' so a new device can check if its session exists yet
       allow read: if isSignedIn() && (
         resource == null || 
         resource.data.uid == request.auth.uid || 
