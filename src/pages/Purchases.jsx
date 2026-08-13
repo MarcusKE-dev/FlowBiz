@@ -61,7 +61,7 @@ export default function Purchases() {
     if (!form.productId||!form.supplierId||!form.quantity||!form.costPricePerUnit) { toast.error('Fill in all fields.'); return; }
     if (form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
     setBusy(true);
-    try {
+try {
       const qty   = Number(form.quantity);
       const cost  = Number(form.costPricePerUnit);
       const total = qty * cost;
@@ -83,20 +83,16 @@ export default function Purchases() {
         paymentMethod:form.paymentStatus==='paid'?form.paymentMethod:null,
         mpesaCode:form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
       }, businessId));
-      if (form.paymentStatus==='paid') {
-        // NOTE: paid purchases are NOT recorded as an `expenses` doc.
-        // Cash/M-Pesa outflow for a paid purchase is already derived from
-        // this `purchases` doc directly in utils/financials.js
-        // (totalCashOutflows / totalMpesaOutflows), and the purchase gets
-        // exactly one Dashboard activity entry. Writing a second `expenses`
-        // doc here previously caused a duplicate "Stock Purchase" entry in
-        // Recent Activity and incorrectly listed inventory purchases as
-        // operating expenses on the Expenses page. 
-      }
-      await batch.commit();
-      toast.success('Purchase recorded and stock updated');
+      
+      const commit = batch.commit();
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+      
+      toast.success(queuedOffline ? "Purchase queued offline — it'll sync soon." : 'Purchase recorded and stock updated');
+      if (queuedOffline) commit.catch((err) => toast.error(`A purchase from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+      
       setForm(empty);
-    } catch(err) {toast.error(friendlyErrorMessage(err)); } finally { setBusy(false); }
+    } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setBusy(false); }
   };
 
 const handleSupplierSave = async (supplierData) => {

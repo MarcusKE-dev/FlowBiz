@@ -109,7 +109,7 @@ export default function Dashboard() {
   };
 
   // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
-  const handleConfirmSale = async ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
+const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
     const productRef = doc(db, 'products', product.id);
     const saleRef = doc(collection(db, 'sales'));
     const saleData = withBusiness({
@@ -125,13 +125,11 @@ export default function Dashboard() {
     const batch = writeBatch(db);
     batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
     batch.set(saleRef, saleData);
-    await batch.commit();
 
-    return { id: saleRef.id, ...saleData, soldAt: new Date() };
+    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
   };
 
-  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick Credit.
-  const handleConfirmCredit = async ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
+  const handleConfirmCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
     const productRef = doc(db, 'products', product.id);
     const totalAmount = soldPricePerUnit * quantity;
     const creditRef = doc(collection(db, 'creditSales'));
@@ -147,9 +145,8 @@ export default function Dashboard() {
     const batch = writeBatch(db);
     batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
     batch.set(creditRef, creditData);
-    await batch.commit();
 
-    return { id: creditRef.id, ...creditData, soldAt: new Date() };
+    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
   };
 
   const handleProductSave = async (data) => {

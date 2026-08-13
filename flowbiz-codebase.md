@@ -187,103 +187,6 @@ vite.config.js
 
 # Files
 
-## File: src/router/routePrefetch.js
-````javascript
-const idle = typeof requestIdleCallback === 'function'
-  ? requestIdleCallback
-  : (fn) => setTimeout(fn, 200);
-
-export function prefetchRoutes(loaders) {
-  if (!navigator.onLine) return;
-  // Respect Data Saver — never spend someone's mobile data on
-  // speculative background fetches if they've asked sites not to.
-  if (navigator.connection?.saveData) return;
-
-  loaders.forEach((load, i) => {
-    idle(() => { load().catch(() => {}); }, { timeout: 2000 + i * 500 });
-  });
-}
-````
-
-## File: src/utils/errorMessages.js
-````javascript
-// Central place to turn raw Firebase/network error codes into copy a
-// shop owner or cashier can actually act on. Never shows a raw
-// "FirebaseError: ..." string or an internal code to the user — the
-// original error is still logged to the console for debugging.
-const MESSAGES = {
-  'permission-denied': "You're not allowed to do that. If you think this is a mistake, check with your business owner.",
-  'unauthenticated': 'Your session has expired. Please sign in again.',
-  'unavailable': "Can't reach the server right now. Check your connection and try again.",
-  'deadline-exceeded': 'That took too long to complete. Please try again.',
-  'resource-exhausted': "We're getting too many requests right now. Please wait a moment and try again.",
-  'not-found': "That record couldn't be found, it may have been deleted or moved.",
-  'already-exists': 'That already exists.',
-  'cancelled': 'That was cancelled before it could finish.',
-  'aborted': 'That could not be completed, please try again.',
-  'internal': 'Something went wrong on our end. Please try again.',
-  'auth/network-request-failed': 'Please check your internet connection and try again.',
-  'auth/too-many-requests': 'Too many attempts. Please wait a bit before trying again.',
-  'auth/user-disabled': 'This account has been disabled. Please contact your business owner.',
-  'storage/unauthorized': "You're not allowed to upload that file.",
-  'storage/canceled': 'The upload was cancelled.',
-  'storage/quota-exceeded': 'Storage limit reached, please contact support.',
-};
-
-export function friendlyErrorMessage(err, options = {}) {
-  const { fallback = 'Something went wrong. Please try again.', overrides = {} } = options;
-  const code = err?.code || '';
-  if (overrides[code]) return overrides[code];
-  if (MESSAGES[code]) return MESSAGES[code];
-
-  const raw = err?.message || '';
-  if (/offline|failed to fetch|networkerror/i.test(raw)) {
-    return "Can't reach the server, check your internet connection and try again.";
-  }
-  // A raw Firestore/Firebase SDK error string — never show that verbatim.
-  if (/^Firebase|Missing or insufficient permissions|\[code=/i.test(raw)) {
-    console.error('[FlowBiz] Unmapped error:', err);
-    return fallback;
-  }
-  // Anything else is almost certainly one of FlowBiz's OWN thrown
-  // messages ("Enter a valid phone number.", "Amount exceeds the
-  // outstanding balance...") — those are already written for people.
-  return raw || fallback;
-}
-````
-
-## File: src/utils/offlineWrite.js
-````javascript
-// Resolves within `timeoutMs` no matter what: with the real
-// success/failure if the write settles in time, or with
-// `{ queuedOffline: true }` if it's still pending once the timeout
-// hits. The original promise keeps running in the background so the
-// caller can still react if it eventually fails for real.
-export function raceWithTimeout(promise, timeoutMs = 4000) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) { settled = true; resolve({ queuedOffline: true }); }
-    }, timeoutMs);
-
-    promise.then(
-      (value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve({ queuedOffline: false, value });
-      },
-      (err) => {
-        clearTimeout(timer);
-        if (!settled) { settled = true; resolve({ queuedOffline: false, error: err }); }
-        // else: caller already moved on optimistically — it attaches
-        // its own .catch() to the original promise for this case.
-      }
-    );
-  });
-}
-````
-
 ## File: cloudflare-worker/src/lib/cors.js
 ````javascript
 // src/lib/cors.js
@@ -698,80 +601,6 @@ export async function handleDeleteStaff(request, env) {
 
   return json({ success: true });
 }
-````
-
-## File: cloudflare-worker/src/routes/paystackInitialize.js
-````javascript
-// src/routes/paystackInitialize.js
-//
-// POST /api/paystack/initialize
-//
-// Starts a Paystack transaction for the FlowBiz Pro plan. The price is
-// fixed SERVER-SIDE — the browser never gets to say what the amount is.
-// Records a pending payment doc first, so the webhook always has
-// something authoritative to check the eventual callback against.
-
-import { json, errorResponse } from '../lib/response.js';
-import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
-import { getDocument, createDocument } from '../lib/firestore.js';
-
-const PRO_PLAN_AMOUNT_KES = 500; // Must match what Pro.jsx advertises to the user.
-
-export async function handlePaystackInitialize(request, env) {
-  const authHeader = request.headers.get('Authorization') || '';
-  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!idToken) return errorResponse('Missing Authorization header.', 401);
-
-  let caller;
-  try {
-    caller = await verifyFirebaseIdToken(idToken, env.FIREBASE_PROJECT_ID);
-  } catch (err) {
-    return errorResponse(`Invalid session: ${err.message}`, 401);
-  }
-
-  const callerProfile = await getDocument(env, 'users', caller.uid);
-  if (!callerProfile) return errorResponse('Profile not found.', 403);
-  if (callerProfile.role !== 'owner') return errorResponse('Only an owner can manage the subscription.', 403);
-  if (callerProfile.active === false) return errorResponse('Your account is deactivated.', 403);
-  if (!callerProfile.businessId) return errorResponse('No business associated with this account.', 400);
-
-  const email = callerProfile.email || caller.email;
-  if (!email) return errorResponse('No email on file for this account.', 400);
-
-  const reference = `flowbiz_${callerProfile.businessId}_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
-  const amountKobo = PRO_PLAN_AMOUNT_KES * 100;
-
-  const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email,
-      amount: amountKobo,
-      currency: 'KES',
-      reference,
-      callback_url: env.PAYSTACK_CALLBACK_URL || undefined,
-      metadata: { businessId: callerProfile.businessId, plan: 'pro' },
-    }),
-  });
-
-  const paystackData = await paystackRes.json();
-  if (!paystackRes.ok || !paystackData.status) {
-    return errorResponse(paystackData.message || 'Could not start payment with Paystack.', 502);
-  }
-
-  // Recorded BEFORE handing the reference back to the browser — the
-  // webhook checks the eventual payment against this, not the other way
-  // around, so nothing the frontend says here needs to be trusted later.
-  await createDocument(env, 'payments', reference, {
-    businessId: callerProfile.businessId,
-    plan: 'pro',
-    amountKes: PRO_PLAN_AMOUNT_KES,
-    status: 'pending',
-    createdAt: new Date(),
-    initializedBy: caller.uid,
-  });
-
-return json({ authorization_url: paystackData.data.authorization_url, access_code: paystackData.data.access_code, reference });}
 ````
 
 ## File: cloudflare-worker/src/routes/paystackWebhook.js
@@ -1274,32 +1103,6 @@ export default function MiniLineChart({ data, height = 140, colorClassName = 'te
           {change >= 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}% over this period — ending at {formatValue(last)}
         </p>
       )}
-    </div>
-  );
-}
-````
-
-## File: src/components/common/ConfirmDialog.jsx
-````javascript
-import { useEffect } from 'react';
-export default function ConfirmDialog({ open, title, message, confirmLabel = 'Confirm', danger = false, confirmDisabled = false, onConfirm, onCancel }) {
-  useEffect(() => {
-    if (!open) return;
-    const handleKey = e => { if (e.key === 'Escape' && !confirmDisabled) onCancel(); };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [open, onCancel, confirmDisabled]);
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink-950/60 p-4 sm:items-center" role="alertdialog" aria-modal="true">
-      <div className="w-full max-w-sm rounded-xl2 bg-white p-5 shadow-xl">
-        <h3 className="font-display text-base font-bold text-ink-900">{title}</h3>
-        {message && <p className="mt-2 text-sm text-ink-500">{message}</p>}
-        <div className="mt-5 flex justify-end gap-2">
-          <button className="btn-secondary" onClick={onCancel} disabled={confirmDisabled}>Cancel</button>
-          <button className={danger ? 'btn-danger' : 'btn-primary'} onClick={onConfirm} disabled={confirmDisabled}>{confirmLabel}</button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1874,144 +1677,6 @@ export default function ProductGrid({ products, onSelect, isAdmin=false, onEdit 
 }
 ````
 
-## File: src/components/pos/SaleModal.jsx
-````javascript
-import { useEffect, useState } from 'react';
-import toast from 'react-hot-toast';
-import Modal from '../common/Modal';
-import { formatKES } from '../../utils/currency';
-import { Banknote, Smartphone, BookOpen } from 'lucide-react';
-import { raceWithTimeout } from '../../utils/offlineWrite';
-import { friendlyErrorMessage } from '../../utils/errorMessages';
-
-const METHODS = [
-  { id: 'Cash',   label: 'Cash',   Icon: Banknote   },
-  { id: 'M-Pesa', label: 'M-Pesa', Icon: Smartphone },
-  { id: 'Credit', label: 'Credit', Icon: BookOpen   },
-];
-
-export default function SaleModal({ open, product, customers, onClose, onConfirmSale, onConfirmCredit, onCreateCustomer }) {
-  const [quantity, setQuantity]               = useState(1);
-  const [price, setPrice]                     = useState(product?.sellingPrice ?? 0);
-  const [method, setMethod]                   = useState('Cash');
-  const [mpesaCode, setMpesaCode]             = useState('');
-  const [customerId, setCustomerId]           = useState('');
-  const [newMode, setNewMode]                 = useState(false);
-  const [newName, setNewName]                 = useState('');
-  const [newPhone, setNewPhone]               = useState('');
-  const [submitting, setSubmitting]           = useState(false);
-
-  useEffect(() => {
-    setQuantity(1); setPrice(product?.sellingPrice ?? 0); setMethod('Cash');
-    setMpesaCode(''); setCustomerId(''); setNewMode(false); setNewName(''); setNewPhone('');
-  }, [product?.id, product?.sellingPrice]);
-
-  if (!product) return null;
-
-  const total        = (Number(price) || 0) * (Number(quantity) || 0);
-  const exceedsStock = Number(quantity) > product.stock;
-  const needsMpesaCode = method === 'M-Pesa' && !mpesaCode.trim();
-  const needsCustomer  = method === 'Credit' && !customerId && !(newMode && newName.trim());
-  const canSubmit = Number(quantity) > 0 && !exceedsStock && Number(price) >= 0 && !needsMpesaCode && !needsCustomer && !submitting;
-
-const handleConfirm = async () => {
-    setSubmitting(true);
-    try {
-      let cId = customerId, cName = customers.find(c=>c.id===customerId)?.name, cPhone = customers.find(c=>c.id===customerId)?.phone;
-      if (method === 'Credit' && newMode) {
-        const cr = await onCreateCustomer({ name: newName.trim(), phone: newPhone.trim() });
-        cId = cr.id; cName = cr.name; cPhone = cr.phone;
-      }
-
-      const { record, commit } = method === 'Credit'
-        ? onConfirmCredit({ product, quantity: Number(quantity), soldPricePerUnit: Number(price), customerId: cId, customerName: cName, customerPhone: cPhone })
-        : onConfirmSale({ product, quantity: Number(quantity), soldPricePerUnit: Number(price), paymentMethod: method, mpesaCode: method === 'M-Pesa' ? mpesaCode.trim() : null });
-
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
-      if (error) throw error;
-      if (queuedOffline) {
-        toast.success("Sale saved — it'll sync once you're back online.");
-        commit.catch((err) => toast.error(`A sale from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
-      }
-      onClose(record);
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, {
-        overrides: { 'permission-denied': "That didn't go through — the stock may have just changed, or today's session may have been closed. Please refresh and try again." },
-      }));
-    } finally { setSubmitting(false); }
-  };
-
-  return (
-    <Modal open={open} onClose={() => onClose(null)} title="Record Sale">
-      <div className="space-y-4">
-        <div className="rounded-lg bg-ink-50 px-3 py-2.5">
-          <p className="font-semibold text-ink-800">{product.name}</p>
-          <p className="text-xs text-ink-400">In stock: <span className="font-semibold">{product.stock}</span> · Default {formatKES(product.sellingPrice)}</p>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">Quantity</label>
-            <input type="number" min="1" max={product.stock} className="input" value={quantity} onChange={e=>setQuantity(e.target.value)} />
-            {exceedsStock && <p className="mt-1 text-xs font-medium text-rust-600">Only {product.stock} left.</p>}
-          </div>
-          <div>
-            <label className="label">Price / unit (KES)</label>
-            <input type="number" min="0" step="0.01" className="input" value={price} onChange={e=>setPrice(e.target.value)} />
-          </div>
-        </div>
-        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-2.5">
-          <span className="text-sm font-medium text-ink-500">Total</span>
-          <span className="font-display text-lg font-bold text-ink-900">{formatKES(total)}</span>
-        </div>
-        <div>
-          <label className="label">Payment method</label>
-          <div className="grid grid-cols-3 gap-2">
-            {METHODS.map(({id,label,Icon}) => (
-              <button key={id} type="button" onClick={()=>setMethod(id)} className={`flex flex-col items-center gap-1 rounded-lg border px-2 py-2.5 text-xs font-semibold ${method===id ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}>
-                <Icon className="h-4 w-4" strokeWidth={1.75} />{label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {method === 'M-Pesa' && (
-          <div>
-            <label className="label">M-Pesa transaction code <span className="text-rust-500">*</span></label>
-            <input className="input uppercase" placeholder="e.g. QWE1234567" value={mpesaCode} onChange={e=>setMpesaCode(e.target.value.toUpperCase())} />
-            {needsMpesaCode && <p className="mt-1 text-xs text-rust-600">Transaction code required for M-Pesa sales.</p>}
-          </div>
-        )}
-        {method === 'Credit' && (
-          <div className="space-y-2 rounded-lg border border-ink-100 p-3">
-            {!newMode ? (
-              <>
-                <label className="label">Customer (Deni)</label>
-                <select className="input" value={customerId} onChange={e=>setCustomerId(e.target.value)}>
-                  <option value="">— Select customer —</option>
-                  {customers.map(c=><option key={c.id} value={c.id}>{c.name}{c.phone?` · ${c.phone}`:''}</option>)}
-                </select>
-                <button type="button" className="text-xs font-semibold text-moss-700 hover:underline" onClick={()=>setNewMode(true)}>+ New customer</button>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center justify-between"><label className="label">New customer</label><button type="button" className="text-xs text-ink-400 hover:underline" onClick={()=>setNewMode(false)}>Use existing</button></div>
-                <input className="input" placeholder="Customer name" value={newName} onChange={e=>setNewName(e.target.value)} />
-                <input className="input" placeholder="Phone (07xx...)" value={newPhone} onChange={e=>setNewPhone(e.target.value)} />
-              </>
-            )}
-          </div>
-        )}
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn-secondary" onClick={() => onClose(null)}>Cancel</button>
-          <button type="button" className="btn-primary" disabled={!canSubmit} onClick={handleConfirm}>
-            {submitting ? 'Recording…' : method==='Credit' ? 'Record credit' : 'Confirm sale'}
-          </button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-````
-
 ## File: src/components/scanner/ScanFab.jsx
 ````javascript
 // src/components/scanner/ScanFab.jsx
@@ -2028,152 +1693,6 @@ export default function ScanFab({ onClick, label = 'Scan barcode' }) {
     >
       <ScanLine className="h-6 w-6" strokeWidth={2} />
     </button>
-  );
-}
-````
-
-## File: src/components/scanner/ScannerModal.jsx
-````javascript
-// src/components/scanner/ScannerModal.jsx
-import { useCallback, useEffect, useState } from 'react';
-import { X, Zap, ZapOff, AlertTriangle } from 'lucide-react';
-import { useCameraScanner } from '../../hooks/useCameraScanner';
-
-export default function ScannerModal({ open, onClose, onDetected }) {
-  // Guards against multiple rapid detections firing in the brief window
-  // between "we found something" and the parent page actually closing us.
-  const [paused, setPaused] = useState(false);
-
-  useEffect(() => {
-    if (open) setPaused(false);
-  }, [open]);
-
-  const handleDetected = useCallback((text) => {
-    if (paused) return;
-    setPaused(true);
-    onDetected(text);
-  }, [paused, onDetected]);
-
-const { videoRef, status, torchOn, torchSupported, toggleTorch, retry } = useCameraScanner({
-    onDetected: handleDetected,
-    active: open && !paused,
-  });
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-ink-950">
-      <div className="flex items-center justify-between px-4 py-3 safe-top">
-        <span className="font-display text-sm font-bold text-white">Scan barcode</span>
-        <button onClick={onClose} className="rounded-lg p-2 text-white/80 hover:bg-white/10" aria-label="Close">
-          <X className="h-5 w-5" strokeWidth={1.75} />
-        </button>
-      </div>
-
-      <div className="relative flex-1 overflow-hidden">
-        <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
-
-        {status === 'scanning' && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <div className="h-40 w-64 rounded-xl2 border-2 border-moss-400/80" />
-          </div>
-        )}
-
-        {status === 'denied' && (
-          <ScannerMessage
-            icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
-            title="Camera permission needed"
-            body="FlowBiz needs camera access to scan barcodes. Please allow camera access in your browser settings, then try again."
-            action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
-          />
-        )}
-
-        {status === 'insecure' && (
-          <ScannerMessage
-            icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
-            title="Camera needs a secure connection"
-            body="This page was opened over a plain network address (not HTTPS or localhost), so the browser blocks camera access entirely on this device. Open the app via HTTPS, or via localhost on this device, to use the scanner. You can still find the product by searching its name or code."
-          />
-        )}
-
-        {status === 'unavailable' && (
-          <ScannerMessage
-            icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
-            title="Camera unavailable"
-            body="No usable camera was found on this device. You can still find the product by searching its name or code."
-            action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
-          />
-        )}
-      </div>
-
-      {torchSupported && status === 'scanning' && (
-        <div className="flex justify-center pb-8 pt-4 safe-bottom">
-          <button
-            onClick={toggleTorch}
-            className={`flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold ${torchOn ? 'bg-amber-400 text-ink-900' : 'bg-white/10 text-white'}`}
-          >
-            {torchOn ? <Zap className="h-4 w-4" strokeWidth={1.75} /> : <ZapOff className="h-4 w-4" strokeWidth={1.75} />}
-            Torch
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ScannerMessage({ icon, title, body, action }) {
-  return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
-      {icon}
-      <p className="font-display text-base font-bold text-white">{title}</p>
-      <p className="text-sm text-white/70">{body}</p>
-      {action}
-    </div>
-  );
-}
-````
-
-## File: src/components/suppliers/SupplierFormModal.jsx
-````javascript
-import { useEffect, useState } from 'react';
-import Modal from '../common/Modal';
-
-const empty = { name:'', contactPerson:'', phone:'', email:'', address:'', notes:'' };
-export default function SupplierFormModal({ open, onClose, onSave, initialSupplier }) {
-  const [form, setForm] = useState(empty);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { setForm(initialSupplier ? {...empty,...initialSupplier} : empty); setBusy(false); }, [initialSupplier, open]);
-  const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
-
-  const handle = async e => {
-    e.preventDefault();
-    if (!form.name.trim() || busy) return;
-    setBusy(true);
-    try {
-      await onSave({...form,name:form.name.trim()});
-    } catch (err) {
-      setBusy(false);
-    }
-  };
-  const handleClose = () => { if (!busy) onClose(); };
-
-  return (
-    <Modal open={open} onClose={handleClose} title={initialSupplier ? 'Edit supplier' : 'Add supplier'}>
-      <form onSubmit={handle} className="space-y-3">
-        <div><label className="label">Business name</label><input className="input" value={form.name} onChange={set('name')} required disabled={busy} /></div>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Contact person</label><input className="input" value={form.contactPerson} onChange={set('contactPerson')} disabled={busy} /></div>
-          <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={set('phone')} placeholder="07xx xxx xxx" disabled={busy} /></div>
-        </div>
-        <div><label className="label">Email</label><input type="email" className="input" value={form.email} onChange={set('email')} disabled={busy} /></div>
-        <div><label className="label">Address</label><input className="input" value={form.address} onChange={set('address')} disabled={busy} /></div>
-        <div><label className="label">Notes</label><textarea className="input" rows={2} value={form.notes} onChange={set('notes')} disabled={busy} /></div>
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Saving…' : (initialSupplier ? 'Save changes' : 'Add supplier')}</button>
-        </div>
-      </form>
-    </Modal>
   );
 }
 ````
@@ -2631,205 +2150,6 @@ export function resetDemoData() {
   buildAndSeed();
   localStorage.setItem('flowbiz_demo_seeded_v2', 'true');
 }
-````
-
-## File: src/hooks/useCameraScanner.js
-````javascript
-// src/hooks/useCameraScanner.js
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { BrowserMultiFormatReader } from '@zxing/browser';
-
-// Dev-only diagnostics — never runs in production, never changes `status`.
-const DEV = import.meta.env.DEV;
-const devLog = (...args) => { if (DEV) console.log('[Scanner]', ...args); };
-const devError = (...args) => { if (DEV) console.error('[Scanner]', ...args); };
-const [retryToken, setRetryToken] = useState(0);
-const retry = useCallback(() => setRetryToken((t) => t + 1), []);
-
-function getInsecureContextReason() {
-  if (typeof window === 'undefined') return null;
-  if (window.isSecureContext) return null;
-  return { protocol: window.location.protocol, hostname: window.location.hostname };
-}
-
-// Fallback cascade instead of a single fixed constraint set — covers
-// exact vs ideal facingMode and an environment→user→any-camera fallback,
-// so one rejected constraint doesn't fail the whole scan attempt outright.
-function buildConstraintAttempts() {
-  return [
-    { label: 'exact environment', constraints: { video: { facingMode: { exact: 'environment' } } } },
-    { label: 'ideal environment', constraints: { video: { facingMode: 'environment' } } },
-    { label: 'user-facing', constraints: { video: { facingMode: 'user' } } },
-    { label: 'any camera', constraints: { video: true } },
-  ];
-}
-
-export function useCameraScanner({ onDetected, active }) {
-  const videoRef = useRef(null);
-  const readerRef = useRef(null);
-  // decodeFromConstraints() resolves with an IScannerControls object —
-  // THAT is what exposes .stop() for a continuous decode session in this
-  // @zxing/browser version. Cleanup must go through it, not the reader.
-  const controlsRef = useRef(null);
-  const streamRef = useRef(null);
-  const [status, setStatus] = useState('idle'); // idle | starting | scanning | denied | unavailable | insecure
-  const [torchOn, setTorchOn] = useState(false);
-  const [torchSupported, setTorchSupported] = useState(false);
-
-  const stop = useCallback(() => {
-    try {
-      controlsRef.current?.stop();
-    } catch (err) {
-      devError('controls.stop() failed', err);
-    }
-    controlsRef.current = null;
-
-    try {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    } catch (err) {
-      devError('manual track stop failed', err);
-    }
-    streamRef.current = null;
-
-    setTorchOn(false);
-    setTorchSupported(false);
-  }, []);
-
-  useEffect(() => {
-    if (!active) {
-      stop();
-      setStatus('idle');
-      return;
-    }
-
-    let cancelled = false;
-    setStatus('starting');
-
-    // Secure-context guard — checked BEFORE touching mediaDevices at all,
-    // so the real cause is surfaced instead of a generic "unavailable".
-    const insecure = getInsecureContextReason();
-    if (insecure) {
-      devError(
-        'Insecure context — navigator.mediaDevices is unavailable.',
-        'protocol:', insecure.protocol,
-        'hostname:', insecure.hostname,
-        'window.isSecureContext:', window.isSecureContext
-      );
-      setStatus('insecure');
-      return () => { cancelled = true; stop(); };
-    }
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      devError('navigator.mediaDevices.getUserMedia is not available in this browser.');
-      setStatus('unavailable');
-      return () => { cancelled = true; stop(); };
-    }
-
-    const reader = new BrowserMultiFormatReader();
-    readerRef.current = reader;
-
-    if (DEV) {
-      devLog(
-        'window.isSecureContext:', window.isSecureContext,
-        'protocol:', window.location.protocol,
-        'hostname:', window.location.hostname
-      );
-      navigator.mediaDevices.enumerateDevices()
-        .then((devices) => {
-          const cams = devices.filter((d) => d.kind === 'videoinput');
-          devLog(
-            'videoinput devices (labels blank until permission is granted):',
-            cams.length,
-            cams.map((c) => ({ deviceId: c.deviceId, label: c.label || '(hidden)' }))
-          );
-        })
-        .catch((err) => devError('enumerateDevices() failed', err));
-    }
-
-    (async () => {
-      const attempts = buildConstraintAttempts();
-      let lastError = null;
-
-      for (const attempt of attempts) {
-        if (cancelled) return;
-        devLog(`trying constraints [${attempt.label}]:`, attempt.constraints);
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          const controls = await reader.decodeFromConstraints(
-            attempt.constraints,
-            videoRef.current,
-            (result, err) => {
-              if (cancelled) return;
-              if (result) {
-                onDetected(result.getText());
-                return;
-              }
-              // NotFoundException fires continuously between frames while
-              // scanning with nothing in view — that's expected, not an error.
-              if (DEV && err && err.name !== 'NotFoundException') {
-                devError('decode callback error:', err.name, err.message);
-              }
-            }
-          );
-
-          if (cancelled) {
-            try { controls.stop(); } catch (err) { devError('post-cancel controls.stop() failed', err); }
-            return;
-          }
-
-          controlsRef.current = controls;
-          setStatus('scanning');
-          streamRef.current = videoRef.current?.srcObject || null;
-          const track = streamRef.current?.getVideoTracks?.()[0];
-          const capabilities = track?.getCapabilities?.();
-          setTorchSupported(!!capabilities?.torch);
-          devLog(`camera started using [${attempt.label}] — track:`, track?.label, 'capabilities:', capabilities);
-          return; // success — stop trying further constraint attempts
-        } catch (err) {
-          lastError = err;
-          devError(`constraints [${attempt.label}] failed:`, err?.name, err?.message);
-          // A denial should stop the cascade immediately — retrying with
-          // looser constraints won't change the user's answer.
-          if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError' || err?.name === 'SecurityError') {
-            break;
-          }
-          // Otherwise (OverconstrainedError, NotFoundError, NotReadableError,
-          // AbortError, ...) fall through and try the next, looser constraint set.
-        }
-      }
-
-      if (cancelled) return;
-      devError('all camera constraint attempts failed. Last error:', lastError?.name, lastError?.message, lastError);
-      const name = lastError?.name;
-      setStatus(
-        name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError'
-          ? 'denied'
-          : 'unavailable'
-      );
-    })();
-
-    return () => {
-      cancelled = true;
-      stop();
-    };
-  }, [active, onDetected, stop, retryToken]);
-
-  const toggleTorch = useCallback(async () => {
-    const track = streamRef.current?.getVideoTracks?.()[0];
-    if (!track || !torchSupported) return;
-    try {
-      const next = !torchOn;
-      await track.applyConstraints({ advanced: [{ torch: next }] });
-      setTorchOn(next);
-    } catch (err) {
-      // Some devices report torch as supported but reject the constraint
-      // anyway — fail silently rather than surface a confusing error for
-      // what's meant to be a nice-to-have.
-      devError('toggleTorch failed', err);
-    }
-  }, [torchOn, torchSupported]);
-
-return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };}
 ````
 
 ## File: src/hooks/useDailySession.js
@@ -3501,352 +2821,6 @@ export default function AdvancedAnalytics() {
 }
 ````
 
-## File: src/pages/CloseDay.jsx
-````javascript
-// HP-7 FIX: chunk deletions to avoid 500-op batch limit; replace window.location.reload() with React state
-import { useMemo, useState } from 'react';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { useDailySession } from '../hooks/useDailySession';
-import { useFinancialsForRange } from '../hooks/useFinancials';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import { formatKES } from '../utils/currency';
-import { startOfDay, endOfDay } from '../utils/dateRanges';
-import { computeExpectedTillBalances } from '../utils/financials';
-
-export default function CloseDay() {
-  const { profile } = useAuth();
-  const { session, loading:sessLoad, sessionId, isClosed, reopenSession } = useDailySession();
-  const today = useMemo(() => ({ start:startOfDay(), end:endOfDay() }), []);
-  const { loading:finLoad, error:finErr, summary } = useFinancialsForRange(today.start, today.end);
-  const [cash,      setCash]      = useState('');
-  const [mpesa,     setMpesa]     = useState('');
-  const [submitting,setSubmit]    = useState(false);
-
-  if (sessLoad || finLoad) return <LoadingSpinner />;
-  if (!session) return <EmptyState title="No session open today" description="The counter hasn't been opened yet today." />;
-
-  const { expectedCashAtClose, expectedMpesaAtClose } = computeExpectedTillBalances({
-    openingCashFloat:         session.openingCashFloat,
-    openingMpesaFloat:        session.openingMpesaFloat,
-    totalCashSales:           summary.totalCashSales,
-    totalMpesaSales:          summary.totalMpesaSales,
-    totalDebtRepaymentsCash:  summary.totalDebtRepaymentsCash,
-    totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
-    totalExpensesCash:        summary.totalExpensesCash,
-    totalExpensesMpesa:       summary.totalExpensesMpesa,
-    totalCashOutflows:        summary.totalCashOutflows,
-    totalMpesaOutflows:       summary.totalMpesaOutflows,
-  });
-
-  const cashVar  = (Number(cash) ||0) - expectedCashAtClose;
-  const mpesaVar = (Number(mpesa)||0) - expectedMpesaAtClose;
-
-  const handleClose = async () => {
-    setSubmit(true);
-    try {
-      await updateDoc(doc(db,'dailySessions',sessionId), {
-        totalCashSales:           summary.totalCashSales,
-        totalMpesaSales:          summary.totalMpesaSales,
-        totalCreditSales:         summary.totalCreditSales,
-        totalDebtRepaymentsCash:  summary.totalDebtRepaymentsCash,
-        totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
-        totalExpensesCash:        summary.totalExpensesCash,
-        totalExpensesMpesa:       summary.totalExpensesMpesa,
-        totalRefundsCash:         summary.totalRefundsCash,
-        totalRefundsMpesa:        summary.totalRefundsMpesa,
-        expectedCashAtClose, actualCashAtClose:Number(cash)||0,
-        expectedMpesaAtClose, actualMpesaAtClose:Number(mpesa)||0,
-        cashVariance:cashVar, mpesaVariance:mpesaVar,
-        closedAt:serverTimestamp(), closedBy:profile.uid,
-      });
-      toast.success('Day closed. See you tomorrow!');
-    } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setSubmit(false); }
-  };
-
-  if (isClosed) return (
-    <div className="mx-auto max-w-2xl space-y-4">
-      <EmptyState title="Today's session is closed" description="Counting resumes when the counter opens tomorrow." />
-      <div className="card divide-y divide-ink-100">
-        <SRow label="Expected cash"   value={expectedCashAtClose} />
-        <SRow label="Actual cash"     value={session.actualCashAtClose||0} />
-        <SRow label="Cash variance"   value={(session.actualCashAtClose||0)-expectedCashAtClose} variance />
-        <SRow label="Expected M-Pesa" value={expectedMpesaAtClose} />
-        <SRow label="Actual M-Pesa"   value={session.actualMpesaAtClose||0} />
-        <SRow label="M-Pesa variance" value={(session.actualMpesaAtClose||0)-expectedMpesaAtClose} variance />
-      </div>
-      <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>
-    </div>
-  );
-
-  if (finErr) return <ErrorBanner message={`Failed to load figures: ${finErr}`} />;
-
-  return (
-    <div className="mx-auto max-w-2xl space-y-4">
-      <h1 className="font-display text-xl font-bold text-ink-900">Close Day</h1>
-      <div className="card divide-y divide-ink-100">
-        <div className="px-4 py-3 text-sm font-bold text-ink-800">Cash drawer</div>
-        <Row label="Opening float"             value={session.openingCashFloat} />
-        <Row label="+ Cash sales"              value={summary.totalCashSales} />
-        <Row label="+ Debt repayments (cash)"  value={summary.totalDebtRepaymentsCash} />
-        <Row label="− Expenses (cash)"         value={-summary.totalExpensesCash} />
-        <Row label="− Refunds (cash)"          value={-summary.totalRefundsCash} />
-        <Row label="= Expected cash"           value={expectedCashAtClose} bold />
-      </div>
-      <div className="card p-4 space-y-2">
-        <label className="label">Actual cash counted (KES)</label>
-        <input type="number" className="input" value={cash} onChange={e=>setCash(e.target.value)} placeholder="0" />
-        {cash!==''&&<Variance v={cashVar} />}
-      </div>
-      <div className="card divide-y divide-ink-100">
-        <div className="px-4 py-3 text-sm font-bold text-ink-800">M-Pesa till</div>
-        <Row label="Opening balance"             value={session.openingMpesaFloat} />
-        <Row label="+ M-Pesa sales"              value={summary.totalMpesaSales} />
-        <Row label="+ Debt repayments (M-Pesa)"  value={summary.totalDebtRepaymentsMpesa} />
-        <Row label="− Expenses (M-Pesa)"         value={-summary.totalExpensesMpesa} />
-        <Row label="− Refunds (M-Pesa)"          value={-summary.totalRefundsMpesa} />
-        <Row label="= Expected M-Pesa"           value={expectedMpesaAtClose} bold />
-      </div>
-      <div className="card p-4 space-y-2">
-        <label className="label">Actual M-Pesa balance (KES)</label>
-        <input type="number" className="input" value={mpesa} onChange={e=>setMpesa(e.target.value)} placeholder="0" />
-        {mpesa!==''&&<Variance v={mpesaVar} />}
-      </div>
-      <button className="btn-primary w-full" disabled={cash===''||mpesa===''||submitting} onClick={handleClose}>{submitting?'Closing…':'Confirm and close day'}</button>
-    </div>
-  );
-}
-
-function Row({ label, value, bold }) {
-  return <div className={`flex items-center justify-between px-4 py-2.5 text-sm ${bold?'bg-ink-50/60':''}`}><span className={bold?'font-bold text-ink-900':'text-ink-500'}>{label}</span><span className={bold?'font-bold text-ink-900':'text-ink-700'}>{formatKES(value)}</span></div>;
-}
-function SRow({ label, value, variance }) {
-  const tone = variance ? (value===0?'text-moss-700':value<0?'text-rust-600':'text-amber-600') : 'text-ink-700';
-  return <div className="flex items-center justify-between px-4 py-2.5 text-sm"><span className="text-ink-500">{label}</span><span className={`font-semibold ${tone}`}>{formatKES(value)}</span></div>;
-}
-function Variance({ v }) {
-  const tone = v===0?'text-moss-700':v<0?'text-rust-600':'text-amber-600';
-  return <p className={`text-sm font-semibold ${tone}`}>{v===0?'✓ Matches exactly':v<0?`Shortage of ${formatKES(Math.abs(v))}`:`Surplus of ${formatKES(v)}`}</p>;
-}
-````
-
-## File: src/pages/CustomerDetail.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { where, orderBy, doc, writeBatch, increment, getDoc, serverTimestamp, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Receipt, Banknote, Smartphone, Undo2 } from 'lucide-react';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import RepaymentModal from '../components/debtors/RepaymentModal';
-import RefundModal from '../components/debtors/RefundModal';
-import { formatKES } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
-
-export default function CustomerDetail() {
-  const { customerId } = useParams();
-  const { profile, isAdmin, businessId } = useAuth();
-
-  const customerQ   = useMemo(() => businessId ? tenantQuery('customers', businessId, where('__name__','==',customerId)) : null, [customerId, businessId]);
-  const creditQ     = useMemo(() => businessId ? tenantQuery('creditSales', businessId, where('customerId','==',customerId)) : null, [customerId, businessId]);
-  const repaymentsQ = useMemo(() => businessId ? tenantQuery('repayments', businessId, where('customerId','==',customerId), orderBy('paidAt','desc')) : null, [customerId, businessId]);
-
-  const { data: customerData, loading: custLoad } = useFirestoreCollection(customerQ);
-  const { data: creditSales, loading: credLoad, error } = useFirestoreCollection(creditQ);
-  const { data: repayments } = useFirestoreCollection(repaymentsQ);
-  
-  const [repayOpen, setRepayOpen]       = useState(false);
-  const [cancelTarget, setCancelTarget] = useState(null);
-  const [refundTarget, setRefundTarget] = useState(null);
-
-  const customer = customerData[0];
-  const sorted = [...creditSales].sort((a,b) => (b.soldAt?.toMillis?.() ?? 0) - (a.soldAt?.toMillis?.() ?? 0));
-  const totalOwed = creditSales
-    .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded')
-    .reduce((acc,cs) => acc + (Number(cs.remainingBalance) || 0), 0);
-
-  const handleRepayment = async ({ amount, method, mpesaCode }) => {
-    const openSales = [...creditSales]
-      .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded' && (Number(cs.remainingBalance) || 0) > 0.005)
-      .sort((a,b) => (a.soldAt?.toMillis?.() ?? 0) - (b.soldAt?.toMillis?.() ?? 0));
-
-    if (!openSales.length) { toast.error('No outstanding balance.'); return; }
-    try {
-      const batch = writeBatch(db);
-      let remaining = amount;
-      for (const cs of openSales) {
-        if (remaining <= 0.005) break;
-        const owed    = Number(cs.remainingBalance) || 0;
-        const portion = Math.min(owed, remaining);
-        remaining    -= portion;
-        const newPaid = (Number(cs.amountPaid) || 0) + portion;
-        const newBal  = owed - portion;
-        batch.update(doc(db,'creditSales',cs.id), { amountPaid: newPaid, remainingBalance: newBal, status: newBal <= 0.005 ? 'paid' : 'partial' });
-        const repRef = doc(collection(db,'repayments'));
-        batch.set(repRef, {
-          businessId,
-          creditSaleId: cs.id,
-          customerId: cs.customerId,
-          customerName: cs.customerName,
-          productName: cs.productName,
-          amount: portion,
-          method,
-          mpesaCode: mpesaCode || null,
-          paidAt: serverTimestamp(),
-          recordedBy: profile.uid,
-          recordedByName: profile.displayName,
-        });
-      }
-      await batch.commit();
-      toast.success(`Recorded ${formatKES(amount)} repayment`);
-    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
-  };
-
-  const handleCancel = async (cs) => {
-    setCancelTarget(null);
-    try {
-      const batch = writeBatch(db);
-      const prodRef = doc(db,'products',cs.productId);
-      const prodSnap = await getDoc(prodRef);
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
-      }
-      batch.update(doc(db,'creditSales',cs.id), {
-        status: 'cancelled', remainingBalance: 0,
-        cancelledAt: serverTimestamp(), cancelledBy: profile.uid,
-      });
-      await batch.commit();
-      toast.success('Credit sale cancelled and stock restored.');
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-  };
-
-  const handleRefund = async (cs, { method }) => {
-    try {
-      const batch = writeBatch(db);
-      const prodRef = doc(db,'products',cs.productId);
-      const prodSnap = await getDoc(prodRef);
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
-      }
-      batch.update(doc(db,'creditSales',cs.id), {
-        status: 'refunded', remainingBalance: 0,
-        refundedAt: serverTimestamp(), refundedBy: profile.uid,
-      });
-      const refundRef = doc(collection(db,'refunds'));
-      batch.set(refundRef, {
-        businessId,
-        creditSaleId: cs.id, customerId: cs.customerId, customerName: cs.customerName,
-        productName: cs.productName, amount: Number(cs.amountPaid) || 0, method,
-        refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName,
-      });
-      await batch.commit();
-      toast.success('Sale refunded and stock restored.');
-      setRefundTarget(null);
-    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
-  };
-
-  if (custLoad || credLoad) return <LoadingSpinner />;
-  if (error) return <ErrorBanner message={`Could not load data. ${error}`} />;
-  if (!customer && creditSales.length === 0) return <EmptyState title="Customer not found" />;
-
-  const displayName = customer?.name || creditSales[0]?.customerName || 'Unknown Customer';
-  const displayPhone = customer?.phone || creditSales[0]?.customerPhone || 'No phone';
-
-  return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <Link to="/customers" className="text-sm font-semibold text-ink-400 hover:text-ink-700">← Back to Customers</Link>
-      <div className="card flex flex-wrap items-center justify-between gap-3 p-5">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">{displayName}</h1>
-          <p className="text-sm text-ink-400">{displayPhone}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-xs text-ink-400">Outstanding Debt</p>
-          <p className={`font-display text-xl font-bold ${totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>{formatKES(totalOwed)}</p>
-        </div>
-      </div>
-      <button className="btn-primary w-full sm:w-auto" disabled={totalOwed <= 0} onClick={() => setRepayOpen(true)}>
-        <Receipt className="h-4 w-4" strokeWidth={1.75}/> Record repayment
-      </button>
-
-      {sorted.length > 0 && (
-        <div className="card p-4">
-          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Credit purchases</h2>
-          <div className="divide-y divide-ink-100">
-            {sorted.map(cs => {
-              const reversed = cs.status === 'cancelled' || cs.status === 'refunded';
-              return (
-                <div key={cs.id} className={`flex items-center justify-between gap-2 py-2.5 text-sm ${reversed ? 'opacity-50' : ''}`}>
-                  <div>
-                    <p className="font-medium text-ink-700">{cs.quantity} × {cs.productName}</p>
-                    <p className="text-xs text-ink-400">{formatDateTime(cs.soldAt)}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="text-right">
-                      <p className={`font-semibold ${reversed ? 'line-through text-ink-400' : 'text-ink-800'}`}>{formatKES(cs.totalAmount)}</p>
-                      <span className={`badge ${cs.status === 'paid' ? 'bg-moss-100 text-moss-700' : cs.status === 'partial' ? 'bg-rust-100 text-rust-700' : 'bg-ink-100 text-ink-500'}`}>{cs.status}</span>
-                    </div>
-                    {isAdmin && !reversed && (
-                      <button
-                        className="rounded-lg p-2 text-ink-400 hover:bg-ink-100"
-                        title={Number(cs.amountPaid) > 0.005 ? 'Refund this sale' : 'Cancel this sale'}
-                        onClick={() => (Number(cs.amountPaid) > 0.005 ? setRefundTarget(cs) : setCancelTarget(cs))}
-                      >
-                        <Undo2 className="h-4 w-4" strokeWidth={1.75}/>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-      
-      {repayments.length > 0 && (
-        <div className="card p-4">
-          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Repayment history</h2>
-          <div className="divide-y divide-ink-100">
-            {repayments.map(r => (
-              <div key={r.id} className="flex items-center justify-between py-2.5 text-sm">
-                <div>
-                  <p className="font-medium text-ink-700">{r.method === 'Cash' ? <><Banknote className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>Cash</> : <><Smartphone className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>M-Pesa {r.mpesaCode ? `(${r.mpesaCode})` : ''}</>}</p>
-                  <p className="text-xs text-ink-400">{formatDateTime(r.paidAt)}</p>
-                </div>
-                <span className="font-semibold text-moss-700">{formatKES(r.amount)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <RepaymentModal open={repayOpen} customer={{ name: displayName }} totalOwed={totalOwed} onClose={() => setRepayOpen(false)} onSubmit={handleRepayment} />
-      <RefundModal open={!!refundTarget} creditSale={refundTarget} onClose={() => setRefundTarget(null)} onSubmit={(opts) => handleRefund(refundTarget, opts)} />
-      <ConfirmDialog
-        open={!!cancelTarget}
-        title="Cancel this credit sale?"
-        message={`"${cancelTarget?.productName}" (×${cancelTarget?.quantity}) will be cancelled and stock restored. Nothing has been paid on this sale yet.`}
-        confirmLabel="Cancel sale"
-        danger
-        onConfirm={() => handleCancel(cancelTarget)}
-        onCancel={() => setCancelTarget(null)}
-      />
-    </div>
-  );
-}
-````
-
 ## File: src/pages/Customers.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -3917,105 +2891,6 @@ export default function Customers() {
                 {d.totalOwed > 0 ? formatKES(d.totalOwed) : 'Paid'}
               </span>
             </Link>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-````
-
-## File: src/pages/Expenses.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { addDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Banknote, Smartphone } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useSettings } from '../hooks/useSettings';
-import { isExpenseExcluded } from '../utils/financials';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ExportCsvButton from '../components/common/ExportCsvButton';
-import { EXPENSE_CATEGORIES } from '../constants/categories';
-import { formatKES } from '../utils/currency';
-import { formatDateTime, todayKey } from '../utils/dateRanges';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-const emptyForm = { description:'', category:EXPENSE_CATEGORIES[0], amount:'', paymentMethod:'Cash', mpesaCode:'' };
-
-export default function Expenses() {
-  const { profile, isAdmin, businessId } = useAuth();
-  const { settings, loading:sLoad } = useSettings();
-  const expQ = useMemo(() => businessId ? tenantQuery('expenses', businessId, orderBy('recordedAt','desc'), limit(200)) : null, [businessId]);
-  const { data: rawExpenses, loading } = useFirestoreCollection(expQ);
-  // FIX: supplier-debt-payment entries are auto-written to `expenses` so
-  // till reconciliation math works (see financials.js), but they aren't
-  // real operating expenses — showing them here confused the actual
-  // expense log. Filter them out with the exact same rule used to
-  // exclude them from the Total Expenses figure.
-  const expenses = useMemo(() => rawExpenses.filter((e) => !isExpenseExcluded(e)), [rawExpenses]);
-  const [form, setForm]   = useState(emptyForm);
-  const [busy, setBusy]   = useState(false);
-  const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
-
-  if (sLoad) return <LoadingSpinner />;
-  if (!isAdmin && !settings.cashierCanRecordExpenses) return <EmptyState title="Expense recording is owner-only" description="Ask your owner to enable cashier expenses in Settings." />;
-
-const handle = async e => {
-    e.preventDefault();
-    if (!form.description.trim()||!form.amount) return;
-    if (form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa transaction code.'); return; }
-    setBusy(true);
-    const write = addDoc(tenantCollection('expenses'), withBusiness({
-      description:form.description.trim(), category:form.category, amount:Number(form.amount),
-      paymentMethod:form.paymentMethod, mpesaCode:form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
-      recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp(),
-    }, businessId));
-
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-    setBusy(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Expense saved — it'll sync once you're back online." : 'Expense recorded');
-    if (queuedOffline) write.catch((err) => toast.error(`An expense from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
-    setForm(emptyForm);
-  };
-
-  const rows = expenses.map(e=>({ date:formatDateTime(e.recordedAt), description:e.description, category:e.category, amount:e.amount, paymentMethod:e.paymentMethod, mpesaCode:e.mpesaCode||'', recordedBy:e.recordedByName }));
-
-  return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <h1 className="font-display text-xl font-bold text-ink-900">Expenses</h1>
-      <form onSubmit={handle} className="card space-y-3 p-4">
-        <h2 className="font-display text-sm font-bold text-ink-800">Record an expense</h2>
-        <div><label className="label">Description</label><input className="input" value={form.description} onChange={set('description')} placeholder="e.g. Rent for July" required /></div>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Category</label><select className="input" value={form.category} onChange={set('category')}>{EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></div>
-          <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" className="input" value={form.amount} onChange={set('amount')} required /></div>
-        </div>
-        <div>
-          <label className="label">Payment method</label>
-          <div className="grid grid-cols-2 gap-2">
-            {['Cash','M-Pesa'].map(m=>(
-              <button key={m} type="button" onClick={()=>setForm(p=>({...p,paymentMethod:m}))} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentMethod===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
-                {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
-              </button>
-            ))}
-          </div>
-        </div>
-        {form.paymentMethod==='M-Pesa'&&<div><label className="label">M-Pesa code <span className="text-rust-500">*</span></label><input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} placeholder="QWE1234567" /></div>}
-        <button type="submit" className="btn-primary w-full" disabled={busy}>{busy?'Saving…':'Record expense'}</button>
-      </form>
-      <div className="flex items-center justify-between"><h2 className="font-display text-sm font-bold text-ink-800">Recent expenses</h2><ExportCsvButton filename={`expenses-${todayKey()}.csv`} rows={rows} /></div>
-      {loading?<LoadingSpinner />:expenses.length===0?<EmptyState title="No expenses yet" />:(
-        <div className="card divide-y divide-ink-100">
-          {expenses.map(e=>(
-            <div key={e.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
-              <div><p className="font-medium text-ink-700">{e.description}</p><p className="text-xs text-ink-400">{e.category} · {formatDateTime(e.recordedAt)} · {e.recordedByName}</p></div>
-              <div className="text-right"><p className="font-semibold text-rust-600">{formatKES(e.amount)}</p><p className="text-xs text-ink-400">{e.paymentMethod}</p></div>
-            </div>
           ))}
         </div>
       )}
@@ -4696,116 +3571,6 @@ export default function JoinStaff() {
 }
 ````
 
-## File: src/pages/Pro.jsx
-````javascript
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { auth } from '../firebase';
-import toast from 'react-hot-toast';
-
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-
-export default function Pro() {
-  const { isPro, subscription } = useAuth();
-  const [loading, setLoading] = useState(false);
-
-  // FIX: Shifted from missing Firebase Function to the existing Cloudflare Worker API
-const handleSubscribe = async () => {
-    setLoading(true);
-    try {
-      const idToken = await auth.currentUser.getIdToken(true);
-      const response = await fetch(`${FLOWBIZ_API_URL}/api/paystack/initialize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-      });
-      const data = await response.json();
-
-      if (data?.access_code && window.PaystackPop) {
-        const popup = new window.PaystackPop();
-        popup.resumeTransaction(data.access_code, {
-          onSuccess: () => toast.success('Payment received — activating your subscription…'),
-          onCancel: () => toast('Payment cancelled.'),
-        });
-      } else if (data?.authorization_url) {
-        // Fallback if the Paystack script hasn't loaded yet.
-        window.location.href = data.authorization_url;
-      } else {
-        toast.error(data?.error || "Couldn't initialize payment. Please try again.");
-      }
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, { fallback: 'Payment initiation failed.' }));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="mx-auto max-w-4xl space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900">FlowBiz Pro</h1>
-          <p className="text-sm text-ink-500">Supercharge your shop operations.</p>
-        </div>
-        <Link to="/" className="btn-outline text-xs">Back to Dashboard</Link>
-      </div>
-
-      <div className="card p-8 text-center bg-moss-50 border-moss-200">
-        <h2 className="font-display text-3xl font-bold text-moss-800">KSh 500 <span className="text-lg font-normal text-moss-700">/ 30 days</span></h2>
-        <p className="mt-2 text-ink-600 max-w-lg mx-auto">No recurring auto-billing. Manual renewal ensures you're always in control of your subscription.</p>
-        
-        {isPro ? (
-          <div className="mt-6 inline-flex flex-col items-center">
-            <span className="badge bg-amber-100 text-amber-800 px-4 py-2 text-sm">FlowBiz Pro Active</span>
-            {subscription?.expiresAt && <p className="text-xs text-ink-500 mt-2">Expires on {new Date(subscription.expiresAt.toMillis ? subscription.expiresAt.toMillis() : subscription.expiresAt).toLocaleDateString()}</p>}
-            <button onClick={handleSubscribe} disabled={loading} className="mt-4 btn-outline">Extend Subscription</button>
-          </div>
-        ) : (
-          <button onClick={handleSubscribe} disabled={loading} className="mt-6 btn-primary px-8 py-3 text-lg">
-            {loading ? 'Initializing Payment...' : 'Pay KSh 500'}
-          </button>
-        )}
-      </div>
-
-      <div className="grid sm:grid-cols-2 gap-6 pt-4">
-        <div>
-          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Advanced Analytics</h3>
-          <ul className="space-y-2 text-sm text-ink-600">
-            <li><span className="text-moss-700 mr-2">✓</span>Business Health Dashboard</li>
-            <li><span className="text-moss-700 mr-2">✓</span>Sales insights & Profit analysis</li>
-            <li><span className="text-moss-700 mr-2">✓</span>Staff Analytics and performance tracking</li>
-          </ul>
-        </div>
-        <div>
-          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Inventory Intelligence</h3>
-          <ul className="space-y-2 text-sm text-ink-600">
-            <li><span className="text-moss-700 mr-2">✓</span>Detect overstocked items holding capital</li>
-            <li><span className="text-moss-700 mr-2">✓</span>Predictive stockout warnings</li>
-            <li><span className="text-moss-700 mr-2">✓</span>Total capital & potential profit insights</li>
-          </ul>
-        </div>
-        <div>
-          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Professional Documents</h3>
-          <ul className="space-y-2 text-sm text-ink-600">
-            <li><span className="text-moss-700 mr-2">✓</span>Professional invoices and receipts</li>
-            <li><span className="text-moss-700 mr-2">✓</span>PDF generation and direct printing</li>
-            <li><span className="text-moss-700 mr-2">✓</span>Business logo prominently displayed</li>
-          </ul>
-        </div>
-        <div>
-          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Communication & Team</h3>
-          <ul className="space-y-2 text-sm text-ink-600">
-            <li><span className="text-moss-700 mr-2">✓</span>WhatsApp receipts directly to customers</li>
-            <li><span className="text-moss-700 mr-2">✓</span>WhatsApp invoice sending</li>
-            <li><span className="text-moss-700 mr-2">✓</span>Unlimited staff members (Free plan limits to 1)</li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  );
-}
-````
-
 ## File: src/pages/Reports.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -5082,381 +3847,6 @@ export default function Reports() {
 }
 ````
 
-## File: src/pages/Settings.jsx
-````javascript
-import { useEffect, useState } from 'react';
-import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { db, storage } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { resetBusinessData } from '../utils/businessReset';
-import { restoreProduct, permanentlyDeleteProduct, cleanupOrphanedBarcodeIndexes } from '../utils/products';
-import { isDemoMode } from '../demo/demoMode';
-import { resetDemoData } from '../demo/seedData';
-import { formatDateTime } from '../utils/dateRanges';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-
-const RESET_CONFIRM_PHRASE = 'RESET';
-
-export default function Settings() {
-  const { profile, businessId, isOwner, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, subscription } = useAuth();
-  const demo = isDemoMode();
-  const [loading, setLoading]     = useState(true);
-  
-  const [shopName, setShopName]   = useState('');
-  const [phone, setPhone]         = useState('');
-  const [email, setEmail]         = useState('');
-  const [address, setAddress]     = useState('');
-  const [logoFile, setLogoFile]   = useState(null);
-  const [logoUrl, setLogoUrl]     = useState('');
-  const [cashierExp, setCashierExp] = useState(true);
-  
-  const [saving, setSaving]       = useState(false);
-  const [savingPermissions, setSavingPermissions] = useState(false);
-  const [resetDialogOpen, setResetDialogOpen] = useState(false);
-  const [resetConfirmText, setResetConfirmText] = useState('');
-  const [resetting, setResetting] = useState(false);
-
-  const [sessions, setSessions] = useState([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-
-  const [archived, setArchived] = useState([]);
-  const [archivedLoading, setArchivedLoading] = useState(false);
-  const [archivedOpen, setArchivedOpen] = useState(false);
-
-  const settingsRef = businessId ? doc(db, 'businessSettings', businessId) : null;
-
-  function compressImage(file, maxDimension = 480, quality = 0.75) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob((blob) => {
-        if (!blob) { reject(new Error('Could not process image.')); return; }
-        resolve(blob);
-      }, 'image/jpeg', quality);
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
-    img.src = url;
-  });
-}
-
-  useEffect(() => {
-    if (!settingsRef) return;
-    getDoc(settingsRef).then(snap => {
-      if (snap.exists()) { 
-        const d = snap.data(); 
-        setShopName(d.shopName || ''); 
-        setPhone(d.phone || '');
-        setEmail(d.email || '');
-        setAddress(d.address || '');
-        setLogoUrl(d.logoUrl || '');
-        setCashierExp(d.cashierCanRecordExpenses !== false); 
-      }
-      setLoading(false);
-    });
-  }, [businessId]);
-
-  useEffect(() => {
-    if (!businessId) return;
-    listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
-  }, [businessId]);
-
-  const loadArchived = async () => {
-    if (!businessId) return;
-    setArchivedLoading(true);
-    try {
-      const snap = await getDocs(query(collection(db, 'products'), where('businessId', '==', businessId), where('deleted', '==', true)));
-      setArchived(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } finally {
-      setArchivedLoading(false);
-    }
-  };
-
-const handleSave = async e => {
-    e.preventDefault(); 
-    setSaving(true);
-    try {
-      let finalLogoUrl = logoUrl;
-
-      // Logo upload gets its OWN try/catch (Issue 8): a slow/failed
-      // upload of the (now compressed) image must not block saving the
-      // rest of Business Information, which has nothing to do with it.
-      if (logoFile) {
-        try {
-          const compressed = await compressImage(logoFile, 480, 0.75);
-          const fileRef = ref(storage, `businesses/${businessId}/logo_${Date.now()}`);
-          await uploadBytes(fileRef, compressed);
-          finalLogoUrl = await getDownloadURL(fileRef);
-        } catch (logoErr) {
-          toast.error(`Logo upload failed, but the rest of your settings will still be saved: ${logoErr.message}`);
-        }
-      }
-
-      await setDoc(settingsRef, { 
-        shopName: shopName.trim(), 
-        phone: phone.trim(),
-        email: email.trim(),
-        address: address.trim(),
-        logoUrl: finalLogoUrl,
-      }, { merge: true });
-      
-      setLogoUrl(finalLogoUrl);
-      toast.success('Business information saved'); 
-      setLogoFile(null);
-    } catch (err) { 
-      toast.error(err.message); 
-    } finally { 
-      setSaving(false); 
-    }
-  };
-
-  const handleSavePermissions = async () => {
-    setSavingPermissions(true);
-    try {
-      await setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
-      toast.success('Permissions saved');
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setSavingPermissions(false);
-    }
-  };
-
-  const handleReset = async () => {
-    setResetting(true);
-    try {
-      if (demo) {
-        resetDemoData();
-        toast.success('Demo data reset. Reloading…');
-      } else {
-        await resetBusinessData(businessId, profile?.uid);
-        toast.success('Business data reset. Reloading…');
-      }
-      window.location.href = '/';
-    } catch (err) {
-      toast.error(`Reset failed partway through: ${err.message}`);
-      setResetting(false);
-      setResetDialogOpen(false);
-    }
-  };
-
-  const handleRevoke = async (sessionId) => {
-    try {
-      await revokeSession(sessionId);
-      setSessions(s => s.map(x => x.id === sessionId ? { ...x, revoked: true } : x));
-      toast.success('Device signed out.');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handleRestore = async (productId) => {
-    try { await restoreProduct(productId); setArchived(a => a.filter(p => p.id !== productId)); toast.success('Product restored'); }
-    catch (err) { toast.error(err.message); }
-  };
-
-  const handlePermanentDelete = async (productId) => {
-    const target = archived.find(p => p.id === productId);
-    try {
-      await permanentlyDeleteProduct(productId, target?.barcode, businessId);
-      setArchived(a => a.filter(p => p.id !== productId));
-      toast.success('Product permanently deleted');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const [cleaningOrphans, setCleaningOrphans] = useState(false);
-  const handleCleanupOrphans = async () => {
-    setCleaningOrphans(true);
-    try {
-      const { scanned, removed } = await cleanupOrphanedBarcodeIndexes(businessId);
-      toast.success(removed > 0
-        ? `Checked ${scanned} barcode record(s), freed ${removed} orphaned barcode(s).`
-        : `Checked ${scanned} barcode record(s) — none were orphaned.`);
-    } catch (err) { toast.error(err.message); }
-    finally { setCleaningOrphans(false); }
-  };
-
-  if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
-
-  return (
-    <div className="mx-auto max-w-xl space-y-5">
-      <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
-
-      <div className="card p-5 space-y-2">
-        <h2 className="font-display text-base font-bold text-ink-800">Account &amp; Security</h2>
-        <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
-        <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
-        <Row label="Business ID" value={businessId || '—'} mono />
-      </div>
-
-      <form onSubmit={handleSave} className="card space-y-4 p-5">
-        <h2 className="font-display text-base font-bold text-ink-800">Business Information</h2>
-        <p className="text-sm text-ink-500 mb-2">This info dynamically populates your customer-facing documents (receipts, invoices).</p>
-        
-        <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
-        
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
-          <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
-        </div>
-
-        <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
-        
-        <div>
-          <label className="label">Business Logo</label>
-          <div className="flex items-center gap-4">
-            {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
-            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files[0])} />
-          </div>
-        </div>
-
-<button type="submit" className="btn-primary w-full" disabled={saving}>{saving?'Saving…':'Save settings'}</button>
-      </form>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Permissions</h2>
-        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-3">
-          <div><p className="text-sm font-semibold text-ink-800">Let cashiers record expenses</p><p className="text-xs text-ink-400">Turn off if only owners should log expenses.</p></div>
-          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-moss-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
-            <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition-transform ${cashierExp?'translate-x-5':''}`} />
-          </button>
-        </div>
-        <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
-          {savingPermissions ? 'Saving…' : 'Save permissions'}
-        </button>
-      </div>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Team Management</h2>
-        <p className="text-sm text-ink-500">Invite owners or cashiers, and manage pending invites and access.</p>
-        <Link to="/users" className="btn-outline w-full flex items-center justify-center gap-2">Manage users &amp; invites</Link>
-      </div>
-
-      {!demo && (
-        <div className="card p-5 space-y-3">
-          <h2 className="font-display text-base font-bold text-ink-800">Device Management</h2>
-          {sessionsLoading ? <p className="text-sm text-ink-400">Loading…</p> : sessions.length === 0 ? (
-            <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {sessions.map(s => (
-                <div key={s.id} className="flex items-center justify-between py-2.5 text-sm">
-                  <div>
-                    <p className="font-medium text-ink-700">{s.deviceLabel}{s.id === currentSessionId && <span className="text-xs text-ink-400"> (this device)</span>}</p>
-                    <p className="text-xs text-ink-400">Last active {formatDateTime(s.lastActiveAt)}</p>
-                  </div>
-                  {s.revoked ? (
-                    <span className="badge bg-ink-100 text-ink-500">Signed out</span>
-                  ) : (
-                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRevoke(s.id)}>Sign out</button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="card p-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
-          <div className="flex gap-2">
-            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={handleCleanupOrphans} disabled={cleaningOrphans}>
-              {cleaningOrphans ? 'Checking…' : 'Clean Up Orphaned Barcodes'}
-            </button>
-            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
-              {archivedOpen ? 'Hide' : 'View archive'}
-            </button>
-          </div>
-        </div>
-        <p className="text-sm text-ink-500">Deleted products are archived here first, never destroyed immediately.</p>
-        {archivedOpen && (
-          archivedLoading ? <p className="text-sm text-ink-400">Loading…</p> : archived.length === 0 ? (
-            <p className="text-sm text-ink-400">Nothing archived.</p>
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {archived.map(p => (
-                <div key={p.id} className="flex items-center justify-between py-2.5 text-sm">
-                  <span className="font-medium text-ink-700">{p.name}</span>
-                  <div className="flex gap-2">
-                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRestore(p.id)}>Restore</button>
-                    <button className="btn-danger !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handlePermanentDelete(p.id)}>Delete forever</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )
-        )}
-      </div>
-
-      <div className="card p-5 space-y-2">
-        <h2 className="font-display text-base font-bold text-ink-800">Subscription</h2>
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
-          <Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>
-        </div>
-      </div>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Support</h2>
-        <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
-      </div>
-
-      <div className="card space-y-3 border-rust-200 p-5">
-        <div>
-          <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
-          <p className="mt-1 text-sm text-ink-500">
-            {demo
-              ? 'Demo Reset clears all sample data stored in this browser.'
-              : "Business Reset permanently deletes ALL of this business's data. This cannot be undone."}
-          </p>
-        </div>
-        <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
-          {demo ? 'Demo Reset' : 'Business Reset'}
-        </button>
-      </div>
-
-      <ConfirmDialog
-        open={resetDialogOpen}
-        title={demo ? 'Reset the demo data?' : 'This will permanently delete ALL data for this business'}
-        message={
-          demo ? (
-            <p>All sample data in this browser will be cleared and replaced with the original demo dataset.</p>
-          ) : (
-            <>
-              <p className="mb-2">Everything this business owns will be deleted. This cannot be undone.</p>
-              <label className="label mt-3">Type <span className="font-mono font-bold">{RESET_CONFIRM_PHRASE}</span> to confirm</label>
-              <input className="input" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} autoFocus />
-            </>
-          )
-        }
-        confirmLabel={resetting ? 'Resetting…' : demo ? 'Reset demo data' : 'Delete everything'}
-        danger
-        onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
-        onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
-      />
-    </div>
-  );
-}
-
-function Row({ label, value, tone = '', mono = false }) {
-  return (
-    <div className="flex items-center justify-between py-1 text-sm">
-      <span className="text-ink-500">{label}</span>
-      <span className={`font-semibold ${mono ? 'font-mono text-xs' : ''} ${tone || 'text-ink-800'}`}>{value}</span>
-    </div>
-  );
-}
-````
-
 ## File: src/pages/Setup.jsx
 ````javascript
 import { useState } from 'react';
@@ -5584,543 +3974,21 @@ export default function Setup() {
 }
 ````
 
-## File: src/pages/StockTake.jsx
+## File: src/router/routePrefetch.js
 ````javascript
-import { useMemo, useRef, useState } from 'react';
-import { doc, collection, writeBatch, increment, serverTimestamp, orderBy, where } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
+const idle = typeof requestIdleCallback === 'function'
+  ? requestIdleCallback
+  : (fn) => setTimeout(fn, 200);
 
-export default function StockTake() {
-  const { profile, businessId } = useAuth();
-  const productsQ = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const { data: products, loading } = useFirestoreCollection(productsQ);
-  const [counts, setCounts] = useState({});
-  const [reasons, setReasons] = useState({});
-  const [confirm, setConfirm] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const rowRefs = useRef({});
+export function prefetchRoutes(loaders) {
+  if (!navigator.onLine) return;
+  // Respect Data Saver — never spend someone's mobile data on
+  // speculative background fetches if they've asked sites not to.
+  if (navigator.connection?.saveData) return;
 
-  const getPhysical = (p) => (counts[p.id] !== undefined && counts[p.id] !== '' ? counts[p.id] : p.stock);
-  const diffFor = (p) => (counts[p.id] !== undefined && counts[p.id] !== '' ? Number(counts[p.id]) - p.stock : 0);
-  const changed = products.filter((p) => diffFor(p) !== 0);
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (!found) { toast.error('Product not found.'); return; }
-    rowRefs.current[found.id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    const inputEl = document.getElementById(`stocktake-count-${found.id}`) || document.getElementById(`stocktake-count-mobile-${found.id}`);
-    inputEl?.focus();
-    inputEl?.select?.();
-  };
-
-  useHardwareScanner(handleScanDetected, { enabled: !scannerOpen && !confirm });
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const batch = writeBatch(db);
-      for (const p of changed) {
-        const physicalQty = Number(getPhysical(p)) || 0;
-        const difference = physicalQty - p.stock;
-        const ref = doc(db, 'products', p.id);
-
-        batch.update(ref, { stock: increment(difference), updatedAt: serverTimestamp() });
-
-        const adjRef = doc(collection(db, 'stockAdjustments'));
-        batch.set(adjRef, {
-          businessId,
-          productId: p.id,
-          productName: p.name,
-          systemQty: p.stock,
-          physicalQty,
-          difference,
-          reason: reasons[p.id] || '',
-          adjustedBy: profile.uid,
-          adjustedByName: profile.displayName,
-          adjustedAt: serverTimestamp(),
-        });
-      }
-
-      await batch.commit();
-
-      toast.success(`Stock take saved — ${changed.length} product(s) adjusted`);
-      setCounts({});
-      setReasons({});
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err));
-    } finally {
-      setSaving(false);
-      setConfirm(false);
-    }
-  };
-
-  if (loading) return <LoadingSpinner />;
-
-  return (
-    <div className="mx-auto max-w-4xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Stock Take</h1>
-          <p className="text-sm text-ink-400">Enter physical counts, or scan to jump to a product. Leave blank to keep unchanged.</p>
-        </div>
-        <button className="btn-primary" disabled={changed.length === 0} onClick={() => setConfirm(true)}>
-          Save ({changed.length} changed)
-        </button>
-      </div>
-
-      <div className="space-y-3 sm:hidden">
-        {products.map((p) => {
-          const diff = diffFor(p);
-          return (
-            <div key={p.id} ref={(el) => { rowRefs.current[p.id] = el; }} className={`card p-4 space-y-3 ${diff !== 0 ? 'border-rust-200 bg-rust-50/20' : ''}`}>
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold text-ink-800">{p.name}</span>
-                <span className="badge bg-ink-100 text-ink-600 text-xs">System: {p.stock}</span>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="label">Physical count</label>
-                  <input id={`stocktake-count-mobile-${p.id}`} type="number" min="0" className="input !py-2" value={counts[p.id] ?? ''} placeholder={String(p.stock)} onChange={(e) => setCounts((c) => ({ ...c, [p.id]: e.target.value }))} />
-                </div>
-                <div>
-                  <label className="label">Difference</label>
-                  <div className={`input !py-2 flex items-center font-semibold ${diff < 0 ? 'text-rust-600' : diff > 0 ? 'text-moss-600' : 'text-ink-400'}`}>
-                    {diff !== 0 ? (diff > 0 ? `+${diff}` : diff) : '0'}
-                  </div>
-                </div>
-              </div>
-              {diff !== 0 && (
-                <div>
-                  <label className="label">Reason for discrepancy</label>
-                  <input className="input !py-2" placeholder="e.g. damage, theft, expired" value={reasons[p.id] || ''} onChange={(e) => setReasons((r) => ({ ...r, [p.id]: e.target.value }))} />
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="hidden sm:block card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-              <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">System</th><th className="px-4 py-3">Physical count</th><th className="px-4 py-3">Diff</th><th className="px-4 py-3">Reason</th></tr>
-            </thead>
-            <tbody className="divide-y divide-ink-100">
-              {products.map((p) => {
-                const diff = diffFor(p);
-                return (
-                  <tr key={p.id} ref={(el) => { rowRefs.current[p.id] = el; }} className={diff !== 0 ? 'bg-rust-50/30' : ''}>
-                    <td className="px-4 py-3 font-medium text-ink-800">{p.name}</td>
-                    <td className="px-4 py-3 text-ink-500">{p.stock}</td>
-                    <td className="px-4 py-3">
-                      <input id={`stocktake-count-${p.id}`} type="number" min="0" className="input !w-24 !py-1.5" value={counts[p.id] ?? ''} placeholder={String(p.stock)} onChange={(e) => setCounts((c) => ({ ...c, [p.id]: e.target.value }))} />
-                    </td>
-                    <td className={`px-4 py-3 font-semibold ${diff < 0 ? 'text-rust-600' : diff > 0 ? 'text-moss-600' : 'text-ink-300'}`}>
-                      {diff !== 0 ? (diff > 0 ? `+${diff}` : diff) : '—'}
-                    </td>
-                    <td className="px-4 py-3">
-                      <input className="input !py-1.5" placeholder="e.g. breakage, theft" value={reasons[p.id] || ''} disabled={diff === 0} onChange={(e) => setReasons((r) => ({ ...r, [p.id]: e.target.value }))} />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <ConfirmDialog
-        open={confirm}
-        title="Save stock take?"
-        message={`${changed.length} product(s) will be updated to match your physical count.`}
-        confirmLabel={saving ? 'Saving…' : 'Save'}
-        onConfirm={handleSave}
-        onCancel={() => setConfirm(false)}
-      />
-    </div>
-  );
-}s
-````
-
-## File: src/pages/Suppliers.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { addDoc, updateDoc, deleteDoc, doc, writeBatch, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Pencil, Trash2, Banknote, Smartphone } from 'lucide-react';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import { formatKES } from '../utils/currency';
-import { computeSupplierBalances } from '../utils/financials';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function Suppliers() {
-  const { profile, businessId } = useAuth();
-  const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const purchQ  = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
-  const paymQ   = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
-  const { data: suppliers, loading } = useFirestoreCollection(suppQ);
-  const { data: purchases }          = useFirestoreCollection(purchQ);
-  const { data: spayments }          = useFirestoreCollection(paymQ);
-
-  const [modal, setModal]       = useState(false);
-  const [editing, setEditing]   = useState(null);
-  const [pendDel, setPendDel]   = useState(null);
-  const [payModal, setPayModal] = useState(false);
-  const [selSupp, setSelSupp]   = useState(null);
-  const [payAmt, setPayAmt]     = useState('');
-  const [payMethod, setPayMethod] = useState('Cash');
-  const [payCode, setPayCode]   = useState('');
-  const [paying, setPaying]     = useState(false);
-
-  const owedList = useMemo(
-    () => computeSupplierBalances(purchases, spayments, suppliers),
-    [purchases, spayments, suppliers]
-  );
-  const owedMap = useMemo(
-    () => Object.fromEntries(owedList.map((o) => [o.supplierId, o.balance])),
-    [owedList]
-  );
-  const totalOwed = owedList.reduce((a, o) => a + o.balance, 0);
-
-const [deleting, setDeleting] = useState(false);
-
-  const handleSave = async data => {
-    const write = editing
-      ? updateDoc(doc(db,'suppliers',editing.id), data)
-      : addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
-
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
-    setModal(false); setEditing(null);
-  };
-
-  const handleDel = async () => {
-    const balance = owedMap[pendDel.id] || 0;
-    if (balance > 0.005) {
-      toast.error(`Can't remove "${pendDel.name}" — they still have an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
-      setPendDel(null);
-      return;
-    }
-    setDeleting(true);
-    const { queuedOffline, error } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
-    setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
-    setPendDel(null);
-  };
-
-  const handlePay = async e => {
-    e.preventDefault();
-    const amount = Number(payAmt);
-    const balance = owedMap[selSupp?.id]||0;
-    if (amount<=0) { toast.error('Enter a positive amount.'); return; }
-    if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatKES(balance)}.`); return; }
-    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
-    setPaying(true);
-    const batch = writeBatch(db);
-    const expRef = doc(collection(db,'expenses'));
-    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp() }, businessId));
-    const payRef = doc(collection(db,'supplierPayments'));
-    batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:serverTimestamp(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
-
-    const commit = batch.commit();
-    const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
-    setPaying(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
-    if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
-    setPayModal(false); setPayAmt(''); setPayCode('');
-  };
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
-
-  return (
-    <div className="mx-auto max-w-4xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Suppliers</h1><p className="text-sm text-ink-400">Total owed: <span className="font-semibold text-rust-600">{formatKES(totalOwed)}</span></p></div>
-        <button className="btn-primary" onClick={()=>{setEditing(null);setModal(true);}}>+ Add supplier</button>
-      </div>
-      {loading?<LoadingSpinner />:suppliers.length===0?<EmptyState title="No suppliers yet" description="Add suppliers to track restocking and balances." />:(
-        <div className="space-y-3">
-          {suppliers.map(s=>{
-            const balance = owedMap[s.id]||0;
-            return (
-              <div key={s.id} className="card flex flex-wrap items-center justify-between gap-3 p-4">
-                <div><p className="font-semibold text-ink-800">{s.name}</p><p className="text-xs text-ink-400">{s.contactPerson&&`${s.contactPerson} · `}{s.phone||'No phone'}</p></div>
-                <div className="flex items-center gap-3">
-                  <div className="text-right"><p className="text-xs text-ink-400">Outstanding</p><p className={`font-semibold ${balance>0?'text-rust-600':'text-moss-600'}`}>{formatKES(balance)}</p></div>
-                  {balance>0&&<button className="btn-primary !text-xs !px-3 !py-1.5 !min-h-0" onClick={()=>{setSelSupp(s);setPayModal(true);}}>Pay</button>}
-                  <button className="rounded-lg p-2 text-ink-400 hover:bg-ink-100" onClick={()=>{setEditing(s);setModal(true);}}><Pencil className="h-4 w-4" strokeWidth={1.75}/></button>
-                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50" onClick={()=>setPendDel(s)}><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-      <SupplierFormModal open={modal} onClose={()=>{setModal(false);setEditing(null);}} onSave={handleSave} initialSupplier={editing} />
-<ConfirmDialog
-        open={!!pendDel}
-        title="Remove supplier?"
-        message={(owedMap[pendDel?.id]||0) > 0.005
-          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)} — pay it off first.`
-          : `"${pendDel?.name}" will be removed. Purchase records stay intact.`}
-        confirmLabel={deleting ? 'Removing…' : 'Remove'}
-        confirmDisabled={deleting}
-        danger
-        onConfirm={handleDel}
-        onCancel={()=>{ if (!deleting) setPendDel(null); }}
-      />      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
-        <form onSubmit={handlePay} className="space-y-3">
-          <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(owedMap[selSupp?.id]||0)}</span></div>
-          <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
-          <div><label className="label">Method</label>
-            <div className="grid grid-cols-2 gap-2">
-              {['Cash','M-Pesa'].map(m=>(
-                <button key={m} type="button" onClick={()=>setPayMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${payMethod===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
-                  {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
-                </button>
-              ))}
-            </div>
-          </div>
-          {payMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={payCode} onChange={e=>setPayCode(e.target.value.toUpperCase())} /></div>}
-          <div className="flex justify-end gap-2 pt-1"><button type="button" className="btn-secondary" onClick={()=>setPayModal(false)}>Cancel</button><button type="submit" className="btn-primary" disabled={paying}>{paying?'Recording…':'Record payment'}</button></div>
-        </form>
-      </Modal>
-    </div>
-  );
-}
-````
-
-## File: src/pages/Users.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { orderBy } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Trash2, Copy, X } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { tenantQuery } from '../lib/tenant';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import Modal from '../components/common/Modal';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-
-export default function Users() {
-  const { createStaffInvite, cancelStaffInvite, removeStaffAccount, toggleMemberActive, profile, businessId, isPro } = useAuth();
-  const usersQ = useMemo(() => tenantQuery('users', businessId, orderBy('displayName')), [businessId]);
-  const { data: users, loading } = useFirestoreCollection(usersQ);
-
-  const invitesQ = useMemo(() => tenantQuery('staffInvites', businessId), [businessId]);
-  const { data: allInvites, loading: invitesLoading } = useFirestoreCollection(invitesQ);
-  const invites = allInvites.filter((i) => !i.claimed);
-
-  const ownerCount = users.filter((u) => u.role === 'owner' && u.active !== false).length;
-  const totalUsersCount = users.filter((u) => u.active !== false).length;
-
-  const [modal, setModal]           = useState(false);
-  const [newName, setNewName]       = useState('');
-  const [newRole, setNewRole]       = useState('cashier');
-  const [busy, setBusy]             = useState(false);
-  const [freshInvite, setFreshInvite] = useState(null);
-  const [pendToggle, setPendToggle] = useState(null);
-  const [pendDelete, setPendDelete] = useState(null);
-  const [pendCancelInvite, setPendCancelInvite] = useState(null);
-
-  const inviteLink = (inviteId) => `${window.location.origin}/join/${inviteId}`;
-
-  const copyLink = async (inviteId) => {
-    try { await navigator.clipboard.writeText(inviteLink(inviteId)); toast.success('Invite link copied'); }
-    catch { toast.error('Could not copy — long-press the link to copy it manually.'); }
-  };
-
-  const handleCreateInvite = async (e) => {
-    e.preventDefault();
-    if (!newName.trim()) return;
-    
-    // Feature 14 - Staff limits enforced in frontend for UX, backend rules would prevent it too
-    if (!isPro && (totalUsersCount + invites.length) >= 2) {
-      toast.error('Free plan allows a maximum of 1 Owner and 1 additional Staff member. Upgrade to FlowBiz Pro to add more, or cancel a pending invite first.');
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const invite = await createStaffInvite({ displayName: newName.trim(), role: newRole });
-      setFreshInvite({ id: invite.id, displayName: newName.trim(), role: newRole });
-      setNewName('');
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setBusy(false); }
-  };
-
-  const handleCancelInvite = async () => {
-    try { await cancelStaffInvite(pendCancelInvite.id); toast.success('Invite cancelled'); }
-    catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setPendCancelInvite(null); }
-  };
-
-  const handleToggle = async () => {
-    if (pendToggle.role === 'owner' && pendToggle.active !== false && ownerCount <= 1) {
-      toast.error("This is the only active owner — deactivating them would lock everyone out. Invite another owner first.");
-      setPendToggle(null);
-      return;
-    }
-    try {
-      await toggleMemberActive(pendToggle.id, pendToggle.active === false);
-      toast.success(pendToggle.active !== false ? 'Account deactivated' : 'Account reactivated');
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setPendToggle(null); }
-  };
-
-  const handleDelete = async () => {
-    if (pendDelete.role === 'owner' && ownerCount <= 1) {
-      toast.error('You cannot remove the only owner. Invite another owner first.');
-      setPendDelete(null);
-      return;
-    }
-    try { await removeStaffAccount(pendDelete.id); toast.success('Account removed.'); }
-    catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setPendDelete(null); }
-  };
-
-  return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Team</h1>
-          <p className="text-sm text-ink-400">Manage who has access to this business.</p>
-        </div>
-        <button className="btn-primary" type="button" onClick={() => { setFreshInvite(null); setNewName(''); setNewRole('cashier'); setModal(true); }}>
-          + Invite someone
-        </button>
-      </div>
-
-      {invites.length > 0 && (
-        <div className="card p-4 space-y-2">
-          <h2 className="font-display text-sm font-bold text-ink-800">Pending invites</h2>
-          <div className="divide-y divide-ink-100">
-            {invites.map((inv) => (
-              <div key={inv.id} className="flex items-center justify-between gap-2 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <p className="font-semibold text-ink-800">
-                    {inv.displayName}
-                    <span className={`badge ml-2 ${inv.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{inv.role}</span>
-                  </p>
-                  <p className="text-xs text-ink-400 truncate font-mono">{inviteLink(inv.id)}</p>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => copyLink(inv.id)}>
-                    <Copy className="h-3.5 w-3.5" strokeWidth={1.75} /> Copy link
-                  </button>
-                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[40px] min-w-[40px] flex items-center justify-center" title="Cancel invite" onClick={() => setPendCancelInvite(inv)}>
-                    <X className="h-4 w-4" strokeWidth={1.75} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {loading || invitesLoading ? <LoadingSpinner /> : (
-        <div className="card divide-y divide-ink-100">
-          {users.map(u => (
-            <div key={u.id} className="flex items-center justify-between px-4 py-3 gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-ink-800">
-                  {u.displayName || u.email?.split('@')[0] || 'Unnamed'}
-                  {u.id === profile?.uid && <span className="text-xs font-normal text-ink-400"> (you)</span>}
-                </p>
-                <p className="text-xs text-ink-400 truncate">{u.email || 'No email'}</p>
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <span className={`badge ${u.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{u.role || '—'}</span>
-                <span className={`badge ${u.active !== false ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>{u.active !== false ? 'Active' : 'Deactivated'}</span>
-                <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => setPendToggle(u)}>
-                  {u.active !== false ? 'Deactivate' : 'Reactivate'}
-                </button>
-                {u.id === profile?.uid ? (
-                  <span className="text-xs text-ink-300 px-2 hidden sm:inline">You</span>
-                ) : (
-                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Remove account" onClick={() => setPendDelete(u)}>
-                    <Trash2 className="h-4 w-4" strokeWidth={1.75} />
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <Modal open={modal} onClose={() => setModal(false)} title={freshInvite ? 'Invite ready' : 'Invite someone'}>
-        {!freshInvite ? (
-          <form onSubmit={handleCreateInvite} className="space-y-3">
-            <div>
-              <label className="label">Full name</label>
-              <input className="input" value={newName} onChange={e=>setNewName(e.target.value)} required autoComplete="off" autoFocus />
-            </div>
-            <div>
-              <label className="label">Role</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button type="button" onClick={() => setNewRole('cashier')} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole==='cashier'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Cashier</button>
-                <button type="button" onClick={() => setNewRole('owner')} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole==='owner'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Owner</button>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 pt-1">
-              <button type="button" className="btn-secondary" onClick={() => setModal(false)}>Cancel</button>
-              <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Creating…' : 'Create invite'}</button>
-            </div>
-          </form>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-sm text-ink-600">Send this link to <span className="font-semibold">{freshInvite.displayName}</span> ({freshInvite.role}).</p>
-            <div className="flex items-center gap-2">
-              <input className="input font-mono text-xs" readOnly value={inviteLink(freshInvite.id)} onFocus={(e) => e.target.select()} />
-              <button type="button" className="btn-outline shrink-0" onClick={() => copyLink(freshInvite.id)}>
-                <Copy className="h-4 w-4" strokeWidth={1.75} /> Copy
-              </button>
-            </div>
-            <button type="button" className="btn-primary w-full" onClick={() => setModal(false)}>Done</button>
-          </div>
-        )}
-      </Modal>
-
-      <ConfirmDialog open={!!pendToggle} title="Change Account Status?" confirmLabel="Confirm" onConfirm={handleToggle} onCancel={() => setPendToggle(null)} />
-      <ConfirmDialog open={!!pendDelete} title="Remove Account?" confirmLabel="Remove" danger onConfirm={handleDelete} onCancel={() => setPendDelete(null)} />
-      <ConfirmDialog open={!!pendCancelInvite} title="Cancel Invite?" confirmLabel="Cancel" danger onConfirm={handleCancelInvite} onCancel={() => setPendCancelInvite(null)} />
-    </div>
-  );
+  loaders.forEach((load, i) => {
+    idle(() => { load().catch(() => {}); }, { timeout: 2000 + i * 500 });
+  });
 }
 ````
 
@@ -6298,6 +4166,53 @@ export function buildDateBuckets(start, end, granularity = 'day') {
     cursor = new Date(cursor.getTime() + stepMs);
   }
   return buckets;
+}
+````
+
+## File: src/utils/errorMessages.js
+````javascript
+// Central place to turn raw Firebase/network error codes into copy a
+// shop owner or cashier can actually act on. Never shows a raw
+// "FirebaseError: ..." string or an internal code to the user — the
+// original error is still logged to the console for debugging.
+const MESSAGES = {
+  'permission-denied': "You're not allowed to do that. If you think this is a mistake, check with your business owner.",
+  'unauthenticated': 'Your session has expired. Please sign in again.',
+  'unavailable': "Can't reach the server right now. Check your connection and try again.",
+  'deadline-exceeded': 'That took too long to complete. Please try again.',
+  'resource-exhausted': "We're getting too many requests right now. Please wait a moment and try again.",
+  'not-found': "That record couldn't be found, it may have been deleted or moved.",
+  'already-exists': 'That already exists.',
+  'cancelled': 'That was cancelled before it could finish.',
+  'aborted': 'That could not be completed, please try again.',
+  'internal': 'Something went wrong on our end. Please try again.',
+  'auth/network-request-failed': 'Please check your internet connection and try again.',
+  'auth/too-many-requests': 'Too many attempts. Please wait a bit before trying again.',
+  'auth/user-disabled': 'This account has been disabled. Please contact your business owner.',
+  'storage/unauthorized': "You're not allowed to upload that file.",
+  'storage/canceled': 'The upload was cancelled.',
+  'storage/quota-exceeded': 'Storage limit reached, please contact support.',
+};
+
+export function friendlyErrorMessage(err, options = {}) {
+  const { fallback = 'Something went wrong. Please try again.', overrides = {} } = options;
+  const code = err?.code || '';
+  if (overrides[code]) return overrides[code];
+  if (MESSAGES[code]) return MESSAGES[code];
+
+  const raw = err?.message || '';
+  if (/offline|failed to fetch|networkerror/i.test(raw)) {
+    return "Can't reach the server, check your internet connection and try again.";
+  }
+  // A raw Firestore/Firebase SDK error string — never show that verbatim.
+  if (/^Firebase|Missing or insufficient permissions|\[code=/i.test(raw)) {
+    console.error('[FlowBiz] Unmapped error:', err);
+    return fallback;
+  }
+  // Anything else is almost certainly one of FlowBiz's OWN thrown
+  // messages ("Enter a valid phone number.", "Amount exceeds the
+  // outstanding balance...") — those are already written for people.
+  return raw || fallback;
 }
 ````
 
@@ -6628,6 +4543,38 @@ test('purchase and supplier payments only affect outflows, not profit', () => {
   assert.equal(summary.netProfit, 0);
   assert.equal(summary.totalCashOutflows, 100000);
 });
+````
+
+## File: src/utils/offlineWrite.js
+````javascript
+// Resolves within `timeoutMs` no matter what: with the real
+// success/failure if the write settles in time, or with
+// `{ queuedOffline: true }` if it's still pending once the timeout
+// hits. The original promise keeps running in the background so the
+// caller can still react if it eventually fails for real.
+export function raceWithTimeout(promise, timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; resolve({ queuedOffline: true }); }
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ queuedOffline: false, value });
+      },
+      (err) => {
+        clearTimeout(timer);
+        if (!settled) { settled = true; resolve({ queuedOffline: false, error: err }); }
+        // else: caller already moved on optimistically — it attaches
+        // its own .catch() to the original promise for this case.
+      }
+    );
+  });
+}
 ````
 
 ## File: src/utils/products.js
@@ -7246,46 +5193,6 @@ service cloud.firestore {
 }
 ````
 
-## File: index.html
-````html
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
-    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
-    <!-- PWA meta tags -->
-    <meta name="application-name" content="FlowBiz" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="FlowBiz" />
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="theme-color" content="#1a623c" />
-    <!-- Viewport: cover ensures notch areas are used. PRIORITY 4 FIX: locked
-         zoom (maximum-scale=1.0, user-scalable=no) for dedicated
-         business-device usage — note this does reduce accessibility for
-         anyone who relies on pinch-zoom to read small text. -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="description" content="POS and inventory management for Kenyan businesses" />
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
-    <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
-    <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
-    <title>FlowBiz | Business Manager</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-    <script src="https://js.paystack.co/v2/inline.js"></script>
-  </body>
-</html>
-````
-
 ## File: package.json
 ````json
 {
@@ -7634,6 +5541,106 @@ export default defineConfig(({ mode }) => ({
 }));
 ````
 
+## File: cloudflare-worker/src/routes/paystackInitialize.js
+````javascript
+// src/routes/paystackInitialize.js
+//
+// POST /api/paystack/initialize
+//
+// Starts a Paystack transaction for the FlowBiz Pro plan. The price is
+// fixed SERVER-SIDE — the browser never gets to say what the amount is.
+// Records a pending payment doc first, so the webhook always has
+// something authoritative to check the eventual callback against.
+
+import { json, errorResponse } from '../lib/response.js';
+import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
+import { getDocument, createDocument } from '../lib/firestore.js';
+
+const PRO_PLAN_AMOUNT_KES = 500; // Must match what Pro.jsx advertises to the user.
+
+export async function handlePaystackInitialize(request, env) {
+  const authHeader = request.headers.get('Authorization') || '';
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!idToken) return errorResponse('Missing Authorization header.', 401);
+
+  let caller;
+  try {
+    caller = await verifyFirebaseIdToken(idToken, env.FIREBASE_PROJECT_ID);
+  } catch (err) {
+    return errorResponse(`Invalid session: ${err.message}`, 401);
+  }
+
+  const callerProfile = await getDocument(env, 'users', caller.uid);
+  if (!callerProfile) return errorResponse('Profile not found.', 403);
+  if (callerProfile.role !== 'owner') return errorResponse('Only an owner can manage the subscription.', 403);
+  if (callerProfile.active === false) return errorResponse('Your account is deactivated.', 403);
+  if (!callerProfile.businessId) return errorResponse('No business associated with this account.', 400);
+
+  const email = callerProfile.email || caller.email;
+  if (!email) return errorResponse('No email on file for this account.', 400);
+
+  const reference = `flowbiz_${callerProfile.businessId}_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  const amountKobo = PRO_PLAN_AMOUNT_KES * 100;
+
+  const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email,
+      amount: amountKobo,
+      currency: 'KES',
+      reference,
+      callback_url: env.PAYSTACK_CALLBACK_URL || undefined,
+      metadata: { businessId: callerProfile.businessId, plan: 'pro' },
+    }),
+  });
+
+  const paystackData = await paystackRes.json();
+  if (!paystackRes.ok || !paystackData.status) {
+    return errorResponse(paystackData.message || 'Could not start payment with Paystack.', 502);
+  }
+
+  // Recorded BEFORE handing the reference back to the browser — the
+  // webhook checks the eventual payment against this, not the other way
+  // around, so nothing the frontend says here needs to be trusted later.
+  await createDocument(env, 'payments', reference, {
+    businessId: callerProfile.businessId,
+    plan: 'pro',
+    amountKes: PRO_PLAN_AMOUNT_KES,
+    status: 'pending',
+    createdAt: new Date(),
+    initializedBy: caller.uid,
+  });
+
+return json({ authorization_url: paystackData.data.authorization_url, access_code: paystackData.data.access_code, reference });}
+````
+
+## File: src/components/common/ConfirmDialog.jsx
+````javascript
+import { useEffect } from 'react';
+export default function ConfirmDialog({ open, title, message, confirmLabel = 'Confirm', danger = false, confirmDisabled = false, onConfirm, onCancel }) {
+  useEffect(() => {
+    if (!open) return;
+    const handleKey = e => { if (e.key === 'Escape' && !confirmDisabled) onCancel(); };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [open, onCancel, confirmDisabled]);
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink-950/60 p-4 sm:items-center" role="alertdialog" aria-modal="true">
+      <div className="w-full max-w-sm rounded-xl2 bg-white p-5 shadow-xl">
+        <h3 className="font-display text-base font-bold text-ink-900">{title}</h3>
+        {message && <p className="mt-2 text-sm text-ink-500">{message}</p>}
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="btn-secondary" onClick={onCancel} disabled={confirmDisabled}>Cancel</button>
+          <button className={danger ? 'btn-danger' : 'btn-primary'} onClick={onConfirm} disabled={confirmDisabled}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+````
+
 ## File: src/components/layout/BottomNav.jsx
 ````javascript
 import { useState } from 'react';
@@ -7785,6 +5792,144 @@ export default function Sidebar() {
         ))}
       </nav>
     </aside>
+  );
+}
+````
+
+## File: src/components/pos/SaleModal.jsx
+````javascript
+import { useEffect, useState } from 'react';
+import toast from 'react-hot-toast';
+import Modal from '../common/Modal';
+import { formatKES } from '../../utils/currency';
+import { Banknote, Smartphone, BookOpen } from 'lucide-react';
+import { raceWithTimeout } from '../../utils/offlineWrite';
+import { friendlyErrorMessage } from '../../utils/errorMessages';
+
+const METHODS = [
+  { id: 'Cash',   label: 'Cash',   Icon: Banknote   },
+  { id: 'M-Pesa', label: 'M-Pesa', Icon: Smartphone },
+  { id: 'Credit', label: 'Credit', Icon: BookOpen   },
+];
+
+export default function SaleModal({ open, product, customers, onClose, onConfirmSale, onConfirmCredit, onCreateCustomer }) {
+  const [quantity, setQuantity]               = useState(1);
+  const [price, setPrice]                     = useState(product?.sellingPrice ?? 0);
+  const [method, setMethod]                   = useState('Cash');
+  const [mpesaCode, setMpesaCode]             = useState('');
+  const [customerId, setCustomerId]           = useState('');
+  const [newMode, setNewMode]                 = useState(false);
+  const [newName, setNewName]                 = useState('');
+  const [newPhone, setNewPhone]               = useState('');
+  const [submitting, setSubmitting]           = useState(false);
+
+  useEffect(() => {
+    setQuantity(1); setPrice(product?.sellingPrice ?? 0); setMethod('Cash');
+    setMpesaCode(''); setCustomerId(''); setNewMode(false); setNewName(''); setNewPhone('');
+  }, [product?.id, product?.sellingPrice]);
+
+  if (!product) return null;
+
+  const total        = (Number(price) || 0) * (Number(quantity) || 0);
+  const exceedsStock = Number(quantity) > product.stock;
+  const needsMpesaCode = method === 'M-Pesa' && !mpesaCode.trim();
+  const needsCustomer  = method === 'Credit' && !customerId && !(newMode && newName.trim());
+  const canSubmit = Number(quantity) > 0 && !exceedsStock && Number(price) >= 0 && !needsMpesaCode && !needsCustomer && !submitting;
+
+const handleConfirm = async () => {
+    setSubmitting(true);
+    try {
+      let cId = customerId, cName = customers.find(c=>c.id===customerId)?.name, cPhone = customers.find(c=>c.id===customerId)?.phone;
+      if (method === 'Credit' && newMode) {
+        const cr = await onCreateCustomer({ name: newName.trim(), phone: newPhone.trim() });
+        cId = cr.id; cName = cr.name; cPhone = cr.phone;
+      }
+
+      const { record, commit } = method === 'Credit'
+        ? onConfirmCredit({ product, quantity: Number(quantity), soldPricePerUnit: Number(price), customerId: cId, customerName: cName, customerPhone: cPhone })
+        : onConfirmSale({ product, quantity: Number(quantity), soldPricePerUnit: Number(price), paymentMethod: method, mpesaCode: method === 'M-Pesa' ? mpesaCode.trim() : null });
+
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+      if (queuedOffline) {
+        toast.success("Sale saved — it'll sync once you're back online.");
+        commit.catch((err) => toast.error(`A sale from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+      }
+      onClose(record);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, {
+        overrides: { 'permission-denied': "That didn't go through — the stock may have just changed, or today's session may have been closed. Please refresh and try again." },
+      }));
+    } finally { setSubmitting(false); }
+  };
+
+  return (
+    <Modal open={open} onClose={() => onClose(null)} title="Record Sale">
+      <div className="space-y-4">
+        <div className="rounded-lg bg-ink-50 px-3 py-2.5">
+          <p className="font-semibold text-ink-800">{product.name}</p>
+          <p className="text-xs text-ink-400">In stock: <span className="font-semibold">{product.stock}</span> · Default {formatKES(product.sellingPrice)}</p>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Quantity</label>
+            <input type="number" min="1" max={product.stock} className="input" value={quantity} onChange={e=>setQuantity(e.target.value)} />
+            {exceedsStock && <p className="mt-1 text-xs font-medium text-rust-600">Only {product.stock} left.</p>}
+          </div>
+          <div>
+            <label className="label">Price / unit (KES)</label>
+            <input type="number" min="0" step="0.01" className="input" value={price} onChange={e=>setPrice(e.target.value)} />
+          </div>
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-2.5">
+          <span className="text-sm font-medium text-ink-500">Total</span>
+          <span className="font-display text-lg font-bold text-ink-900">{formatKES(total)}</span>
+        </div>
+        <div>
+          <label className="label">Payment method</label>
+          <div className="grid grid-cols-3 gap-2">
+            {METHODS.map(({id,label,Icon}) => (
+              <button key={id} type="button" onClick={()=>setMethod(id)} className={`flex flex-col items-center gap-1 rounded-lg border px-2 py-2.5 text-xs font-semibold ${method===id ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}>
+                <Icon className="h-4 w-4" strokeWidth={1.75} />{label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {method === 'M-Pesa' && (
+          <div>
+            <label className="label">M-Pesa transaction code <span className="text-rust-500">*</span></label>
+            <input className="input uppercase" placeholder="e.g. QWE1234567" value={mpesaCode} onChange={e=>setMpesaCode(e.target.value.toUpperCase())} />
+            {needsMpesaCode && <p className="mt-1 text-xs text-rust-600">Transaction code required for M-Pesa sales.</p>}
+          </div>
+        )}
+        {method === 'Credit' && (
+          <div className="space-y-2 rounded-lg border border-ink-100 p-3">
+            {!newMode ? (
+              <>
+                <label className="label">Customer (Deni)</label>
+                <select className="input" value={customerId} onChange={e=>setCustomerId(e.target.value)}>
+                  <option value="">— Select customer —</option>
+                  {customers.map(c=><option key={c.id} value={c.id}>{c.name}{c.phone?` · ${c.phone}`:''}</option>)}
+                </select>
+                <button type="button" className="text-xs font-semibold text-moss-700 hover:underline" onClick={()=>setNewMode(true)}>+ New customer</button>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between"><label className="label">New customer</label><button type="button" className="text-xs text-ink-400 hover:underline" onClick={()=>setNewMode(false)}>Use existing</button></div>
+                <input className="input" placeholder="Customer name" value={newName} onChange={e=>setNewName(e.target.value)} />
+                <input className="input" placeholder="Phone (07xx...)" value={newPhone} onChange={e=>setNewPhone(e.target.value)} />
+              </>
+            )}
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={() => onClose(null)}>Cancel</button>
+          <button type="button" className="btn-primary" disabled={!canSubmit} onClick={handleConfirm}>
+            {submitting ? 'Recording…' : method==='Credit' ? 'Record credit' : 'Confirm sale'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 ````
@@ -8010,6 +6155,152 @@ simplifiedForPurchase = false, productCount = 0,
               </span>
             ) : (initialProduct ? 'Save changes' : 'Add product')}
           </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+````
+
+## File: src/components/scanner/ScannerModal.jsx
+````javascript
+// src/components/scanner/ScannerModal.jsx
+import { useCallback, useEffect, useState } from 'react';
+import { X, Zap, ZapOff, AlertTriangle } from 'lucide-react';
+import { useCameraScanner } from '../../hooks/useCameraScanner';
+
+export default function ScannerModal({ open, onClose, onDetected }) {
+  // Guards against multiple rapid detections firing in the brief window
+  // between "we found something" and the parent page actually closing us.
+  const [paused, setPaused] = useState(false);
+
+  useEffect(() => {
+    if (open) setPaused(false);
+  }, [open]);
+
+  const handleDetected = useCallback((text) => {
+    if (paused) return;
+    setPaused(true);
+    onDetected(text);
+  }, [paused, onDetected]);
+
+const { videoRef, status, torchOn, torchSupported, toggleTorch, retry } = useCameraScanner({
+    onDetected: handleDetected,
+    active: open && !paused,
+  });
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-ink-950">
+      <div className="flex items-center justify-between px-4 py-3 safe-top">
+        <span className="font-display text-sm font-bold text-white">Scan barcode</span>
+        <button onClick={onClose} className="rounded-lg p-2 text-white/80 hover:bg-white/10" aria-label="Close">
+          <X className="h-5 w-5" strokeWidth={1.75} />
+        </button>
+      </div>
+
+      <div className="relative flex-1 overflow-hidden">
+        <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
+
+        {status === 'scanning' && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className="h-40 w-64 rounded-xl2 border-2 border-moss-400/80" />
+          </div>
+        )}
+
+        {status === 'denied' && (
+          <ScannerMessage
+            icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
+            title="Camera permission needed"
+            body="FlowBiz needs camera access to scan barcodes. Please allow camera access in your browser settings, then try again."
+            action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
+          />
+        )}
+
+        {status === 'insecure' && (
+          <ScannerMessage
+            icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
+            title="Camera needs a secure connection"
+            body="This page was opened over a plain network address (not HTTPS or localhost), so the browser blocks camera access entirely on this device. Open the app via HTTPS, or via localhost on this device, to use the scanner. You can still find the product by searching its name or code."
+          />
+        )}
+
+        {status === 'unavailable' && (
+          <ScannerMessage
+            icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
+            title="Camera unavailable"
+            body="No usable camera was found on this device. You can still find the product by searching its name or code."
+            action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
+          />
+        )}
+      </div>
+
+      {torchSupported && status === 'scanning' && (
+        <div className="flex justify-center pb-8 pt-4 safe-bottom">
+          <button
+            onClick={toggleTorch}
+            className={`flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold ${torchOn ? 'bg-amber-400 text-ink-900' : 'bg-white/10 text-white'}`}
+          >
+            {torchOn ? <Zap className="h-4 w-4" strokeWidth={1.75} /> : <ZapOff className="h-4 w-4" strokeWidth={1.75} />}
+            Torch
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScannerMessage({ icon, title, body, action }) {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
+      {icon}
+      <p className="font-display text-base font-bold text-white">{title}</p>
+      <p className="text-sm text-white/70">{body}</p>
+      {action}
+    </div>
+  );
+}
+````
+
+## File: src/components/suppliers/SupplierFormModal.jsx
+````javascript
+import { useEffect, useState } from 'react';
+import Modal from '../common/Modal';
+
+const empty = { name:'', contactPerson:'', phone:'', email:'', address:'', notes:'' };
+export default function SupplierFormModal({ open, onClose, onSave, initialSupplier }) {
+  const [form, setForm] = useState(empty);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setForm(initialSupplier ? {...empty,...initialSupplier} : empty); setBusy(false); }, [initialSupplier, open]);
+  const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
+
+  const handle = async e => {
+    e.preventDefault();
+    if (!form.name.trim() || busy) return;
+    setBusy(true);
+    try {
+      await onSave({...form,name:form.name.trim()});
+    } catch (err) {
+      setBusy(false);
+    }
+  };
+  const handleClose = () => { if (!busy) onClose(); };
+
+  return (
+    <Modal open={open} onClose={handleClose} title={initialSupplier ? 'Edit supplier' : 'Add supplier'}>
+      <form onSubmit={handle} className="space-y-3">
+        <div><label className="label">Business name</label><input className="input" value={form.name} onChange={set('name')} required disabled={busy} /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Contact person</label><input className="input" value={form.contactPerson} onChange={set('contactPerson')} disabled={busy} /></div>
+          <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={set('phone')} placeholder="07xx xxx xxx" disabled={busy} /></div>
+        </div>
+        <div><label className="label">Email</label><input type="email" className="input" value={form.email} onChange={set('email')} disabled={busy} /></div>
+        <div><label className="label">Address</label><input className="input" value={form.address} onChange={set('address')} disabled={busy} /></div>
+        <div><label className="label">Notes</label><textarea className="input" rows={2} value={form.notes} onChange={set('notes')} disabled={busy} /></div>
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Saving…' : (initialSupplier ? 'Save changes' : 'Add supplier')}</button>
         </div>
       </form>
     </Modal>
@@ -8345,6 +6636,205 @@ export function useAuth() {
 }
 ````
 
+## File: src/hooks/useCameraScanner.js
+````javascript
+// src/hooks/useCameraScanner.js
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { BrowserMultiFormatReader } from '@zxing/browser';
+
+// Dev-only diagnostics — never runs in production, never changes `status`.
+const DEV = import.meta.env.DEV;
+const devLog = (...args) => { if (DEV) console.log('[Scanner]', ...args); };
+const devError = (...args) => { if (DEV) console.error('[Scanner]', ...args); };
+const [retryToken, setRetryToken] = useState(0);
+const retry = useCallback(() => setRetryToken((t) => t + 1), []);
+
+function getInsecureContextReason() {
+  if (typeof window === 'undefined') return null;
+  if (window.isSecureContext) return null;
+  return { protocol: window.location.protocol, hostname: window.location.hostname };
+}
+
+// Fallback cascade instead of a single fixed constraint set — covers
+// exact vs ideal facingMode and an environment→user→any-camera fallback,
+// so one rejected constraint doesn't fail the whole scan attempt outright.
+function buildConstraintAttempts() {
+  return [
+    { label: 'exact environment', constraints: { video: { facingMode: { exact: 'environment' } } } },
+    { label: 'ideal environment', constraints: { video: { facingMode: 'environment' } } },
+    { label: 'user-facing', constraints: { video: { facingMode: 'user' } } },
+    { label: 'any camera', constraints: { video: true } },
+  ];
+}
+
+export function useCameraScanner({ onDetected, active }) {
+  const videoRef = useRef(null);
+  const readerRef = useRef(null);
+  // decodeFromConstraints() resolves with an IScannerControls object —
+  // THAT is what exposes .stop() for a continuous decode session in this
+  // @zxing/browser version. Cleanup must go through it, not the reader.
+  const controlsRef = useRef(null);
+  const streamRef = useRef(null);
+  const [status, setStatus] = useState('idle'); // idle | starting | scanning | denied | unavailable | insecure
+  const [torchOn, setTorchOn] = useState(false);
+  const [torchSupported, setTorchSupported] = useState(false);
+
+  const stop = useCallback(() => {
+    try {
+      controlsRef.current?.stop();
+    } catch (err) {
+      devError('controls.stop() failed', err);
+    }
+    controlsRef.current = null;
+
+    try {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    } catch (err) {
+      devError('manual track stop failed', err);
+    }
+    streamRef.current = null;
+
+    setTorchOn(false);
+    setTorchSupported(false);
+  }, []);
+
+  useEffect(() => {
+    if (!active) {
+      stop();
+      setStatus('idle');
+      return;
+    }
+
+    let cancelled = false;
+    setStatus('starting');
+
+    // Secure-context guard — checked BEFORE touching mediaDevices at all,
+    // so the real cause is surfaced instead of a generic "unavailable".
+    const insecure = getInsecureContextReason();
+    if (insecure) {
+      devError(
+        'Insecure context — navigator.mediaDevices is unavailable.',
+        'protocol:', insecure.protocol,
+        'hostname:', insecure.hostname,
+        'window.isSecureContext:', window.isSecureContext
+      );
+      setStatus('insecure');
+      return () => { cancelled = true; stop(); };
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      devError('navigator.mediaDevices.getUserMedia is not available in this browser.');
+      setStatus('unavailable');
+      return () => { cancelled = true; stop(); };
+    }
+
+    const reader = new BrowserMultiFormatReader();
+    readerRef.current = reader;
+
+    if (DEV) {
+      devLog(
+        'window.isSecureContext:', window.isSecureContext,
+        'protocol:', window.location.protocol,
+        'hostname:', window.location.hostname
+      );
+      navigator.mediaDevices.enumerateDevices()
+        .then((devices) => {
+          const cams = devices.filter((d) => d.kind === 'videoinput');
+          devLog(
+            'videoinput devices (labels blank until permission is granted):',
+            cams.length,
+            cams.map((c) => ({ deviceId: c.deviceId, label: c.label || '(hidden)' }))
+          );
+        })
+        .catch((err) => devError('enumerateDevices() failed', err));
+    }
+
+    (async () => {
+      const attempts = buildConstraintAttempts();
+      let lastError = null;
+
+      for (const attempt of attempts) {
+        if (cancelled) return;
+        devLog(`trying constraints [${attempt.label}]:`, attempt.constraints);
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const controls = await reader.decodeFromConstraints(
+            attempt.constraints,
+            videoRef.current,
+            (result, err) => {
+              if (cancelled) return;
+              if (result) {
+                onDetected(result.getText());
+                return;
+              }
+              // NotFoundException fires continuously between frames while
+              // scanning with nothing in view — that's expected, not an error.
+              if (DEV && err && err.name !== 'NotFoundException') {
+                devError('decode callback error:', err.name, err.message);
+              }
+            }
+          );
+
+          if (cancelled) {
+            try { controls.stop(); } catch (err) { devError('post-cancel controls.stop() failed', err); }
+            return;
+          }
+
+          controlsRef.current = controls;
+          setStatus('scanning');
+          streamRef.current = videoRef.current?.srcObject || null;
+          const track = streamRef.current?.getVideoTracks?.()[0];
+          const capabilities = track?.getCapabilities?.();
+          setTorchSupported(!!capabilities?.torch);
+          devLog(`camera started using [${attempt.label}] — track:`, track?.label, 'capabilities:', capabilities);
+          return; // success — stop trying further constraint attempts
+        } catch (err) {
+          lastError = err;
+          devError(`constraints [${attempt.label}] failed:`, err?.name, err?.message);
+          // A denial should stop the cascade immediately — retrying with
+          // looser constraints won't change the user's answer.
+          if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError' || err?.name === 'SecurityError') {
+            break;
+          }
+          // Otherwise (OverconstrainedError, NotFoundError, NotReadableError,
+          // AbortError, ...) fall through and try the next, looser constraint set.
+        }
+      }
+
+      if (cancelled) return;
+      devError('all camera constraint attempts failed. Last error:', lastError?.name, lastError?.message, lastError);
+      const name = lastError?.name;
+      setStatus(
+        name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError'
+          ? 'denied'
+          : 'unavailable'
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [active, onDetected, stop, retryToken]);
+
+  const toggleTorch = useCallback(async () => {
+    const track = streamRef.current?.getVideoTracks?.()[0];
+    if (!track || !torchSupported) return;
+    try {
+      const next = !torchOn;
+      await track.applyConstraints({ advanced: [{ torch: next }] });
+      setTorchOn(next);
+    } catch (err) {
+      // Some devices report torch as supported but reject the constraint
+      // anyway — fail silently rather than surface a confusing error for
+      // what's meant to be a nice-to-have.
+      devError('toggleTorch failed', err);
+    }
+  }, [torchOn, torchSupported]);
+
+return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };}
+````
+
 ## File: src/pages/AuthAction.jsx
 ````javascript
 import { useEffect, useState } from 'react';
@@ -8575,603 +7065,452 @@ function ResetPasswordPanel({ oobCode }) {
 }
 ````
 
-## File: src/pages/Counter.jsx
+## File: src/pages/CloseDay.jsx
 ````javascript
-import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
+// HP-7 FIX: chunk deletions to avoid 500-op batch limit; replace window.location.reload() with React state
+import { useMemo, useState } from 'react';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import toast from 'react-hot-toast';
-import { Trash2 } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { useDailySession } from '../hooks/useDailySession';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct } from '../utils/products';
+import { useFinancialsForRange } from '../hooks/useFinancials';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import ProductGrid from '../components/pos/ProductGrid';
-import SaleModal from '../components/pos/SaleModal';
-import SaleCompleteModal from '../components/pos/SaleCompleteModal';
-import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
+import ErrorBanner from '../components/common/ErrorBanner';
 import { formatKES } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
+import { startOfDay, endOfDay } from '../utils/dateRanges';
+import { computeExpectedTillBalances } from '../utils/financials';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
-export default function Counter() {
-  const { profile, isAdmin, businessId } = useAuth();
-  const location = useLocation();
-  const navigate = useNavigate();
-  
-  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const salesQ     = useMemo(() => businessId ? tenantQuery('sales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
-  const creditSalesQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+export default function CloseDay() {
+  const { profile } = useAuth();
+  const { session, loading:sessLoad, sessionId, isClosed, reopenSession } = useDailySession();
+  const today = useMemo(() => ({ start:startOfDay(), end:endOfDay() }), []);
+  const { loading:finLoad, error:finErr, summary } = useFinancialsForRange(today.start, today.end);
+  const [cash,      setCash]      = useState('');
+  const [mpesa,     setMpesa]     = useState('');
+  const [submitting,setSubmit]    = useState(false);
 
-  const { data: products,  loading: prodLoading }  = useFirestoreCollection(productsQ);
-  const { data: customers }                         = useFirestoreCollection(customersQ);
-  const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
-  const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
-  const { data: suppliers }                         = useFirestoreCollection(suppliersQ);
-  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
+  if (sessLoad || finLoad) return <LoadingSpinner />;
+  if (!session) return <EmptyState title="No session open today" description="The counter hasn't been opened yet today." />;
 
-  const [search, setSearch]           = useState('');
-  const [activeProduct, setActive]    = useState(null);
-  const [completedSale, setCompletedSale] = useState(null);
-  const [pendingVoid, setPendingVoid] = useState(null);
-  const [editProduct, setEditProd]    = useState(null);
-  const [prodModal, setProdModal]     = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [notFoundCode, setNotFoundCode] = useState(null);
+  const { expectedCashAtClose, expectedMpesaAtClose } = computeExpectedTillBalances({
+    openingCashFloat:         session.openingCashFloat,
+    openingMpesaFloat:        session.openingMpesaFloat,
+    totalCashSales:           summary.totalCashSales,
+    totalMpesaSales:          summary.totalMpesaSales,
+    totalDebtRepaymentsCash:  summary.totalDebtRepaymentsCash,
+    totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
+    totalExpensesCash:        summary.totalExpensesCash,
+    totalExpensesMpesa:       summary.totalExpensesMpesa,
+    totalCashOutflows:        summary.totalCashOutflows,
+    totalMpesaOutflows:       summary.totalMpesaOutflows,
+  });
 
-  useEffect(() => {
-    if (location.state?.autoScan && session && !isClosed) {
-      setScannerOpen(true);
-      navigate(location.pathname, { replace: true, state: {} });
-    }
-  }, [location, navigate, session, isClosed]);
+  const cashVar  = (Number(cash) ||0) - expectedCashAtClose;
+  const mpesaVar = (Number(mpesa)||0) - expectedMpesaAtClose;
 
-  const filtered = products.filter(p =>
-    p.name.toLowerCase().includes(search.toLowerCase()) ||
-    (p.barcode && p.barcode.includes(search.trim())) ||
-    (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  const handleClose = async () => {
+    setSubmit(true);
+try {
+      const write = updateDoc(doc(db,'dailySessions',sessionId), {
+        totalCashSales: summary.totalCashSales,
+        totalMpesaSales: summary.totalMpesaSales,
+        totalCreditSales: summary.totalCreditSales,
+        totalDebtRepaymentsCash: summary.totalDebtRepaymentsCash,
+        totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
+        totalExpensesCash: summary.totalExpensesCash,
+        totalExpensesMpesa: summary.totalExpensesMpesa,
+        totalRefundsCash: summary.totalRefundsCash,
+        totalRefundsMpesa: summary.totalRefundsMpesa,
+        expectedCashAtClose, actualCashAtClose:Number(cash)||0,
+        expectedMpesaAtClose, actualMpesaAtClose:Number(mpesa)||0,
+        cashVariance:cashVar, mpesaVariance:mpesaVar,
+        closedAt:serverTimestamp(), closedBy:profile.uid,
+      });
+      const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+      if (error) throw error;
+      toast.success(queuedOffline ? "Day closed offline. It'll sync later!" : 'Day closed. See you tomorrow!');
+    } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setSubmit(false); }
+  };
+
+  if (isClosed) return (
+    <div className="mx-auto max-w-2xl space-y-4">
+      <EmptyState title="Today's session is closed" description="Counting resumes when the counter opens tomorrow." />
+      <div className="card divide-y divide-ink-100">
+        <SRow label="Expected cash"   value={expectedCashAtClose} />
+        <SRow label="Actual cash"     value={session.actualCashAtClose||0} />
+        <SRow label="Cash variance"   value={(session.actualCashAtClose||0)-expectedCashAtClose} variance />
+        <SRow label="Expected M-Pesa" value={expectedMpesaAtClose} />
+        <SRow label="Actual M-Pesa"   value={session.actualMpesaAtClose||0} />
+        <SRow label="M-Pesa variance" value={(session.actualMpesaAtClose||0)-expectedMpesaAtClose} variance />
+      </div>
+      <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>
+    </div>
   );
 
-  const mergedSales = useMemo(() => {
-    const list = [];
-    sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
-    creditSales.forEach(cs => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
-    return list.sort((a, b) => {
-      const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
-      const bTime = b.soldAt?.toMillis?.() ?? b.soldAt?.toDate?.()?.getTime?.() ?? new Date(b.soldAt || 0).getTime();
-      return bTime - aTime;
-    }).slice(0, 100);
-  }, [sales, creditSales]);
+  if (finErr) return <ErrorBanner message={`Failed to load figures: ${finErr}`} />;
 
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
-    return { id:ref.id, name, phone };
-  };
+  return (
+    <div className="mx-auto max-w-2xl space-y-4">
+      <h1 className="font-display text-xl font-bold text-ink-900">Close Day</h1>
+      <div className="card divide-y divide-ink-100">
+        <div className="px-4 py-3 text-sm font-bold text-ink-800">Cash drawer</div>
+        <Row label="Opening float"             value={session.openingCashFloat} />
+        <Row label="+ Cash sales"              value={summary.totalCashSales} />
+        <Row label="+ Debt repayments (cash)"  value={summary.totalDebtRepaymentsCash} />
+        <Row label="− Expenses (cash)"         value={-summary.totalExpensesCash} />
+        <Row label="− Refunds (cash)"          value={-summary.totalRefundsCash} />
+        <Row label="= Expected cash"           value={expectedCashAtClose} bold />
+      </div>
+      <div className="card p-4 space-y-2">
+        <label className="label">Actual cash counted (KES)</label>
+        <input type="number" className="input" value={cash} onChange={e=>setCash(e.target.value)} placeholder="0" />
+        {cash!==''&&<Variance v={cashVar} />}
+      </div>
+      <div className="card divide-y divide-ink-100">
+        <div className="px-4 py-3 text-sm font-bold text-ink-800">M-Pesa till</div>
+        <Row label="Opening balance"             value={session.openingMpesaFloat} />
+        <Row label="+ M-Pesa sales"              value={summary.totalMpesaSales} />
+        <Row label="+ Debt repayments (M-Pesa)"  value={summary.totalDebtRepaymentsMpesa} />
+        <Row label="− Expenses (M-Pesa)"         value={-summary.totalExpensesMpesa} />
+        <Row label="− Refunds (M-Pesa)"          value={-summary.totalRefundsMpesa} />
+        <Row label="= Expected M-Pesa"           value={expectedMpesaAtClose} bold />
+      </div>
+      <div className="card p-4 space-y-2">
+        <label className="label">Actual M-Pesa balance (KES)</label>
+        <input type="number" className="input" value={mpesa} onChange={e=>setMpesa(e.target.value)} placeholder="0" />
+        {mpesa!==''&&<Variance v={mpesaVar} />}
+      </div>
+      <button className="btn-primary w-full" disabled={cash===''||mpesa===''||submitting} onClick={handleClose}>{submitting?'Closing…':'Confirm and close day'}</button>
+    </div>
+  );
+}
 
-  // FIX: Replaced runTransaction with writeBatch(db) and increment() for perfect offline capability.
-const handleSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
-    const productRef = doc(db, 'products', product.id);
-    const saleRef = doc(collection(db, 'sales'));
-    const saleData = withBusiness({
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit,
-      totalAmount: soldPricePerUnit * quantity,
-      profit: (soldPricePerUnit - product.costPrice) * quantity,
-      paymentMethod, mpesaCode: mpesaCode || null,
-      soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
-    }, businessId);
+function Row({ label, value, bold }) {
+  return <div className={`flex items-center justify-between px-4 py-2.5 text-sm ${bold?'bg-ink-50/60':''}`}><span className={bold?'font-bold text-ink-900':'text-ink-500'}>{label}</span><span className={bold?'font-bold text-ink-900':'text-ink-700'}>{formatKES(value)}</span></div>;
+}
+function SRow({ label, value, variance }) {
+  const tone = variance ? (value===0?'text-moss-700':value<0?'text-rust-600':'text-amber-600') : 'text-ink-700';
+  return <div className="flex items-center justify-between px-4 py-2.5 text-sm"><span className="text-ink-500">{label}</span><span className={`font-semibold ${tone}`}>{formatKES(value)}</span></div>;
+}
+function Variance({ v }) {
+  const tone = v===0?'text-moss-700':v<0?'text-rust-600':'text-amber-600';
+  return <p className={`text-sm font-semibold ${tone}`}>{v===0?'✓ Matches exactly':v<0?`Shortage of ${formatKES(Math.abs(v))}`:`Surplus of ${formatKES(v)}`}</p>;
+}
+````
 
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(saleRef, saleData);
+## File: src/pages/CustomerDetail.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { where, orderBy, doc, writeBatch, increment, getDoc, serverTimestamp, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Receipt, Banknote, Smartphone, Undo2 } from 'lucide-react';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import RepaymentModal from '../components/debtors/RepaymentModal';
+import RefundModal from '../components/debtors/RefundModal';
+import { formatKES } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
-    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
-  };
+export default function CustomerDetail() {
+  const { customerId } = useParams();
+  const { profile, isAdmin, businessId } = useAuth();
 
-  const handleCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
-    const productRef = doc(db, 'products', product.id);
-    const totalAmount = soldPricePerUnit * quantity;
-    const creditRef = doc(collection(db, 'creditSales'));
-    const creditData = withBusiness({
-      customerId, customerName, customerPhone: customerPhone || '',
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
-      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
-      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true
-    }, businessId);
+  const customerQ   = useMemo(() => businessId ? tenantQuery('customers', businessId, where('__name__','==',customerId)) : null, [customerId, businessId]);
+  const creditQ     = useMemo(() => businessId ? tenantQuery('creditSales', businessId, where('customerId','==',customerId)) : null, [customerId, businessId]);
+  const repaymentsQ = useMemo(() => businessId ? tenantQuery('repayments', businessId, where('customerId','==',customerId), orderBy('paidAt','desc')) : null, [customerId, businessId]);
 
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(creditRef, creditData);
+  const { data: customerData, loading: custLoad } = useFirestoreCollection(customerQ);
+  const { data: creditSales, loading: credLoad, error } = useFirestoreCollection(creditQ);
+  const { data: repayments } = useFirestoreCollection(repaymentsQ);
+  
+  const [repayOpen, setRepayOpen]       = useState(false);
+  const [cancelTarget, setCancelTarget] = useState(null);
+  const [refundTarget, setRefundTarget] = useState(null);
 
-    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
-  };
+  const customer = customerData[0];
+  const sorted = [...creditSales].sort((a,b) => (b.soldAt?.toMillis?.() ?? 0) - (a.soldAt?.toMillis?.() ?? 0));
+  const totalOwed = creditSales
+    .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded')
+    .reduce((acc,cs) => acc + (Number(cs.remainingBalance) || 0), 0);
 
-  // FIX: Voiding a Cash Sale now creates a 'refunds' document to correct CloseDay till shortages.
-  const handleVoid = async () => {
-    const sale = pendingVoid;
-    setPendingVoid(null);
+  const handleRepayment = async ({ amount, method, mpesaCode }) => {
+    const openSales = [...creditSales]
+      .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded' && (Number(cs.remainingBalance) || 0) > 0.005)
+      .sort((a,b) => (a.soldAt?.toMillis?.() ?? 0) - (b.soldAt?.toMillis?.() ?? 0));
+
+    if (!openSales.length) { toast.error('No outstanding balance.'); return; }
     try {
       const batch = writeBatch(db);
-      const prodRef = doc(db, 'products', sale.productId);
-      const prodSnap = await getDoc(prodRef);
-
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(sale.quantity), updatedAt: serverTimestamp() });
-      } else {
-        toast('Product was deleted; sale voided without stock restoration.', { icon: '⚠️' });
+      let remaining = amount;
+      for (const cs of openSales) {
+        if (remaining <= 0.005) break;
+        const owed    = Number(cs.remainingBalance) || 0;
+        const portion = Math.min(owed, remaining);
+        remaining    -= portion;
+        const newPaid = (Number(cs.amountPaid) || 0) + portion;
+        const newBal  = owed - portion;
+        batch.update(doc(db,'creditSales',cs.id), { amountPaid: newPaid, remainingBalance: newBal, status: newBal <= 0.005 ? 'paid' : 'partial' });
+        const repRef = doc(collection(db,'repayments'));
+        batch.set(repRef, {
+          businessId,
+          creditSaleId: cs.id,
+          customerId: cs.customerId,
+          customerName: cs.customerName,
+          productName: cs.productName,
+          amount: portion,
+          method,
+          mpesaCode: mpesaCode || null,
+          paidAt: serverTimestamp(),
+          recordedBy: profile.uid,
+          recordedByName: profile.displayName,
+        });
       }
-
-      batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
-
-      if (!sale.isCredit) {
-        const refundRef = doc(collection(db, 'refunds'));
-        batch.set(refundRef, withBusiness({
-          saleId: sale.id,
-          amount: sale.totalAmount,
-          method: sale.paymentMethod,
-          refundedAt: serverTimestamp(),
-          refundedBy: profile.uid,
-          refundedByName: profile.displayName
-        }, businessId));
-      }
-
       await batch.commit();
-      if (prodSnap.exists()) toast.success('Sale voided and stock restored.');
+      toast.success(`Recorded ${formatKES(amount)} repayment`);
+    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
+  };
+
+  const handleCancel = async (cs) => {
+    setCancelTarget(null);
+    try {
+      const batch = writeBatch(db);
+      const prodRef = doc(db,'products',cs.productId);
+      const prodSnap = await getDoc(prodRef);
+      if (prodSnap.exists()) {
+        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
+      }
+      batch.update(doc(db,'creditSales',cs.id), {
+        status: 'cancelled', remainingBalance: 0,
+        cancelledAt: serverTimestamp(), cancelledBy: profile.uid,
+      });
+      await batch.commit();
+      toast.success('Credit sale cancelled and stock restored.');
     } catch (err) { toast.error(friendlyErrorMessage(err)); }
   };
 
-  const handleProductSave = async (data) => {
+  const handleRefund = async (cs, { method }) => {
     try {
-      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
-      else { await createProduct(data, businessId); toast.success('Product added'); }
-      setEditProd(null);
-      setProdModal(false);
-      setPrefillBarcode(null);
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err));
-      throw err;
-    }
+      const batch = writeBatch(db);
+      const prodRef = doc(db,'products',cs.productId);
+      const prodSnap = await getDoc(prodRef);
+      if (prodSnap.exists()) {
+        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
+      }
+      batch.update(doc(db,'creditSales',cs.id), {
+        status: 'refunded', remainingBalance: 0,
+        refundedAt: serverTimestamp(), refundedBy: profile.uid,
+      });
+      const refundRef = doc(collection(db,'refunds'));
+      batch.set(refundRef, {
+        businessId,
+        creditSaleId: cs.id, customerId: cs.customerId, customerName: cs.customerName,
+        productName: cs.productName, amount: Number(cs.amountPaid) || 0, method,
+        refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName,
+      });
+      await batch.commit();
+      toast.success('Sale refunded and stock restored.');
+      setRefundTarget(null);
+    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
   };
 
-  const handleSupplierSave = async (supplierData) => {
-    try {
-      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-      setNewSupplierId(ref.id);
-      setSupplierModal(false);
-      toast.success('Supplier added');
-    } catch (err) { toast.error(err.message); }
-  };
+  if (custLoad || credLoad) return <LoadingSpinner />;
+  if (error) return <ErrorBanner message={`Could not load data. ${error}`} />;
+  if (!customer && creditSales.length === 0) return <EmptyState title="Customer not found" />;
 
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setActive(found);
-    else setNotFoundCode(code);
-  };
-
-  useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
-  });
-
-  if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
-  if (isClosed) return (
-    <div className="mx-auto max-w-sm pt-8 space-y-4 text-center">
-      <EmptyState title="Today's session is closed" description="Sales are locked. An owner can reopen to continue trading." />
-      {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>}
-    </div>
-  );
-  if (!session) return <OpenSessionPrompt onOpen={floats => openSession({ ...floats, openedBy:profile.uid })} />;
+  const displayName = customer?.name || creditSales[0]?.customerName || 'Unknown Customer';
+  const displayPhone = customer?.phone || creditSales[0]?.customerPhone || 'No phone';
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Tap a product, or scan a barcode, to record a sale.</p></div>
-        {isAdmin && <button className="btn-outline text-xs" onClick={()=>{setEditProd(null);setPrefillBarcode(null);setProdModal(true);}}>+ Quick add product</button>}
+    <div className="mx-auto max-w-3xl space-y-4">
+      <Link to="/customers" className="text-sm font-semibold text-ink-400 hover:text-ink-700">← Back to Customers</Link>
+      <div className="card flex flex-wrap items-center justify-between gap-3 p-5">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">{displayName}</h1>
+          <p className="text-sm text-ink-400">{displayPhone}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-xs text-ink-400">Outstanding Debt</p>
+          <p className={`font-display text-xl font-bold ${totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>{formatKES(totalOwed)}</p>
+        </div>
       </div>
-      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
-      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
-        <ProductGrid products={filtered} onSelect={setActive} isAdmin={isAdmin} />}
+      <button className="btn-primary w-full sm:w-auto" disabled={totalOwed <= 0} onClick={() => setRepayOpen(true)}>
+        <Receipt className="h-4 w-4" strokeWidth={1.75}/> Record repayment
+      </button>
 
-      {isAdmin && (
-        <div className="mt-4">
-          <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Sales log (last 100)</h2>
-          {salesLoading || creditLoading ? <LoadingSpinner /> : mergedSales.length === 0 ? <EmptyState title="No sales recorded" /> : (
-            <div className="card divide-y divide-ink-100">
-              {mergedSales.map(s=>(
-                <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided?'opacity-40 line-through':''}`}>
+      {sorted.length > 0 && (
+        <div className="card p-4">
+          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Credit purchases</h2>
+          <div className="divide-y divide-ink-100">
+            {sorted.map(cs => {
+              const reversed = cs.status === 'cancelled' || cs.status === 'refunded';
+              return (
+                <div key={cs.id} className={`flex items-center justify-between gap-2 py-2.5 text-sm ${reversed ? 'opacity-50' : ''}`}>
                   <div>
-                    <p className="font-medium text-ink-700">{s.quantity} × {s.productName} — {formatKES(s.totalAmount)}</p>
-                    <p className="text-xs text-ink-400">
-                      {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
-                      {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
-                    </p>
+                    <p className="font-medium text-ink-700">{cs.quantity} × {cs.productName}</p>
+                    <p className="text-xs text-ink-400">{formatDateTime(cs.soldAt)}</p>
                   </div>
-                  {!s.isVoided && !s.isCredit && isAdmin && (
-                    <button onClick={()=>setPendingVoid(s)} className="p-1 text-rust-400 hover:text-rust-600 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Void sale"><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
-                  )}
-                  {s.isCredit && isAdmin && (
-                    <Link to={`/customers/${s.customerId}`} className="btn-outline !py-1 !px-2.5 !min-h-0 text-xs text-ink-500 hover:text-ink-700">View Customer</Link>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <div className="text-right">
+                      <p className={`font-semibold ${reversed ? 'line-through text-ink-400' : 'text-ink-800'}`}>{formatKES(cs.totalAmount)}</p>
+                      <span className={`badge ${cs.status === 'paid' ? 'bg-moss-100 text-moss-700' : cs.status === 'partial' ? 'bg-rust-100 text-rust-700' : 'bg-ink-100 text-ink-500'}`}>{cs.status}</span>
+                    </div>
+                    {isAdmin && !reversed && (
+                      <button
+                        className="rounded-lg p-2 text-ink-400 hover:bg-ink-100"
+                        title={Number(cs.amountPaid) > 0.005 ? 'Refund this sale' : 'Cancel this sale'}
+                        onClick={() => (Number(cs.amountPaid) > 0.005 ? setRefundTarget(cs) : setCancelTarget(cs))}
+                      >
+                        <Undo2 className="h-4 w-4" strokeWidth={1.75}/>
+                      </button>
+                    )}
+                  </div>
                 </div>
-              ))}
-            </div>
-          )}
+              );
+            })}
+          </div>
+        </div>
+      )}
+      
+      {repayments.length > 0 && (
+        <div className="card p-4">
+          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Repayment history</h2>
+          <div className="divide-y divide-ink-100">
+            {repayments.map(r => (
+              <div key={r.id} className="flex items-center justify-between py-2.5 text-sm">
+                <div>
+                  <p className="font-medium text-ink-700">{r.method === 'Cash' ? <><Banknote className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>Cash</> : <><Smartphone className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>M-Pesa {r.mpesaCode ? `(${r.mpesaCode})` : ''}</>}</p>
+                  <p className="text-xs text-ink-400">{formatDateTime(r.paidAt)}</p>
+                </div>
+                <span className="font-semibold text-moss-700">{formatKES(r.amount)}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!notFoundCode} onClose={()=>setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={()=>setNotFoundCode(null)}>Cancel</button>
-          {isAdmin ? (
-            <button className="btn-primary" onClick={()=>{ setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
-          ) : (
-            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
-          )}
-        </div>
-      </Modal>
-
-      <SaleModal 
-        open={!!activeProduct} 
-        product={activeProduct} 
-        customers={customers} 
-        onClose={(record) => {
-          setActive(null);
-          if (record && record.id) {
-            setCompletedSale(record);
-          }
-        }} 
-        onConfirmSale={handleSale} 
-        onConfirmCredit={handleCredit} 
-        onCreateCustomer={handleCreateCustomer} 
+      <RepaymentModal open={repayOpen} customer={{ name: displayName }} totalOwed={totalOwed} onClose={() => setRepayOpen(false)} onSubmit={handleRepayment} />
+      <RefundModal open={!!refundTarget} creditSale={refundTarget} onClose={() => setRefundTarget(null)} onSubmit={(opts) => handleRefund(refundTarget, opts)} />
+      <ConfirmDialog
+        open={!!cancelTarget}
+        title="Cancel this credit sale?"
+        message={`"${cancelTarget?.productName}" (×${cancelTarget?.quantity}) will be cancelled and stock restored. Nothing has been paid on this sale yet.`}
+        confirmLabel="Cancel sale"
+        danger
+        onConfirm={() => handleCancel(cancelTarget)}
+        onCancel={() => setCancelTarget(null)}
       />
-      <SaleCompleteModal
-        open={!!completedSale}
-        sale={completedSale}
-        onClose={() => setCompletedSale(null)}
-      />
-
-<ProductFormModal
-        open={prodModal}
-        onClose={()=>{setProdModal(false);setEditProd(null);setPrefillBarcode(null);}}
-        onSave={handleProductSave}
-        suppliers={suppliers}
-        initialProduct={editProduct}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-      />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-      <ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" (×${pendingVoid?.quantity}) will be restored.`} confirmLabel="Void sale" danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />
     </div>
   );
 }
 ````
 
-## File: src/pages/Dashboard.jsx
+## File: src/pages/Expenses.jsx
 ````javascript
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import { addDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore';
 import toast from 'react-hot-toast';
-import { db } from '../firebase';
+import { Banknote, Smartphone } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useDailySession } from '../hooks/useDailySession';
-import { useFinancialsForRange } from '../hooks/useFinancials';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct } from '../utils/products';
+import { useSettings } from '../hooks/useSettings';
+import { isExpenseExcluded } from '../utils/financials';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
-import Modal from '../components/common/Modal';
-import SaleModal from '../components/pos/SaleModal';
-import SaleCompleteModal from '../components/pos/SaleCompleteModal';
-import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
+import ExportCsvButton from '../components/common/ExportCsvButton';
+import { EXPENSE_CATEGORIES } from '../constants/categories';
 import { formatKES } from '../utils/currency';
-import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
-import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { formatDateTime, todayKey } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+const emptyForm = { description:'', category:EXPENSE_CATEGORIES[0], amount:'', paymentMethod:'Cash', mpesaCode:'' };
 
-function StatCard({ label, value, tone = 'text-ink-900', sub }) {
-  return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
-    </div>
-  );
-}
+export default function Expenses() {
+  const { profile, isAdmin, businessId } = useAuth();
+  const { settings, loading:sLoad } = useSettings();
+  const expQ = useMemo(() => businessId ? tenantQuery('expenses', businessId, orderBy('recordedAt','desc'), limit(200)) : null, [businessId]);
+  const { data: rawExpenses, loading } = useFirestoreCollection(expQ);
+  // FIX: supplier-debt-payment entries are auto-written to `expenses` so
+  // till reconciliation math works (see financials.js), but they aren't
+  // real operating expenses — showing them here confused the actual
+  // expense log. Filter them out with the exact same rule used to
+  // exclude them from the Total Expenses figure.
+  const expenses = useMemo(() => rawExpenses.filter((e) => !isExpenseExcluded(e)), [rawExpenses]);
+  const [form, setForm]   = useState(emptyForm);
+  const [busy, setBusy]   = useState(false);
+  const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
 
-export default function Dashboard() {
-  const { profile, isAdmin, businessId, isPro } = useAuth();
-  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
-  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
+  if (sLoad) return <LoadingSpinner />;
+  if (!isAdmin && !settings.cashierCanRecordExpenses) return <EmptyState title="Expense recording is owner-only" description="Ask your owner to enable cashier expenses in Settings." />;
 
-  const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const { data: products } = useFirestoreCollection(productsQuery);
-  const { data: customers } = useFirestoreCollection(customersQuery);
-  const { data: suppliers } = useFirestoreCollection(suppliersQuery);
+const handle = async e => {
+    e.preventDefault();
+    if (!form.description.trim()||!form.amount) return;
+    if (form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa transaction code.'); return; }
+    setBusy(true);
+    const write = addDoc(tenantCollection('expenses'), withBusiness({
+      description:form.description.trim(), category:form.category, amount:Number(form.amount),
+      paymentMethod:form.paymentMethod, mpesaCode:form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
+      recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp(),
+    }, businessId));
 
-  const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
-  const [activeProduct, setActiveProduct] = useState(null);
-  const [completedSale, setCompletedSale] = useState(null);
-  const [editProduct, setEditProd] = useState(null);
-  const [prodModal, setProdModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [notFoundCode, setNotFoundCode] = useState(null);
-
-  const [privacyMode, setPrivacyMode] = useState(() => {
-    try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
-    catch { return false; }
-  });
-
-  const togglePrivacyMode = () => {
-    setPrivacyMode((prev) => {
-      const next = !prev;
-      try { localStorage.setItem('flowbiz_dashboard_privacy', String(next)); }
-      catch (err) { console.error('Failed to save privacy mode setting', err); }
-      return next;
-    });
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    setBusy(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Expense saved — it'll sync once you're back online." : 'Expense recorded');
+    if (queuedOffline) write.catch((err) => toast.error(`An expense from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+    setForm(emptyForm);
   };
 
-  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
-
-  const dashboardCashReceived = summary.totalCashReceipts;
-  const dashboardMpesaReceived = summary.totalMpesaReceipts;
-  const dashboardExpenses = summary.totalExpenses;
-  const dashboardNetProfit = summary.netProfit;
-
-  const lowStock = products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
-  const totalInventoryValue = products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
-  const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
-  const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
-  const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
-
-  const recentActivity = useMemo(() => {
-    const list = [];
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      list.push({ id: `sale-${s.id}`, type: 'Sale', title: `${s.quantity} × ${s.productName}`, subtitle: `Sold by ${s.soldByName || 'Staff'}`, amount: s.totalAmount, method: s.paymentMethod, timestamp: s.soldAt, isPositive: true });
-    });
-    (repayments || []).forEach((r) => {
-      list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
-    });
-    return list.sort((a, b) => {
-      const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
-      const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
-      return bTime - aTime;
-    }).slice(0, 8);
-  }, [sales, repayments]);
-
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
-    return { id: ref.id, name, phone };
-  };
-
-  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
-  const handleConfirmSale = async ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
-    const productRef = doc(db, 'products', product.id);
-    const saleRef = doc(collection(db, 'sales'));
-    const saleData = withBusiness({
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit,
-      totalAmount: soldPricePerUnit * quantity,
-      profit: (soldPricePerUnit - product.costPrice) * quantity,
-      paymentMethod, mpesaCode: mpesaCode || null,
-      soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(saleRef, saleData);
-    await batch.commit();
-
-    return { id: saleRef.id, ...saleData, soldAt: new Date() };
-  };
-
-  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick Credit.
-  const handleConfirmCredit = async ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
-    const productRef = doc(db, 'products', product.id);
-    const totalAmount = soldPricePerUnit * quantity;
-    const creditRef = doc(collection(db, 'creditSales'));
-    const creditData = withBusiness({
-      customerId, customerName, customerPhone: customerPhone || '',
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
-      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
-      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(creditRef, creditData);
-    await batch.commit();
-
-    return { id: creditRef.id, ...creditData, soldAt: new Date() };
-  };
-
-  const handleProductSave = async (data) => {
-    try {
-      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
-      else { await createProduct(data, businessId); toast.success('Product added'); }
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
-  };
-
-  const handleSupplierSave = async (supplierData) => {
-    try {
-      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-      setNewSupplierId(ref.id);
-      setSupplierModal(false);
-      toast.success('Supplier added');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setActiveProduct(found);
-    else setNotFoundCode(code);
-  };
-
-  useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
-  });
-
-  if (sessionLoading) return <LoadingSpinner label="Loading today's session…" />;
-
-  if (isClosed) {
-    return (
-      <div className="mx-auto max-w-sm space-y-4 text-center">
-        <EmptyState title="Day is closed" description="Sales are locked until you reopen the session or tomorrow starts." />
-        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen today's session</button>}
-      </div>
-    );
-  }
-  if (!session) {
-    return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
-  }
+  const rows = expenses.map(e=>({ date:formatDateTime(e.recordedAt), description:e.description, category:e.category, amount:e.amount, paymentMethod:e.paymentMethod, mpesaCode:e.mpesaCode||'', recordedBy:e.recordedByName }));
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
-          <div className="flex items-center gap-2 mt-1">
-            {isAdmin && (
-<Link to="/pro" className={`badge text-[11px] font-bold transition-colors ${isPro ? 'bg-amber-100 text-amber-800' : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'}`}>                {isPro ? 'FlowBiz Pro ✓' : 'Explore FlowBiz Pro'}
-              </Link>
-            )}
-            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
-          </div>
+    <div className="mx-auto max-w-3xl space-y-4">
+      <h1 className="font-display text-xl font-bold text-ink-900">Expenses</h1>
+      <form onSubmit={handle} className="card space-y-3 p-4">
+        <h2 className="font-display text-sm font-bold text-ink-800">Record an expense</h2>
+        <div><label className="label">Description</label><input className="input" value={form.description} onChange={set('description')} placeholder="e.g. Rent for July" required /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Category</label><select className="input" value={form.category} onChange={set('category')}>{EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></div>
+          <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" className="input" value={form.amount} onChange={set('amount')} required /></div>
         </div>
-        <button
-          onClick={togglePrivacyMode}
-          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
-          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
-        >
-          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
-        </button>
-      </div>
-
-      {isAdmin && (
-        <>
-          {financialsLoading ? <LoadingSpinner /> : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
-              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
-              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
-              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
-              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
-            </div>
-          )}
-          <div className="grid gap-3 sm:grid-cols-3">
-            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
-<StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
-            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
-          </div>
-        </>
-      )}
-
-      <div>
-        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
-        {recentActivity.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
-        ) : (
-          <div className="card divide-y divide-ink-100">
-            {recentActivity.map((act) => (
-              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
-                <div className="min-w-0 flex-1 pr-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
-                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
-                  </div>
-                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
-                </div>
-              </div>
+        <div>
+          <label className="label">Payment method</label>
+          <div className="grid grid-cols-2 gap-2">
+            {['Cash','M-Pesa'].map(m=>(
+              <button key={m} type="button" onClick={()=>setForm(p=>({...p,paymentMethod:m}))} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentMethod===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
+                {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
+              </button>
             ))}
           </div>
-        )}
-      </div>
-
-      <SaleModal 
-        open={!!activeProduct} 
-        product={activeProduct} 
-        customers={customers} 
-        onClose={(record) => {
-          setActiveProduct(null);
-          if (record && record.id) setCompletedSale(record);
-        }} 
-        onConfirmSale={handleConfirmSale} 
-        onConfirmCredit={handleConfirmCredit} 
-        onCreateCustomer={handleCreateCustomer} 
-      />
-      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
-          {isAdmin ? (
-            <button className="btn-primary" onClick={() => { setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
-          ) : (
-            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
-          )}
         </div>
-      </Modal>
-
-<ProductFormModal
-        open={prodModal}
-        onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
-        onSave={handleProductSave}
-        suppliers={suppliers}
-        initialProduct={editProduct}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-      />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+        {form.paymentMethod==='M-Pesa'&&<div><label className="label">M-Pesa code <span className="text-rust-500">*</span></label><input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} placeholder="QWE1234567" /></div>}
+        <button type="submit" className="btn-primary w-full" disabled={busy}>{busy?'Saving…':'Record expense'}</button>
+      </form>
+      <div className="flex items-center justify-between"><h2 className="font-display text-sm font-bold text-ink-800">Recent expenses</h2><ExportCsvButton filename={`expenses-${todayKey()}.csv`} rows={rows} /></div>
+      {loading?<LoadingSpinner />:expenses.length===0?<EmptyState title="No expenses yet" />:(
+        <div className="card divide-y divide-ink-100">
+          {expenses.map(e=>(
+            <div key={e.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
+              <div><p className="font-medium text-ink-700">{e.description}</p><p className="text-xs text-ink-400">{e.category} · {formatDateTime(e.recordedAt)} · {e.recordedByName}</p></div>
+              <div className="text-right"><p className="font-semibold text-rust-600">{formatKES(e.amount)}</p><p className="text-xs text-ink-400">{e.paymentMethod}</p></div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -9334,500 +7673,858 @@ finally {
 }
 ````
 
-## File: src/pages/Products.jsx
+## File: src/pages/Pro.jsx
 ````javascript
-import { useMemo, useState } from 'react';
-import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { Pencil, Trash2, TrendingUp } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
+import { auth } from '../firebase';
+import toast from 'react-hot-toast';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
-export default function Products() {
-  const { businessId } = useAuth();
-  const productsQ = useMemo(
-    () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
-    [businessId]
-  );
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const { data: products, loading, error } = useFirestoreCollection(productsQ);
-  const { data: suppliers } = useFirestoreCollection(suppliersQ);
-  
-  const [search, setSearch] = useState('');
-  const [modal, setModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [editing, setEditing] = useState(null);
-  const [pendingDel, setPendingDel] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [scanFoundProduct, setScanFoundProduct] = useState(null);
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
-  const filtered = products.filter(
-    (p) =>
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.category.toLowerCase().includes(search.toLowerCase()) ||
-      (p.barcode && p.barcode.includes(search.trim())) ||
-      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
-  );
-  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
+export default function Pro() {
+  const { isPro, subscription } = useAuth();
+  const [loading, setLoading] = useState(false);
 
-  const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
-
-  const handleSave = async (data) => {
+  // FIX: Shifted from missing Firebase Function to the existing Cloudflare Worker API
+const handleSubscribe = async () => {
+    setLoading(true);
     try {
-      if (editing) {
-        await updateProduct(editing.id, data, editing.barcode, businessId);
-        toast.success('Product updated');
+      const idToken = await auth.currentUser.getIdToken(true);
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/paystack/initialize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      });
+      const data = await response.json();
+
+      if (data?.access_code && window.PaystackPop) {
+        const popup = new window.PaystackPop();
+        popup.resumeTransaction(data.access_code, {
+          onSuccess: () => toast.success('Payment received — activating your subscription…'),
+          onCancel: () => toast('Payment cancelled.'),
+        });
+      } else if (data?.authorization_url) {
+        // Fallback if the Paystack script hasn't loaded yet.
+        window.location.href = data.authorization_url;
       } else {
-        await createProduct(data, businessId);
-        toast.success('Product added');
+        toast.error(data?.error || "Couldn't initialize payment. Please try again.");
       }
-      closeFormModal();
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, { fallback: 'Payment initiation failed.' }));
+    } finally {
+      setLoading(false);
+    }
   };
-
-  const handleSupplierSave = async (supplierData) => {
-    try {
-      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-      setNewSupplierId(ref.id);
-      setSupplierModal(false);
-      toast.success('Supplier added');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handleDel = async () => {
-    try { await softDeleteProduct(pendingDel.id); toast.success('Product archived'); }
-    catch (err) {toast.error(friendlyErrorMessage(err)); }
-    finally { setPendingDel(null); }
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setScanFoundProduct(found);
-    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
-  };
-
-  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
-        <div className="flex gap-2">
-          <Link to="/inventory-intelligence" className="btn-outline">
-            <TrendingUp className="h-4 w-4" /> Intelligence
-          </Link>
-          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
+    <div className="mx-auto max-w-4xl space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="font-display text-2xl font-bold text-ink-900">FlowBiz Pro</h1>
+          <p className="text-sm text-ink-500">Supercharge your shop operations.</p>
+        </div>
+        <Link to="/" className="btn-outline text-xs">Back to Dashboard</Link>
+      </div>
+
+      <div className="card p-8 text-center bg-moss-50 border-moss-200">
+        <h2 className="font-display text-3xl font-bold text-moss-800">KSh 500 <span className="text-lg font-normal text-moss-700">/ 30 days</span></h2>
+        <p className="mt-2 text-ink-600 max-w-lg mx-auto">No recurring auto-billing. Manual renewal ensures you're always in control of your subscription.</p>
+        
+        {isPro ? (
+          <div className="mt-6 inline-flex flex-col items-center">
+            <span className="badge bg-amber-100 text-amber-800 px-4 py-2 text-sm">FlowBiz Pro Active</span>
+            {subscription?.expiresAt && <p className="text-xs text-ink-500 mt-2">Expires on {new Date(subscription.expiresAt.toMillis ? subscription.expiresAt.toMillis() : subscription.expiresAt).toLocaleDateString()}</p>}
+            <button onClick={handleSubscribe} disabled={loading} className="mt-4 btn-outline">Extend Subscription</button>
+          </div>
+        ) : (
+          <button onClick={handleSubscribe} disabled={loading} className="mt-6 btn-primary px-8 py-3 text-lg">
+            {loading ? 'Initializing Payment...' : 'Pay KSh 500'}
+          </button>
+        )}
+      </div>
+
+      <div className="grid sm:grid-cols-2 gap-6 pt-4">
+        <div>
+          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Advanced Analytics</h3>
+          <ul className="space-y-2 text-sm text-ink-600">
+            <li><span className="text-moss-700 mr-2">✓</span>Business Health Dashboard</li>
+            <li><span className="text-moss-700 mr-2">✓</span>Sales insights & Profit analysis</li>
+            <li><span className="text-moss-700 mr-2">✓</span>Staff Analytics and performance tracking</li>
+          </ul>
+        </div>
+        <div>
+          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Inventory Intelligence</h3>
+          <ul className="space-y-2 text-sm text-ink-600">
+            <li><span className="text-moss-700 mr-2">✓</span>Detect overstocked items holding capital</li>
+            <li><span className="text-moss-700 mr-2">✓</span>Predictive stockout warnings</li>
+            <li><span className="text-moss-700 mr-2">✓</span>Total capital & potential profit insights</li>
+          </ul>
+        </div>
+        <div>
+          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Professional Documents</h3>
+          <ul className="space-y-2 text-sm text-ink-600">
+            <li><span className="text-moss-700 mr-2">✓</span>Professional invoices and receipts</li>
+            <li><span className="text-moss-700 mr-2">✓</span>PDF generation and direct printing</li>
+            <li><span className="text-moss-700 mr-2">✓</span>Business logo prominently displayed</li>
+          </ul>
+        </div>
+        <div>
+          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Communication & Team</h3>
+          <ul className="space-y-2 text-sm text-ink-600">
+            <li><span className="text-moss-700 mr-2">✓</span>WhatsApp receipts directly to customers</li>
+            <li><span className="text-moss-700 mr-2">✓</span>WhatsApp invoice sending</li>
+            <li><span className="text-moss-700 mr-2">✓</span>Unlimited staff members (Free plan limits to 1)</li>
+          </ul>
         </div>
       </div>
-      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      <ErrorBanner message={error} />
-      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
-        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
-      ) : (
-        <>
-          <div className="space-y-2.5 sm:hidden">
-            {filtered.map((p) => (
-              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
-                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
-                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
-                  <div>
-                    <span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span>
-                  </div>
-                  <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="hidden sm:block card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {filtered.map((p) => (
-                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
-                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
-                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
-                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
-                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
-                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
-                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
-          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
-        </div>
-      </Modal>
-
-<ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-      <ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel="Archive" danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />
     </div>
   );
 }
 ````
 
-## File: src/pages/Purchases.jsx
+## File: src/pages/Settings.jsx
+````javascript
+import { useEffect, useState } from 'react';
+import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { db, storage } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { resetBusinessData } from '../utils/businessReset';
+import { restoreProduct, permanentlyDeleteProduct, cleanupOrphanedBarcodeIndexes } from '../utils/products';
+import { isDemoMode } from '../demo/demoMode';
+import { resetDemoData } from '../demo/seedData';
+import { formatDateTime } from '../utils/dateRanges';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';import { friendlyErrorMessage } from '../utils/errorMessages';
+
+const RESET_CONFIRM_PHRASE = 'RESET';
+
+export default function Settings() {
+  const { profile, businessId, isOwner, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, subscription } = useAuth();
+  const demo = isDemoMode();
+  const [loading, setLoading]     = useState(true);
+  
+  const [shopName, setShopName]   = useState('');
+  const [phone, setPhone]         = useState('');
+  const [email, setEmail]         = useState('');
+  const [address, setAddress]     = useState('');
+  const [logoFile, setLogoFile]   = useState(null);
+  const [logoUrl, setLogoUrl]     = useState('');
+  const [cashierExp, setCashierExp] = useState(true);
+  
+  const [saving, setSaving]       = useState(false);
+  const [savingPermissions, setSavingPermissions] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resetting, setResetting] = useState(false);
+
+  const [sessions, setSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+
+  const [archived, setArchived] = useState([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+
+  const settingsRef = businessId ? doc(db, 'businessSettings', businessId) : null;
+
+  function compressImage(file, maxDimension = 480, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        if (!blob) { reject(new Error('Could not process image.')); return; }
+        resolve(blob);
+      }, 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
+    img.src = url;
+  });
+}
+
+  useEffect(() => {
+    if (!settingsRef) return;
+    getDoc(settingsRef).then(snap => {
+      if (snap.exists()) { 
+        const d = snap.data(); 
+        setShopName(d.shopName || ''); 
+        setPhone(d.phone || '');
+        setEmail(d.email || '');
+        setAddress(d.address || '');
+        setLogoUrl(d.logoUrl || '');
+        setCashierExp(d.cashierCanRecordExpenses !== false); 
+      }
+      setLoading(false);
+    });
+  }, [businessId]);
+
+  useEffect(() => {
+    if (!businessId) return;
+    listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
+  }, [businessId]);
+
+  const loadArchived = async () => {
+    if (!businessId) return;
+    setArchivedLoading(true);
+    try {
+      const snap = await getDocs(query(collection(db, 'products'), where('businessId', '==', businessId), where('deleted', '==', true)));
+      setArchived(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } finally {
+      setArchivedLoading(false);
+    }
+  };
+
+const handleSave = async e => {
+    e.preventDefault(); 
+    setSaving(true);
+    try {
+      let finalLogoUrl = logoUrl;
+
+      // Logo upload gets its OWN try/catch (Issue 8): a slow/failed
+      // upload of the (now compressed) image must not block saving the
+      // rest of Business Information, which has nothing to do with it.
+      if (logoFile) {
+        try {
+          const compressed = await compressImage(logoFile, 480, 0.75);
+          const fileRef = ref(storage, `businesses/${businessId}/logo_${Date.now()}`);
+          await uploadBytes(fileRef, compressed);
+          finalLogoUrl = await getDownloadURL(fileRef);
+        } catch (logoErr) {
+          toast.error(`Logo upload failed, but the rest of your settings will still be saved: ${logoErr.message}`);
+        }
+      }
+
+      await setDoc(settingsRef, { 
+        shopName: shopName.trim(), 
+        phone: phone.trim(),
+        email: email.trim(),
+        address: address.trim(),
+        logoUrl: finalLogoUrl,
+      }, { merge: true });
+      
+      setLogoUrl(finalLogoUrl);
+      toast.success('Business information saved'); 
+      setLogoFile(null);
+    } catch (err) { 
+      toast.error(err.message); 
+    } finally { 
+      setSaving(false); 
+    }
+  };
+
+  const handleSavePermissions = async () => {
+    setSavingPermissions(true);
+    try {
+      await setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
+      toast.success('Permissions saved');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingPermissions(false);
+    }
+  };
+
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      if (demo) {
+        resetDemoData();
+        toast.success('Demo data reset. Reloading…');
+      } else {
+        await resetBusinessData(businessId, profile?.uid);
+        toast.success('Business data reset. Reloading…');
+      }
+      window.location.href = '/';
+    } catch (err) {
+      toast.error(`Reset failed partway through: ${err.message}`);
+      setResetting(false);
+      setResetDialogOpen(false);
+    }
+  };
+
+  const handleRevoke = async (sessionId) => {
+    try {
+      await revokeSession(sessionId);
+      setSessions(s => s.map(x => x.id === sessionId ? { ...x, revoked: true } : x));
+      toast.success('Device signed out.');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const handleRestore = async (productId) => {
+    try { await restoreProduct(productId); setArchived(a => a.filter(p => p.id !== productId)); toast.success('Product restored'); }
+    catch (err) { toast.error(err.message); }
+  };
+
+  const handlePermanentDelete = async (productId) => {
+    const target = archived.find(p => p.id === productId);
+    try {
+      await permanentlyDeleteProduct(productId, target?.barcode, businessId);
+      setArchived(a => a.filter(p => p.id !== productId));
+      toast.success('Product permanently deleted');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const [cleaningOrphans, setCleaningOrphans] = useState(false);
+  const handleCleanupOrphans = async () => {
+    setCleaningOrphans(true);
+    try {
+      const { scanned, removed } = await cleanupOrphanedBarcodeIndexes(businessId);
+      toast.success(removed > 0
+        ? `Checked ${scanned} barcode record(s), freed ${removed} orphaned barcode(s).`
+        : `Checked ${scanned} barcode record(s) — none were orphaned.`);
+    } catch (err) { toast.error(err.message); }
+    finally { setCleaningOrphans(false); }
+  };
+
+  if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
+
+  return (
+    <div className="mx-auto max-w-xl space-y-5">
+      <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
+
+      <div className="card p-5 space-y-2">
+        <h2 className="font-display text-base font-bold text-ink-800">Account &amp; Security</h2>
+        <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
+        <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
+        <Row label="Business ID" value={businessId || '—'} mono />
+      </div>
+
+      <form onSubmit={handleSave} className="card space-y-4 p-5">
+        <h2 className="font-display text-base font-bold text-ink-800">Business Information</h2>
+        <p className="text-sm text-ink-500 mb-2">This info dynamically populates your customer-facing documents (receipts, invoices).</p>
+        
+        <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
+        
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
+          <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
+        </div>
+
+        <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
+        
+        <div>
+          <label className="label">Business Logo</label>
+          <div className="flex items-center gap-4">
+            {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
+            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files[0])} />
+          </div>
+        </div>
+
+<button type="submit" className="btn-primary w-full" disabled={saving}>{saving?'Saving…':'Save settings'}</button>
+      </form>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Permissions</h2>
+        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-3">
+          <div><p className="text-sm font-semibold text-ink-800">Let cashiers record expenses</p><p className="text-xs text-ink-400">Turn off if only owners should log expenses.</p></div>
+          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-moss-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
+            <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition-transform ${cashierExp?'translate-x-5':''}`} />
+          </button>
+        </div>
+        <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
+          {savingPermissions ? 'Saving…' : 'Save permissions'}
+        </button>
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Team Management</h2>
+        <p className="text-sm text-ink-500">Invite owners or cashiers, and manage pending invites and access.</p>
+        <Link to="/users" className="btn-outline w-full flex items-center justify-center gap-2">Manage users &amp; invites</Link>
+      </div>
+
+      {!demo && (
+        <div className="card p-5 space-y-3">
+          <h2 className="font-display text-base font-bold text-ink-800">Device Management</h2>
+          {sessionsLoading ? <p className="text-sm text-ink-400">Loading…</p> : sessions.length === 0 ? (
+            <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {sessions.map(s => (
+                <div key={s.id} className="flex items-center justify-between py-2.5 text-sm">
+                  <div>
+                    <p className="font-medium text-ink-700">{s.deviceLabel}{s.id === currentSessionId && <span className="text-xs text-ink-400"> (this device)</span>}</p>
+                    <p className="text-xs text-ink-400">Last active {formatDateTime(s.lastActiveAt)}</p>
+                  </div>
+                  {s.revoked ? (
+                    <span className="badge bg-ink-100 text-ink-500">Signed out</span>
+                  ) : (
+                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRevoke(s.id)}>Sign out</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="card p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
+          <div className="flex gap-2">
+            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={handleCleanupOrphans} disabled={cleaningOrphans}>
+              {cleaningOrphans ? 'Checking…' : 'Clean Up Orphaned Barcodes'}
+            </button>
+            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
+              {archivedOpen ? 'Hide' : 'View archive'}
+            </button>
+          </div>
+        </div>
+        <p className="text-sm text-ink-500">Deleted products are archived here first, never destroyed immediately.</p>
+        {archivedOpen && (
+          archivedLoading ? <p className="text-sm text-ink-400">Loading…</p> : archived.length === 0 ? (
+            <p className="text-sm text-ink-400">Nothing archived.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {archived.map(p => (
+                <div key={p.id} className="flex items-center justify-between py-2.5 text-sm">
+                  <span className="font-medium text-ink-700">{p.name}</span>
+                  <div className="flex gap-2">
+                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRestore(p.id)}>Restore</button>
+                    <button className="btn-danger !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handlePermanentDelete(p.id)}>Delete forever</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </div>
+
+      <div className="card p-5 space-y-2">
+        <h2 className="font-display text-base font-bold text-ink-800">Subscription</h2>
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
+          <Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>
+        </div>
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Support</h2>
+        <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
+      </div>
+
+      <div className="card space-y-3 border-rust-200 p-5">
+        <div>
+          <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
+          <p className="mt-1 text-sm text-ink-500">
+            {demo
+              ? 'Demo Reset clears all sample data stored in this browser.'
+              : "Business Reset permanently deletes ALL of this business's data. This cannot be undone."}
+          </p>
+        </div>
+        <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
+          {demo ? 'Demo Reset' : 'Business Reset'}
+        </button>
+      </div>
+
+      <ConfirmDialog
+        open={resetDialogOpen}
+        title={demo ? 'Reset the demo data?' : 'This will permanently delete ALL data for this business'}
+        message={
+          demo ? (
+            <p>All sample data in this browser will be cleared and replaced with the original demo dataset.</p>
+          ) : (
+            <>
+              <p className="mb-2">Everything this business owns will be deleted. This cannot be undone.</p>
+              <label className="label mt-3">Type <span className="font-mono font-bold">{RESET_CONFIRM_PHRASE}</span> to confirm</label>
+              <input className="input" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} autoFocus />
+            </>
+          )
+        }
+        confirmLabel={resetting ? 'Resetting…' : demo ? 'Reset demo data' : 'Delete everything'}
+        danger
+        onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
+        onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
+      />
+    </div>
+  );
+}
+
+function Row({ label, value, tone = '', mono = false }) {
+  return (
+    <div className="flex items-center justify-between py-1 text-sm">
+      <span className="text-ink-500">{label}</span>
+      <span className={`font-semibold ${mono ? 'font-mono text-xs' : ''} ${tone || 'text-ink-800'}`}>{value}</span>
+    </div>
+  );
+}
+````
+
+## File: src/pages/Suppliers.jsx
 ````javascript
 import { useMemo, useState } from 'react';
-import { doc, writeBatch, increment, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
-
+import { addDoc, updateDoc, deleteDoc, doc, writeBatch, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
 import toast from 'react-hot-toast';
+import { Pencil, Trash2, Banknote, Smartphone } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct } from '../utils/products';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
-import ProductFormModal from '../components/products/ProductFormModal';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
 import { formatKES } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
+import { computeSupplierBalances } from '../utils/financials';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
-const empty = { supplierId:'', productId:'', quantity:'', costPricePerUnit:'', paymentStatus:'paid', paymentMethod:'Cash', mpesaCode:'' };
-
-export default function Purchases() {
+export default function Suppliers() {
   const { profile, businessId } = useAuth();
-  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt','desc'), limit(50)) : null, [businessId]);
-  const { data: products }  = useFirestoreCollection(productsQ);
-  const { data: suppliers } = useFirestoreCollection(suppliersQ);
-  const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
-  const [form, setForm] = useState(empty);
-  const [busy, setBusy] = useState(false);
-  const [productModal, setProductModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
+  const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const purchQ  = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
+  const paymQ   = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
+  const { data: suppliers, loading } = useFirestoreCollection(suppQ);
+  const { data: purchases }          = useFirestoreCollection(purchQ);
+  const { data: spayments }          = useFirestoreCollection(paymQ);
 
-  const selProd = products.find(p=>p.id===form.productId);
-  const selSupp = suppliers.find(s=>s.id===form.supplierId);
-  const totalCost = (Number(form.quantity)||0)*(Number(form.costPricePerUnit)||0);
+  const [modal, setModal]       = useState(false);
+  const [editing, setEditing]   = useState(null);
+  const [pendDel, setPendDel]   = useState(null);
+  const [payModal, setPayModal] = useState(false);
+  const [selSupp, setSelSupp]   = useState(null);
+  const [payAmt, setPayAmt]     = useState('');
+  const [payMethod, setPayMethod] = useState('Cash');
+  const [payCode, setPayCode]   = useState('');
+  const [paying, setPaying]     = useState(false);
 
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) {
-      setForm(p => ({ ...p, productId: found.id }));
-      toast.success(`Selected ${found.name}`);
-    } else {
-      setPrefillBarcode(code);
-      setProductModal(true);
+  const owedList = useMemo(
+    () => computeSupplierBalances(purchases, spayments, suppliers),
+    [purchases, spayments, suppliers]
+  );
+  const owedMap = useMemo(
+    () => Object.fromEntries(owedList.map((o) => [o.supplierId, o.balance])),
+    [owedList]
+  );
+  const totalOwed = owedList.reduce((a, o) => a + o.balance, 0);
+
+const [deleting, setDeleting] = useState(false);
+
+  const handleSave = async data => {
+    const write = editing
+      ? updateDoc(doc(db,'suppliers',editing.id), data)
+      : addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
+
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
+    setModal(false); setEditing(null);
+  };
+
+  const handleDel = async () => {
+    const balance = owedMap[pendDel.id] || 0;
+    if (balance > 0.005) {
+      toast.error(`Can't remove "${pendDel.name}" — they still have an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
+      setPendDel(null);
+      return;
     }
+    setDeleting(true);
+    const { queuedOffline, error } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
+    setDeleting(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
+    setPendDel(null);
   };
 
-  useHardwareScanner(handleScanDetected, { enabled: !productModal && !supplierModal && !scannerOpen });
-
-  const handle = async e => {
+  const handlePay = async e => {
     e.preventDefault();
-    if (!form.productId||!form.supplierId||!form.quantity||!form.costPricePerUnit) { toast.error('Fill in all fields.'); return; }
-    if (form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
-    setBusy(true);
-    try {
-      const qty   = Number(form.quantity);
-      const cost  = Number(form.costPricePerUnit);
-      const total = qty * cost;
-      const batch = writeBatch(db);
-      batch.update(doc(db,'products',form.productId), { stock:increment(qty), costPrice:cost, updatedAt:serverTimestamp() });
-      const purchRef = doc(collection(db,'purchases'));
-      batch.set(purchRef, withBusiness({
-        supplierId:form.supplierId,
-        supplierName:selSupp?.name||'',
-        productId:form.productId,
-        productName:selProd?.name||'',
-        quantity:qty,
-        costPricePerUnit:cost,
-        totalCost:total,
-        purchasedBy:profile.uid,
-        purchasedByName:profile.displayName,
-        purchasedAt:serverTimestamp(),
-        paymentStatus:form.paymentStatus==='paid'?'paid':'pending_supplier_credit',
-        paymentMethod:form.paymentStatus==='paid'?form.paymentMethod:null,
-        mpesaCode:form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
-      }, businessId));
-      if (form.paymentStatus==='paid') {
-        // NOTE: paid purchases are NOT recorded as an `expenses` doc.
-        // Cash/M-Pesa outflow for a paid purchase is already derived from
-        // this `purchases` doc directly in utils/financials.js
-        // (totalCashOutflows / totalMpesaOutflows), and the purchase gets
-        // exactly one Dashboard activity entry. Writing a second `expenses`
-        // doc here previously caused a duplicate "Stock Purchase" entry in
-        // Recent Activity and incorrectly listed inventory purchases as
-        // operating expenses on the Expenses page. 
-      }
-      await batch.commit();
-      toast.success('Purchase recorded and stock updated');
-      setForm(empty);
-    } catch(err) {toast.error(friendlyErrorMessage(err)); } finally { setBusy(false); }
-  };
+    const amount = Number(payAmt);
+    const balance = owedMap[selSupp?.id]||0;
+    if (amount<=0) { toast.error('Enter a positive amount.'); return; }
+    if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatKES(balance)}.`); return; }
+    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
+    setPaying(true);
+    const batch = writeBatch(db);
+    const expRef = doc(collection(db,'expenses'));
+    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp() }, businessId));
+    const payRef = doc(collection(db,'supplierPayments'));
+    batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:serverTimestamp(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
 
-  const handleSupplierSave = async (data) => {
-    try {
-      const ref = await addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
-      setNewSupplierId(ref.id);
-      setForm(p=>({...p, supplierId: ref.id}));
-      setSupplierModal(false);
-      toast.success('Supplier added');
-    } catch(err) { toast.error(err.message); }
+    const commit = batch.commit();
+    const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+    setPaying(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
+    if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+    setPayModal(false); setPayAmt(''); setPayCode('');
+  };
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <h1 className="font-display text-xl font-bold text-ink-900">Record Purchase</h1>
-      <form onSubmit={handle} className="card space-y-3 p-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">Supplier</label>
-            <select className="input" value={form.supplierId} onChange={set('supplierId')} required>
-              <option value="">— Select —</option>
-              {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>setSupplierModal(true)}>+ Add new supplier</button>
-          </div>
-          <div>
-            <label className="label">Product</label>
-            <select className="input" value={form.productId} onChange={set('productId')} required>
-              <option value="">— Select —</option>
-              {products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>{setPrefillBarcode(null);setProductModal(true);}}>+ Add new product</button>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Qty received</label><input type="number" min="1" className="input" value={form.quantity} onChange={set('quantity')} required /></div>
-          <div><label className="label">Cost / unit (KES)</label><input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required /></div>
-        </div>
-        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm text-ink-600">Total cost: <span className="font-semibold">{formatKES(totalCost)}</span></div>
-        <div>
-          <label className="label">Payment status</label>
-          <div className="grid grid-cols-2 gap-2">
-            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'paid'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='paid'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Paid now</button>
-            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'credit'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='credit'?'border-rust-500 bg-rust-50 text-rust-700':'border-ink-200 text-ink-500'}`}>On credit</button>
-          </div>
-        </div>
-        {form.paymentStatus==='paid'&&(
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Paid via</label><select className="input" value={form.paymentMethod} onChange={set('paymentMethod')}><option>Cash</option><option>M-Pesa</option></select></div>
-            {form.paymentMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} /></div>}
-          </div>
-        )}
-        <button type="submit" className="btn-primary w-full" disabled={busy}>{busy?'Saving…':'Record purchase'}</button>
-      </form>
-      <h2 className="font-display text-sm font-bold text-ink-800">Recent purchases</h2>
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
-
-<ProductFormModal
-        open={productModal}
-        onClose={()=>{setProductModal(false);setPrefillBarcode(null);}}
-        onSave={async (data) => {
-          try {
-            const { id } = await createProduct(data, businessId);
-            setForm(p=>({...p, productId: id}));
-            setProductModal(false);
-            setPrefillBarcode(null);
-            toast.success('Product added');
-          } catch (err) { toast.error(friendlyErrorMessage(err)); }
-        }}
-        suppliers={suppliers}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-        simplifiedForPurchase
-      />
-      <SupplierFormModal open={supplierModal} onClose={()=>setSupplierModal(false)} onSave={handleSupplierSave} />
-      {loading?<LoadingSpinner />:purchases.length===0?<EmptyState title="No purchases yet" />:(
-        <div className="card divide-y divide-ink-100">
-          {purchases.map(p=>(
-            <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
-              <div><p className="font-medium text-ink-700">{p.quantity} × {p.productName}</p><p className="text-xs text-ink-400">{p.supplierName} · {formatDateTime(p.purchasedAt)}</p></div>
-              <div className="text-right"><p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p><span className={`badge ${p.paymentStatus==='paid'?'bg-moss-100 text-moss-700':'bg-rust-100 text-rust-700'}`}>{p.paymentStatus==='paid'?'Paid':'On credit'}</span></div>
-            </div>
-          ))}
+    <div className="mx-auto max-w-4xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Suppliers</h1><p className="text-sm text-ink-400">Total owed: <span className="font-semibold text-rust-600">{formatKES(totalOwed)}</span></p></div>
+        <button className="btn-primary" onClick={()=>{setEditing(null);setModal(true);}}>+ Add supplier</button>
+      </div>
+      {loading?<LoadingSpinner />:suppliers.length===0?<EmptyState title="No suppliers yet" description="Add suppliers to track restocking and balances." />:(
+        <div className="space-y-3">
+          {suppliers.map(s=>{
+            const balance = owedMap[s.id]||0;
+            return (
+              <div key={s.id} className="card flex flex-wrap items-center justify-between gap-3 p-4">
+                <div><p className="font-semibold text-ink-800">{s.name}</p><p className="text-xs text-ink-400">{s.contactPerson&&`${s.contactPerson} · `}{s.phone||'No phone'}</p></div>
+                <div className="flex items-center gap-3">
+                  <div className="text-right"><p className="text-xs text-ink-400">Outstanding</p><p className={`font-semibold ${balance>0?'text-rust-600':'text-moss-600'}`}>{formatKES(balance)}</p></div>
+                  {balance>0&&<button className="btn-primary !text-xs !px-3 !py-1.5 !min-h-0" onClick={()=>{setSelSupp(s);setPayModal(true);}}>Pay</button>}
+                  <button className="rounded-lg p-2 text-ink-400 hover:bg-ink-100" onClick={()=>{setEditing(s);setModal(true);}}><Pencil className="h-4 w-4" strokeWidth={1.75}/></button>
+                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50" onClick={()=>setPendDel(s)}><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
+      <SupplierFormModal open={modal} onClose={()=>{setModal(false);setEditing(null);}} onSave={handleSave} initialSupplier={editing} />
+<ConfirmDialog
+        open={!!pendDel}
+        title="Remove supplier?"
+        message={(owedMap[pendDel?.id]||0) > 0.005
+          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)} — pay it off first.`
+          : `"${pendDel?.name}" will be removed. Purchase records stay intact.`}
+        confirmLabel={deleting ? 'Removing…' : 'Remove'}
+        confirmDisabled={deleting}
+        danger
+        onConfirm={handleDel}
+        onCancel={()=>{ if (!deleting) setPendDel(null); }}
+      />      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
+        <form onSubmit={handlePay} className="space-y-3">
+          <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(owedMap[selSupp?.id]||0)}</span></div>
+          <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
+          <div><label className="label">Method</label>
+            <div className="grid grid-cols-2 gap-2">
+              {['Cash','M-Pesa'].map(m=>(
+                <button key={m} type="button" onClick={()=>setPayMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${payMethod===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
+                  {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
+                </button>
+              ))}
+            </div>
+          </div>
+          {payMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={payCode} onChange={e=>setPayCode(e.target.value.toUpperCase())} /></div>}
+          <div className="flex justify-end gap-2 pt-1"><button type="button" className="btn-secondary" onClick={()=>setPayModal(false)}>Cancel</button><button type="submit" className="btn-primary" disabled={paying}>{paying?'Recording…':'Record payment'}</button></div>
+        </form>
+      </Modal>
     </div>
   );
 }
 ````
 
-## File: src/router/AppRouter.jsx
+## File: src/pages/Users.jsx
 ````javascript
-import { lazy, Suspense, useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
-import ProtectedRoute from '../components/common/ProtectedRoute';
-import AppShell from '../components/layout/AppShell';
-import LoadingSpinner from '../components/common/LoadingSpinner';
+import { useMemo, useState } from 'react';
+import { orderBy } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Trash2, Copy, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { prefetchRoutes } from './routePrefetch';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { tenantQuery } from '../lib/tenant';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import Modal from '../components/common/Modal';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
 
-// Defined once, reused by both lazy() and the prefetcher below — calling
-// the same import() specifier twice is free (the module system dedupes
-// it), so the prefetcher just warms the same chunks lazy() will need.
-const routeLoaders = {
-  setup: () => import('../pages/Setup'),
-  login: () => import('../pages/Login'),
-  forgotPassword: () => import('../pages/ForgotPassword'),
-  joinStaff: () => import('../pages/JoinStaff'),
-  authAction: () => import('../pages/AuthAction'),
-  dashboard: () => import('../pages/Dashboard'),
-  counter: () => import('../pages/Counter'),
-  customers: () => import('../pages/Customers'),
-  customerDetail: () => import('../pages/CustomerDetail'),
-  expenses: () => import('../pages/Expenses'),
-  purchases: () => import('../pages/Purchases'),
-  products: () => import('../pages/Products'),
-  suppliers: () => import('../pages/Suppliers'),
-  stockTake: () => import('../pages/StockTake'),
-  reports: () => import('../pages/Reports'),
-  closeDay: () => import('../pages/CloseDay'),
-  users: () => import('../pages/Users'),
-  settings: () => import('../pages/Settings'),
-  helpGuide: () => import('../pages/HelpGuide'),
-  pro: () => import('../pages/Pro'),
-  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
-  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
-};
+export default function Users() {
+  const { createStaffInvite, cancelStaffInvite, removeStaffAccount, toggleMemberActive, profile, businessId, isPro } = useAuth();
+  const usersQ = useMemo(() => tenantQuery('users', businessId, orderBy('displayName')), [businessId]);
+  const { data: users, loading } = useFirestoreCollection(usersQ);
 
-const Setup      = lazy(routeLoaders.setup);
-const Login      = lazy(routeLoaders.login);
-const ForgotPassword = lazy(routeLoaders.forgotPassword);
-const JoinStaff  = lazy(routeLoaders.joinStaff);
-const AuthAction = lazy(routeLoaders.authAction);
-const Dashboard  = lazy(routeLoaders.dashboard);
-const Counter    = lazy(routeLoaders.counter);
-const Customers  = lazy(routeLoaders.customers);
-const CustomerDetail = lazy(routeLoaders.customerDetail);
-const Expenses   = lazy(routeLoaders.expenses);
-const Purchases  = lazy(routeLoaders.purchases);
-const Products   = lazy(routeLoaders.products);
-const Suppliers  = lazy(routeLoaders.suppliers);
-const StockTake  = lazy(routeLoaders.stockTake);
-const Reports    = lazy(routeLoaders.reports);
-const CloseDay   = lazy(routeLoaders.closeDay);
-const Users      = lazy(routeLoaders.users);
-const Settings   = lazy(routeLoaders.settings);
-const HelpGuide  = lazy(routeLoaders.helpGuide);
-const Pro        = lazy(routeLoaders.pro);
-const AdvancedAnalytics = lazy(routeLoaders.advancedAnalytics);
-const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
+  const invitesQ = useMemo(() => tenantQuery('staffInvites', businessId), [businessId]);
+  const { data: allInvites, loading: invitesLoading } = useFirestoreCollection(invitesQ);
+  const invites = allInvites.filter((i) => !i.claimed);
 
-function Page({ children, adminOnly = false }) {
+  const ownerCount = users.filter((u) => u.role === 'owner' && u.active !== false).length;
+  const totalUsersCount = users.filter((u) => u.active !== false).length;
+
+  const [modal, setModal]           = useState(false);
+  const [newName, setNewName]       = useState('');
+  const [newRole, setNewRole]       = useState('cashier');
+  const [busy, setBusy]             = useState(false);
+  const [freshInvite, setFreshInvite] = useState(null);
+  const [pendToggle, setPendToggle] = useState(null);
+  const [pendDelete, setPendDelete] = useState(null);
+  const [pendCancelInvite, setPendCancelInvite] = useState(null);
+
+  const inviteLink = (inviteId) => `${window.location.origin}/join/${inviteId}`;
+
+  const copyLink = async (inviteId) => {
+    try { await navigator.clipboard.writeText(inviteLink(inviteId)); toast.success('Invite link copied'); }
+    catch { toast.error('Could not copy — long-press the link to copy it manually.'); }
+  };
+
+  const handleCreateInvite = async (e) => {
+    e.preventDefault();
+    if (!newName.trim()) return;
+    
+    // Feature 14 - Staff limits enforced in frontend for UX, backend rules would prevent it too
+    if (!isPro && (totalUsersCount + invites.length) >= 2) {
+      toast.error('Free plan allows a maximum of 1 Owner and 1 additional Staff member. Upgrade to FlowBiz Pro to add more, or cancel a pending invite first.');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const invite = await createStaffInvite({ displayName: newName.trim(), role: newRole });
+      setFreshInvite({ id: invite.id, displayName: newName.trim(), role: newRole });
+      setNewName('');
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setBusy(false); }
+  };
+
+  const handleCancelInvite = async () => {
+    try { await cancelStaffInvite(pendCancelInvite.id); toast.success('Invite cancelled'); }
+    catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setPendCancelInvite(null); }
+  };
+
+  const handleToggle = async () => {
+    if (pendToggle.role === 'owner' && pendToggle.active !== false && ownerCount <= 1) {
+      toast.error("This is the only active owner — deactivating them would lock everyone out. Invite another owner first.");
+      setPendToggle(null);
+      return;
+    }
+    try {
+      await toggleMemberActive(pendToggle.id, pendToggle.active === false);
+      toast.success(pendToggle.active !== false ? 'Account deactivated' : 'Account reactivated');
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setPendToggle(null); }
+  };
+
+  const handleDelete = async () => {
+    if (pendDelete.role === 'owner' && ownerCount <= 1) {
+      toast.error('You cannot remove the only owner. Invite another owner first.');
+      setPendDelete(null);
+      return;
+    }
+    try { await removeStaffAccount(pendDelete.id); toast.success('Account removed.'); }
+    catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setPendDelete(null); }
+  };
+
   return (
-    <ProtectedRoute adminOnly={adminOnly}>
-      <AppShell>
-        <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>
-      </AppShell>
-    </ProtectedRoute>
-  );
-}
+    <div className="mx-auto max-w-3xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Team</h1>
+          <p className="text-sm text-ink-400">Manage who has access to this business.</p>
+        </div>
+        <button className="btn-primary" type="button" onClick={() => { setFreshInvite(null); setNewName(''); setNewRole('cashier'); setModal(true); }}>
+          + Invite someone
+        </button>
+      </div>
 
-function PublicOnly({ children }) {
-  const { firebaseUser, loading } = useAuth();
-  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
-  if (firebaseUser) return <Navigate to="/" replace />;
-  return children;
-}
+      {invites.length > 0 && (
+        <div className="card p-4 space-y-2">
+          <h2 className="font-display text-sm font-bold text-ink-800">Pending invites</h2>
+          <div className="divide-y divide-ink-100">
+            {invites.map((inv) => (
+              <div key={inv.id} className="flex items-center justify-between gap-2 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-ink-800">
+                    {inv.displayName}
+                    <span className={`badge ml-2 ${inv.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{inv.role}</span>
+                  </p>
+                  <p className="text-xs text-ink-400 truncate font-mono">{inviteLink(inv.id)}</p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => copyLink(inv.id)}>
+                    <Copy className="h-3.5 w-3.5" strokeWidth={1.75} /> Copy link
+                  </button>
+                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[40px] min-w-[40px] flex items-center justify-center" title="Cancel invite" onClick={() => setPendCancelInvite(inv)}>
+                    <X className="h-4 w-4" strokeWidth={1.75} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
-function RoutePrefetcher() {
-  const { firebaseUser, isAdmin } = useAuth();
-  useEffect(() => {
-    if (!firebaseUser) return;
-    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
-    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
-    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
-  }, [firebaseUser, isAdmin]);
-  return null;
-}
+      {loading || invitesLoading ? <LoadingSpinner /> : (
+        <div className="card divide-y divide-ink-100">
+          {users.map(u => (
+            <div key={u.id} className="flex items-center justify-between px-4 py-3 gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-ink-800">
+                  {u.displayName || u.email?.split('@')[0] || 'Unnamed'}
+                  {u.id === profile?.uid && <span className="text-xs font-normal text-ink-400"> (you)</span>}
+                </p>
+                <p className="text-xs text-ink-400 truncate">{u.email || 'No email'}</p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`badge ${u.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{u.role || '—'}</span>
+                <span className={`badge ${u.active !== false ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>{u.active !== false ? 'Active' : 'Deactivated'}</span>
+                <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => setPendToggle(u)}>
+                  {u.active !== false ? 'Deactivate' : 'Reactivate'}
+                </button>
+                {u.id === profile?.uid ? (
+                  <span className="text-xs text-ink-300 px-2 hidden sm:inline">You</span>
+                ) : (
+                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Remove account" onClick={() => setPendDelete(u)}>
+                    <Trash2 className="h-4 w-4" strokeWidth={1.75} />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
-export default function AppRouter() {
-  return (
-    <Suspense fallback={<LoadingSpinner label="Starting FlowBiz…" />}>
-      <RoutePrefetcher />
-      <Routes>
-        <Route path="/setup" element={<PublicOnly><Setup /></PublicOnly>} />
-        <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
-        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
-        <Route path="/join/:inviteId" element={<JoinStaff />} />
-        <Route path="/auth/action" element={<AuthAction />} />
+      <Modal open={modal} onClose={() => setModal(false)} title={freshInvite ? 'Invite ready' : 'Invite someone'}>
+        {!freshInvite ? (
+          <form onSubmit={handleCreateInvite} className="space-y-3">
+            <div>
+              <label className="label">Full name</label>
+              <input className="input" value={newName} onChange={e=>setNewName(e.target.value)} required autoComplete="off" autoFocus />
+            </div>
+            <div>
+              <label className="label">Role</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => setNewRole('cashier')} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole==='cashier'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Cashier</button>
+                <button type="button" onClick={() => setNewRole('owner')} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole==='owner'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Owner</button>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" className="btn-secondary" onClick={() => setModal(false)}>Cancel</button>
+              <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Creating…' : 'Create invite'}</button>
+            </div>
+          </form>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-ink-600">Send this link to <span className="font-semibold">{freshInvite.displayName}</span> ({freshInvite.role}).</p>
+            <div className="flex items-center gap-2">
+              <input className="input font-mono text-xs" readOnly value={inviteLink(freshInvite.id)} onFocus={(e) => e.target.select()} />
+              <button type="button" className="btn-outline shrink-0" onClick={() => copyLink(freshInvite.id)}>
+                <Copy className="h-4 w-4" strokeWidth={1.75} /> Copy
+              </button>
+            </div>
+            <button type="button" className="btn-primary w-full" onClick={() => setModal(false)}>Done</button>
+          </div>
+        )}
+      </Modal>
 
-        <Route path="/"             element={<Page adminOnly><Dashboard /></Page>} />
-        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
-        <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
-        <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
-
-        <Route path="/counter"      element={<Page><Counter /></Page>} />
-        <Route path="/customers"    element={<Page><Customers /></Page>} />
-        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
-        <Route path="/expenses"     element={<Page><Expenses /></Page>} />
-        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
-        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
-        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
-        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
-        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
-        <Route path="/close-day"    element={<Page adminOnly><CloseDay /></Page>} />
-        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
-        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
-        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
-        <Route path="*"             element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
+      <ConfirmDialog open={!!pendToggle} title="Change Account Status?" confirmLabel="Confirm" onConfirm={handleToggle} onCancel={() => setPendToggle(null)} />
+      <ConfirmDialog open={!!pendDelete} title="Remove Account?" confirmLabel="Remove" danger onConfirm={handleDelete} onCancel={() => setPendDelete(null)} />
+      <ConfirmDialog open={!!pendCancelInvite} title="Cancel Invite?" confirmLabel="Cancel" danger onConfirm={handleCancelInvite} onCancel={() => setPendCancelInvite(null)} />
+    </div>
   );
 }
 ````
@@ -10093,6 +8790,46 @@ export function sendWhatsAppDocument(sale, settings, phone) {
 }
 ````
 
+## File: index.html
+````html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <!-- PWA meta tags -->
+    <meta name="application-name" content="FlowBiz" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="FlowBiz" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#1a623c" />
+    <!-- Viewport: cover ensures notch areas are used. PRIORITY 4 FIX: locked
+         zoom (maximum-scale=1.0, user-scalable=no) for dedicated
+         business-device usage — note this does reduce accessibility for
+         anyone who relies on pinch-zoom to read small text. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="description" content="POS and inventory management for Kenyan businesses" />
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
+    <title>FlowBiz | Business Manager</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+    <script src="https://js.paystack.co/v2/inline.js"></script>
+  </body>
+</html>
+````
+
 ## File: src/components/pos/SaleCompleteModal.jsx
 ````javascript
 import { useState, useEffect } from 'react';
@@ -10264,6 +9001,1290 @@ export async function verifyPasswordResetCode() {
 
 export async function confirmPasswordReset() {
   return Promise.resolve();
+}
+````
+
+## File: src/pages/Counter.jsx
+````javascript
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Trash2 } from 'lucide-react';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useDailySession } from '../hooks/useDailySession';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import ProductGrid from '../components/pos/ProductGrid';
+import SaleModal from '../components/pos/SaleModal';
+import SaleCompleteModal from '../components/pos/SaleCompleteModal';
+import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Counter() {
+  const { profile, isAdmin, businessId } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  
+  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  const salesQ     = useMemo(() => businessId ? tenantQuery('sales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
+  const creditSalesQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+
+  const { data: products,  loading: prodLoading }  = useFirestoreCollection(productsQ);
+  const { data: customers }                         = useFirestoreCollection(customersQ);
+  const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
+  const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
+  const { data: suppliers }                         = useFirestoreCollection(suppliersQ);
+  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
+
+  const [search, setSearch]           = useState('');
+  const [activeProduct, setActive]    = useState(null);
+  const [completedSale, setCompletedSale] = useState(null);
+  const [pendingVoid, setPendingVoid] = useState(null);
+  const [editProduct, setEditProd]    = useState(null);
+  const [prodModal, setProdModal]     = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [notFoundCode, setNotFoundCode] = useState(null);
+  const [voiding, setVoiding] = useState(false);
+
+  useEffect(() => {
+    if (location.state?.autoScan && session && !isClosed) {
+      setScannerOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location, navigate, session, isClosed]);
+
+  const filtered = products.filter(p =>
+    p.name.toLowerCase().includes(search.toLowerCase()) ||
+    (p.barcode && p.barcode.includes(search.trim())) ||
+    (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  const mergedSales = useMemo(() => {
+    const list = [];
+    sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
+    creditSales.forEach(cs => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
+    return list.sort((a, b) => {
+      const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
+      const bTime = b.soldAt?.toMillis?.() ?? b.soldAt?.toDate?.()?.getTime?.() ?? new Date(b.soldAt || 0).getTime();
+      return bTime - aTime;
+    }).slice(0, 100);
+  }, [sales, creditSales]);
+
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
+    return { id:ref.id, name, phone };
+  };
+
+  // FIX: Replaced runTransaction with writeBatch(db) and increment() for perfect offline capability.
+const handleSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
+    const productRef = doc(db, 'products', product.id);
+    const saleRef = doc(collection(db, 'sales'));
+    const saleData = withBusiness({
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit,
+      totalAmount: soldPricePerUnit * quantity,
+      profit: (soldPricePerUnit - product.costPrice) * quantity,
+      paymentMethod, mpesaCode: mpesaCode || null,
+      soldBy: profile.uid, soldByName: profile.displayName,
+      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(saleRef, saleData);
+
+    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
+    const productRef = doc(db, 'products', product.id);
+    const totalAmount = soldPricePerUnit * quantity;
+    const creditRef = doc(collection(db, 'creditSales'));
+    const creditData = withBusiness({
+      customerId, customerName, customerPhone: customerPhone || '',
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
+      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
+      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
+      isCredit: true
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(creditRef, creditData);
+
+    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  // FIX: Voiding a Cash Sale now creates a 'refunds' document to correct CloseDay till shortages.
+const handleVoid = async () => {
+    const sale = pendingVoid;
+    setVoiding(true);
+    try {
+      const batch = writeBatch(db);
+      const prodRef = doc(db, 'products', sale.productId);
+      const prodSnap = await getDoc(prodRef);
+
+      if (prodSnap.exists()) {
+        batch.update(prodRef, { stock: increment(sale.quantity), updatedAt: serverTimestamp() });
+      }
+
+      batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
+
+      if (!sale.isCredit) {
+        const refundRef = doc(collection(db, 'refunds'));
+        batch.set(refundRef, withBusiness({
+          saleId: sale.id, amount: sale.totalAmount, method: sale.paymentMethod,
+          refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName
+        }, businessId));
+      }
+
+      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+      if (error) throw error;
+      
+      toast.success(queuedOffline ? 'Sale voided offline.' : (prodSnap.exists() ? 'Sale voided and stock restored.' : 'Sale voided (product was deleted, no stock restored).'));
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setVoiding(false); setPendingVoid(null); }
+  };
+
+  const handleProductSave = async (data) => {
+    try {
+      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
+      else { await createProduct(data, businessId); toast.success('Product added'); }
+      setEditProd(null);
+      setProdModal(false);
+      setPrefillBarcode(null);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+      throw err;
+    }
+  };
+
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setActive(found);
+    else setNotFoundCode(code);
+  };
+
+  useHardwareScanner(handleScanDetected, {
+    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
+  });
+
+  if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
+  if (isClosed) return (
+    <div className="mx-auto max-w-sm pt-8 space-y-4 text-center">
+      <EmptyState title="Today's session is closed" description="Sales are locked. An owner can reopen to continue trading." />
+      {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>}
+    </div>
+  );
+  if (!session) return <OpenSessionPrompt onOpen={floats => openSession({ ...floats, openedBy:profile.uid })} />;
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Tap a product, or scan a barcode, to record a sale.</p></div>
+        {isAdmin && <button className="btn-outline text-xs" onClick={()=>{setEditProd(null);setPrefillBarcode(null);setProdModal(true);}}>+ Quick add product</button>}
+      </div>
+      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
+      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
+        <ProductGrid products={filtered} onSelect={setActive} isAdmin={isAdmin} />}
+
+      {isAdmin && (
+        <div className="mt-4">
+          <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Sales log (last 100)</h2>
+          {salesLoading || creditLoading ? <LoadingSpinner /> : mergedSales.length === 0 ? <EmptyState title="No sales recorded" /> : (
+            <div className="card divide-y divide-ink-100">
+              {mergedSales.map(s=>(
+                <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided?'opacity-40 line-through':''}`}>
+                  <div>
+                    <p className="font-medium text-ink-700">{s.quantity} × {s.productName} — {formatKES(s.totalAmount)}</p>
+                    <p className="text-xs text-ink-400">
+                      {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
+                      {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
+                    </p>
+                  </div>
+                  {!s.isVoided && !s.isCredit && isAdmin && (
+                    <button onClick={()=>setPendingVoid(s)} className="p-1 text-rust-400 hover:text-rust-600 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Void sale"><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
+                  )}
+                  {s.isCredit && isAdmin && (
+                    <Link to={`/customers/${s.customerId}`} className="btn-outline !py-1 !px-2.5 !min-h-0 text-xs text-ink-500 hover:text-ink-700">View Customer</Link>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!notFoundCode} onClose={()=>setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={()=>setNotFoundCode(null)}>Cancel</button>
+          {isAdmin ? (
+            <button className="btn-primary" onClick={()=>{ setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
+          ) : (
+            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
+          )}
+        </div>
+      </Modal>
+
+      <SaleModal 
+        open={!!activeProduct} 
+        product={activeProduct} 
+        customers={customers} 
+        onClose={(record) => {
+          setActive(null);
+          if (record && record.id) {
+            setCompletedSale(record);
+          }
+        }} 
+        onConfirmSale={handleSale} 
+        onConfirmCredit={handleCredit} 
+        onCreateCustomer={handleCreateCustomer} 
+      />
+      <SaleCompleteModal
+        open={!!completedSale}
+        sale={completedSale}
+        onClose={() => setCompletedSale(null)}
+      />
+
+<ProductFormModal
+        open={prodModal}
+        onClose={()=>{setProdModal(false);setEditProd(null);setPrefillBarcode(null);}}
+        onSave={handleProductSave}
+        suppliers={suppliers}
+        initialProduct={editProduct}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+      />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+<ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" (×${pendingVoid?.quantity}) will be restored.`} confirmLabel={voiding ? "Voiding..." : "Void sale"} confirmDisabled={voiding} danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />    </div>
+  );
+}
+````
+
+## File: src/pages/Dashboard.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useDailySession } from '../hooks/useDailySession';
+import { useFinancialsForRange } from '../hooks/useFinancials';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import Modal from '../components/common/Modal';
+import SaleModal from '../components/pos/SaleModal';
+import SaleCompleteModal from '../components/pos/SaleCompleteModal';
+import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
+import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+function StatCard({ label, value, tone = 'text-ink-900', sub }) {
+  return (
+    <div className="card p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
+      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
+    </div>
+  );
+}
+
+export default function Dashboard() {
+  const { profile, isAdmin, businessId, isPro } = useAuth();
+  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
+  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
+
+  const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const { data: products } = useFirestoreCollection(productsQuery);
+  const { data: customers } = useFirestoreCollection(customersQuery);
+  const { data: suppliers } = useFirestoreCollection(suppliersQuery);
+
+  const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
+  const [activeProduct, setActiveProduct] = useState(null);
+  const [completedSale, setCompletedSale] = useState(null);
+  const [editProduct, setEditProd] = useState(null);
+  const [prodModal, setProdModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [notFoundCode, setNotFoundCode] = useState(null);
+
+  const [privacyMode, setPrivacyMode] = useState(() => {
+    try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
+    catch { return false; }
+  });
+
+  const togglePrivacyMode = () => {
+    setPrivacyMode((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('flowbiz_dashboard_privacy', String(next)); }
+      catch (err) { console.error('Failed to save privacy mode setting', err); }
+      return next;
+    });
+  };
+
+  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
+
+  const dashboardCashReceived = summary.totalCashReceipts;
+  const dashboardMpesaReceived = summary.totalMpesaReceipts;
+  const dashboardExpenses = summary.totalExpenses;
+  const dashboardNetProfit = summary.netProfit;
+
+  const lowStock = products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
+  const totalInventoryValue = products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
+  const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
+  const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
+  const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
+
+  const recentActivity = useMemo(() => {
+    const list = [];
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      list.push({ id: `sale-${s.id}`, type: 'Sale', title: `${s.quantity} × ${s.productName}`, subtitle: `Sold by ${s.soldByName || 'Staff'}`, amount: s.totalAmount, method: s.paymentMethod, timestamp: s.soldAt, isPositive: true });
+    });
+    (repayments || []).forEach((r) => {
+      list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
+    });
+    return list.sort((a, b) => {
+      const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
+      const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
+      return bTime - aTime;
+    }).slice(0, 8);
+  }, [sales, repayments]);
+
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
+    return { id: ref.id, name, phone };
+  };
+
+  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
+  const handleConfirmSale = async ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
+    const productRef = doc(db, 'products', product.id);
+    const saleRef = doc(collection(db, 'sales'));
+    const saleData = withBusiness({
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit,
+      totalAmount: soldPricePerUnit * quantity,
+      profit: (soldPricePerUnit - product.costPrice) * quantity,
+      paymentMethod, mpesaCode: mpesaCode || null,
+      soldBy: profile.uid, soldByName: profile.displayName,
+      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(saleRef, saleData);
+    await batch.commit();
+
+    return { id: saleRef.id, ...saleData, soldAt: new Date() };
+  };
+
+  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick Credit.
+  const handleConfirmCredit = async ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
+    const productRef = doc(db, 'products', product.id);
+    const totalAmount = soldPricePerUnit * quantity;
+    const creditRef = doc(collection(db, 'creditSales'));
+    const creditData = withBusiness({
+      customerId, customerName, customerPhone: customerPhone || '',
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
+      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
+      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
+      isCredit: true
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(creditRef, creditData);
+    await batch.commit();
+
+    return { id: creditRef.id, ...creditData, soldAt: new Date() };
+  };
+
+  const handleProductSave = async (data) => {
+    try {
+      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
+      else { await createProduct(data, businessId); toast.success('Product added'); }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
+  };
+
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setActiveProduct(found);
+    else setNotFoundCode(code);
+  };
+
+  useHardwareScanner(handleScanDetected, {
+    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
+  });
+
+  if (sessionLoading) return <LoadingSpinner label="Loading today's session…" />;
+
+  if (isClosed) {
+    return (
+      <div className="mx-auto max-w-sm space-y-4 text-center">
+        <EmptyState title="Day is closed" description="Sales are locked until you reopen the session or tomorrow starts." />
+        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen today's session</button>}
+      </div>
+    );
+  }
+  if (!session) {
+    return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
+          <div className="flex items-center gap-2 mt-1">
+            {isAdmin && (
+<Link to="/pro" className={`badge text-[11px] font-bold transition-colors ${isPro ? 'bg-amber-100 text-amber-800' : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'}`}>                {isPro ? 'FlowBiz Pro ✓' : 'Explore FlowBiz Pro'}
+              </Link>
+            )}
+            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
+          </div>
+        </div>
+        <button
+          onClick={togglePrivacyMode}
+          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
+          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
+        >
+          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
+        </button>
+      </div>
+
+      {isAdmin && (
+        <>
+          {financialsLoading ? <LoadingSpinner /> : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
+              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
+              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
+              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
+              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
+<StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
+            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
+          </div>
+        </>
+      )}
+
+      <div>
+        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
+        {recentActivity.length === 0 ? (
+          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
+        ) : (
+          <div className="card divide-y divide-ink-100">
+            {recentActivity.map((act) => (
+              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
+                <div className="min-w-0 flex-1 pr-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
+                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
+                  </div>
+                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <SaleModal 
+        open={!!activeProduct} 
+        product={activeProduct} 
+        customers={customers} 
+        onClose={(record) => {
+          setActiveProduct(null);
+          if (record && record.id) setCompletedSale(record);
+        }} 
+        onConfirmSale={handleConfirmSale} 
+        onConfirmCredit={handleConfirmCredit} 
+        onCreateCustomer={handleCreateCustomer} 
+      />
+      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
+          {isAdmin ? (
+            <button className="btn-primary" onClick={() => { setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
+          ) : (
+            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
+          )}
+        </div>
+      </Modal>
+
+<ProductFormModal
+        open={prodModal}
+        onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
+        onSave={handleProductSave}
+        suppliers={suppliers}
+        initialProduct={editProduct}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+      />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+    </div>
+  );
+}
+````
+
+## File: src/pages/Products.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { Pencil, Trash2, TrendingUp } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Products() {
+  const { businessId } = useAuth();
+  const productsQ = useMemo(
+    () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
+    [businessId]
+  );
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const { data: products, loading, error } = useFirestoreCollection(productsQ);
+  const { data: suppliers } = useFirestoreCollection(suppliersQ);
+  
+  const [search, setSearch] = useState('');
+  const [modal, setModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [pendingDel, setPendingDel] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanFoundProduct, setScanFoundProduct] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+
+  const filtered = products.filter(
+    (p) =>
+      p.name.toLowerCase().includes(search.toLowerCase()) ||
+      p.category.toLowerCase().includes(search.toLowerCase()) ||
+      (p.barcode && p.barcode.includes(search.trim())) ||
+      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  );
+  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
+
+  const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
+
+  const handleSave = async (data) => {
+    try {
+      if (editing) {
+        await updateProduct(editing.id, data, editing.barcode, businessId);
+        toast.success('Product updated');
+      } else {
+        await createProduct(data, businessId);
+        toast.success('Product added');
+      }
+      closeFormModal();
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+  };
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+const handleDel = async () => {
+    setDeleting(true);
+    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id), 4000);
+    setDeleting(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
+    setPendingDel(null);
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setScanFoundProduct(found);
+    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
+  };
+
+  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
+        <div className="flex gap-2">
+          <Link to="/inventory-intelligence" className="btn-outline">
+            <TrendingUp className="h-4 w-4" /> Intelligence
+          </Link>
+          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
+        </div>
+      </div>
+      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <ErrorBanner message={error} />
+      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
+        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
+      ) : (
+        <>
+          <div className="space-y-2.5 sm:hidden">
+            {filtered.map((p) => (
+              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
+                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
+                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
+                  <div>
+                    <span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span>
+                  </div>
+                  <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden sm:block card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
+                </thead>
+                <tbody className="divide-y divide-ink-100">
+                  {filtered.map((p) => (
+                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
+                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
+                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
+                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
+                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
+                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
+                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1">
+                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
+          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
+        </div>
+      </Modal>
+
+<ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+<ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    </div>
+  );
+}
+````
+
+## File: src/pages/Purchases.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { doc, writeBatch, increment, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
+
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+const empty = { supplierId:'', productId:'', quantity:'', costPricePerUnit:'', paymentStatus:'paid', paymentMethod:'Cash', mpesaCode:'' };
+
+export default function Purchases() {
+  const { profile, businessId } = useAuth();
+  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt','desc'), limit(50)) : null, [businessId]);
+  const { data: products }  = useFirestoreCollection(productsQ);
+  const { data: suppliers } = useFirestoreCollection(suppliersQ);
+  const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
+  const [form, setForm] = useState(empty);
+  const [busy, setBusy] = useState(false);
+  const [productModal, setProductModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
+
+  const selProd = products.find(p=>p.id===form.productId);
+  const selSupp = suppliers.find(s=>s.id===form.supplierId);
+  const totalCost = (Number(form.quantity)||0)*(Number(form.costPricePerUnit)||0);
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) {
+      setForm(p => ({ ...p, productId: found.id }));
+      toast.success(`Selected ${found.name}`);
+    } else {
+      setPrefillBarcode(code);
+      setProductModal(true);
+    }
+  };
+
+  useHardwareScanner(handleScanDetected, { enabled: !productModal && !supplierModal && !scannerOpen });
+
+  const handle = async e => {
+    e.preventDefault();
+    if (!form.productId||!form.supplierId||!form.quantity||!form.costPricePerUnit) { toast.error('Fill in all fields.'); return; }
+    if (form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
+    setBusy(true);
+    try {
+      const qty   = Number(form.quantity);
+      const cost  = Number(form.costPricePerUnit);
+      const total = qty * cost;
+      const batch = writeBatch(db);
+      batch.update(doc(db,'products',form.productId), { stock:increment(qty), costPrice:cost, updatedAt:serverTimestamp() });
+      const purchRef = doc(collection(db,'purchases'));
+      batch.set(purchRef, withBusiness({
+        supplierId:form.supplierId,
+        supplierName:selSupp?.name||'',
+        productId:form.productId,
+        productName:selProd?.name||'',
+        quantity:qty,
+        costPricePerUnit:cost,
+        totalCost:total,
+        purchasedBy:profile.uid,
+        purchasedByName:profile.displayName,
+        purchasedAt:serverTimestamp(),
+        paymentStatus:form.paymentStatus==='paid'?'paid':'pending_supplier_credit',
+        paymentMethod:form.paymentStatus==='paid'?form.paymentMethod:null,
+        mpesaCode:form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
+      }, businessId));
+      if (form.paymentStatus==='paid') {
+        // NOTE: paid purchases are NOT recorded as an `expenses` doc.
+        // Cash/M-Pesa outflow for a paid purchase is already derived from
+        // this `purchases` doc directly in utils/financials.js
+        // (totalCashOutflows / totalMpesaOutflows), and the purchase gets
+        // exactly one Dashboard activity entry. Writing a second `expenses`
+        // doc here previously caused a duplicate "Stock Purchase" entry in
+        // Recent Activity and incorrectly listed inventory purchases as
+        // operating expenses on the Expenses page. 
+      }
+      await batch.commit();
+      toast.success('Purchase recorded and stock updated');
+      setForm(empty);
+    } catch(err) {toast.error(friendlyErrorMessage(err)); } finally { setBusy(false); }
+  };
+
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4">
+      <h1 className="font-display text-xl font-bold text-ink-900">Record Purchase</h1>
+      <form onSubmit={handle} className="card space-y-3 p-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Supplier</label>
+            <select className="input" value={form.supplierId} onChange={set('supplierId')} required>
+              <option value="">— Select —</option>
+              {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>setSupplierModal(true)}>+ Add new supplier</button>
+          </div>
+          <div>
+            <label className="label">Product</label>
+            <select className="input" value={form.productId} onChange={set('productId')} required>
+              <option value="">— Select —</option>
+              {products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>{setPrefillBarcode(null);setProductModal(true);}}>+ Add new product</button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Qty received</label><input type="number" min="1" className="input" value={form.quantity} onChange={set('quantity')} required /></div>
+          <div><label className="label">Cost / unit (KES)</label><input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required /></div>
+        </div>
+        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm text-ink-600">Total cost: <span className="font-semibold">{formatKES(totalCost)}</span></div>
+        <div>
+          <label className="label">Payment status</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'paid'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='paid'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Paid now</button>
+            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'credit'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='credit'?'border-rust-500 bg-rust-50 text-rust-700':'border-ink-200 text-ink-500'}`}>On credit</button>
+          </div>
+        </div>
+        {form.paymentStatus==='paid'&&(
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="label">Paid via</label><select className="input" value={form.paymentMethod} onChange={set('paymentMethod')}><option>Cash</option><option>M-Pesa</option></select></div>
+            {form.paymentMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} /></div>}
+          </div>
+        )}
+        <button type="submit" className="btn-primary w-full" disabled={busy}>{busy?'Saving…':'Record purchase'}</button>
+      </form>
+      <h2 className="font-display text-sm font-bold text-ink-800">Recent purchases</h2>
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
+
+<ProductFormModal
+        open={productModal}
+        onClose={()=>{setProductModal(false);setPrefillBarcode(null);}}
+        onSave={async (data) => {
+          try {
+            const { id } = await createProduct(data, businessId);
+            setForm(p=>({...p, productId: id}));
+            setProductModal(false);
+            setPrefillBarcode(null);
+            toast.success('Product added');
+          } catch (err) { toast.error(friendlyErrorMessage(err)); }
+        }}
+        suppliers={suppliers}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+        simplifiedForPurchase
+      />
+      <SupplierFormModal open={supplierModal} onClose={()=>setSupplierModal(false)} onSave={handleSupplierSave} />
+      {loading?<LoadingSpinner />:purchases.length===0?<EmptyState title="No purchases yet" />:(
+        <div className="card divide-y divide-ink-100">
+          {purchases.map(p=>(
+            <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
+              <div><p className="font-medium text-ink-700">{p.quantity} × {p.productName}</p><p className="text-xs text-ink-400">{p.supplierName} · {formatDateTime(p.purchasedAt)}</p></div>
+              <div className="text-right"><p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p><span className={`badge ${p.paymentStatus==='paid'?'bg-moss-100 text-moss-700':'bg-rust-100 text-rust-700'}`}>{p.paymentStatus==='paid'?'Paid':'On credit'}</span></div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+````
+
+## File: src/pages/StockTake.jsx
+````javascript
+import { useMemo, useRef, useState } from 'react';
+import { doc, collection, writeBatch, increment, serverTimestamp, orderBy, where } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function StockTake() {
+  const { profile, businessId } = useAuth();
+  const productsQ = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const { data: products, loading } = useFirestoreCollection(productsQ);
+  const [counts, setCounts] = useState({});
+  const [reasons, setReasons] = useState({});
+  const [confirm, setConfirm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const rowRefs = useRef({});
+
+  const getPhysical = (p) => (counts[p.id] !== undefined && counts[p.id] !== '' ? counts[p.id] : p.stock);
+  const diffFor = (p) => (counts[p.id] !== undefined && counts[p.id] !== '' ? Number(counts[p.id]) - p.stock : 0);
+  const changed = products.filter((p) => diffFor(p) !== 0);
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (!found) { toast.error('Product not found.'); return; }
+    rowRefs.current[found.id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const inputEl = document.getElementById(`stocktake-count-${found.id}`) || document.getElementById(`stocktake-count-mobile-${found.id}`);
+    inputEl?.focus();
+    inputEl?.select?.();
+  };
+
+  useHardwareScanner(handleScanDetected, { enabled: !scannerOpen && !confirm });
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const batch = writeBatch(db);
+      for (const p of changed) {
+        const physicalQty = Number(getPhysical(p)) || 0;
+        const difference = physicalQty - p.stock;
+        const ref = doc(db, 'products', p.id);
+
+        batch.update(ref, { stock: increment(difference), updatedAt: serverTimestamp() });
+
+        const adjRef = doc(collection(db, 'stockAdjustments'));
+        batch.set(adjRef, {
+          businessId,
+          productId: p.id,
+          productName: p.name,
+          systemQty: p.stock,
+          physicalQty,
+          difference,
+          reason: reasons[p.id] || '',
+          adjustedBy: profile.uid,
+          adjustedByName: profile.displayName,
+          adjustedAt: serverTimestamp(),
+        });
+      }
+
+      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+      if (error) throw error;
+
+      toast.success(queuedOffline ? `Stock take queued offline.` : `Stock take saved — ${changed.length} product(s) adjusted`);
+      setCounts({});
+      setReasons({});
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+    } finally {
+      setSaving(false);
+      setConfirm(false);
+    }
+  };
+
+  if (loading) return <LoadingSpinner />;
+
+  return (
+    <div className="mx-auto max-w-4xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Stock Take</h1>
+          <p className="text-sm text-ink-400">Enter physical counts, or scan to jump to a product. Leave blank to keep unchanged.</p>
+        </div>
+        <button className="btn-primary" disabled={changed.length === 0} onClick={() => setConfirm(true)}>
+          Save ({changed.length} changed)
+        </button>
+      </div>
+
+      <div className="space-y-3 sm:hidden">
+        {products.map((p) => {
+          const diff = diffFor(p);
+          return (
+            <div key={p.id} ref={(el) => { rowRefs.current[p.id] = el; }} className={`card p-4 space-y-3 ${diff !== 0 ? 'border-rust-200 bg-rust-50/20' : ''}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-ink-800">{p.name}</span>
+                <span className="badge bg-ink-100 text-ink-600 text-xs">System: {p.stock}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Physical count</label>
+                  <input id={`stocktake-count-mobile-${p.id}`} type="number" min="0" className="input !py-2" value={counts[p.id] ?? ''} placeholder={String(p.stock)} onChange={(e) => setCounts((c) => ({ ...c, [p.id]: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="label">Difference</label>
+                  <div className={`input !py-2 flex items-center font-semibold ${diff < 0 ? 'text-rust-600' : diff > 0 ? 'text-moss-600' : 'text-ink-400'}`}>
+                    {diff !== 0 ? (diff > 0 ? `+${diff}` : diff) : '0'}
+                  </div>
+                </div>
+              </div>
+              {diff !== 0 && (
+                <div>
+                  <label className="label">Reason for discrepancy</label>
+                  <input className="input !py-2" placeholder="e.g. damage, theft, expired" value={reasons[p.id] || ''} onChange={(e) => setReasons((r) => ({ ...r, [p.id]: e.target.value }))} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="hidden sm:block card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+              <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">System</th><th className="px-4 py-3">Physical count</th><th className="px-4 py-3">Diff</th><th className="px-4 py-3">Reason</th></tr>
+            </thead>
+            <tbody className="divide-y divide-ink-100">
+              {products.map((p) => {
+                const diff = diffFor(p);
+                return (
+                  <tr key={p.id} ref={(el) => { rowRefs.current[p.id] = el; }} className={diff !== 0 ? 'bg-rust-50/30' : ''}>
+                    <td className="px-4 py-3 font-medium text-ink-800">{p.name}</td>
+                    <td className="px-4 py-3 text-ink-500">{p.stock}</td>
+                    <td className="px-4 py-3">
+                      <input id={`stocktake-count-${p.id}`} type="number" min="0" className="input !w-24 !py-1.5" value={counts[p.id] ?? ''} placeholder={String(p.stock)} onChange={(e) => setCounts((c) => ({ ...c, [p.id]: e.target.value }))} />
+                    </td>
+                    <td className={`px-4 py-3 font-semibold ${diff < 0 ? 'text-rust-600' : diff > 0 ? 'text-moss-600' : 'text-ink-300'}`}>
+                      {diff !== 0 ? (diff > 0 ? `+${diff}` : diff) : '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      <input className="input !py-1.5" placeholder="e.g. breakage, theft" value={reasons[p.id] || ''} disabled={diff === 0} onChange={(e) => setReasons((r) => ({ ...r, [p.id]: e.target.value }))} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <ConfirmDialog
+        open={confirm}
+        title="Save stock take?"
+        message={`${changed.length} product(s) will be updated to match your physical count.`}
+        confirmLabel={saving ? 'Saving…' : 'Save'}
+        confirmDisabled={saving}
+        onConfirm={handleSave}
+        onCancel={() => setConfirm(false)}
+      />
+    </div>
+  );
+}
+````
+
+## File: src/router/AppRouter.jsx
+````javascript
+import { lazy, Suspense, useEffect } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import ProtectedRoute from '../components/common/ProtectedRoute';
+import AppShell from '../components/layout/AppShell';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import { useAuth } from '../contexts/AuthContext';
+import { prefetchRoutes } from './routePrefetch';
+
+// Defined once, reused by both lazy() and the prefetcher below — calling
+// the same import() specifier twice is free (the module system dedupes
+// it), so the prefetcher just warms the same chunks lazy() will need.
+const routeLoaders = {
+  setup: () => import('../pages/Setup'),
+  login: () => import('../pages/Login'),
+  forgotPassword: () => import('../pages/ForgotPassword'),
+  joinStaff: () => import('../pages/JoinStaff'),
+  authAction: () => import('../pages/AuthAction'),
+  dashboard: () => import('../pages/Dashboard'),
+  counter: () => import('../pages/Counter'),
+  customers: () => import('../pages/Customers'),
+  customerDetail: () => import('../pages/CustomerDetail'),
+  expenses: () => import('../pages/Expenses'),
+  purchases: () => import('../pages/Purchases'),
+  products: () => import('../pages/Products'),
+  suppliers: () => import('../pages/Suppliers'),
+  stockTake: () => import('../pages/StockTake'),
+  reports: () => import('../pages/Reports'),
+  closeDay: () => import('../pages/CloseDay'),
+  users: () => import('../pages/Users'),
+  settings: () => import('../pages/Settings'),
+  helpGuide: () => import('../pages/HelpGuide'),
+  pro: () => import('../pages/Pro'),
+  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
+  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
+};
+
+const Setup      = lazy(routeLoaders.setup);
+const Login      = lazy(routeLoaders.login);
+const ForgotPassword = lazy(routeLoaders.forgotPassword);
+const JoinStaff  = lazy(routeLoaders.joinStaff);
+const AuthAction = lazy(routeLoaders.authAction);
+const Dashboard  = lazy(routeLoaders.dashboard);
+const Counter    = lazy(routeLoaders.counter);
+const Customers  = lazy(routeLoaders.customers);
+const CustomerDetail = lazy(routeLoaders.customerDetail);
+const Expenses   = lazy(routeLoaders.expenses);
+const Purchases  = lazy(routeLoaders.purchases);
+const Products   = lazy(routeLoaders.products);
+const Suppliers  = lazy(routeLoaders.suppliers);
+const StockTake  = lazy(routeLoaders.stockTake);
+const Reports    = lazy(routeLoaders.reports);
+const CloseDay   = lazy(routeLoaders.closeDay);
+const Users      = lazy(routeLoaders.users);
+const Settings   = lazy(routeLoaders.settings);
+const HelpGuide  = lazy(routeLoaders.helpGuide);
+const Pro        = lazy(routeLoaders.pro);
+const AdvancedAnalytics = lazy(routeLoaders.advancedAnalytics);
+const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
+
+function Page({ children, adminOnly = false }) {
+  return (
+    <ProtectedRoute adminOnly={adminOnly}>
+      <AppShell>
+        <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>
+      </AppShell>
+    </ProtectedRoute>
+  );
+}
+
+function PublicOnly({ children }) {
+  const { firebaseUser, loading } = useAuth();
+  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
+  if (firebaseUser) return <Navigate to="/" replace />;
+  return children;
+}
+
+function RoutePrefetcher() {
+  const { firebaseUser, isAdmin } = useAuth();
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
+    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
+    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
+  }, [firebaseUser, isAdmin]);
+  return null;
+}
+
+export default function AppRouter() {
+  return (
+    <Suspense fallback={<LoadingSpinner label="Starting FlowBiz…" />}>
+      <RoutePrefetcher />
+      <Routes>
+        <Route path="/setup" element={<PublicOnly><Setup /></PublicOnly>} />
+        <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
+        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
+        <Route path="/join/:inviteId" element={<JoinStaff />} />
+        <Route path="/auth/action" element={<AuthAction />} />
+
+        <Route path="/"             element={<Page adminOnly><Dashboard /></Page>} />
+        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
+        <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
+        <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
+
+        <Route path="/counter"      element={<Page><Counter /></Page>} />
+        <Route path="/customers"    element={<Page><Customers /></Page>} />
+        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
+        <Route path="/expenses"     element={<Page><Expenses /></Page>} />
+        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
+        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
+        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
+        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
+        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
+        <Route path="/close-day"    element={<Page adminOnly><CloseDay /></Page>} />
+        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
+        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
+        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
+        <Route path="*"             element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
+  );
 }
 ````
 
