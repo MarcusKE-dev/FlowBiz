@@ -38,13 +38,6 @@ service cloud.firestore {
       return owns(existing) && owns(incoming);
     }
 
-    // SECURITY FIX — Path B of the users/{userId} create rule below.
-    // Binds a new staff account to exactly one real, currently-unclaimed
-    // invite whose businessId/role match what's being written. Reads the
-    // invite ONCE (not three separate get() calls) and checks it against
-    // JoinStaff.jsx's real, non-transactional write order — the invite's
-    // `claimed` flag is still false at the moment users/{uid} is created,
-    // since JoinStaff.jsx only marks it claimed in a SEPARATE call after.
     function isValidInviteClaim(inviteId, businessId, role) {
       let invite = get(/databases/$(database)/documents/staffInvites/$(inviteId)).data;
       return invite.claimed == false && invite.businessId == businessId && invite.role == role;
@@ -79,33 +72,15 @@ service cloud.firestore {
       allow get: if isSignedIn() && request.auth.uid == userId;
       allow list: if isOwner() && resource.data.businessId == myBusinessId();
 
-      // SECURITY FIX (CRITICAL): the previous rule only checked
-      // `role in ['owner','cashier']` — it never verified businessId
-      // actually belonged to a business this request was entitled to,
-      // letting any signed-in user grant themselves owner/cashier access
-      // to ANY existing business by writing this doc directly. Now there
-      // are exactly two provable paths, matching the app's two real
-      // write flows:
       allow create: if isSignedIn() && request.auth.uid == userId
                     && request.resource.data.role in ['owner', 'cashier']
                     && (
-                      // Path A — Setup.jsx: bootstrapping a BRAND NEW
-                      // business. Proven within the SAME transaction:
-                      // the business doc did not exist before this write,
-                      // and after the transaction commits it exists with
-                      // createdBy == this exact uid. Owner-only, matching
-                      // Setup.jsx (it never creates a cashier).
                       (
                         request.resource.data.role == 'owner'
                         && !exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
                         && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.createdBy == request.auth.uid
                       )
                       ||
-                      // Path B — JoinStaff.jsx: claiming a real,
-                      // unclaimed invite. The client must now record
-                      // WHICH invite it's claiming (claimedFromInviteId),
-                      // and that invite must currently be unclaimed and
-                      // match the businessId/role being written.
                       (
                         request.resource.data.claimedFromInviteId is string
                         && isValidInviteClaim(request.resource.data.claimedFromInviteId, request.resource.data.businessId, request.resource.data.role)
@@ -130,27 +105,15 @@ service cloud.firestore {
 
     // ── Device sessions (Settings > Device Management) ────────────────
     match /sessions/{sessionId} {
-      // SECURITY FIX: businessId is now required to match the caller's
-      // ACTUAL business — previously unchecked, letting a real staff
-      // member of one business inject a session doc that shows up in a
-      // DIFFERENT business's Device Management list.
       allow create: if isStaff() && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == myBusinessId();
 
-      allow read: if isSignedIn() && (resource.data.uid == request.auth.uid || (isStaff() && resource.data.businessId == myBusinessId()));
+      // FIX: Added 'resource == null' so a new device can check if its session exists yet
+      allow read: if isSignedIn() && (
+        resource == null || 
+        resource.data.uid == request.auth.uid || 
+        (isStaff() && resource.data.businessId == myBusinessId())
+      );
 
-      // SECURITY FIX: field-level split, replacing the old rule which let
-      // a device (or an owner) touch ANY field on an update, including
-      // uid/businessId (spoofing, same class as create above) and,
-      // critically, `revoked` — which previously let a device's own
-      // routine heartbeat write (AuthContext's registerSession(), which
-      // unconditionally resends revoked:false on every profile load)
-      // silently un-revoke itself the next time it came online, defeating
-      // the whole point of Device Management.
-      //   - A device updating its OWN session may only touch heartbeat
-      //     fields (lastActiveAt/deviceLabel/userAgent) — never uid,
-      //     businessId, or revoked.
-      //   - Only an OWNER of the matching business may flip `revoked`,
-      //     and only that single field.
       allow update: if isSignedIn() && (
         (resource.data.uid == request.auth.uid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent']))

@@ -6,8 +6,6 @@ import { BrowserMultiFormatReader } from '@zxing/browser';
 const DEV = import.meta.env.DEV;
 const devLog = (...args) => { if (DEV) console.log('[Scanner]', ...args); };
 const devError = (...args) => { if (DEV) console.error('[Scanner]', ...args); };
-const [retryToken, setRetryToken] = useState(0);
-const retry = useCallback(() => setRetryToken((t) => t + 1), []);
 
 function getInsecureContextReason() {
   if (typeof window === 'undefined') return null;
@@ -28,6 +26,10 @@ function buildConstraintAttempts() {
 }
 
 export function useCameraScanner({ onDetected, active }) {
+  // FIX: Moved inside the hook body
+  const [retryToken, setRetryToken] = useState(0);
+  const retry = useCallback(() => setRetryToken((t) => t + 1), []);
+
   const videoRef = useRef(null);
   const readerRef = useRef(null);
   // decodeFromConstraints() resolves with an IScannerControls object —
@@ -192,4 +194,5 @@ export function useCameraScanner({ onDetected, active }) {
     }
   }, [torchOn, torchSupported]);
 
-return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };}
+  return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };
+}
