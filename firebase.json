@@ -1,16 +1,8 @@
 {
-  "functions": [
-    {
-      "source": "functions",
-      "codebase": "default",
-      "ignore": [
-        "node_modules",
-        ".git",
-        "firebase-debug.log",
-        "firebase-debug.*.log"
-      ]
-    }
-  ],
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
   "emulators": {
     "auth": {
       "port": 9099
@@ -18,12 +10,12 @@
     "firestore": {
       "port": 8080
     },
-    "functions": {
-      "port": 5001
-    },
     "ui": {
       "enabled": true,
       "port": 4000
-    }
+    },
+    "storage": {
+  "rules": "storage.rules"
+}
   }
 }

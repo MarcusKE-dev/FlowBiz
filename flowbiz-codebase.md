@@ -4937,262 +4937,6 @@ export default defineConfig([
 }
 ````
 
-## File: firestore.rules
-````
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-
-    // ── Helpers ─────────────────────────────────────────────────────────
-    function isSignedIn() { return request.auth != null; }
-
-    function hasProfile() {
-      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
-    }
-
-    function myProfile() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
-
-    function isActive() {
-      let data = myProfile();
-      return !('active' in data) || data.active != false;
-    }
-
-    function isStaff() {
-      return hasProfile() && isActive();
-    }
-
-    function myBusinessId() {
-      return myProfile().businessId;
-    }
-
-    function isOwner() {
-      return isStaff() && myProfile().role == 'owner';
-    }
-
-    function owns(data) {
-      return isStaff() && data.businessId == myBusinessId();
-    }
-
-    function ownsUpdate(existing, incoming) {
-      return owns(existing) && owns(incoming);
-    }
-
-    // SECURITY FIX — Path B of the users/{userId} create rule below.
-    // Binds a new staff account to exactly one real, currently-unclaimed
-    // invite whose businessId/role match what's being written. Reads the
-    // invite ONCE (not three separate get() calls) and checks it against
-    // JoinStaff.jsx's real, non-transactional write order — the invite's
-    // `claimed` flag is still false at the moment users/{uid} is created,
-    // since JoinStaff.jsx only marks it claimed in a SEPARATE call after.
-    function isValidInviteClaim(inviteId, businessId, role) {
-      let invite = get(/databases/$(database)/documents/staffInvites/$(inviteId)).data;
-      return invite.claimed == false && invite.businessId == businessId && invite.role == role;
-    }
-
-    // ── Businesses ──────────────────────────────────────────────────────
-    match /businesses/{businessId} {
-      allow get: if isStaff() && myBusinessId() == businessId;
-      allow create: if isSignedIn();
-      allow update: if isOwner() && myBusinessId() == businessId
-                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription']);
-      allow delete: if false;
-    }
-
-    match /barcodeIndex/{docId} {
-      allow read: if isOwner() && owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-      allow update: if false;
-    }
-    match /productCodeCounters/{businessId} {
-      allow read, write: if isOwner() && myBusinessId() == businessId;
-    }
-
-    match /businessSettings/{businessId} {
-      allow get: if isStaff() && myBusinessId() == businessId;
-      allow write: if isOwner() && myBusinessId() == businessId;
-    }
-
-    // ── Users & invites ─────────────────────────────────────────────────
-    match /users/{userId} {
-      allow get: if isSignedIn() && request.auth.uid == userId;
-      allow list: if isOwner() && resource.data.businessId == myBusinessId();
-
-      // SECURITY FIX (CRITICAL): the previous rule only checked
-      // `role in ['owner','cashier']` — it never verified businessId
-      // actually belonged to a business this request was entitled to,
-      // letting any signed-in user grant themselves owner/cashier access
-      // to ANY existing business by writing this doc directly. Now there
-      // are exactly two provable paths, matching the app's two real
-      // write flows:
-      allow create: if isSignedIn() && request.auth.uid == userId
-                    && request.resource.data.role in ['owner', 'cashier']
-                    && (
-                      // Path A — Setup.jsx: bootstrapping a BRAND NEW
-                      // business. Proven within the SAME transaction:
-                      // the business doc did not exist before this write,
-                      // and after the transaction commits it exists with
-                      // createdBy == this exact uid. Owner-only, matching
-                      // Setup.jsx (it never creates a cashier).
-                      (
-                        request.resource.data.role == 'owner'
-                        && !exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
-                        && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.createdBy == request.auth.uid
-                      )
-                      ||
-                      // Path B — JoinStaff.jsx: claiming a real,
-                      // unclaimed invite. The client must now record
-                      // WHICH invite it's claiming (claimedFromInviteId),
-                      // and that invite must currently be unclaimed and
-                      // match the businessId/role being written.
-                      (
-                        request.resource.data.claimedFromInviteId is string
-                        && isValidInviteClaim(request.resource.data.claimedFromInviteId, request.resource.data.businessId, request.resource.data.role)
-                      )
-                    );
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data) && userId != request.auth.uid;
-    }
-
-    match /staffInvites/{inviteId} {
-      allow get: if true;
-      allow list: if isOwner() && resource.data.businessId == myBusinessId();
-      allow create: if isOwner() && request.resource.data.businessId == myBusinessId()
-                    && request.resource.data.role in ['owner', 'cashier'];
-      allow update: if isSignedIn()
-                    && resource.data.claimed == false
-                    && request.resource.data.claimed == true
-                    && request.resource.data.linkedUid == request.auth.uid
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'linkedUid', 'claimedAt']);
-      allow delete: if isOwner() && resource.data.businessId == myBusinessId();
-    }
-
-    // ── Device sessions (Settings > Device Management) ────────────────
-    match /sessions/{sessionId} {
-      // SECURITY FIX: businessId is now required to match the caller's
-      // ACTUAL business — previously unchecked, letting a real staff
-      // member of one business inject a session doc that shows up in a
-      // DIFFERENT business's Device Management list.
-      allow create: if isStaff() && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == myBusinessId();
-
-      allow read: if isSignedIn() && (resource.data.uid == request.auth.uid || (isStaff() && resource.data.businessId == myBusinessId()));
-
-      // SECURITY FIX: field-level split, replacing the old rule which let
-      // a device (or an owner) touch ANY field on an update, including
-      // uid/businessId (spoofing, same class as create above) and,
-      // critically, `revoked` — which previously let a device's own
-      // routine heartbeat write (AuthContext's registerSession(), which
-      // unconditionally resends revoked:false on every profile load)
-      // silently un-revoke itself the next time it came online, defeating
-      // the whole point of Device Management.
-      //   - A device updating its OWN session may only touch heartbeat
-      //     fields (lastActiveAt/deviceLabel/userAgent) — never uid,
-      //     businessId, or revoked.
-      //   - Only an OWNER of the matching business may flip `revoked`,
-      //     and only that single field.
-      allow update: if isSignedIn() && (
-        (resource.data.uid == request.auth.uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent']))
-        ||
-        (isOwner() && resource.data.businessId == myBusinessId()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked']))
-      );
-      allow delete: if false;
-    }
-
-    // ── Business data ───────────────────────────────────────────────────
-    match /products/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data) && (
-        isOwner() ||
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt'])
-      );
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /suppliers/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /sales/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /customers/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /creditSales/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /repayments/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /refunds/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /expenses/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /purchases/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /supplierPayments/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /stockAdjustments/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /dailySessions/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-  }
-}
-````
-
 ## File: package.json
 ````json
 {
@@ -6636,205 +6380,6 @@ export function useAuth() {
 }
 ````
 
-## File: src/hooks/useCameraScanner.js
-````javascript
-// src/hooks/useCameraScanner.js
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { BrowserMultiFormatReader } from '@zxing/browser';
-
-// Dev-only diagnostics — never runs in production, never changes `status`.
-const DEV = import.meta.env.DEV;
-const devLog = (...args) => { if (DEV) console.log('[Scanner]', ...args); };
-const devError = (...args) => { if (DEV) console.error('[Scanner]', ...args); };
-const [retryToken, setRetryToken] = useState(0);
-const retry = useCallback(() => setRetryToken((t) => t + 1), []);
-
-function getInsecureContextReason() {
-  if (typeof window === 'undefined') return null;
-  if (window.isSecureContext) return null;
-  return { protocol: window.location.protocol, hostname: window.location.hostname };
-}
-
-// Fallback cascade instead of a single fixed constraint set — covers
-// exact vs ideal facingMode and an environment→user→any-camera fallback,
-// so one rejected constraint doesn't fail the whole scan attempt outright.
-function buildConstraintAttempts() {
-  return [
-    { label: 'exact environment', constraints: { video: { facingMode: { exact: 'environment' } } } },
-    { label: 'ideal environment', constraints: { video: { facingMode: 'environment' } } },
-    { label: 'user-facing', constraints: { video: { facingMode: 'user' } } },
-    { label: 'any camera', constraints: { video: true } },
-  ];
-}
-
-export function useCameraScanner({ onDetected, active }) {
-  const videoRef = useRef(null);
-  const readerRef = useRef(null);
-  // decodeFromConstraints() resolves with an IScannerControls object —
-  // THAT is what exposes .stop() for a continuous decode session in this
-  // @zxing/browser version. Cleanup must go through it, not the reader.
-  const controlsRef = useRef(null);
-  const streamRef = useRef(null);
-  const [status, setStatus] = useState('idle'); // idle | starting | scanning | denied | unavailable | insecure
-  const [torchOn, setTorchOn] = useState(false);
-  const [torchSupported, setTorchSupported] = useState(false);
-
-  const stop = useCallback(() => {
-    try {
-      controlsRef.current?.stop();
-    } catch (err) {
-      devError('controls.stop() failed', err);
-    }
-    controlsRef.current = null;
-
-    try {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    } catch (err) {
-      devError('manual track stop failed', err);
-    }
-    streamRef.current = null;
-
-    setTorchOn(false);
-    setTorchSupported(false);
-  }, []);
-
-  useEffect(() => {
-    if (!active) {
-      stop();
-      setStatus('idle');
-      return;
-    }
-
-    let cancelled = false;
-    setStatus('starting');
-
-    // Secure-context guard — checked BEFORE touching mediaDevices at all,
-    // so the real cause is surfaced instead of a generic "unavailable".
-    const insecure = getInsecureContextReason();
-    if (insecure) {
-      devError(
-        'Insecure context — navigator.mediaDevices is unavailable.',
-        'protocol:', insecure.protocol,
-        'hostname:', insecure.hostname,
-        'window.isSecureContext:', window.isSecureContext
-      );
-      setStatus('insecure');
-      return () => { cancelled = true; stop(); };
-    }
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      devError('navigator.mediaDevices.getUserMedia is not available in this browser.');
-      setStatus('unavailable');
-      return () => { cancelled = true; stop(); };
-    }
-
-    const reader = new BrowserMultiFormatReader();
-    readerRef.current = reader;
-
-    if (DEV) {
-      devLog(
-        'window.isSecureContext:', window.isSecureContext,
-        'protocol:', window.location.protocol,
-        'hostname:', window.location.hostname
-      );
-      navigator.mediaDevices.enumerateDevices()
-        .then((devices) => {
-          const cams = devices.filter((d) => d.kind === 'videoinput');
-          devLog(
-            'videoinput devices (labels blank until permission is granted):',
-            cams.length,
-            cams.map((c) => ({ deviceId: c.deviceId, label: c.label || '(hidden)' }))
-          );
-        })
-        .catch((err) => devError('enumerateDevices() failed', err));
-    }
-
-    (async () => {
-      const attempts = buildConstraintAttempts();
-      let lastError = null;
-
-      for (const attempt of attempts) {
-        if (cancelled) return;
-        devLog(`trying constraints [${attempt.label}]:`, attempt.constraints);
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          const controls = await reader.decodeFromConstraints(
-            attempt.constraints,
-            videoRef.current,
-            (result, err) => {
-              if (cancelled) return;
-              if (result) {
-                onDetected(result.getText());
-                return;
-              }
-              // NotFoundException fires continuously between frames while
-              // scanning with nothing in view — that's expected, not an error.
-              if (DEV && err && err.name !== 'NotFoundException') {
-                devError('decode callback error:', err.name, err.message);
-              }
-            }
-          );
-
-          if (cancelled) {
-            try { controls.stop(); } catch (err) { devError('post-cancel controls.stop() failed', err); }
-            return;
-          }
-
-          controlsRef.current = controls;
-          setStatus('scanning');
-          streamRef.current = videoRef.current?.srcObject || null;
-          const track = streamRef.current?.getVideoTracks?.()[0];
-          const capabilities = track?.getCapabilities?.();
-          setTorchSupported(!!capabilities?.torch);
-          devLog(`camera started using [${attempt.label}] — track:`, track?.label, 'capabilities:', capabilities);
-          return; // success — stop trying further constraint attempts
-        } catch (err) {
-          lastError = err;
-          devError(`constraints [${attempt.label}] failed:`, err?.name, err?.message);
-          // A denial should stop the cascade immediately — retrying with
-          // looser constraints won't change the user's answer.
-          if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError' || err?.name === 'SecurityError') {
-            break;
-          }
-          // Otherwise (OverconstrainedError, NotFoundError, NotReadableError,
-          // AbortError, ...) fall through and try the next, looser constraint set.
-        }
-      }
-
-      if (cancelled) return;
-      devError('all camera constraint attempts failed. Last error:', lastError?.name, lastError?.message, lastError);
-      const name = lastError?.name;
-      setStatus(
-        name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError'
-          ? 'denied'
-          : 'unavailable'
-      );
-    })();
-
-    return () => {
-      cancelled = true;
-      stop();
-    };
-  }, [active, onDetected, stop, retryToken]);
-
-  const toggleTorch = useCallback(async () => {
-    const track = streamRef.current?.getVideoTracks?.()[0];
-    if (!track || !torchSupported) return;
-    try {
-      const next = !torchOn;
-      await track.applyConstraints({ advanced: [{ torch: next }] });
-      setTorchOn(next);
-    } catch (err) {
-      // Some devices report torch as supported but reject the constraint
-      // anyway — fail silently rather than surface a confusing error for
-      // what's meant to be a nice-to-have.
-      devError('toggleTorch failed', err);
-    }
-  }, [torchOn, torchSupported]);
-
-return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };}
-````
-
 ## File: src/pages/AuthAction.jsx
 ````javascript
 import { useEffect, useState } from 'react';
@@ -7784,549 +7329,6 @@ const handleSubscribe = async () => {
 }
 ````
 
-## File: src/pages/Settings.jsx
-````javascript
-import { useEffect, useState } from 'react';
-import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { db, storage } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { resetBusinessData } from '../utils/businessReset';
-import { restoreProduct, permanentlyDeleteProduct, cleanupOrphanedBarcodeIndexes } from '../utils/products';
-import { isDemoMode } from '../demo/demoMode';
-import { resetDemoData } from '../demo/seedData';
-import { formatDateTime } from '../utils/dateRanges';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';import { friendlyErrorMessage } from '../utils/errorMessages';
-
-const RESET_CONFIRM_PHRASE = 'RESET';
-
-export default function Settings() {
-  const { profile, businessId, isOwner, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, subscription } = useAuth();
-  const demo = isDemoMode();
-  const [loading, setLoading]     = useState(true);
-  
-  const [shopName, setShopName]   = useState('');
-  const [phone, setPhone]         = useState('');
-  const [email, setEmail]         = useState('');
-  const [address, setAddress]     = useState('');
-  const [logoFile, setLogoFile]   = useState(null);
-  const [logoUrl, setLogoUrl]     = useState('');
-  const [cashierExp, setCashierExp] = useState(true);
-  
-  const [saving, setSaving]       = useState(false);
-  const [savingPermissions, setSavingPermissions] = useState(false);
-  const [resetDialogOpen, setResetDialogOpen] = useState(false);
-  const [resetConfirmText, setResetConfirmText] = useState('');
-  const [resetting, setResetting] = useState(false);
-
-  const [sessions, setSessions] = useState([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-
-  const [archived, setArchived] = useState([]);
-  const [archivedLoading, setArchivedLoading] = useState(false);
-  const [archivedOpen, setArchivedOpen] = useState(false);
-
-  const settingsRef = businessId ? doc(db, 'businessSettings', businessId) : null;
-
-  function compressImage(file, maxDimension = 480, quality = 0.75) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob((blob) => {
-        if (!blob) { reject(new Error('Could not process image.')); return; }
-        resolve(blob);
-      }, 'image/jpeg', quality);
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
-    img.src = url;
-  });
-}
-
-  useEffect(() => {
-    if (!settingsRef) return;
-    getDoc(settingsRef).then(snap => {
-      if (snap.exists()) { 
-        const d = snap.data(); 
-        setShopName(d.shopName || ''); 
-        setPhone(d.phone || '');
-        setEmail(d.email || '');
-        setAddress(d.address || '');
-        setLogoUrl(d.logoUrl || '');
-        setCashierExp(d.cashierCanRecordExpenses !== false); 
-      }
-      setLoading(false);
-    });
-  }, [businessId]);
-
-  useEffect(() => {
-    if (!businessId) return;
-    listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
-  }, [businessId]);
-
-  const loadArchived = async () => {
-    if (!businessId) return;
-    setArchivedLoading(true);
-    try {
-      const snap = await getDocs(query(collection(db, 'products'), where('businessId', '==', businessId), where('deleted', '==', true)));
-      setArchived(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } finally {
-      setArchivedLoading(false);
-    }
-  };
-
-const handleSave = async e => {
-    e.preventDefault(); 
-    setSaving(true);
-    try {
-      let finalLogoUrl = logoUrl;
-
-      // Logo upload gets its OWN try/catch (Issue 8): a slow/failed
-      // upload of the (now compressed) image must not block saving the
-      // rest of Business Information, which has nothing to do with it.
-      if (logoFile) {
-        try {
-          const compressed = await compressImage(logoFile, 480, 0.75);
-          const fileRef = ref(storage, `businesses/${businessId}/logo_${Date.now()}`);
-          await uploadBytes(fileRef, compressed);
-          finalLogoUrl = await getDownloadURL(fileRef);
-        } catch (logoErr) {
-          toast.error(`Logo upload failed, but the rest of your settings will still be saved: ${logoErr.message}`);
-        }
-      }
-
-      await setDoc(settingsRef, { 
-        shopName: shopName.trim(), 
-        phone: phone.trim(),
-        email: email.trim(),
-        address: address.trim(),
-        logoUrl: finalLogoUrl,
-      }, { merge: true });
-      
-      setLogoUrl(finalLogoUrl);
-      toast.success('Business information saved'); 
-      setLogoFile(null);
-    } catch (err) { 
-      toast.error(err.message); 
-    } finally { 
-      setSaving(false); 
-    }
-  };
-
-  const handleSavePermissions = async () => {
-    setSavingPermissions(true);
-    try {
-      await setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
-      toast.success('Permissions saved');
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setSavingPermissions(false);
-    }
-  };
-
-  const handleReset = async () => {
-    setResetting(true);
-    try {
-      if (demo) {
-        resetDemoData();
-        toast.success('Demo data reset. Reloading…');
-      } else {
-        await resetBusinessData(businessId, profile?.uid);
-        toast.success('Business data reset. Reloading…');
-      }
-      window.location.href = '/';
-    } catch (err) {
-      toast.error(`Reset failed partway through: ${err.message}`);
-      setResetting(false);
-      setResetDialogOpen(false);
-    }
-  };
-
-  const handleRevoke = async (sessionId) => {
-    try {
-      await revokeSession(sessionId);
-      setSessions(s => s.map(x => x.id === sessionId ? { ...x, revoked: true } : x));
-      toast.success('Device signed out.');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handleRestore = async (productId) => {
-    try { await restoreProduct(productId); setArchived(a => a.filter(p => p.id !== productId)); toast.success('Product restored'); }
-    catch (err) { toast.error(err.message); }
-  };
-
-  const handlePermanentDelete = async (productId) => {
-    const target = archived.find(p => p.id === productId);
-    try {
-      await permanentlyDeleteProduct(productId, target?.barcode, businessId);
-      setArchived(a => a.filter(p => p.id !== productId));
-      toast.success('Product permanently deleted');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const [cleaningOrphans, setCleaningOrphans] = useState(false);
-  const handleCleanupOrphans = async () => {
-    setCleaningOrphans(true);
-    try {
-      const { scanned, removed } = await cleanupOrphanedBarcodeIndexes(businessId);
-      toast.success(removed > 0
-        ? `Checked ${scanned} barcode record(s), freed ${removed} orphaned barcode(s).`
-        : `Checked ${scanned} barcode record(s) — none were orphaned.`);
-    } catch (err) { toast.error(err.message); }
-    finally { setCleaningOrphans(false); }
-  };
-
-  if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
-
-  return (
-    <div className="mx-auto max-w-xl space-y-5">
-      <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
-
-      <div className="card p-5 space-y-2">
-        <h2 className="font-display text-base font-bold text-ink-800">Account &amp; Security</h2>
-        <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
-        <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
-        <Row label="Business ID" value={businessId || '—'} mono />
-      </div>
-
-      <form onSubmit={handleSave} className="card space-y-4 p-5">
-        <h2 className="font-display text-base font-bold text-ink-800">Business Information</h2>
-        <p className="text-sm text-ink-500 mb-2">This info dynamically populates your customer-facing documents (receipts, invoices).</p>
-        
-        <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
-        
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
-          <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
-        </div>
-
-        <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
-        
-        <div>
-          <label className="label">Business Logo</label>
-          <div className="flex items-center gap-4">
-            {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
-            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files[0])} />
-          </div>
-        </div>
-
-<button type="submit" className="btn-primary w-full" disabled={saving}>{saving?'Saving…':'Save settings'}</button>
-      </form>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Permissions</h2>
-        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-3">
-          <div><p className="text-sm font-semibold text-ink-800">Let cashiers record expenses</p><p className="text-xs text-ink-400">Turn off if only owners should log expenses.</p></div>
-          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-moss-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
-            <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition-transform ${cashierExp?'translate-x-5':''}`} />
-          </button>
-        </div>
-        <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
-          {savingPermissions ? 'Saving…' : 'Save permissions'}
-        </button>
-      </div>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Team Management</h2>
-        <p className="text-sm text-ink-500">Invite owners or cashiers, and manage pending invites and access.</p>
-        <Link to="/users" className="btn-outline w-full flex items-center justify-center gap-2">Manage users &amp; invites</Link>
-      </div>
-
-      {!demo && (
-        <div className="card p-5 space-y-3">
-          <h2 className="font-display text-base font-bold text-ink-800">Device Management</h2>
-          {sessionsLoading ? <p className="text-sm text-ink-400">Loading…</p> : sessions.length === 0 ? (
-            <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {sessions.map(s => (
-                <div key={s.id} className="flex items-center justify-between py-2.5 text-sm">
-                  <div>
-                    <p className="font-medium text-ink-700">{s.deviceLabel}{s.id === currentSessionId && <span className="text-xs text-ink-400"> (this device)</span>}</p>
-                    <p className="text-xs text-ink-400">Last active {formatDateTime(s.lastActiveAt)}</p>
-                  </div>
-                  {s.revoked ? (
-                    <span className="badge bg-ink-100 text-ink-500">Signed out</span>
-                  ) : (
-                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRevoke(s.id)}>Sign out</button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="card p-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
-          <div className="flex gap-2">
-            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={handleCleanupOrphans} disabled={cleaningOrphans}>
-              {cleaningOrphans ? 'Checking…' : 'Clean Up Orphaned Barcodes'}
-            </button>
-            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
-              {archivedOpen ? 'Hide' : 'View archive'}
-            </button>
-          </div>
-        </div>
-        <p className="text-sm text-ink-500">Deleted products are archived here first, never destroyed immediately.</p>
-        {archivedOpen && (
-          archivedLoading ? <p className="text-sm text-ink-400">Loading…</p> : archived.length === 0 ? (
-            <p className="text-sm text-ink-400">Nothing archived.</p>
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {archived.map(p => (
-                <div key={p.id} className="flex items-center justify-between py-2.5 text-sm">
-                  <span className="font-medium text-ink-700">{p.name}</span>
-                  <div className="flex gap-2">
-                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRestore(p.id)}>Restore</button>
-                    <button className="btn-danger !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handlePermanentDelete(p.id)}>Delete forever</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )
-        )}
-      </div>
-
-      <div className="card p-5 space-y-2">
-        <h2 className="font-display text-base font-bold text-ink-800">Subscription</h2>
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
-          <Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>
-        </div>
-      </div>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Support</h2>
-        <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
-      </div>
-
-      <div className="card space-y-3 border-rust-200 p-5">
-        <div>
-          <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
-          <p className="mt-1 text-sm text-ink-500">
-            {demo
-              ? 'Demo Reset clears all sample data stored in this browser.'
-              : "Business Reset permanently deletes ALL of this business's data. This cannot be undone."}
-          </p>
-        </div>
-        <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
-          {demo ? 'Demo Reset' : 'Business Reset'}
-        </button>
-      </div>
-
-      <ConfirmDialog
-        open={resetDialogOpen}
-        title={demo ? 'Reset the demo data?' : 'This will permanently delete ALL data for this business'}
-        message={
-          demo ? (
-            <p>All sample data in this browser will be cleared and replaced with the original demo dataset.</p>
-          ) : (
-            <>
-              <p className="mb-2">Everything this business owns will be deleted. This cannot be undone.</p>
-              <label className="label mt-3">Type <span className="font-mono font-bold">{RESET_CONFIRM_PHRASE}</span> to confirm</label>
-              <input className="input" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} autoFocus />
-            </>
-          )
-        }
-        confirmLabel={resetting ? 'Resetting…' : demo ? 'Reset demo data' : 'Delete everything'}
-        danger
-        onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
-        onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
-      />
-    </div>
-  );
-}
-
-function Row({ label, value, tone = '', mono = false }) {
-  return (
-    <div className="flex items-center justify-between py-1 text-sm">
-      <span className="text-ink-500">{label}</span>
-      <span className={`font-semibold ${mono ? 'font-mono text-xs' : ''} ${tone || 'text-ink-800'}`}>{value}</span>
-    </div>
-  );
-}
-````
-
-## File: src/pages/Suppliers.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { addDoc, updateDoc, deleteDoc, doc, writeBatch, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Pencil, Trash2, Banknote, Smartphone } from 'lucide-react';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import { formatKES } from '../utils/currency';
-import { computeSupplierBalances } from '../utils/financials';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function Suppliers() {
-  const { profile, businessId } = useAuth();
-  const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const purchQ  = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
-  const paymQ   = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
-  const { data: suppliers, loading } = useFirestoreCollection(suppQ);
-  const { data: purchases }          = useFirestoreCollection(purchQ);
-  const { data: spayments }          = useFirestoreCollection(paymQ);
-
-  const [modal, setModal]       = useState(false);
-  const [editing, setEditing]   = useState(null);
-  const [pendDel, setPendDel]   = useState(null);
-  const [payModal, setPayModal] = useState(false);
-  const [selSupp, setSelSupp]   = useState(null);
-  const [payAmt, setPayAmt]     = useState('');
-  const [payMethod, setPayMethod] = useState('Cash');
-  const [payCode, setPayCode]   = useState('');
-  const [paying, setPaying]     = useState(false);
-
-  const owedList = useMemo(
-    () => computeSupplierBalances(purchases, spayments, suppliers),
-    [purchases, spayments, suppliers]
-  );
-  const owedMap = useMemo(
-    () => Object.fromEntries(owedList.map((o) => [o.supplierId, o.balance])),
-    [owedList]
-  );
-  const totalOwed = owedList.reduce((a, o) => a + o.balance, 0);
-
-const [deleting, setDeleting] = useState(false);
-
-  const handleSave = async data => {
-    const write = editing
-      ? updateDoc(doc(db,'suppliers',editing.id), data)
-      : addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
-
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
-    setModal(false); setEditing(null);
-  };
-
-  const handleDel = async () => {
-    const balance = owedMap[pendDel.id] || 0;
-    if (balance > 0.005) {
-      toast.error(`Can't remove "${pendDel.name}" — they still have an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
-      setPendDel(null);
-      return;
-    }
-    setDeleting(true);
-    const { queuedOffline, error } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
-    setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
-    setPendDel(null);
-  };
-
-  const handlePay = async e => {
-    e.preventDefault();
-    const amount = Number(payAmt);
-    const balance = owedMap[selSupp?.id]||0;
-    if (amount<=0) { toast.error('Enter a positive amount.'); return; }
-    if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatKES(balance)}.`); return; }
-    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
-    setPaying(true);
-    const batch = writeBatch(db);
-    const expRef = doc(collection(db,'expenses'));
-    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp() }, businessId));
-    const payRef = doc(collection(db,'supplierPayments'));
-    batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:serverTimestamp(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
-
-    const commit = batch.commit();
-    const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
-    setPaying(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
-    if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
-    setPayModal(false); setPayAmt(''); setPayCode('');
-  };
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
-
-  return (
-    <div className="mx-auto max-w-4xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Suppliers</h1><p className="text-sm text-ink-400">Total owed: <span className="font-semibold text-rust-600">{formatKES(totalOwed)}</span></p></div>
-        <button className="btn-primary" onClick={()=>{setEditing(null);setModal(true);}}>+ Add supplier</button>
-      </div>
-      {loading?<LoadingSpinner />:suppliers.length===0?<EmptyState title="No suppliers yet" description="Add suppliers to track restocking and balances." />:(
-        <div className="space-y-3">
-          {suppliers.map(s=>{
-            const balance = owedMap[s.id]||0;
-            return (
-              <div key={s.id} className="card flex flex-wrap items-center justify-between gap-3 p-4">
-                <div><p className="font-semibold text-ink-800">{s.name}</p><p className="text-xs text-ink-400">{s.contactPerson&&`${s.contactPerson} · `}{s.phone||'No phone'}</p></div>
-                <div className="flex items-center gap-3">
-                  <div className="text-right"><p className="text-xs text-ink-400">Outstanding</p><p className={`font-semibold ${balance>0?'text-rust-600':'text-moss-600'}`}>{formatKES(balance)}</p></div>
-                  {balance>0&&<button className="btn-primary !text-xs !px-3 !py-1.5 !min-h-0" onClick={()=>{setSelSupp(s);setPayModal(true);}}>Pay</button>}
-                  <button className="rounded-lg p-2 text-ink-400 hover:bg-ink-100" onClick={()=>{setEditing(s);setModal(true);}}><Pencil className="h-4 w-4" strokeWidth={1.75}/></button>
-                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50" onClick={()=>setPendDel(s)}><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-      <SupplierFormModal open={modal} onClose={()=>{setModal(false);setEditing(null);}} onSave={handleSave} initialSupplier={editing} />
-<ConfirmDialog
-        open={!!pendDel}
-        title="Remove supplier?"
-        message={(owedMap[pendDel?.id]||0) > 0.005
-          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)} — pay it off first.`
-          : `"${pendDel?.name}" will be removed. Purchase records stay intact.`}
-        confirmLabel={deleting ? 'Removing…' : 'Remove'}
-        confirmDisabled={deleting}
-        danger
-        onConfirm={handleDel}
-        onCancel={()=>{ if (!deleting) setPendDel(null); }}
-      />      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
-        <form onSubmit={handlePay} className="space-y-3">
-          <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(owedMap[selSupp?.id]||0)}</span></div>
-          <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
-          <div><label className="label">Method</label>
-            <div className="grid grid-cols-2 gap-2">
-              {['Cash','M-Pesa'].map(m=>(
-                <button key={m} type="button" onClick={()=>setPayMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${payMethod===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
-                  {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
-                </button>
-              ))}
-            </div>
-          </div>
-          {payMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={payCode} onChange={e=>setPayCode(e.target.value.toUpperCase())} /></div>}
-          <div className="flex justify-end gap-2 pt-1"><button type="button" className="btn-secondary" onClick={()=>setPayModal(false)}>Cancel</button><button type="submit" className="btn-primary" disabled={paying}>{paying?'Recording…':'Record payment'}</button></div>
-        </form>
-      </Modal>
-    </div>
-  );
-}
-````
-
 ## File: src/pages/Users.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -8790,6 +7792,225 @@ export function sendWhatsAppDocument(sale, settings, phone) {
 }
 ````
 
+## File: firestore.rules
+````
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ─────────────────────────────────────────────────────────
+    function isSignedIn() { return request.auth != null; }
+
+    function hasProfile() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActive() {
+      let data = myProfile();
+      return !('active' in data) || data.active != false;
+    }
+
+    function isStaff() {
+      return hasProfile() && isActive();
+    }
+
+    function myBusinessId() {
+      return myProfile().businessId;
+    }
+
+    function isOwner() {
+      return isStaff() && myProfile().role == 'owner';
+    }
+
+    function owns(data) {
+      return isStaff() && data.businessId == myBusinessId();
+    }
+
+    function ownsUpdate(existing, incoming) {
+      return owns(existing) && owns(incoming);
+    }
+
+    function isValidInviteClaim(inviteId, businessId, role) {
+      let invite = get(/databases/$(database)/documents/staffInvites/$(inviteId)).data;
+      return invite.claimed == false && invite.businessId == businessId && invite.role == role;
+    }
+
+    // ── Businesses ──────────────────────────────────────────────────────
+    match /businesses/{businessId} {
+      allow get: if isStaff() && myBusinessId() == businessId;
+      allow create: if isSignedIn();
+      allow update: if isOwner() && myBusinessId() == businessId
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription']);
+      allow delete: if false;
+    }
+
+    match /barcodeIndex/{docId} {
+      allow read: if isOwner() && owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+      allow update: if false;
+    }
+    match /productCodeCounters/{businessId} {
+      allow read, write: if isOwner() && myBusinessId() == businessId;
+    }
+
+    match /businessSettings/{businessId} {
+      allow get: if isStaff() && myBusinessId() == businessId;
+      allow write: if isOwner() && myBusinessId() == businessId;
+    }
+
+    // ── Users & invites ─────────────────────────────────────────────────
+    match /users/{userId} {
+      allow get: if isSignedIn() && request.auth.uid == userId;
+      allow list: if isOwner() && resource.data.businessId == myBusinessId();
+
+      allow create: if isSignedIn() && request.auth.uid == userId
+                    && request.resource.data.role in ['owner', 'cashier']
+                    && (
+                      (
+                        request.resource.data.role == 'owner'
+                        && !exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
+                        && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.createdBy == request.auth.uid
+                      )
+                      ||
+                      (
+                        request.resource.data.claimedFromInviteId is string
+                        && isValidInviteClaim(request.resource.data.claimedFromInviteId, request.resource.data.businessId, request.resource.data.role)
+                      )
+                    );
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data) && userId != request.auth.uid;
+    }
+
+    match /staffInvites/{inviteId} {
+      allow get: if true;
+      allow list: if isOwner() && resource.data.businessId == myBusinessId();
+      allow create: if isOwner() && request.resource.data.businessId == myBusinessId()
+                    && request.resource.data.role in ['owner', 'cashier'];
+      allow update: if isSignedIn()
+                    && resource.data.claimed == false
+                    && request.resource.data.claimed == true
+                    && request.resource.data.linkedUid == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'linkedUid', 'claimedAt']);
+      allow delete: if isOwner() && resource.data.businessId == myBusinessId();
+    }
+
+    // ── Device sessions (Settings > Device Management) ────────────────
+    match /sessions/{sessionId} {
+      allow create: if isStaff() && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == myBusinessId();
+
+      // FIX: Added 'resource == null' so a new device can check if its session exists yet
+      allow read: if isSignedIn() && (
+        resource == null || 
+        resource.data.uid == request.auth.uid || 
+        (isStaff() && resource.data.businessId == myBusinessId())
+      );
+
+      allow update: if isSignedIn() && (
+        (resource.data.uid == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent']))
+        ||
+        (isOwner() && resource.data.businessId == myBusinessId()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked']))
+      );
+      allow delete: if false;
+    }
+
+    // ── Business data ───────────────────────────────────────────────────
+    match /products/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if ownsUpdate(resource.data, request.resource.data) && (
+        isOwner() ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt'])
+      );
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /suppliers/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /sales/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /customers/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /creditSales/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /repayments/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /refunds/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /expenses/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /purchases/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /supplierPayments/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /stockAdjustments/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /dailySessions/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+  }
+}
+````
+
 ## File: index.html
 ````html
 <!doctype html>
@@ -9001,6 +8222,208 @@ export async function verifyPasswordResetCode() {
 
 export async function confirmPasswordReset() {
   return Promise.resolve();
+}
+````
+
+## File: src/hooks/useCameraScanner.js
+````javascript
+// src/hooks/useCameraScanner.js
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { BrowserMultiFormatReader } from '@zxing/browser';
+
+// Dev-only diagnostics — never runs in production, never changes `status`.
+const DEV = import.meta.env.DEV;
+const devLog = (...args) => { if (DEV) console.log('[Scanner]', ...args); };
+const devError = (...args) => { if (DEV) console.error('[Scanner]', ...args); };
+
+function getInsecureContextReason() {
+  if (typeof window === 'undefined') return null;
+  if (window.isSecureContext) return null;
+  return { protocol: window.location.protocol, hostname: window.location.hostname };
+}
+
+// Fallback cascade instead of a single fixed constraint set — covers
+// exact vs ideal facingMode and an environment→user→any-camera fallback,
+// so one rejected constraint doesn't fail the whole scan attempt outright.
+function buildConstraintAttempts() {
+  return [
+    { label: 'exact environment', constraints: { video: { facingMode: { exact: 'environment' } } } },
+    { label: 'ideal environment', constraints: { video: { facingMode: 'environment' } } },
+    { label: 'user-facing', constraints: { video: { facingMode: 'user' } } },
+    { label: 'any camera', constraints: { video: true } },
+  ];
+}
+
+export function useCameraScanner({ onDetected, active }) {
+  // FIX: Moved inside the hook body
+  const [retryToken, setRetryToken] = useState(0);
+  const retry = useCallback(() => setRetryToken((t) => t + 1), []);
+
+  const videoRef = useRef(null);
+  const readerRef = useRef(null);
+  // decodeFromConstraints() resolves with an IScannerControls object —
+  // THAT is what exposes .stop() for a continuous decode session in this
+  // @zxing/browser version. Cleanup must go through it, not the reader.
+  const controlsRef = useRef(null);
+  const streamRef = useRef(null);
+  const [status, setStatus] = useState('idle'); // idle | starting | scanning | denied | unavailable | insecure
+  const [torchOn, setTorchOn] = useState(false);
+  const [torchSupported, setTorchSupported] = useState(false);
+
+  const stop = useCallback(() => {
+    try {
+      controlsRef.current?.stop();
+    } catch (err) {
+      devError('controls.stop() failed', err);
+    }
+    controlsRef.current = null;
+
+    try {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    } catch (err) {
+      devError('manual track stop failed', err);
+    }
+    streamRef.current = null;
+
+    setTorchOn(false);
+    setTorchSupported(false);
+  }, []);
+
+  useEffect(() => {
+    if (!active) {
+      stop();
+      setStatus('idle');
+      return;
+    }
+
+    let cancelled = false;
+    setStatus('starting');
+
+    // Secure-context guard — checked BEFORE touching mediaDevices at all,
+    // so the real cause is surfaced instead of a generic "unavailable".
+    const insecure = getInsecureContextReason();
+    if (insecure) {
+      devError(
+        'Insecure context — navigator.mediaDevices is unavailable.',
+        'protocol:', insecure.protocol,
+        'hostname:', insecure.hostname,
+        'window.isSecureContext:', window.isSecureContext
+      );
+      setStatus('insecure');
+      return () => { cancelled = true; stop(); };
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      devError('navigator.mediaDevices.getUserMedia is not available in this browser.');
+      setStatus('unavailable');
+      return () => { cancelled = true; stop(); };
+    }
+
+    const reader = new BrowserMultiFormatReader();
+    readerRef.current = reader;
+
+    if (DEV) {
+      devLog(
+        'window.isSecureContext:', window.isSecureContext,
+        'protocol:', window.location.protocol,
+        'hostname:', window.location.hostname
+      );
+      navigator.mediaDevices.enumerateDevices()
+        .then((devices) => {
+          const cams = devices.filter((d) => d.kind === 'videoinput');
+          devLog(
+            'videoinput devices (labels blank until permission is granted):',
+            cams.length,
+            cams.map((c) => ({ deviceId: c.deviceId, label: c.label || '(hidden)' }))
+          );
+        })
+        .catch((err) => devError('enumerateDevices() failed', err));
+    }
+
+    (async () => {
+      const attempts = buildConstraintAttempts();
+      let lastError = null;
+
+      for (const attempt of attempts) {
+        if (cancelled) return;
+        devLog(`trying constraints [${attempt.label}]:`, attempt.constraints);
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const controls = await reader.decodeFromConstraints(
+            attempt.constraints,
+            videoRef.current,
+            (result, err) => {
+              if (cancelled) return;
+              if (result) {
+                onDetected(result.getText());
+                return;
+              }
+              // NotFoundException fires continuously between frames while
+              // scanning with nothing in view — that's expected, not an error.
+              if (DEV && err && err.name !== 'NotFoundException') {
+                devError('decode callback error:', err.name, err.message);
+              }
+            }
+          );
+
+          if (cancelled) {
+            try { controls.stop(); } catch (err) { devError('post-cancel controls.stop() failed', err); }
+            return;
+          }
+
+          controlsRef.current = controls;
+          setStatus('scanning');
+          streamRef.current = videoRef.current?.srcObject || null;
+          const track = streamRef.current?.getVideoTracks?.()[0];
+          const capabilities = track?.getCapabilities?.();
+          setTorchSupported(!!capabilities?.torch);
+          devLog(`camera started using [${attempt.label}] — track:`, track?.label, 'capabilities:', capabilities);
+          return; // success — stop trying further constraint attempts
+        } catch (err) {
+          lastError = err;
+          devError(`constraints [${attempt.label}] failed:`, err?.name, err?.message);
+          // A denial should stop the cascade immediately — retrying with
+          // looser constraints won't change the user's answer.
+          if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError' || err?.name === 'SecurityError') {
+            break;
+          }
+          // Otherwise (OverconstrainedError, NotFoundError, NotReadableError,
+          // AbortError, ...) fall through and try the next, looser constraint set.
+        }
+      }
+
+      if (cancelled) return;
+      devError('all camera constraint attempts failed. Last error:', lastError?.name, lastError?.message, lastError);
+      const name = lastError?.name;
+      setStatus(
+        name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError'
+          ? 'denied'
+          : 'unavailable'
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [active, onDetected, stop, retryToken]);
+
+  const toggleTorch = useCallback(async () => {
+    const track = streamRef.current?.getVideoTracks?.()[0];
+    if (!track || !torchSupported) return;
+    try {
+      const next = !torchOn;
+      await track.applyConstraints({ advanced: [{ torch: next }] });
+      setTorchOn(next);
+    } catch (err) {
+      // Some devices report torch as supported but reject the constraint
+      // anyway — fail silently rather than surface a confusing error for
+      // what's meant to be a nice-to-have.
+      devError('toggleTorch failed', err);
+    }
+  }, [torchOn, torchSupported]);
+
+  return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };
 }
 ````
 
@@ -9299,314 +8722,6 @@ const handleSupplierSave = async (supplierData) => {
 }
 ````
 
-## File: src/pages/Dashboard.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useDailySession } from '../hooks/useDailySession';
-import { useFinancialsForRange } from '../hooks/useFinancials';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import Modal from '../components/common/Modal';
-import SaleModal from '../components/pos/SaleModal';
-import SaleCompleteModal from '../components/pos/SaleCompleteModal';
-import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
-import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-function StatCard({ label, value, tone = 'text-ink-900', sub }) {
-  return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
-    </div>
-  );
-}
-
-export default function Dashboard() {
-  const { profile, isAdmin, businessId, isPro } = useAuth();
-  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
-  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
-
-  const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const { data: products } = useFirestoreCollection(productsQuery);
-  const { data: customers } = useFirestoreCollection(customersQuery);
-  const { data: suppliers } = useFirestoreCollection(suppliersQuery);
-
-  const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
-  const [activeProduct, setActiveProduct] = useState(null);
-  const [completedSale, setCompletedSale] = useState(null);
-  const [editProduct, setEditProd] = useState(null);
-  const [prodModal, setProdModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [notFoundCode, setNotFoundCode] = useState(null);
-
-  const [privacyMode, setPrivacyMode] = useState(() => {
-    try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
-    catch { return false; }
-  });
-
-  const togglePrivacyMode = () => {
-    setPrivacyMode((prev) => {
-      const next = !prev;
-      try { localStorage.setItem('flowbiz_dashboard_privacy', String(next)); }
-      catch (err) { console.error('Failed to save privacy mode setting', err); }
-      return next;
-    });
-  };
-
-  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
-
-  const dashboardCashReceived = summary.totalCashReceipts;
-  const dashboardMpesaReceived = summary.totalMpesaReceipts;
-  const dashboardExpenses = summary.totalExpenses;
-  const dashboardNetProfit = summary.netProfit;
-
-  const lowStock = products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
-  const totalInventoryValue = products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
-  const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
-  const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
-  const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
-
-  const recentActivity = useMemo(() => {
-    const list = [];
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      list.push({ id: `sale-${s.id}`, type: 'Sale', title: `${s.quantity} × ${s.productName}`, subtitle: `Sold by ${s.soldByName || 'Staff'}`, amount: s.totalAmount, method: s.paymentMethod, timestamp: s.soldAt, isPositive: true });
-    });
-    (repayments || []).forEach((r) => {
-      list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
-    });
-    return list.sort((a, b) => {
-      const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
-      const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
-      return bTime - aTime;
-    }).slice(0, 8);
-  }, [sales, repayments]);
-
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
-    return { id: ref.id, name, phone };
-  };
-
-  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
-  const handleConfirmSale = async ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
-    const productRef = doc(db, 'products', product.id);
-    const saleRef = doc(collection(db, 'sales'));
-    const saleData = withBusiness({
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit,
-      totalAmount: soldPricePerUnit * quantity,
-      profit: (soldPricePerUnit - product.costPrice) * quantity,
-      paymentMethod, mpesaCode: mpesaCode || null,
-      soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(saleRef, saleData);
-    await batch.commit();
-
-    return { id: saleRef.id, ...saleData, soldAt: new Date() };
-  };
-
-  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick Credit.
-  const handleConfirmCredit = async ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
-    const productRef = doc(db, 'products', product.id);
-    const totalAmount = soldPricePerUnit * quantity;
-    const creditRef = doc(collection(db, 'creditSales'));
-    const creditData = withBusiness({
-      customerId, customerName, customerPhone: customerPhone || '',
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
-      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
-      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(creditRef, creditData);
-    await batch.commit();
-
-    return { id: creditRef.id, ...creditData, soldAt: new Date() };
-  };
-
-  const handleProductSave = async (data) => {
-    try {
-      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
-      else { await createProduct(data, businessId); toast.success('Product added'); }
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
-  };
-
-const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setActiveProduct(found);
-    else setNotFoundCode(code);
-  };
-
-  useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
-  });
-
-  if (sessionLoading) return <LoadingSpinner label="Loading today's session…" />;
-
-  if (isClosed) {
-    return (
-      <div className="mx-auto max-w-sm space-y-4 text-center">
-        <EmptyState title="Day is closed" description="Sales are locked until you reopen the session or tomorrow starts." />
-        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen today's session</button>}
-      </div>
-    );
-  }
-  if (!session) {
-    return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
-  }
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
-          <div className="flex items-center gap-2 mt-1">
-            {isAdmin && (
-<Link to="/pro" className={`badge text-[11px] font-bold transition-colors ${isPro ? 'bg-amber-100 text-amber-800' : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'}`}>                {isPro ? 'FlowBiz Pro ✓' : 'Explore FlowBiz Pro'}
-              </Link>
-            )}
-            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
-          </div>
-        </div>
-        <button
-          onClick={togglePrivacyMode}
-          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
-          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
-        >
-          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
-        </button>
-      </div>
-
-      {isAdmin && (
-        <>
-          {financialsLoading ? <LoadingSpinner /> : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
-              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
-              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
-              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
-              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
-            </div>
-          )}
-          <div className="grid gap-3 sm:grid-cols-3">
-            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
-<StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
-            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
-          </div>
-        </>
-      )}
-
-      <div>
-        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
-        {recentActivity.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
-        ) : (
-          <div className="card divide-y divide-ink-100">
-            {recentActivity.map((act) => (
-              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
-                <div className="min-w-0 flex-1 pr-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
-                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
-                  </div>
-                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <SaleModal 
-        open={!!activeProduct} 
-        product={activeProduct} 
-        customers={customers} 
-        onClose={(record) => {
-          setActiveProduct(null);
-          if (record && record.id) setCompletedSale(record);
-        }} 
-        onConfirmSale={handleConfirmSale} 
-        onConfirmCredit={handleConfirmCredit} 
-        onCreateCustomer={handleCreateCustomer} 
-      />
-      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
-          {isAdmin ? (
-            <button className="btn-primary" onClick={() => { setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
-          ) : (
-            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
-          )}
-        </div>
-      </Modal>
-
-<ProductFormModal
-        open={prodModal}
-        onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
-        onSave={handleProductSave}
-        suppliers={suppliers}
-        initialProduct={editProduct}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-      />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-    </div>
-  );
-}
-````
-
 ## File: src/pages/Products.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -9791,195 +8906,377 @@ const handleDel = async () => {
 }
 ````
 
-## File: src/pages/Purchases.jsx
+## File: src/pages/Settings.jsx
 ````javascript
-import { useMemo, useState } from 'react';
-import { doc, writeBatch, increment, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
-
+import { useEffect, useState } from 'react';
+import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { db } from '../firebase';
+import { db, storage } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
+import { resetBusinessData } from '../utils/businessReset';
+import { restoreProduct, permanentlyDeleteProduct, cleanupOrphanedBarcodeIndexes } from '../utils/products';
+import { isDemoMode } from '../demo/demoMode';
+import { resetDemoData } from '../demo/seedData';
 import { formatDateTime } from '../utils/dateRanges';
+import ConfirmDialog from '../components/common/ConfirmDialog';
 import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
 
-const empty = { supplierId:'', productId:'', quantity:'', costPricePerUnit:'', paymentStatus:'paid', paymentMethod:'Cash', mpesaCode:'' };
+const RESET_CONFIRM_PHRASE = 'RESET';
 
-export default function Purchases() {
-  const { profile, businessId } = useAuth();
-  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt','desc'), limit(50)) : null, [businessId]);
-  const { data: products }  = useFirestoreCollection(productsQ);
-  const { data: suppliers } = useFirestoreCollection(suppliersQ);
-  const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
-  const [form, setForm] = useState(empty);
-  const [busy, setBusy] = useState(false);
-  const [productModal, setProductModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
+export default function Settings() {
+  const { profile, businessId, isOwner, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, subscription } = useAuth();
+  const demo = isDemoMode();
+  const [loading, setLoading]     = useState(true);
+  
+  const [shopName, setShopName]   = useState('');
+  const [phone, setPhone]         = useState('');
+  const [email, setEmail]         = useState('');
+  const [address, setAddress]     = useState('');
+  const [logoFile, setLogoFile]   = useState(null);
+  const [logoUrl, setLogoUrl]     = useState('');
+  const [cashierExp, setCashierExp] = useState(true);
+  
+  const [saving, setSaving]       = useState(false);
+  const [savingPermissions, setSavingPermissions] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resetting, setResetting] = useState(false);
 
-  const selProd = products.find(p=>p.id===form.productId);
-  const selSupp = suppliers.find(s=>s.id===form.supplierId);
-  const totalCost = (Number(form.quantity)||0)*(Number(form.costPricePerUnit)||0);
+  const [sessions, setSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
 
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) {
-      setForm(p => ({ ...p, productId: found.id }));
-      toast.success(`Selected ${found.name}`);
-    } else {
-      setPrefillBarcode(code);
-      setProductModal(true);
+  const [archived, setArchived] = useState([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+
+  const settingsRef = businessId ? doc(db, 'businessSettings', businessId) : null;
+
+  function compressImage(file, maxDimension = 480, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        if (!blob) { reject(new Error('Could not process image.')); return; }
+        resolve(blob);
+      }, 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
+    img.src = url;
+  });
+}
+
+  useEffect(() => {
+    if (!settingsRef) return;
+    getDoc(settingsRef).then(snap => {
+      if (snap.exists()) { 
+        const d = snap.data(); 
+        setShopName(d.shopName || ''); 
+        setPhone(d.phone || '');
+        setEmail(d.email || '');
+        setAddress(d.address || '');
+        setLogoUrl(d.logoUrl || '');
+        setCashierExp(d.cashierCanRecordExpenses !== false); 
+      }
+      setLoading(false);
+    });
+  }, [businessId]);
+
+  useEffect(() => {
+    if (!businessId) return;
+    listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
+  }, [businessId]);
+
+  const loadArchived = async () => {
+    if (!businessId) return;
+    setArchivedLoading(true);
+    try {
+      const snap = await getDocs(query(collection(db, 'products'), where('businessId', '==', businessId), where('deleted', '==', true)));
+      setArchived(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } finally {
+      setArchivedLoading(false);
     }
   };
 
-  useHardwareScanner(handleScanDetected, { enabled: !productModal && !supplierModal && !scannerOpen });
-
-  const handle = async e => {
-    e.preventDefault();
-    if (!form.productId||!form.supplierId||!form.quantity||!form.costPricePerUnit) { toast.error('Fill in all fields.'); return; }
-    if (form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
-    setBusy(true);
+const handleSave = async e => {
+    e.preventDefault(); 
+    setSaving(true);
     try {
-      const qty   = Number(form.quantity);
-      const cost  = Number(form.costPricePerUnit);
-      const total = qty * cost;
-      const batch = writeBatch(db);
-      batch.update(doc(db,'products',form.productId), { stock:increment(qty), costPrice:cost, updatedAt:serverTimestamp() });
-      const purchRef = doc(collection(db,'purchases'));
-      batch.set(purchRef, withBusiness({
-        supplierId:form.supplierId,
-        supplierName:selSupp?.name||'',
-        productId:form.productId,
-        productName:selProd?.name||'',
-        quantity:qty,
-        costPricePerUnit:cost,
-        totalCost:total,
-        purchasedBy:profile.uid,
-        purchasedByName:profile.displayName,
-        purchasedAt:serverTimestamp(),
-        paymentStatus:form.paymentStatus==='paid'?'paid':'pending_supplier_credit',
-        paymentMethod:form.paymentStatus==='paid'?form.paymentMethod:null,
-        mpesaCode:form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
-      }, businessId));
-      if (form.paymentStatus==='paid') {
-        // NOTE: paid purchases are NOT recorded as an `expenses` doc.
-        // Cash/M-Pesa outflow for a paid purchase is already derived from
-        // this `purchases` doc directly in utils/financials.js
-        // (totalCashOutflows / totalMpesaOutflows), and the purchase gets
-        // exactly one Dashboard activity entry. Writing a second `expenses`
-        // doc here previously caused a duplicate "Stock Purchase" entry in
-        // Recent Activity and incorrectly listed inventory purchases as
-        // operating expenses on the Expenses page. 
+      let finalLogoUrl = logoUrl;
+
+      // Logo upload gets its OWN try/catch (Issue 8): a slow/failed
+      // upload of the (now compressed) image must not block saving the
+      // rest of Business Information, which has nothing to do with it.
+      if (logoFile) {
+        try {
+          const compressed = await compressImage(logoFile, 480, 0.75);
+          const fileRef = ref(storage, `businesses/${businessId}/logo_${Date.now()}`);
+          await uploadBytes(fileRef, compressed);
+          finalLogoUrl = await getDownloadURL(fileRef);
+        } catch (logoErr) {
+          toast.error(`Logo upload failed, but the rest of your settings will still be saved: ${logoErr.message}`);
+        }
       }
-      await batch.commit();
-      toast.success('Purchase recorded and stock updated');
-      setForm(empty);
-    } catch(err) {toast.error(friendlyErrorMessage(err)); } finally { setBusy(false); }
+
+      await setDoc(settingsRef, { 
+        shopName: shopName.trim(), 
+        phone: phone.trim(),
+        email: email.trim(),
+        address: address.trim(),
+        logoUrl: finalLogoUrl,
+      }, { merge: true });
+      
+      setLogoUrl(finalLogoUrl);
+      toast.success('Business information saved'); 
+      setLogoFile(null);
+    } catch (err) { 
+      toast.error(err.message); 
+    } finally { 
+      setSaving(false); 
+    }
   };
 
-const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  const handleSavePermissions = async () => {
+    setSavingPermissions(true);
+    try {
+      await setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
+      toast.success('Permissions saved');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingPermissions(false);
+    }
   };
+
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      if (demo) {
+        resetDemoData();
+        toast.success('Demo data reset. Reloading…');
+      } else {
+        await resetBusinessData(businessId, profile?.uid);
+        toast.success('Business data reset. Reloading…');
+      }
+      window.location.href = '/';
+    } catch (err) {
+      toast.error(`Reset failed partway through: ${err.message}`);
+      setResetting(false);
+      setResetDialogOpen(false);
+    }
+  };
+
+  const handleRevoke = async (sessionId) => {
+    try {
+      await revokeSession(sessionId);
+      setSessions(s => s.map(x => x.id === sessionId ? { ...x, revoked: true } : x));
+      toast.success('Device signed out.');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const handleRestore = async (productId) => {
+    try { await restoreProduct(productId); setArchived(a => a.filter(p => p.id !== productId)); toast.success('Product restored'); }
+    catch (err) { toast.error(err.message); }
+  };
+
+  const handlePermanentDelete = async (productId) => {
+    const target = archived.find(p => p.id === productId);
+    try {
+      await permanentlyDeleteProduct(productId, target?.barcode, businessId);
+      setArchived(a => a.filter(p => p.id !== productId));
+      toast.success('Product permanently deleted');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const [cleaningOrphans, setCleaningOrphans] = useState(false);
+  const handleCleanupOrphans = async () => {
+    setCleaningOrphans(true);
+    try {
+      const { scanned, removed } = await cleanupOrphanedBarcodeIndexes(businessId);
+      toast.success(removed > 0
+        ? `Checked ${scanned} barcode record(s), freed ${removed} orphaned barcode(s).`
+        : `Checked ${scanned} barcode record(s) — none were orphaned.`);
+    } catch (err) { toast.error(err.message); }
+    finally { setCleaningOrphans(false); }
+  };
+
+  if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <h1 className="font-display text-xl font-bold text-ink-900">Record Purchase</h1>
-      <form onSubmit={handle} className="card space-y-3 p-4">
+    <div className="mx-auto max-w-xl space-y-5">
+      <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
+
+      <div className="card p-5 space-y-2">
+        <h2 className="font-display text-base font-bold text-ink-800">Account &amp; Security</h2>
+        <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
+        <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
+        <Row label="Business ID" value={businessId || '—'} mono />
+      </div>
+
+      <form onSubmit={handleSave} className="card space-y-4 p-5">
+        <h2 className="font-display text-base font-bold text-ink-800">Business Information</h2>
+        <p className="text-sm text-ink-500 mb-2">This info dynamically populates your customer-facing documents (receipts, invoices).</p>
+        
+        <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
+        
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">Supplier</label>
-            <select className="input" value={form.supplierId} onChange={set('supplierId')} required>
-              <option value="">— Select —</option>
-              {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>setSupplierModal(true)}>+ Add new supplier</button>
-          </div>
-          <div>
-            <label className="label">Product</label>
-            <select className="input" value={form.productId} onChange={set('productId')} required>
-              <option value="">— Select —</option>
-              {products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>{setPrefillBarcode(null);setProductModal(true);}}>+ Add new product</button>
-          </div>
+          <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
+          <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Qty received</label><input type="number" min="1" className="input" value={form.quantity} onChange={set('quantity')} required /></div>
-          <div><label className="label">Cost / unit (KES)</label><input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required /></div>
-        </div>
-        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm text-ink-600">Total cost: <span className="font-semibold">{formatKES(totalCost)}</span></div>
+
+        <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
+        
         <div>
-          <label className="label">Payment status</label>
-          <div className="grid grid-cols-2 gap-2">
-            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'paid'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='paid'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Paid now</button>
-            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'credit'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='credit'?'border-rust-500 bg-rust-50 text-rust-700':'border-ink-200 text-ink-500'}`}>On credit</button>
+          <label className="label">Business Logo</label>
+          <div className="flex items-center gap-4">
+            {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
+            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files[0])} />
           </div>
         </div>
-        {form.paymentStatus==='paid'&&(
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Paid via</label><select className="input" value={form.paymentMethod} onChange={set('paymentMethod')}><option>Cash</option><option>M-Pesa</option></select></div>
-            {form.paymentMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} /></div>}
-          </div>
-        )}
-        <button type="submit" className="btn-primary w-full" disabled={busy}>{busy?'Saving…':'Record purchase'}</button>
+
+<button type="submit" className="btn-primary w-full" disabled={saving}>{saving?'Saving…':'Save settings'}</button>
       </form>
-      <h2 className="font-display text-sm font-bold text-ink-800">Recent purchases</h2>
 
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Permissions</h2>
+        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-3">
+          <div><p className="text-sm font-semibold text-ink-800">Let cashiers record expenses</p><p className="text-xs text-ink-400">Turn off if only owners should log expenses.</p></div>
+          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-moss-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
+            <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition-transform ${cashierExp?'translate-x-5':''}`} />
+          </button>
+        </div>
+        <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
+          {savingPermissions ? 'Saving…' : 'Save permissions'}
+        </button>
+      </div>
 
-<ProductFormModal
-        open={productModal}
-        onClose={()=>{setProductModal(false);setPrefillBarcode(null);}}
-        onSave={async (data) => {
-          try {
-            const { id } = await createProduct(data, businessId);
-            setForm(p=>({...p, productId: id}));
-            setProductModal(false);
-            setPrefillBarcode(null);
-            toast.success('Product added');
-          } catch (err) { toast.error(friendlyErrorMessage(err)); }
-        }}
-        suppliers={suppliers}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-        simplifiedForPurchase
-      />
-      <SupplierFormModal open={supplierModal} onClose={()=>setSupplierModal(false)} onSave={handleSupplierSave} />
-      {loading?<LoadingSpinner />:purchases.length===0?<EmptyState title="No purchases yet" />:(
-        <div className="card divide-y divide-ink-100">
-          {purchases.map(p=>(
-            <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
-              <div><p className="font-medium text-ink-700">{p.quantity} × {p.productName}</p><p className="text-xs text-ink-400">{p.supplierName} · {formatDateTime(p.purchasedAt)}</p></div>
-              <div className="text-right"><p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p><span className={`badge ${p.paymentStatus==='paid'?'bg-moss-100 text-moss-700':'bg-rust-100 text-rust-700'}`}>{p.paymentStatus==='paid'?'Paid':'On credit'}</span></div>
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Team Management</h2>
+        <p className="text-sm text-ink-500">Invite owners or cashiers, and manage pending invites and access.</p>
+        <Link to="/users" className="btn-outline w-full flex items-center justify-center gap-2">Manage users &amp; invites</Link>
+      </div>
+
+      {!demo && (
+        <div className="card p-5 space-y-3">
+          <h2 className="font-display text-base font-bold text-ink-800">Device Management</h2>
+          {sessionsLoading ? <p className="text-sm text-ink-400">Loading…</p> : sessions.length === 0 ? (
+            <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {sessions.map(s => (
+                <div key={s.id} className="flex items-center justify-between py-2.5 text-sm">
+                  <div>
+                    <p className="font-medium text-ink-700">{s.deviceLabel}{s.id === currentSessionId && <span className="text-xs text-ink-400"> (this device)</span>}</p>
+                    <p className="text-xs text-ink-400">Last active {formatDateTime(s.lastActiveAt)}</p>
+                  </div>
+                  {s.revoked ? (
+                    <span className="badge bg-ink-100 text-ink-500">Signed out</span>
+                  ) : (
+                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRevoke(s.id)}>Sign out</button>
+                  )}
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       )}
+
+      <div className="card p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
+          <div className="flex gap-2">
+            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={handleCleanupOrphans} disabled={cleaningOrphans}>
+              {cleaningOrphans ? 'Checking…' : 'Clean Up Orphaned Barcodes'}
+            </button>
+            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
+              {archivedOpen ? 'Hide' : 'View archive'}
+            </button>
+          </div>
+        </div>
+        <p className="text-sm text-ink-500">Deleted products are archived here first, never destroyed immediately.</p>
+        {archivedOpen && (
+          archivedLoading ? <p className="text-sm text-ink-400">Loading…</p> : archived.length === 0 ? (
+            <p className="text-sm text-ink-400">Nothing archived.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {archived.map(p => (
+                <div key={p.id} className="flex items-center justify-between py-2.5 text-sm">
+                  <span className="font-medium text-ink-700">{p.name}</span>
+                  <div className="flex gap-2">
+                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRestore(p.id)}>Restore</button>
+                    <button className="btn-danger !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handlePermanentDelete(p.id)}>Delete forever</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </div>
+
+      <div className="card p-5 space-y-2">
+        <h2 className="font-display text-base font-bold text-ink-800">Subscription</h2>
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
+          <Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>
+        </div>
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Support</h2>
+        <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
+      </div>
+
+      <div className="card space-y-3 border-rust-200 p-5">
+        <div>
+          <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
+          <p className="mt-1 text-sm text-ink-500">
+            {demo
+              ? 'Demo Reset clears all sample data stored in this browser.'
+              : "Business Reset permanently deletes ALL of this business's data. This cannot be undone."}
+          </p>
+        </div>
+        <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
+          {demo ? 'Demo Reset' : 'Business Reset'}
+        </button>
+      </div>
+
+      <ConfirmDialog
+        open={resetDialogOpen}
+        title={demo ? 'Reset the demo data?' : 'This will permanently delete ALL data for this business'}
+        message={
+          demo ? (
+            <p>All sample data in this browser will be cleared and replaced with the original demo dataset.</p>
+          ) : (
+            <>
+              <p className="mb-2">Everything this business owns will be deleted. This cannot be undone.</p>
+              <label className="label mt-3">Type <span className="font-mono font-bold">{RESET_CONFIRM_PHRASE}</span> to confirm</label>
+              <input className="input" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} autoFocus />
+            </>
+          )
+        }
+        confirmLabel={resetting ? 'Resetting…' : demo ? 'Reset demo data' : 'Delete everything'}
+        danger
+        onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
+        onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
+      />
+    </div>
+  );
+}
+
+function Row({ label, value, tone = '', mono = false }) {
+  return (
+    <div className="flex items-center justify-between py-1 text-sm">
+      <span className="text-ink-500">{label}</span>
+      <span className={`font-semibold ${mono ? 'font-mono text-xs' : ''} ${tone || 'text-ink-800'}`}>{value}</span>
     </div>
   );
 }
@@ -10163,6 +9460,172 @@ export default function StockTake() {
 }
 ````
 
+## File: src/pages/Suppliers.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { addDoc, updateDoc, deleteDoc, doc, writeBatch, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Pencil, Trash2, Banknote, Smartphone } from 'lucide-react';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import { formatKES } from '../utils/currency';
+import { computeSupplierBalances } from '../utils/financials';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Suppliers() {
+  const { profile, businessId } = useAuth();
+  const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const purchQ  = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
+  const paymQ   = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
+  const { data: suppliers, loading } = useFirestoreCollection(suppQ);
+  const { data: purchases }          = useFirestoreCollection(purchQ);
+  const { data: spayments }          = useFirestoreCollection(paymQ);
+
+  const [modal, setModal]       = useState(false);
+  const [editing, setEditing]   = useState(null);
+  const [pendDel, setPendDel]   = useState(null);
+  const [payModal, setPayModal] = useState(false);
+  const [selSupp, setSelSupp]   = useState(null);
+  const [payAmt, setPayAmt]     = useState('');
+  const [payMethod, setPayMethod] = useState('Cash');
+  const [payCode, setPayCode]   = useState('');
+  const [paying, setPaying]     = useState(false);
+
+  const owedList = useMemo(
+    () => computeSupplierBalances(purchases, spayments, suppliers),
+    [purchases, spayments, suppliers]
+  );
+  const owedMap = useMemo(
+    () => Object.fromEntries(owedList.map((o) => [o.supplierId, o.balance])),
+    [owedList]
+  );
+  const totalOwed = owedList.reduce((a, o) => a + o.balance, 0);
+
+const [deleting, setDeleting] = useState(false);
+
+  const handleSave = async data => {
+    const write = editing
+      ? updateDoc(doc(db,'suppliers',editing.id), data)
+      : addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
+
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
+    setModal(false); setEditing(null);
+  };
+
+  const handleDel = async () => {
+    const balance = owedMap[pendDel.id] || 0;
+    if (balance > 0.005) {
+      toast.error(`Can't remove "${pendDel.name}" — they still have an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
+      setPendDel(null);
+      return;
+    }
+    setDeleting(true);
+    const { queuedOffline, error } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
+    setDeleting(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
+    setPendDel(null);
+  };
+
+  const handlePay = async e => {
+    e.preventDefault();
+    const amount = Number(payAmt);
+    const balance = owedMap[selSupp?.id]||0;
+    if (amount<=0) { toast.error('Enter a positive amount.'); return; }
+    if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatKES(balance)}.`); return; }
+    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
+    setPaying(true);
+    const batch = writeBatch(db);
+    const expRef = doc(collection(db,'expenses'));
+    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp() }, businessId));
+    const payRef = doc(collection(db,'supplierPayments'));
+    batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:serverTimestamp(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
+
+    const commit = batch.commit();
+    const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+    setPaying(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
+    if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+    setPayModal(false); setPayAmt(''); setPayCode('');
+  };
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Supplier added');
+  };
+
+  return (
+    <div className="mx-auto max-w-4xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Suppliers</h1><p className="text-sm text-ink-400">Total owed: <span className="font-semibold text-rust-600">{formatKES(totalOwed)}</span></p></div>
+        <button className="btn-primary" onClick={()=>{setEditing(null);setModal(true);}}>+ Add supplier</button>
+      </div>
+      {loading?<LoadingSpinner />:suppliers.length===0?<EmptyState title="No suppliers yet" description="Add suppliers to track restocking and balances." />:(
+        <div className="space-y-3">
+          {suppliers.map(s=>{
+            const balance = owedMap[s.id]||0;
+            return (
+              <div key={s.id} className="card flex flex-wrap items-center justify-between gap-3 p-4">
+                <div><p className="font-semibold text-ink-800">{s.name}</p><p className="text-xs text-ink-400">{s.contactPerson&&`${s.contactPerson} · `}{s.phone||'No phone'}</p></div>
+                <div className="flex items-center gap-3">
+                  <div className="text-right"><p className="text-xs text-ink-400">Outstanding</p><p className={`font-semibold ${balance>0?'text-rust-600':'text-moss-600'}`}>{formatKES(balance)}</p></div>
+                  {balance>0&&<button className="btn-primary !text-xs !px-3 !py-1.5 !min-h-0" onClick={()=>{setSelSupp(s);setPayModal(true);}}>Pay</button>}
+                  <button className="rounded-lg p-2 text-ink-400 hover:bg-ink-100" onClick={()=>{setEditing(s);setModal(true);}}><Pencil className="h-4 w-4" strokeWidth={1.75}/></button>
+                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50" onClick={()=>setPendDel(s)}><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <SupplierFormModal open={modal} onClose={()=>{setModal(false);setEditing(null);}} onSave={handleSave} initialSupplier={editing} />
+<ConfirmDialog
+        open={!!pendDel}
+        title="Remove supplier?"
+        message={(owedMap[pendDel?.id]||0) > 0.005
+          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)} — pay it off first.`
+          : `"${pendDel?.name}" will be removed. Purchase records stay intact.`}
+        confirmLabel={deleting ? 'Removing…' : 'Remove'}
+        confirmDisabled={deleting}
+        danger
+        onConfirm={handleDel}
+        onCancel={()=>{ if (!deleting) setPendDel(null); }}
+      />      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
+        <form onSubmit={handlePay} className="space-y-3">
+          <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(owedMap[selSupp?.id]||0)}</span></div>
+          <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
+          <div><label className="label">Method</label>
+            <div className="grid grid-cols-2 gap-2">
+              {['Cash','M-Pesa'].map(m=>(
+                <button key={m} type="button" onClick={()=>setPayMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${payMethod===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
+                  {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
+                </button>
+              ))}
+            </div>
+          </div>
+          {payMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={payCode} onChange={e=>setPayCode(e.target.value.toUpperCase())} /></div>}
+          <div className="flex justify-end gap-2 pt-1"><button type="button" className="btn-secondary" onClick={()=>setPayModal(false)}>Cancel</button><button type="submit" className="btn-primary" disabled={paying}>{paying?'Recording…':'Record payment'}</button></div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+````
+
 ## File: src/router/AppRouter.jsx
 ````javascript
 import { lazy, Suspense, useEffect } from 'react';
@@ -10304,4 +9767,499 @@ FIREBASE_PROJECT_ID = "swiftstock-bc6a3"
 ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://flowbiz.pages.dev"
 WHATSAPP_PHONE_NUMBER_ID = "your-whatsapp-phone-number-id"
 PAYSTACK_CALLBACK_URL = "https://flowbiz.pages.dev/pro"
+````
+
+## File: src/pages/Dashboard.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useDailySession } from '../hooks/useDailySession';
+import { useFinancialsForRange } from '../hooks/useFinancials';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import Modal from '../components/common/Modal';
+import SaleModal from '../components/pos/SaleModal';
+import SaleCompleteModal from '../components/pos/SaleCompleteModal';
+import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
+import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+function StatCard({ label, value, tone = 'text-ink-900', sub }) {
+  return (
+    <div className="card p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
+      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
+    </div>
+  );
+}
+
+export default function Dashboard() {
+  const { profile, isAdmin, businessId, isPro } = useAuth();
+  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
+  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
+
+  const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const { data: products } = useFirestoreCollection(productsQuery);
+  const { data: customers } = useFirestoreCollection(customersQuery);
+  const { data: suppliers } = useFirestoreCollection(suppliersQuery);
+
+  const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
+  const [activeProduct, setActiveProduct] = useState(null);
+  const [completedSale, setCompletedSale] = useState(null);
+  const [editProduct, setEditProd] = useState(null);
+  const [prodModal, setProdModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [notFoundCode, setNotFoundCode] = useState(null);
+
+  const [privacyMode, setPrivacyMode] = useState(() => {
+    try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
+    catch { return false; }
+  });
+
+  const togglePrivacyMode = () => {
+    setPrivacyMode((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('flowbiz_dashboard_privacy', String(next)); }
+      catch (err) { console.error('Failed to save privacy mode setting', err); }
+      return next;
+    });
+  };
+
+  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
+
+  const dashboardCashReceived = summary.totalCashReceipts;
+  const dashboardMpesaReceived = summary.totalMpesaReceipts;
+  const dashboardExpenses = summary.totalExpenses;
+  const dashboardNetProfit = summary.netProfit;
+
+  const lowStock = products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
+  const totalInventoryValue = products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
+  const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
+  const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
+  const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
+
+  const recentActivity = useMemo(() => {
+    const list = [];
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      list.push({ id: `sale-${s.id}`, type: 'Sale', title: `${s.quantity} × ${s.productName}`, subtitle: `Sold by ${s.soldByName || 'Staff'}`, amount: s.totalAmount, method: s.paymentMethod, timestamp: s.soldAt, isPositive: true });
+    });
+    (repayments || []).forEach((r) => {
+      list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
+    });
+    return list.sort((a, b) => {
+      const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
+      const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
+      return bTime - aTime;
+    }).slice(0, 8);
+  }, [sales, repayments]);
+
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
+    return { id: ref.id, name, phone };
+  };
+
+  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
+const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
+    const productRef = doc(db, 'products', product.id);
+    const saleRef = doc(collection(db, 'sales'));
+    const saleData = withBusiness({
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit,
+      totalAmount: soldPricePerUnit * quantity,
+      profit: (soldPricePerUnit - product.costPrice) * quantity,
+      paymentMethod, mpesaCode: mpesaCode || null,
+      soldBy: profile.uid, soldByName: profile.displayName,
+      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(saleRef, saleData);
+
+    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleConfirmCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
+    const productRef = doc(db, 'products', product.id);
+    const totalAmount = soldPricePerUnit * quantity;
+    const creditRef = doc(collection(db, 'creditSales'));
+    const creditData = withBusiness({
+      customerId, customerName, customerPhone: customerPhone || '',
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
+      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
+      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
+      isCredit: true
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(creditRef, creditData);
+
+    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleProductSave = async (data) => {
+    try {
+      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
+      else { await createProduct(data, businessId); toast.success('Product added'); }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
+  };
+
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setActiveProduct(found);
+    else setNotFoundCode(code);
+  };
+
+  useHardwareScanner(handleScanDetected, {
+    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
+  });
+
+  if (sessionLoading) return <LoadingSpinner label="Loading today's session…" />;
+
+  if (isClosed) {
+    return (
+      <div className="mx-auto max-w-sm space-y-4 text-center">
+        <EmptyState title="Day is closed" description="Sales are locked until you reopen the session or tomorrow starts." />
+        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen today's session</button>}
+      </div>
+    );
+  }
+  if (!session) {
+    return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
+          <div className="flex items-center gap-2 mt-1">
+            {isAdmin && (
+<Link to="/pro" className={`badge text-[11px] font-bold transition-colors ${isPro ? 'bg-amber-100 text-amber-800' : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'}`}>                {isPro ? 'FlowBiz Pro ✓' : 'Explore FlowBiz Pro'}
+              </Link>
+            )}
+            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
+          </div>
+        </div>
+        <button
+          onClick={togglePrivacyMode}
+          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
+          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
+        >
+          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
+        </button>
+      </div>
+
+      {isAdmin && (
+        <>
+          {financialsLoading ? <LoadingSpinner /> : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
+              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
+              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
+              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
+              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
+<StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
+            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
+          </div>
+        </>
+      )}
+
+      <div>
+        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
+        {recentActivity.length === 0 ? (
+          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
+        ) : (
+          <div className="card divide-y divide-ink-100">
+            {recentActivity.map((act) => (
+              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
+                <div className="min-w-0 flex-1 pr-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
+                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
+                  </div>
+                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <SaleModal 
+        open={!!activeProduct} 
+        product={activeProduct} 
+        customers={customers} 
+        onClose={(record) => {
+          setActiveProduct(null);
+          if (record && record.id) setCompletedSale(record);
+        }} 
+        onConfirmSale={handleConfirmSale} 
+        onConfirmCredit={handleConfirmCredit} 
+        onCreateCustomer={handleCreateCustomer} 
+      />
+      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
+          {isAdmin ? (
+            <button className="btn-primary" onClick={() => { setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
+          ) : (
+            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
+          )}
+        </div>
+      </Modal>
+
+<ProductFormModal
+        open={prodModal}
+        onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
+        onSave={handleProductSave}
+        suppliers={suppliers}
+        initialProduct={editProduct}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+      />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+    </div>
+  );
+}
+````
+
+## File: src/pages/Purchases.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { doc, writeBatch, increment, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
+
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+const empty = { supplierId:'', productId:'', quantity:'', costPricePerUnit:'', paymentStatus:'paid', paymentMethod:'Cash', mpesaCode:'' };
+
+export default function Purchases() {
+  const { profile, businessId } = useAuth();
+  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt','desc'), limit(50)) : null, [businessId]);
+  const { data: products }  = useFirestoreCollection(productsQ);
+  const { data: suppliers } = useFirestoreCollection(suppliersQ);
+  const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
+  const [form, setForm] = useState(empty);
+  const [busy, setBusy] = useState(false);
+  const [productModal, setProductModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
+
+  const selProd = products.find(p=>p.id===form.productId);
+  const selSupp = suppliers.find(s=>s.id===form.supplierId);
+  const totalCost = (Number(form.quantity)||0)*(Number(form.costPricePerUnit)||0);
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) {
+      setForm(p => ({ ...p, productId: found.id }));
+      toast.success(`Selected ${found.name}`);
+    } else {
+      setPrefillBarcode(code);
+      setProductModal(true);
+    }
+  };
+
+  useHardwareScanner(handleScanDetected, { enabled: !productModal && !supplierModal && !scannerOpen });
+
+  const handle = async e => {
+    e.preventDefault();
+    if (!form.productId||!form.supplierId||!form.quantity||!form.costPricePerUnit) { toast.error('Fill in all fields.'); return; }
+    if (form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
+    setBusy(true);
+try {
+      const qty   = Number(form.quantity);
+      const cost  = Number(form.costPricePerUnit);
+      const total = qty * cost;
+      const batch = writeBatch(db);
+      batch.update(doc(db,'products',form.productId), { stock:increment(qty), costPrice:cost, updatedAt:serverTimestamp() });
+      const purchRef = doc(collection(db,'purchases'));
+      batch.set(purchRef, withBusiness({
+        supplierId:form.supplierId,
+        supplierName:selSupp?.name||'',
+        productId:form.productId,
+        productName:selProd?.name||'',
+        quantity:qty,
+        costPricePerUnit:cost,
+        totalCost:total,
+        purchasedBy:profile.uid,
+        purchasedByName:profile.displayName,
+        purchasedAt:serverTimestamp(),
+        paymentStatus:form.paymentStatus==='paid'?'paid':'pending_supplier_credit',
+        paymentMethod:form.paymentStatus==='paid'?form.paymentMethod:null,
+        mpesaCode:form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
+      }, businessId));
+      
+      const commit = batch.commit();
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+      
+      toast.success(queuedOffline ? "Purchase queued offline — it'll sync soon." : 'Purchase recorded and stock updated');
+      if (queuedOffline) commit.catch((err) => toast.error(`A purchase from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+      
+      setForm(empty);
+    } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setBusy(false); }
+  };
+
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4">
+      <h1 className="font-display text-xl font-bold text-ink-900">Record Purchase</h1>
+      <form onSubmit={handle} className="card space-y-3 p-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Supplier</label>
+            <select className="input" value={form.supplierId} onChange={set('supplierId')} required>
+              <option value="">— Select —</option>
+              {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>setSupplierModal(true)}>+ Add new supplier</button>
+          </div>
+          <div>
+            <label className="label">Product</label>
+            <select className="input" value={form.productId} onChange={set('productId')} required>
+              <option value="">— Select —</option>
+              {products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>{setPrefillBarcode(null);setProductModal(true);}}>+ Add new product</button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Qty received</label><input type="number" min="1" className="input" value={form.quantity} onChange={set('quantity')} required /></div>
+          <div><label className="label">Cost / unit (KES)</label><input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required /></div>
+        </div>
+        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm text-ink-600">Total cost: <span className="font-semibold">{formatKES(totalCost)}</span></div>
+        <div>
+          <label className="label">Payment status</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'paid'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='paid'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Paid now</button>
+            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'credit'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='credit'?'border-rust-500 bg-rust-50 text-rust-700':'border-ink-200 text-ink-500'}`}>On credit</button>
+          </div>
+        </div>
+        {form.paymentStatus==='paid'&&(
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="label">Paid via</label><select className="input" value={form.paymentMethod} onChange={set('paymentMethod')}><option>Cash</option><option>M-Pesa</option></select></div>
+            {form.paymentMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} /></div>}
+          </div>
+        )}
+        <button type="submit" className="btn-primary w-full" disabled={busy}>{busy?'Saving…':'Record purchase'}</button>
+      </form>
+      <h2 className="font-display text-sm font-bold text-ink-800">Recent purchases</h2>
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
+
+<ProductFormModal
+        open={productModal}
+        onClose={()=>{setProductModal(false);setPrefillBarcode(null);}}
+        onSave={async (data) => {
+          try {
+            const { id } = await createProduct(data, businessId);
+            setForm(p=>({...p, productId: id}));
+            setProductModal(false);
+            setPrefillBarcode(null);
+            toast.success('Product added');
+          } catch (err) { toast.error(friendlyErrorMessage(err)); }
+        }}
+        suppliers={suppliers}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+        simplifiedForPurchase
+      />
+      <SupplierFormModal open={supplierModal} onClose={()=>setSupplierModal(false)} onSave={handleSupplierSave} />
+      {loading?<LoadingSpinner />:purchases.length===0?<EmptyState title="No purchases yet" />:(
+        <div className="card divide-y divide-ink-100">
+          {purchases.map(p=>(
+            <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
+              <div><p className="font-medium text-ink-700">{p.quantity} × {p.productName}</p><p className="text-xs text-ink-400">{p.supplierName} · {formatDateTime(p.purchasedAt)}</p></div>
+              <div className="text-right"><p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p><span className={`badge ${p.paymentStatus==='paid'?'bg-moss-100 text-moss-700':'bg-rust-100 text-rust-700'}`}>{p.paymentStatus==='paid'?'Paid':'On credit'}</span></div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 ````
