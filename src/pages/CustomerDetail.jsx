@@ -13,6 +13,7 @@ import ErrorBanner from '../components/common/ErrorBanner';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import RepaymentModal from '../components/debtors/RepaymentModal';
 import RefundModal from '../components/debtors/RefundModal';
+import DebtPaymentReceiptModal from '../components/debtors/DebtPaymentReceiptModal';
 import { formatKES } from '../utils/currency';
 import { formatDateTime } from '../utils/dateRanges';
 import { raceWithTimeout } from '../utils/offlineWrite';
@@ -33,6 +34,7 @@ export default function CustomerDetail() {
   const [repayOpen, setRepayOpen]       = useState(false);
   const [cancelTarget, setCancelTarget] = useState(null);
   const [refundTarget, setRefundTarget] = useState(null);
+  const [receiptData, setReceiptData]   = useState(null);
 
   const customer = customerData[0];
   const sorted = [...creditSales].sort((a,b) => (b.soldAt?.toMillis?.() ?? 0) - (a.soldAt?.toMillis?.() ?? 0));
@@ -40,15 +42,31 @@ export default function CustomerDetail() {
     .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded')
     .reduce((acc,cs) => acc + (Number(cs.remainingBalance) || 0), 0);
 
-const handleRepayment = async ({ amount, method, mpesaCode }) => {
+  const displayName = customer?.name || creditSales[0]?.customerName || 'Unknown Customer';
+  const displayPhone = customer?.phone || creditSales[0]?.customerPhone || '';
+
+  // A debt payment is a payment against existing debt — it updates the
+  // credit sale(s) it applies to and nothing else. It never creates a new
+  // sale or a second financial transaction (Part 28). If the customer has
+  // more than one open credit sale, a single payment can span several of
+  // them (oldest first, unchanged from the app's existing allocation
+  // rule) — the receipt below reflects the payment at the customer level
+  // (previous total owed → new total owed), with each sale's own
+  // reference number kept for traceability (Part 18/19).
+  const handleRepayment = async ({ amount, method, mpesaCode }) => {
     const openSales = [...creditSales]
       .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded' && (Number(cs.remainingBalance) || 0) > 0.005)
       .sort((a,b) => (a.soldAt?.toMillis?.() ?? 0) - (b.soldAt?.toMillis?.() ?? 0));
 
     if (!openSales.length) { toast.error('No outstanding balance.'); return; }
+
+    const previousBalance = totalOwed;
+
     try {
       const batch = writeBatch(db);
       let remaining = amount;
+      const paymentReferences = [];
+
       for (const cs of openSales) {
         if (remaining <= 0.005) break;
         const owed    = Number(cs.remainingBalance) || 0;
@@ -57,7 +75,14 @@ const handleRepayment = async ({ amount, method, mpesaCode }) => {
         const newPaid = (Number(cs.amountPaid) || 0) + portion;
         const newBal  = owed - portion;
         batch.update(doc(db,'creditSales',cs.id), { amountPaid: newPaid, remainingBalance: newBal, status: newBal <= 0.005 ? 'paid' : 'partial' });
+
         const repRef = doc(collection(db,'repayments'));
+        // Reuses Firestore's own unique doc id for traceability rather than
+        // introducing a second, parallel counter/ID system (Part 18) —
+        // adapted to this app's existing ID conventions rather than
+        // literally implementing PAY-000381-style sequential numbering.
+        const paymentReference = `PAY-${repRef.id.slice(-6).toUpperCase()}`;
+        paymentReferences.push(paymentReference);
         batch.set(repRef, {
           businessId,
           creditSaleId: cs.id,
@@ -67,16 +92,32 @@ const handleRepayment = async ({ amount, method, mpesaCode }) => {
           amount: portion,
           method,
           mpesaCode: mpesaCode || null,
+          paymentReference,
           paidAt: serverTimestamp(),
           recordedBy: profile.uid,
           recordedByName: profile.displayName,
         });
       }
+
       const commit = batch.commit();
       const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
       if (error) throw error;
       toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : `Recorded ${formatKES(amount)} repayment`);
       if (queuedOffline) commit.catch((err) => toast.error(`A repayment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+
+      const newTotalOwed = Math.max(0, previousBalance - amount);
+      setReceiptData({
+        customerName: displayName,
+        customerPhone: displayPhone,
+        amountPaid: amount,
+        previousBalance,
+        remainingBalance: newTotalOwed,
+        isCleared: newTotalOwed <= 0.005,
+        method,
+        mpesaCode,
+        paidAt: new Date(),
+        paymentReferences,
+      });
     } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
   };
 
@@ -127,16 +168,13 @@ const handleRepayment = async ({ amount, method, mpesaCode }) => {
   if (error) return <ErrorBanner message={`Could not load data. ${error}`} />;
   if (!customer && creditSales.length === 0) return <EmptyState title="Customer not found" />;
 
-  const displayName = customer?.name || creditSales[0]?.customerName || 'Unknown Customer';
-  const displayPhone = customer?.phone || creditSales[0]?.customerPhone || 'No phone';
-
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <Link to="/customers" className="text-sm font-semibold text-ink-400 hover:text-ink-700">← Back to Customers</Link>
       <div className="card flex flex-wrap items-center justify-between gap-3 p-5">
         <div>
           <h1 className="font-display text-xl font-bold text-ink-900">{displayName}</h1>
-          <p className="text-sm text-ink-400">{displayPhone}</p>
+          <p className="text-sm text-ink-400">{displayPhone || 'No phone'}</p>
         </div>
         <div className="text-right">
           <p className="text-xs text-ink-400">Outstanding Debt</p>
@@ -189,7 +227,9 @@ const handleRepayment = async ({ amount, method, mpesaCode }) => {
               <div key={r.id} className="flex items-center justify-between py-2.5 text-sm">
                 <div>
                   <p className="font-medium text-ink-700">{r.method === 'Cash' ? <><Banknote className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>Cash</> : <><Smartphone className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>M-Pesa {r.mpesaCode ? `(${r.mpesaCode})` : ''}</>}</p>
-                  <p className="text-xs text-ink-400">{formatDateTime(r.paidAt)}</p>
+                  <p className="text-xs text-ink-400">
+                    {formatDateTime(r.paidAt)}{r.paymentReference ? ` · ${r.paymentReference}` : ''}
+                  </p>
                 </div>
                 <span className="font-semibold text-moss-700">{formatKES(r.amount)}</span>
               </div>
@@ -200,6 +240,7 @@ const handleRepayment = async ({ amount, method, mpesaCode }) => {
 
       <RepaymentModal open={repayOpen} customer={{ name: displayName }} totalOwed={totalOwed} onClose={() => setRepayOpen(false)} onSubmit={handleRepayment} />
       <RefundModal open={!!refundTarget} creditSale={refundTarget} onClose={() => setRefundTarget(null)} onSubmit={(opts) => handleRefund(refundTarget, opts)} />
+      <DebtPaymentReceiptModal open={!!receiptData} receipt={receiptData} onClose={() => setReceiptData(null)} />
       <ConfirmDialog
         open={!!cancelTarget}
         title="Cancel this credit sale?"

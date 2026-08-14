@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { formatKES } from './currency';
 import { formatDateTime } from './dateRanges';
+import { openWhatsApp, buildReceiptMessage } from './whatsapp';
 
 export async function loadImageAsDataUrl(url) {
     if (!url) return null;
@@ -19,42 +20,45 @@ export async function loadImageAsDataUrl(url) {
     }
 }
 
-// Replace the buildDocument function in src/utils/documentService.js
-async function buildDocument(data, settings, typeLabel) {
-    const doc = new jsPDF('p', 'mm', [80, 200]); // Thermal receipt size
-    let y = 8;
-    const marginX = 5;
-    const pageWidth = 75;
-
-    // 1. TOP-LEFT LOGO & BUSINESS DETAILS
+// Shared header used by every thermal-receipt-style document this file
+// generates (sale receipts/invoices, and now debt payment receipts) —
+// keeps the logo/business-info block identical across document types
+// instead of re-implementing it per document.
+async function drawDocumentHeader(doc, settings, marginX, startY) {
+    let y = startY;
     const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
     if (logoDataUrl) {
         try {
             const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
-            doc.addImage(logoDataUrl, format, marginX, y, 14, 14); // Logo top-left
-            
+            doc.addImage(logoDataUrl, format, marginX, y, 14, 14);
             doc.setFont('helvetica', 'bold');
             doc.setFontSize(11);
             doc.text(settings.shopName || 'Business Receipt', marginX + 17, y + 5);
-            
             doc.setFont('helvetica', 'normal');
             doc.setFontSize(8);
             if (settings.phone) doc.text(`Tel: ${settings.phone}`, marginX + 17, y + 9);
             if (settings.address) doc.text(settings.address, marginX + 17, y + 13);
-            y += 18;
+            return y + 18;
         } catch (err) {
             console.error('Could not embed business logo in PDF:', err);
         }
-    } else {
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(12);
-        doc.text(settings.shopName || 'Business Receipt', marginX, y + 4);
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(8);
-        if (settings.phone) { y += 4; doc.text(`Tel: ${settings.phone}`, marginX, y + 4); }
-        if (settings.address) { y += 4; doc.text(settings.address, marginX, y + 4); }
-        y += 8;
     }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text(settings.shopName || 'Business Receipt', marginX, y + 4);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    if (settings.phone) { y += 4; doc.text(`Tel: ${settings.phone}`, marginX, y + 4); }
+    if (settings.address) { y += 4; doc.text(settings.address, marginX, y + 4); }
+    return y + 8;
+}
+
+// Replace the buildDocument function in src/utils/documentService.js
+async function buildDocument(data, settings, typeLabel) {
+    const doc = new jsPDF('p', 'mm', [80, 200]); // Thermal receipt size
+    const marginX = 5;
+    const pageWidth = 75;
+    let y = await drawDocumentHeader(doc, settings, marginX, 8);
 
     // 2. DOCUMENT TYPE & META DATA
     y += 2;
@@ -139,6 +143,83 @@ async function buildDocument(data, settings, typeLabel) {
     return doc;
 }
 
+// A debt payment receipt is deliberately its own document shape — a
+// payment against an existing debt is not a sale, and PART 15 requires it
+// to visually read as a distinct document ("DEBT PAYMENT RECEIPT"), not a
+// sales receipt with different labels bolted on.
+async function buildDebtPaymentDocument(receipt, settings) {
+    const doc = new jsPDF('p', 'mm', [80, 200]);
+    const marginX = 5;
+    const pageWidth = 75;
+    let y = await drawDocumentHeader(doc, settings, marginX, 8);
+
+    y += 2;
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.4);
+    doc.line(marginX, y, pageWidth, y);
+
+    y += 6;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('DEBT PAYMENT RECEIPT', marginX, y);
+
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(formatDateTime(receipt.paidAt || new Date()), marginX, y);
+    y += 4;
+    doc.text(`Customer: ${receipt.customerName || '—'}`, marginX, y);
+    y += 4;
+    doc.text(`Payment method: ${receipt.method}${receipt.mpesaCode ? ` (${receipt.mpesaCode})` : ''}`, marginX, y);
+    if (receipt.paymentReferences?.length) {
+        y += 4;
+        const refText = receipt.paymentReferences.join(', ');
+        const splitRef = doc.splitTextToSize(`Ref: ${refText}`, pageWidth - marginX);
+        doc.text(splitRef, marginX, y);
+        y += (splitRef.length - 1) * 3.5;
+    }
+
+    y += 6;
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(0.2);
+    doc.line(marginX, y, pageWidth, y);
+    y += 6;
+
+    const row = (label, value, boldRow = false) => {
+        doc.setFont('helvetica', boldRow ? 'bold' : 'normal');
+        doc.setFontSize(9);
+        doc.text(label, marginX, y);
+        doc.text(value, pageWidth, y, { align: 'right' });
+        y += 5.5;
+    };
+    row('Previous balance', formatKES(receipt.previousBalance));
+    row('Payment received', formatKES(receipt.amountPaid));
+    y += 1;
+    doc.line(marginX, y, pageWidth, y);
+    y += 5;
+    row('Remaining balance', formatKES(receipt.remainingBalance), true);
+
+    y += 4;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    if (receipt.isCleared) {
+        doc.setTextColor(26, 98, 60); // moss
+        doc.text('STATUS: DEBT CLEARED', marginX, y);
+    } else {
+        doc.setTextColor(196, 68, 29); // rust
+        doc.text('STATUS: PARTIALLY PAID', marginX, y);
+    }
+    doc.setTextColor(0, 0, 0);
+
+    y += 10;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'italic');
+    doc.setTextColor(100, 100, 100);
+    doc.text('Thank you for your payment!', 40, y, { align: 'center' });
+
+    return doc;
+}
+
 export async function generateReceiptPDF(sale, settings) {
     const doc = await buildDocument(sale, settings, 'RECEIPT');
     doc.save(`receipt-${sale.id}.pdf`);
@@ -161,33 +242,34 @@ export async function printInvoice(creditSale, settings) {
     window.open(doc.output('bloburl'), '_blank');
 }
 
-function normalizeKenyanPhone(rawPhone) {
-    let digits = String(rawPhone || '').replace(/[^\d]/g, '');
-    if (!digits) return '';
-    if (digits.startsWith('0')) digits = '254' + digits.slice(1);
-    else if (!digits.startsWith('254') && digits.length === 9) digits = '254' + digits;
-    return digits;
+export async function generateDebtPaymentReceiptPDF(receipt, settings) {
+    const doc = await buildDebtPaymentDocument(receipt, settings);
+    doc.save(`debt-payment-receipt-${Date.now()}.pdf`);
 }
 
-function buildWhatsAppMessage(sale, settings) {
-    const shopName = settings.shopName || 'FlowBiz Store';
-    const label = sale.isCredit ? 'Invoice' : 'Receipt';
-    const amountDue = sale.isCredit ? (sale.remainingBalance ?? sale.totalAmount) : sale.totalAmount;
-    const lines = [
-        `*${shopName}*`,
-        `${label} — ${sale.quantity} × ${sale.productName}`,
-        `Total: ${formatKES(sale.totalAmount)}`,
-    ];
-    if (sale.isCredit) lines.push(`Amount due: ${formatKES(amountDue)}`);
-    if (settings.phone) lines.push(`Contact: ${settings.phone}`);
-    lines.push('', sale.isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!');
-    return lines.join('\n');
+export async function printDebtPaymentReceipt(receipt, settings) {
+    const doc = await buildDebtPaymentDocument(receipt, settings);
+    doc.autoPrint();
+    window.open(doc.output('bloburl'), '_blank');
 }
 
+// FIX (Part 24 — centralize WhatsApp deep-link construction): phone
+// normalization and wa.me URL building used to live here directly; they
+// now live in ./whatsapp.js so every WhatsApp-sharing feature (sale
+// receipts, debt reminders, debt payment receipts) shares one
+// implementation. Callers of this function are unchanged.
 export function sendWhatsAppDocument(sale, settings, phone) {
-    const digits = normalizeKenyanPhone(phone);
-    if (!digits) throw new Error('Enter a valid phone number.');
-    const message = buildWhatsAppMessage(sale, settings);
-    const url = `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    const message = buildReceiptMessage({
+        shopName: settings.shopName || 'FlowBiz Store',
+        customerName: sale.customerName,
+        productName: sale.productName,
+        quantity: sale.quantity,
+        totalAmount: sale.totalAmount,
+        isCredit: sale.isCredit,
+        remainingBalance: sale.remainingBalance ?? sale.totalAmount,
+        businessPhone: settings.phone,
+        formatKES,
+    });
+    const opened = openWhatsApp(phone, message);
+    if (!opened) throw new Error('Enter a valid phone number.');
 }
