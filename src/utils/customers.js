@@ -3,7 +3,7 @@ import { doc, addDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { tenantCollection, withBusiness } from '../lib/tenant';
 import { raceWithTimeout } from './offlineWrite';
-import { normalizePhone } from './documentService';
+import { normalizePhone } from './whatsapp'; // FIX: Corrected import path
 
 export async function createCustomer(data, businessId) {
   if (!businessId) throw new Error('createCustomer() called with no businessId');
