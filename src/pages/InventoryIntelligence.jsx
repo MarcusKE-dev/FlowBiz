@@ -8,39 +8,36 @@ import { formatKES } from '../utils/currency';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import MiniBarChart from '../components/charts/MiniBarChart';
 import DonutChart from '../components/charts/DonutChart';
+import { Lock, ArrowLeft, AlertCircle, CheckCircle2, Info, PackageOpen } from 'lucide-react';
 
-function KpiCard({ label, value, tone = 'text-ink-900' }) {
+function KpiCard({ label, value, tone = 'text-ink-900', bg = 'bg-white' }) {
   return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
+    <div className={`card p-4 sm:p-5 ${bg} hover:shadow-md transition-shadow`}>
+      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
+      <p className={`mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
     </div>
   );
 }
 
 function Section({ title, subtitle, children }) {
   return (
-    <div className="card p-4 sm:p-5">
-      <h2 className="font-display text-sm font-bold text-ink-800">{title}</h2>
-      {subtitle && <p className="mt-0.5 text-xs text-ink-400">{subtitle}</p>}
-      <div className="mt-4">{children}</div>
+    <div className="card p-5 bg-white">
+      <div className="mb-4 border-b border-ink-100 pb-3">
+        <h2 className="font-display text-sm font-bold text-ink-900 uppercase tracking-wide">{title}</h2>
+        {subtitle && <p className="mt-1 text-xs text-ink-500">{subtitle}</p>}
+      </div>
+      <div>{children}</div>
     </div>
   );
 }
 
 function NoData({ children }) {
-  return <p className="py-6 text-center text-sm text-ink-400">{children}</p>;
+  return <div className="py-8 flex flex-col items-center justify-center text-center"><PackageOpen className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5}/><p className="text-sm text-ink-500">{children}</p></div>;
 }
 
 export default function InventoryIntelligence() {
   const { isPro, businessId } = useAuth();
-  // MINOR CONSISTENCY FIX: every other page that reads `products`
-  // (Products.jsx, Counter.jsx, Dashboard.jsx, Purchases.jsx, StockTake.jsx)
-  // filters out archived items server-side with `where('deleted','!=',true)`.
-  // This page previously fetched every product (including archived ones)
-  // and only excluded them inside the metrics calculation below — same
-  // end result, just less efficient. Filtering at the query matches the
-  // rest of the app and reads less data.
+  
   const productsQ = useMemo(
     () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
     [businessId]
@@ -69,7 +66,8 @@ export default function InventoryIntelligence() {
 
       if (stock <= 0) {
         outOfStock.push(p);
-      } else if (stock > threshold * 5) {
+      } else if (stock > threshold * 4) {
+        // Lowered threshold multiplier to catch capital traps sooner
         overstocked.push({ ...p, value: stock * cost });
       } else if (stock <= threshold) {
         lowStock.push(p);
@@ -84,95 +82,108 @@ export default function InventoryIntelligence() {
 
   if (!isPro) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-center max-w-sm mx-auto">
-        <h2 className="font-display text-xl font-bold text-ink-900">FlowBiz Pro Required</h2>
-        <p className="mt-2 text-sm text-ink-500">Inventory Intelligence automatically uncovers dead stock, overstock, and capital tie-ups. Upgrade to Pro to unlock.</p>
-        <Link to="/pro" className="mt-6 btn-primary w-full">Explore Pro</Link>
+      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
+        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
+          <Lock className="h-7 w-7" strokeWidth={2} />
+        </div>
+        <h2 className="font-display text-2xl font-bold text-ink-900">Inventory Intelligence Locked</h2>
+        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Instantly uncover dead stock holding up capital and detect urgent re-order limits before stockouts hit. Requires FlowBiz Pro.</p>
+        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
       </div>
     );
   }
 
-  if (loading) return <LoadingSpinner />;
+  if (loading) return <div className="py-12"><LoadingSpinner /></div>;
 
   const potentialProfit = metrics.totalRetail - metrics.totalCost;
   const activeProductsCount = (products || []).length;
+  const totalOverstockValue = metrics.overstocked.reduce((sum, p) => sum + p.value, 0);
 
   const insights = [];
   if (metrics.lowStock.length > 0) {
-    insights.push({ tone: 'negative', text: `${metrics.lowStock.length} product${metrics.lowStock.length === 1 ? ' is' : 's are'} low on stock.` });
+    insights.push({ tone: 'negative', text: `CRITICAL: ${metrics.lowStock.length} product(s) operating below safe threshold. Restock immediately.` });
   }
   if (metrics.outOfStock.length > 0) {
-    insights.push({ tone: 'negative', text: `${metrics.outOfStock.length} product${metrics.outOfStock.length === 1 ? ' is' : 's are'} out of stock — restock to avoid missed sales.` });
+    insights.push({ tone: 'negative', text: `REVENUE LOSS: ${metrics.outOfStock.length} product(s) completely depleted. You are actively losing sales.` });
   }
   if (metrics.overstocked[0]) {
-    insights.push({ tone: 'neutral', text: `"${metrics.overstocked[0].name}" is the biggest capital tie-up, holding ${formatKES(metrics.overstocked[0].value)} in stock.` });
+    insights.push({ tone: 'neutral', text: `CAPITAL TRAP: "${metrics.overstocked[0].name}" alone locks up ${formatKES(metrics.overstocked[0].value)} in inventory.` });
   }
   if (insights.length === 0 && activeProductsCount > 0) {
-    insights.push({ tone: 'positive', text: 'Stock levels look healthy across your product range right now.' });
+    insights.push({ tone: 'positive', text: 'OPTIMAL: Supply distribution perfectly matches current threshold configurations.' });
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
-      <div className="flex justify-between items-center">
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Inventory Intelligence</h1>
-          <p className="text-sm text-ink-400">Where your stock capital is right now</p>
+          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Inventory Intelligence</h1>
+          <p className="text-sm text-ink-500 mt-1">Capital deployment and supply chain health.</p>
         </div>
-        <Link to="/products" className="btn-outline text-xs">Back to Products</Link>
+        <Link to="/products" className="btn-outline text-xs bg-white">
+          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Back to Products
+        </Link>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <KpiCard label="Capital Tied Up" value={formatKES(metrics.totalCost)} />
-        <KpiCard label="Potential Gross Profit" value={formatKES(potentialProfit)} tone="text-moss-700" />
-        <KpiCard label="Units in Stock" value={metrics.unitsInStock.toLocaleString()} />
-        <KpiCard label="Active Products" value={activeProductsCount.toLocaleString()} />
-        <KpiCard label="Low Stock" value={metrics.lowStock.length} tone={metrics.lowStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} />
-        <KpiCard label="Out of Stock" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <KpiCard label="Capital Deployed" value={formatKES(metrics.totalCost)} />
+        <KpiCard label="Projected Gross Profit" value={formatKES(potentialProfit)} tone="text-moss-700" />
+        <KpiCard label="Physical Units" value={metrics.unitsInStock.toLocaleString()} />
+        <KpiCard label="Active SKUs" value={activeProductsCount.toLocaleString()} />
+        <KpiCard label="Low Stock Risk" value={metrics.lowStock.length} tone={metrics.lowStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.lowStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
+        <KpiCard label="Stockout Status" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.outOfStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
+        <KpiCard label="Overstocked SKUs" value={metrics.overstocked.length} tone="text-amber-600" />
+        <KpiCard label="Capital Trapped" value={formatKES(totalOverstockValue)} tone="text-amber-600" />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Section title="Stock Health">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Section title="Global Supply Distribution" subtitle="System-wide inventory health check">
           {activeProductsCount > 0 ? (
-            <DonutChart
-              formatValue={(v) => `${v} product${v === 1 ? '' : 's'}`}
-              segments={[
-                { label: 'Healthy', value: metrics.healthyCount, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
-                { label: 'Low stock', value: metrics.lowStock.length, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
-                { label: 'Out of stock', value: metrics.outOfStock.length, colorClassName: 'text-rust-500', dotClassName: 'bg-rust-500' },
-                { label: 'Overstocked', value: metrics.overstocked.length, colorClassName: 'text-blue-600', dotClassName: 'bg-blue-600' },
-              ]}
-            />
+            <div className="pt-2">
+              <DonutChart
+                size={180}
+                formatValue={(v) => `${v} SKU${v === 1 ? '' : 's'}`}
+                segments={[
+                  { label: 'Optimal Inventory', value: metrics.healthyCount, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
+                  { label: 'Low Stock Risk', value: metrics.lowStock.length, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
+                  { label: 'Critical Stockout', value: metrics.outOfStock.length, colorClassName: 'text-rust-600', dotClassName: 'bg-rust-600' },
+                  { label: 'Capital Surplus (Overstock)', value: metrics.overstocked.length, colorClassName: 'text-ink-800', dotClassName: 'bg-ink-800' },
+                ]}
+              />
+            </div>
           ) : (
-            <NoData>Add products to see stock health here.</NoData>
+            <NoData>System requires active inventory definitions.</NoData>
           )}
         </Section>
 
-        <Section title="Top Capital Tie-Ups" subtitle="Overstocked items holding the most capital">
+        <Section title="Capital Concentration" subtitle="Items holding maximum illiquid capital">
           {metrics.overstocked.length > 0 ? (
-            <MiniBarChart
-              orientation="horizontal"
-              formatValue={formatKES}
-              data={metrics.overstocked.slice(0, 6).map((p) => ({ label: p.name, value: p.value }))}
-            />
+            <div className="pt-2">
+              <MiniBarChart
+                orientation="horizontal"
+                formatValue={formatKES}
+                data={metrics.overstocked.slice(0, 6).map((p) => ({ label: p.name, value: p.value, colorClassName: 'bg-ink-800' }))}
+              />
+            </div>
           ) : (
-            <NoData>No overstock detected.</NoData>
+            <NoData>No significant capital concentration found.</NoData>
           )}
         </Section>
       </div>
 
-      <Section title="Inventory Insights">
-        <ul className="space-y-2.5">
+      <Section title="Automated Intelligence Briefing" subtitle="System-generated supply chain alerts">
+        <div className="space-y-4 pt-1">
           {insights.map((insight, i) => (
-            <li key={i} className="flex items-start gap-2.5 text-sm">
-              <span
-                className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
-                  insight.tone === 'positive' ? 'bg-moss-600' : insight.tone === 'negative' ? 'bg-rust-500' : 'bg-blue-500'
-                }`}
-              />
-              <span className="text-ink-700">{insight.text}</span>
-            </li>
+            <div key={i} className={`flex items-start gap-3 text-sm p-4 rounded-lg border ${insight.tone === 'positive' ? 'bg-moss-50 border-moss-200' : insight.tone === 'negative' ? 'bg-rust-50 border-rust-200' : 'bg-ink-50 border-ink-200'}`}>
+              <div className="shrink-0 mt-0.5">
+                {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
+                 insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
+                 <Info className="h-5 w-5 text-ink-600" strokeWidth={2} />}
+              </div>
+              <span className={`font-medium leading-relaxed ${insight.tone === 'positive' ? 'text-moss-800' : insight.tone === 'negative' ? 'text-rust-800' : 'text-ink-800'}`}>{insight.text}</span>
+            </div>
           ))}
-        </ul>
+        </div>
       </Section>
     </div>
   );

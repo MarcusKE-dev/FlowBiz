@@ -19,106 +19,122 @@ export async function loadImageAsDataUrl(url) {
     }
 }
 
+// Replace the buildDocument function in src/utils/documentService.js
 async function buildDocument(data, settings, typeLabel) {
-    const doc = new jsPDF('p', 'mm', [80, 200]);
-    let y = 10;
-    const centerX = 40;
+    const doc = new jsPDF('p', 'mm', [80, 200]); // Thermal receipt size
+    let y = 8;
+    const marginX = 5;
+    const pageWidth = 75;
 
+    // 1. TOP-LEFT LOGO & BUSINESS DETAILS
     const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
     if (logoDataUrl) {
         try {
             const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
-            doc.addImage(logoDataUrl, format, centerX - 9, y, 18, 18);
-            y += 21;
+            doc.addImage(logoDataUrl, format, marginX, y, 14, 14); // Logo top-left
+            
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(11);
+            doc.text(settings.shopName || 'Business Receipt', marginX + 17, y + 5);
+            
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(8);
+            if (settings.phone) doc.text(`Tel: ${settings.phone}`, marginX + 17, y + 9);
+            if (settings.address) doc.text(settings.address, marginX + 17, y + 13);
+            y += 18;
         } catch (err) {
             console.error('Could not embed business logo in PDF:', err);
         }
+    } else {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(12);
+        doc.text(settings.shopName || 'Business Receipt', marginX, y + 4);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        if (settings.phone) { y += 4; doc.text(`Tel: ${settings.phone}`, marginX, y + 4); }
+        if (settings.address) { y += 4; doc.text(settings.address, marginX, y + 4); }
+        y += 8;
     }
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.text(settings.shopName || 'Business Receipt', centerX, y, { align: 'center' });
+    // 2. DOCUMENT TYPE & META DATA
+    y += 2;
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.4);
+    doc.line(marginX, y, pageWidth, y);
+    
     y += 6;
-
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(typeLabel, marginX, y); // "INVOICE" or "RECEIPT"
+    
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    if (settings.phone) { 
-        doc.text(settings.phone, centerX, y, { align: 'center' }); 
-        y += 5; 
-    }
-    if (settings.email) { 
-        doc.text(settings.email, centerX, y, { align: 'center' }); 
-        y += 5; 
-    }
-    if (settings.address) { 
-        doc.text(settings.address, centerX, y, { align: 'center' }); 
-        y += 5; 
+    doc.setFontSize(8);
+    doc.text(formatDateTime(data.soldAt || data.recordedAt || new Date()), pageWidth, y, { align: 'right' });
+    
+    y += 5;
+    doc.text(`Ref: ${data.id?.substring(0, 8).toUpperCase() || 'N/A'}`, marginX, y);
+    if (data.customerName) {
+        y += 4;
+        doc.text(`To: ${data.customerName}`, marginX, y);
     }
 
+    // 3. ITEMIZED TABLE
     y += 4;
     doc.setDrawColor(200, 200, 200);
-    doc.line(5, y, 75, y);
-    y += 7;
-
-    doc.setFont('helvetica', 'bold');
-    doc.text(typeLabel, centerX, y, { align: 'center' });
-    y += 8;
-
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Ref: ${data.id || 'N/A'}`, 5, y); y += 5;
-    doc.text(`Date: ${formatDateTime(data.soldAt || data.recordedAt || new Date())}`, 5, y); y += 5;
-    if (data.customerName) {
-        doc.text(`Customer: ${data.customerName}`, 5, y); y += 5;
-    }
-    if (data.isCredit) {
-        doc.text(`Status: ${data.status === 'partial' ? 'Partially Paid' : 'Unpaid'}`, 5, y); y += 5;
-    } else if (data.paymentMethod || data.method) {
-        doc.text(`Payment: ${data.paymentMethod || data.method}`, 5, y); y += 5;
-    }
-
-    y += 3;
-    doc.line(5, y, 75, y);
-    y += 7;
-
-    doc.setFont('helvetica', 'bold');
-    doc.text('Item', 5, y);
-    doc.text('Amount', 75, y, { align: 'right' });
-    y += 6;
+    doc.setLineWidth(0.2);
+    doc.line(marginX, y, pageWidth, y);
     
+    y += 5;
+    doc.setFont('helvetica', 'bold');
+    doc.text('ITEM', marginX, y);
+    doc.text('TOTAL', pageWidth, y, { align: 'right' });
+    
+    y += 2;
+    doc.line(marginX, y, pageWidth, y);
+
+    // Items
+    y += 5;
     doc.setFont('helvetica', 'normal');
     const itemName = data.productName || data.description || 'Item';
     const splitName = doc.splitTextToSize(itemName, 45);
-    doc.text(splitName, 5, y);
+    doc.text(splitName, marginX, y);
     
     const amountStr = formatKES(data.totalAmount || data.amount || 0);
-    doc.text(amountStr, 75, y, { align: 'right' });
+    doc.text(amountStr, pageWidth, y, { align: 'right' });
     
-    y += (splitName.length * 4) + 2;
+    y += (splitName.length * 4);
     if (data.quantity) {
-        doc.setFontSize(8);
-        // FIX: Display selling price (@ soldPricePerUnit), not buying price
-        doc.text(`Qty: ${data.quantity} @ ${formatKES(data.soldPricePerUnit || 0)}`, 5, y);
-        y += 6;
+        doc.setTextColor(100, 100, 100);
+        doc.text(`${data.quantity} × @ ${formatKES(data.soldPricePerUnit || 0)}`, marginX, y);
+        doc.setTextColor(0, 0, 0);
+        y += 4;
     }
 
+    // 4. TOTALS SECTION
     y += 2;
-    doc.line(5, y, 75, y);
-    y += 7;
+    doc.line(marginX, y, pageWidth, y);
+    y += 6;
 
     doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
     if (data.isCredit) {
-        doc.text('AMOUNT DUE:', 5, y);
-        doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), 75, y, { align: 'right' });
+        doc.text('TOTAL DUE:', marginX, y);
+        doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth, y, { align: 'right' });
     } else {
-        doc.text('TOTAL:', 5, y);
-        doc.text(amountStr, 75, y, { align: 'right' });
+        doc.text('PAID:', marginX, y);
+        doc.text(amountStr, pageWidth, y, { align: 'right' });
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        y += 4;
+        doc.text(`Via: ${data.paymentMethod || data.method}`, pageWidth, y, { align: 'right' });
     }
 
-    y += 15;
+    // 5. FOOTER
+    y += 12;
     doc.setFontSize(8);
     doc.setFont('helvetica', 'italic');
-    doc.text(data.isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!', centerX, y, { align: 'center' });
+    doc.setTextColor(100, 100, 100);
+    doc.text(data.isCredit ? 'Payment due — thank you!' : 'Thank you for your business!', 40, y, { align: 'center' });
 
     return doc;
 }

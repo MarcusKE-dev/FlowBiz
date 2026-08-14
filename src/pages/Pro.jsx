@@ -52,7 +52,7 @@ const handleSubscribe = async () => {
       </div>
 
       <div className="card p-8 text-center bg-moss-50 border-moss-200">
-        <h2 className="font-display text-3xl font-bold text-moss-800">KSh 500 <span className="text-lg font-normal text-moss-700">/ 30 days</span></h2>
+        <h2 className="font-display text-3xl font-bold text-moss-800">KSh 600 <span className="text-lg font-normal text-moss-700">/ 30 days</span></h2>
         <p className="mt-2 text-ink-600 max-w-lg mx-auto">No recurring auto-billing. Manual renewal ensures you're always in control of your subscription.</p>
         
         {isPro ? (
@@ -63,7 +63,7 @@ const handleSubscribe = async () => {
           </div>
         ) : (
           <button onClick={handleSubscribe} disabled={loading} className="mt-6 btn-primary px-8 py-3 text-lg">
-            {loading ? 'Initializing Payment...' : 'Pay KSh 500'}
+            {loading ? 'Initializing Payment...' : 'Pay KSh 600'}
           </button>
         )}
       </div>

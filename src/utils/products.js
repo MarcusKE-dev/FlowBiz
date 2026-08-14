@@ -1,6 +1,10 @@
-import { collection, doc, writeBatch, updateDoc, deleteField, serverTimestamp, getDoc, getDocs, deleteDoc, query, where } from 'firebase/firestore';
+import { collection, doc, writeBatch, updateDoc, deleteField, serverTimestamp, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { raceWithTimeout } from './offlineWrite';
+
+function barcodeIndexRef(businessId, barcode) {
+  return doc(db, 'barcodeIndex', `${businessId}__${barcode}`);
+}
 
 export async function permanentlyDeleteProduct(productId, barcode, businessId) {
   if (!businessId) throw new Error('permanentlyDeleteProduct() called with no businessId');
@@ -19,27 +23,6 @@ export async function permanentlyDeleteProduct(productId, barcode, businessId) {
   await batch.commit();
 }
 
-export async function cleanupOrphanedBarcodeIndexes(businessId) {
-  if (!businessId) throw new Error('cleanupOrphanedBarcodeIndexes() called with no businessId');
-  const snap = await getDocs(query(collection(db, 'barcodeIndex'), where('businessId', '==', businessId)));
-  let removed = 0;
-  for (const idxDoc of snap.docs) {
-    const { productId } = idxDoc.data();
-    if (!productId) continue;
-    const productSnap = await getDoc(doc(db, 'products', productId));
-    if (!productSnap.exists()) {
-      await deleteDoc(idxDoc.ref);
-      removed += 1;
-    }
-  }
-  return { scanned: snap.docs.length, removed };
-}
-
-function barcodeIndexRef(businessId, barcode) {
-  return doc(db, 'barcodeIndex', `${businessId}__${barcode}`);
-}
-
-// FIX: Offline-safe product creation using writeBatch and generated internalCode
 export async function createProduct(data, businessId) {
   if (!businessId) throw new Error('createProduct() called with no businessId');
   const barcode = data.barcode ? String(data.barcode).trim() : null;
@@ -90,10 +73,49 @@ export async function updateProduct(productId, data, previousBarcode, businessId
   return { queuedOffline };
 }
 
-export async function softDeleteProduct(productId) {
-  await updateDoc(doc(db, 'products', productId), { deleted: true, deletedAt: serverTimestamp() });
+// FIX: archiving now also removes the barcode from barcodeIndex —
+// previously only a *permanent* delete did this, so an archived product
+// silently kept its barcode "reserved" behind the scenes.
+export async function softDeleteProduct(productId, barcode, businessId) {
+  const productRef = doc(db, 'products', productId);
+  const trimmedBarcode = barcode ? String(barcode).trim() : null;
+
+  const batch = writeBatch(db);
+  batch.update(productRef, { deleted: true, deletedAt: serverTimestamp() });
+
+  if (trimmedBarcode && businessId) {
+    const idxRef = barcodeIndexRef(businessId, trimmedBarcode);
+    const idxSnap = await getDoc(idxRef);
+    if (idxSnap.exists() && idxSnap.data().productId === productId) {
+      batch.delete(idxRef);
+    }
+  }
+
+  await batch.commit();
 }
 
-export async function restoreProduct(productId) {
-  await updateDoc(doc(db, 'products', productId), { deleted: false, deletedAt: deleteField() });
+// Restoring re-creates the barcode index entry — unless another product
+// has since claimed that exact barcode while this one was archived, in
+// which case we restore the product but clear its barcode rather than
+// silently taking over the other product's index entry.
+export async function restoreProduct(productId, barcode, businessId) {
+  const productRef = doc(db, 'products', productId);
+  const trimmedBarcode = barcode ? String(barcode).trim() : null;
+
+  if (trimmedBarcode && businessId) {
+    const idxRef = barcodeIndexRef(businessId, trimmedBarcode);
+    const idxSnap = await getDoc(idxRef);
+    if (idxSnap.exists()) {
+      if (idxSnap.data().productId !== productId) {
+        await updateDoc(productRef, { deleted: false, deletedAt: deleteField(), barcode: null });
+        return { barcodeCleared: true };
+      }
+      // Already correctly indexed to this same product — nothing to do.
+    } else {
+      await setDoc(idxRef, { businessId, barcode: trimmedBarcode, productId });
+    }
+  }
+
+  await updateDoc(productRef, { deleted: false, deletedAt: deleteField() });
+  return { barcodeCleared: false };
 }

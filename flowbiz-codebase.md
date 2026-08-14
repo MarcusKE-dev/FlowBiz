@@ -175,12 +175,14 @@ src/
 .pagesignore
 eslint.config.js
 firebase.json
+firestore.indexes.json
 firestore.rules
 index.html
 package.json
 postcss.config.js
 README.md
 skills-lock.json
+storage.rules
 tailwind.config.js
 vite.config.js
 ````
@@ -1471,57 +1473,6 @@ export default function RefundModal({ open, creditSale, onClose, onSubmit }) {
 }
 ````
 
-## File: src/components/debtors/RepaymentModal.jsx
-````javascript
-import { useState } from 'react';
-import Modal from '../common/Modal';
-import { formatKES } from '../../utils/currency';
-import { Banknote, Smartphone } from 'lucide-react';
-export default function RepaymentModal({ open, customer, totalOwed, onClose, onSubmit }) {
-  const [amount, setAmount]     = useState('');
-  const [method, setMethod]     = useState('Cash');
-  const [mpesaCode, setMpesa]   = useState('');
-  const [busy, setBusy]         = useState(false);
-  if (!customer) return null;
-  const numeric = Number(amount) || 0;
-  // MP-6 FIX: prevent over-repayment
-  const overRepayment = numeric > totalOwed + 0.005;
-  const canSubmit = numeric > 0 && !overRepayment && (method !== 'M-Pesa' || mpesaCode.trim()) && !busy;
-  const handle = async e => {
-    e.preventDefault(); setBusy(true);
-    try { await onSubmit({ amount: numeric, method, mpesaCode: method==='M-Pesa'?mpesaCode.trim():null }); setAmount(''); setMpesa(''); onClose(); }
-    finally { setBusy(false); }
-  };
-  return (
-    <Modal open={open} onClose={onClose} title={`Repayment — ${customer.name}`}>
-      <form onSubmit={handle} className="space-y-3">
-        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(totalOwed)}</span></div>
-        <div>
-          <label className="label">Amount received (KES)</label>
-          <input type="number" min="0.01" max={totalOwed} step="0.01" className="input" value={amount} onChange={e=>setAmount(e.target.value)} autoFocus />
-          {overRepayment && <p className="mt-1 text-xs text-rust-600">Amount exceeds the outstanding balance of {formatKES(totalOwed)}.</p>}
-        </div>
-        <div>
-          <label className="label">Payment method</label>
-          <div className="grid grid-cols-2 gap-2">
-            {['Cash','M-Pesa'].map(m=>(
-              <button key={m} type="button" onClick={()=>setMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${method===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
-                {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
-              </button>
-            ))}
-          </div>
-        </div>
-        {method==='M-Pesa' && <div><label className="label">M-Pesa code <span className="text-rust-500">*</span></label><input className="input uppercase" value={mpesaCode} onChange={e=>setMpesa(e.target.value.toUpperCase())} placeholder="QWE1234567" /></div>}
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn-primary" disabled={!canSubmit}>{busy?'Saving…':'Record repayment'}</button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-````
-
 ## File: src/components/layout/AppShell.jsx
 ````javascript
 import Sidebar from './Sidebar';
@@ -2519,22 +2470,30 @@ import LoadingSpinner from '../components/common/LoadingSpinner';
 import MiniLineChart from '../components/charts/MiniLineChart';
 import MiniBarChart from '../components/charts/MiniBarChart';
 import DonutChart from '../components/charts/DonutChart';
+import { TrendingUp, TrendingDown, Lock, AlertCircle, CheckCircle2, Info, ArrowLeft } from 'lucide-react';
 
 const PERIOD_OPTIONS = [
-  { days: 7, label: '7 days' },
-  { days: 30, label: '30 days' },
-  { days: 90, label: '90 days' },
+  { id: '7', label: '7 Days' },
+  { id: '30', label: '30 Days' },
+  { id: '90', label: '90 Days' },
+  { id: 'custom', label: 'Custom' },
 ];
 
 function KpiCard({ label, value, tone = 'text-ink-900', deltaPct }) {
+  const isPositive = deltaPct !== null && deltaPct >= 0;
+  const isNegative = deltaPct !== null && deltaPct < 0;
+
   return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
+    <div className="card p-4 sm:p-5 flex flex-col justify-between bg-white hover:shadow-md transition-shadow">
+      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
+      <div className="mt-2">
+        <p className={`font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
+      </div>
       {deltaPct !== null && deltaPct !== undefined && Number.isFinite(deltaPct) && (
-        <p className={`mt-1 text-xs font-semibold ${deltaPct >= 0 ? 'text-moss-700' : 'text-rust-600'}`}>
-          {deltaPct >= 0 ? '↑' : '↓'} {Math.abs(deltaPct).toFixed(1)}% vs previous period
-        </p>
+        <div className={`mt-3 flex items-center gap-1.5 text-xs font-semibold ${isPositive ? 'text-moss-700' : 'text-rust-600'}`}>
+          {isPositive ? <TrendingUp className="h-3.5 w-3.5" strokeWidth={2.5} /> : <TrendingDown className="h-3.5 w-3.5" strokeWidth={2.5} />}
+          <span>{Math.abs(deltaPct).toFixed(1)}% vs prior period</span>
+        </div>
       )}
     </div>
   );
@@ -2542,33 +2501,47 @@ function KpiCard({ label, value, tone = 'text-ink-900', deltaPct }) {
 
 function Section({ title, subtitle, children }) {
   return (
-    <div className="card p-4 sm:p-5">
-      <h2 className="font-display text-sm font-bold text-ink-800">{title}</h2>
-      {subtitle && <p className="mt-0.5 text-xs text-ink-400">{subtitle}</p>}
-      <div className="mt-4">{children}</div>
+    <div className="card p-5 bg-white">
+      <div className="mb-4 border-b border-ink-100 pb-3">
+        <h2 className="font-display text-sm font-bold text-ink-900 uppercase tracking-wide">{title}</h2>
+        {subtitle && <p className="mt-1 text-xs text-ink-500">{subtitle}</p>}
+      </div>
+      <div>{children}</div>
     </div>
   );
 }
 
 function NoData({ children }) {
-  return <p className="py-6 text-center text-sm text-ink-400">{children}</p>;
+  return <div className="py-8 flex flex-col items-center justify-center text-center"><Info className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5}/><p className="text-sm text-ink-500">{children}</p></div>;
 }
 
 export default function AdvancedAnalytics() {
   const { isPro, businessId } = useAuth();
-  const [periodDays, setPeriodDays] = useState(30);
+  
+  const [period, setPeriod] = useState('30');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
 
   const range = useMemo(() => {
-    const end = endOfDay();
-    const start = startOfDay(new Date(Date.now() - (periodDays - 1) * 86400000));
-    return { start, end };
-  }, [periodDays]);
+    if (period === 'custom' && customStart && customEnd) {
+      return { start: startOfDay(new Date(customStart)), end: endOfDay(new Date(customEnd)) };
+    }
+    const days = Number(period) || 30;
+    return { start: startOfDay(new Date(Date.now() - (days - 1) * 86400000)), end: endOfDay() };
+  }, [period, customStart, customEnd]);
 
   const prevRange = useMemo(() => {
+    if (period === 'custom' && customStart && customEnd) {
+      const diff = range.end.getTime() - range.start.getTime();
+      const prevEnd = new Date(range.start.getTime() - 1);
+      const prevStart = new Date(prevEnd.getTime() - diff);
+      return { start: startOfDay(prevStart), end: endOfDay(prevEnd) };
+    }
+    const days = Number(period) || 30;
     const prevEnd = endOfDay(new Date(range.start.getTime() - 1));
-    const prevStart = startOfDay(new Date(range.start.getTime() - periodDays * 86400000));
+    const prevStart = startOfDay(new Date(range.start.getTime() - days * 86400000));
     return { start: prevStart, end: prevEnd };
-  }, [range, periodDays]);
+  }, [range, period, customStart, customEnd]);
 
   const { loading, sales, creditSales, expenses, repayments, summary } = useFinancialsForRange(range.start, range.end);
   const { loading: prevLoading, summary: prevSummary } = useFinancialsForRange(prevRange.start, prevRange.end);
@@ -2586,7 +2559,7 @@ export default function AdvancedAnalytics() {
     [outstandingCreditSales]
   );
 
-  const granularity = periodDays > 45 ? 'week' : 'day';
+  const granularity = (range.end.getTime() - range.start.getTime()) > (45 * 86400000) ? 'week' : 'day';
   const buckets = useMemo(() => buildDateBuckets(range.start, range.end, granularity), [range, granularity]);
 
   const trend = useMemo(() => {
@@ -2610,7 +2583,6 @@ export default function AdvancedAnalytics() {
     });
   }, [buckets, sales, expenses, repayments, allCreditSales]);
 
-  // FIX: Properly map credit sales into the active product volume calculation
   const productPerf = useMemo(() => {
     const map = {};
     (sales || []).forEach((s) => {
@@ -2649,173 +2621,182 @@ export default function AdvancedAnalytics() {
   const insights = useMemo(() => {
     const list = [];
     if (revenueChangePct !== null) {
-      list.push({ tone: revenueChangePct >= 0 ? 'positive' : 'negative', text: `Revenue is ${revenueChangePct >= 0 ? 'up' : 'down'} ${Math.abs(revenueChangePct).toFixed(1)}% compared to the previous ${periodDays}-day period.` });
+      list.push({ tone: revenueChangePct >= 0 ? 'positive' : 'negative', text: `Recognized revenue is ${revenueChangePct >= 0 ? 'up' : 'down'} ${Math.abs(revenueChangePct).toFixed(1)}% vs prior period.` });
     }
     if (profitChangePct !== null) {
-      list.push({ tone: profitChangePct >= 0 ? 'positive' : 'negative', text: `Net profit is ${profitChangePct >= 0 ? 'up' : 'down'} ${Math.abs(profitChangePct).toFixed(1)}% compared to the previous period.` });
+      list.push({ tone: profitChangePct >= 0 ? 'positive' : 'negative', text: `Net profit is ${profitChangePct >= 0 ? 'up' : 'down'} ${Math.abs(profitChangePct).toFixed(1)}% vs prior period.` });
     }
     if (mostProfitable[0]) {
-      list.push({ tone: 'neutral', text: `"${mostProfitable[0].name}" generated the most gross profit this period (${formatKES(mostProfitable[0].profit)}).` });
+      list.push({ tone: 'neutral', text: `"${mostProfitable[0].name}" drove the highest gross profit margin (${formatKES(mostProfitable[0].profit)}).` });
     }
     const salesActivity = summary.revenue + summary.totalCreditSales;
     if (salesActivity > 0 && summary.totalCreditSales > 0) {
       const pct = (summary.totalCreditSales / salesActivity) * 100;
-      list.push({ tone: pct > 30 ? 'negative' : 'neutral', text: `Credit sales made up ${pct.toFixed(0)}% of this period's sales activity.` });
-    }
-    if (totalOutstanding > 0) {
-      list.push({ tone: 'neutral', text: `${formatKES(totalOutstanding)} is currently outstanding across all customers on credit.` });
+      list.push({ tone: pct > 30 ? 'negative' : 'neutral', text: `Credit exposure: ${pct.toFixed(0)}% of sales activity was issued on credit.` });
     }
     return list;
-  }, [revenueChangePct, profitChangePct, mostProfitable, summary, totalOutstanding, periodDays]);
+  }, [revenueChangePct, profitChangePct, mostProfitable, summary, period]);
 
   if (!isPro) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-center max-w-sm mx-auto">
-        <div className="h-16 w-16 bg-ink-100 text-ink-400 rounded-full flex items-center justify-center mb-4 font-bold text-2xl">?</div>
-        <h2 className="font-display text-xl font-bold text-ink-900">FlowBiz Pro Required</h2>
-        <p className="mt-2 text-sm text-ink-500">Advanced Analytics gives you deep insights into sales patterns, staff performance, and profit margins. Upgrade to Pro to unlock.</p>
-        <Link to="/pro" className="mt-6 btn-primary w-full">Explore Pro</Link>
+      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
+        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
+          <Lock className="h-7 w-7" strokeWidth={2} />
+        </div>
+        <h2 className="font-display text-2xl font-bold text-ink-900">Enterprise Analytics Locked</h2>
+        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Advanced Analytics provides institutional-grade visibility into profit margins, capital exposure, and staff performance trends. Requires FlowBiz Pro.</p>
+        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
       </div>
     );
   }
-
-  if (loading) return <LoadingSpinner />;
 
   const margin = summary.revenue > 0 ? (summary.grossProfit / summary.revenue) * 100 : 0;
   const avgTransactionValue = sales.length > 0 ? summary.revenue / sales.length : 0;
   const hasSalesData = sales.length > 0;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Advanced Analytics</h1>
-          <p className="text-sm text-ink-400">Business health for the selected period</p>
+          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Advanced Analytics</h1>
+          <p className="text-sm text-ink-500 mt-1">Deep financial insights and performance tracking.</p>
         </div>
-        <Link to="/reports" className="btn-outline text-xs">Back to Reports</Link>
+        <Link to="/reports" className="btn-outline text-xs bg-white">
+          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Standard Reports
+        </Link>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        {PERIOD_OPTIONS.map((opt) => (
-          <button
-            key={opt.days}
-            onClick={() => setPeriodDays(opt.days)}
-            className={`rounded-full px-3.5 py-1.5 text-sm font-semibold ${periodDays === opt.days ? 'bg-ink-900 text-white' : 'bg-ink-100 text-ink-600 hover:bg-ink-200'}`}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <KpiCard label="Revenue" value={formatKES(summary.revenue)} deltaPct={revenueChangePct} />
-        <KpiCard label="Gross Profit" value={formatKES(summary.grossProfit)} tone="text-moss-700" />
-        <KpiCard label="Net Profit" value={formatKES(summary.netProfit)} tone="text-moss-700" deltaPct={profitChangePct} />
-        <KpiCard label="Profit Margin" value={`${margin.toFixed(1)}%`} />
-        <KpiCard label="Expenses" value={formatKES(summary.totalExpenses)} tone="text-rust-600" />
-        <KpiCard label="Avg Transaction Value" value={hasSalesData ? formatKES(avgTransactionValue) : 'KES 0'} />
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Section title="Sales Trend" subtitle="Recognized revenue per period">
-          {hasSalesData ? (
-            <MiniLineChart data={trend.map((t) => ({ label: t.label, value: t.revenue }))} formatValue={formatKES} ariaLabel="Sales trend" />
-          ) : (
-            <NoData>Not enough sales data yet. Continue recording sales to see this trend.</NoData>
-          )}
-        </Section>
-        <Section title="Profit Trend" subtitle="Net profit per period">
-          {hasSalesData ? (
-            <MiniBarChart data={trend.map((t) => ({ label: t.label, value: t.netProfit }))} orientation="vertical" formatValue={formatKES} ariaLabel="Profit trend" />
-          ) : (
-            <NoData>Not enough data yet to chart profit over time.</NoData>
-          )}
-        </Section>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Section title="Payment Method Breakdown">
-          {summary.totalCashSales + summary.totalMpesaSales + summary.totalCreditSales > 0 ? (
-            <DonutChart
-              formatValue={formatKES}
-              segments={[
-                { label: 'Cash', value: summary.totalCashSales, colorClassName: 'text-blue-600', dotClassName: 'bg-blue-600' },
-                { label: 'M-Pesa', value: summary.totalMpesaSales, colorClassName: 'text-ink-500', dotClassName: 'bg-ink-500' },
-                { label: 'Credit', value: summary.totalCreditSales, colorClassName: 'text-rust-400', dotClassName: 'bg-rust-400' },
-              ]}
-            />
-          ) : (
-            <NoData>No sales recorded in this period yet.</NoData>
-          )}
-        </Section>
-        <Section title="Credit Intelligence" subtitle="How much money is tied up in credit">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-ink-500">Credit issued this period</span>
-              <span className="font-semibold text-ink-800">{formatKES(summary.totalCreditSales)}</span>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-white p-3 rounded-xl border border-ink-200">
+        <span className="text-xs font-semibold text-ink-500 uppercase tracking-wider pl-1">Date Range:</span>
+        <div className="flex flex-wrap items-center gap-2">
+          {PERIOD_OPTIONS.map((opt) => (
+            <button
+              key={opt.id}
+              onClick={() => setPeriod(opt.id)}
+              className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors ${period === opt.id ? 'bg-ink-900 text-white shadow-sm' : 'bg-ink-50 text-ink-600 hover:bg-ink-100'}`}
+            >
+              {opt.label}
+            </button>
+          ))}
+          {period === 'custom' && (
+            <div className="flex items-center gap-2 ml-1 animate-fade-in">
+              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customStart} onChange={e=>setCustomStart(e.target.value)} />
+              <span className="text-ink-400 text-sm font-medium">to</span>
+              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} />
             </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-ink-500">Repayments collected this period</span>
-              <span className="font-semibold text-moss-700">{formatKES(summary.totalDebtRepayments)}</span>
-            </div>
-            <div className="flex items-center justify-between border-t border-ink-100 pt-3 text-sm">
-              <span className="font-semibold text-ink-700">Outstanding across all customers</span>
-              <span className="font-bold text-rust-600">{formatKES(totalOutstanding)}</span>
-            </div>
+          )}
+        </div>
+      </div>
+
+      {loading ? <div className="py-12"><LoadingSpinner /></div> : (
+        <>
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <KpiCard label="Recognized Revenue" value={formatKES(summary.revenue)} deltaPct={revenueChangePct} />
+            <KpiCard label="Gross Profit" value={formatKES(summary.grossProfit)} tone="text-moss-700" />
+            <KpiCard label="Net Profit" value={formatKES(summary.netProfit)} tone="text-moss-700" deltaPct={profitChangePct} />
+            <KpiCard label="Profit Margin" value={`${margin.toFixed(1)}%`} tone={margin > 20 ? 'text-moss-700' : margin < 10 ? 'text-rust-600' : 'text-ink-900'} />
+            <KpiCard label="Total Expenses" value={formatKES(summary.totalExpenses)} tone="text-rust-600" />
+            <KpiCard label="Avg Transaction Size" value={hasSalesData ? formatKES(avgTransactionValue) : 'KES 0'} />
+            <KpiCard label="Credit Issued" value={formatKES(summary.totalCreditSales)} tone="text-amber-600" />
+            <KpiCard label="Total Outstanding Debt" value={formatKES(totalOutstanding)} tone="text-rust-600" />
           </div>
-        </Section>
-      </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Section title="Best-Selling Products" subtitle="By quantity sold">
-          {bestSelling.length > 0 ? (
-            <MiniBarChart orientation="horizontal" formatValue={(v) => `${v} sold`} data={bestSelling.map((p) => ({ label: p.name, value: p.qty }))} />
-          ) : (
-            <NoData>No product sales in this period yet.</NoData>
-          )}
-        </Section>
-        <Section title="Most Profitable Products" subtitle="By gross profit">
-          {mostProfitable.length > 0 ? (
-            <MiniBarChart orientation="horizontal" formatValue={formatKES} data={mostProfitable.map((p) => ({ label: p.name, value: p.profit, colorClassName: 'bg-moss-600' }))} />
-          ) : (
-            <NoData>No product sales in this period yet.</NoData>
-          )}
-        </Section>
-      </div>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Section title="Revenue Trajectory" subtitle="Recognized revenue tracking over selected period">
+              {hasSalesData ? (
+                <MiniLineChart data={trend.map((t) => ({ label: t.label, value: t.revenue }))} formatValue={formatKES} ariaLabel="Sales trend" colorClassName="text-moss-600" />
+              ) : (
+                <NoData>Insufficient data to chart trajectory.</NoData>
+              )}
+            </Section>
+            <Section title="Net Profit Trend" subtitle="Actual profit realized after expenses">
+              {hasSalesData ? (
+                <MiniBarChart data={trend.map((t) => ({ label: t.label, value: t.netProfit }))} orientation="vertical" formatValue={formatKES} ariaLabel="Profit trend" />
+              ) : (
+                <NoData>Insufficient data to chart profit.</NoData>
+              )}
+            </Section>
+          </div>
 
-      <Section title="Business Insights" subtitle="What's changed and what deserves attention">
-        {insights.length > 0 ? (
-          <ul className="space-y-2.5">
-            {insights.map((insight, i) => (
-              <li key={i} className="flex items-start gap-2.5 text-sm">
-                <span
-                  className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
-                    insight.tone === 'positive' ? 'bg-moss-600' : insight.tone === 'negative' ? 'bg-rust-500' : 'bg-blue-500'
-                  }`}
-                />
-                <span className="text-ink-700">{insight.text}</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <NoData>Insights will appear here once there's enough activity to compare against the previous period.</NoData>
-        )}
-      </Section>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Section title="Volume Drivers" subtitle="Highest quantity moved">
+              {bestSelling.length > 0 ? (
+                <MiniBarChart orientation="horizontal" formatValue={(v) => `${v.toLocaleString()} units`} data={bestSelling.map((p) => ({ label: p.name, value: p.qty, colorClassName: 'bg-ink-800' }))} />
+              ) : (
+                <NoData>No product movement detected.</NoData>
+              )}
+            </Section>
+            <Section title="Margin Drivers" subtitle="Highest gross profit generated">
+              {mostProfitable.length > 0 ? (
+                <MiniBarChart orientation="horizontal" formatValue={formatKES} data={mostProfitable.map((p) => ({ label: p.name, value: p.profit, colorClassName: 'bg-moss-600' }))} />
+              ) : (
+                <NoData>No profit data generated.</NoData>
+              )}
+            </Section>
+          </div>
 
-      <Section title="Staff Sales Performance">
-        {staffPerformance.length === 0 ? (
-          <NoData>No staff sales data for this period.</NoData>
-        ) : (
-          <div className="divide-y divide-ink-100">
-            {staffPerformance.map((st) => (
-              <div key={st.name} className="flex justify-between py-2.5 text-sm">
-                <span className="font-semibold text-ink-800">{st.name}</span>
-                <span className="text-ink-600">{formatKES(st.revenue)} ({st.qty} items)</span>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Section title="Capital & Credit Exposure" subtitle="Liquidity analysis">
+              <div className="space-y-4 pt-1">
+                <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
+                  <span className="text-ink-600 font-medium">Credit Issued (This Period)</span>
+                  <span className="font-semibold text-ink-900">{formatKES(summary.totalCreditSales)}</span>
+                </div>
+                <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
+                  <span className="text-ink-600 font-medium">Debt Collected (This Period)</span>
+                  <span className="font-semibold text-moss-700">{formatKES(summary.totalDebtRepayments)}</span>
+                </div>
+                <div className="flex items-center justify-between pt-1 text-sm bg-rust-50 p-3 rounded-lg border border-rust-100">
+                  <span className="font-bold text-rust-800 uppercase tracking-wide text-xs">Total Market Exposure</span>
+                  <span className="font-bold text-rust-700 text-base">{formatKES(totalOutstanding)}</span>
+                </div>
               </div>
-            ))}
+            </Section>
+
+            <Section title="Executive Summary" subtitle="Automated business intelligence">
+              {insights.length > 0 ? (
+                <div className="space-y-4 pt-1">
+                  {insights.map((insight, i) => (
+                    <div key={i} className="flex items-start gap-3 text-sm bg-ink-50 p-3 rounded-lg border border-ink-100">
+                      <div className="shrink-0 mt-0.5">
+                        {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
+                         insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
+                         <Info className="h-5 w-5 text-ink-500" strokeWidth={2} />}
+                      </div>
+                      <span className="text-ink-800 font-medium leading-relaxed">{insight.text}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <NoData>More transaction volume required to generate insights.</NoData>
+              )}
+            </Section>
           </div>
-        )}
-      </Section>
+
+          <Section title="Staff Performance Index" subtitle="Revenue attribution by cashier">
+            {staffPerformance.length === 0 ? (
+              <NoData>No staff attribution data found.</NoData>
+            ) : (
+              <div className="overflow-hidden rounded-lg border border-ink-200">
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-ink-50 text-xs uppercase tracking-wider font-semibold text-ink-500">
+                    <tr><th className="px-4 py-3 border-b border-ink-200">Staff Member</th><th className="px-4 py-3 border-b border-ink-200 text-right">Items Sold</th><th className="px-4 py-3 border-b border-ink-200 text-right">Revenue Generated</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-ink-100 bg-white">
+                    {staffPerformance.map((st) => (
+                      <tr key={st.name} className="hover:bg-ink-50/50 transition-colors">
+                        <td className="px-4 py-3 font-semibold text-ink-900">{st.name}</td>
+                        <td className="px-4 py-3 text-right text-ink-600">{st.qty.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right font-semibold text-moss-700">{formatKES(st.revenue)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Section>
+        </>
+      )}
     </div>
   );
 }
@@ -3202,39 +3183,36 @@ import { formatKES } from '../utils/currency';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import MiniBarChart from '../components/charts/MiniBarChart';
 import DonutChart from '../components/charts/DonutChart';
+import { Lock, ArrowLeft, AlertCircle, CheckCircle2, Info, PackageOpen } from 'lucide-react';
 
-function KpiCard({ label, value, tone = 'text-ink-900' }) {
+function KpiCard({ label, value, tone = 'text-ink-900', bg = 'bg-white' }) {
   return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
+    <div className={`card p-4 sm:p-5 ${bg} hover:shadow-md transition-shadow`}>
+      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
+      <p className={`mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
     </div>
   );
 }
 
 function Section({ title, subtitle, children }) {
   return (
-    <div className="card p-4 sm:p-5">
-      <h2 className="font-display text-sm font-bold text-ink-800">{title}</h2>
-      {subtitle && <p className="mt-0.5 text-xs text-ink-400">{subtitle}</p>}
-      <div className="mt-4">{children}</div>
+    <div className="card p-5 bg-white">
+      <div className="mb-4 border-b border-ink-100 pb-3">
+        <h2 className="font-display text-sm font-bold text-ink-900 uppercase tracking-wide">{title}</h2>
+        {subtitle && <p className="mt-1 text-xs text-ink-500">{subtitle}</p>}
+      </div>
+      <div>{children}</div>
     </div>
   );
 }
 
 function NoData({ children }) {
-  return <p className="py-6 text-center text-sm text-ink-400">{children}</p>;
+  return <div className="py-8 flex flex-col items-center justify-center text-center"><PackageOpen className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5}/><p className="text-sm text-ink-500">{children}</p></div>;
 }
 
 export default function InventoryIntelligence() {
   const { isPro, businessId } = useAuth();
-  // MINOR CONSISTENCY FIX: every other page that reads `products`
-  // (Products.jsx, Counter.jsx, Dashboard.jsx, Purchases.jsx, StockTake.jsx)
-  // filters out archived items server-side with `where('deleted','!=',true)`.
-  // This page previously fetched every product (including archived ones)
-  // and only excluded them inside the metrics calculation below — same
-  // end result, just less efficient. Filtering at the query matches the
-  // rest of the app and reads less data.
+  
   const productsQ = useMemo(
     () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
     [businessId]
@@ -3263,7 +3241,8 @@ export default function InventoryIntelligence() {
 
       if (stock <= 0) {
         outOfStock.push(p);
-      } else if (stock > threshold * 5) {
+      } else if (stock > threshold * 4) {
+        // Lowered threshold multiplier to catch capital traps sooner
         overstocked.push({ ...p, value: stock * cost });
       } else if (stock <= threshold) {
         lowStock.push(p);
@@ -3278,95 +3257,108 @@ export default function InventoryIntelligence() {
 
   if (!isPro) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-center max-w-sm mx-auto">
-        <h2 className="font-display text-xl font-bold text-ink-900">FlowBiz Pro Required</h2>
-        <p className="mt-2 text-sm text-ink-500">Inventory Intelligence automatically uncovers dead stock, overstock, and capital tie-ups. Upgrade to Pro to unlock.</p>
-        <Link to="/pro" className="mt-6 btn-primary w-full">Explore Pro</Link>
+      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
+        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
+          <Lock className="h-7 w-7" strokeWidth={2} />
+        </div>
+        <h2 className="font-display text-2xl font-bold text-ink-900">Inventory Intelligence Locked</h2>
+        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Instantly uncover dead stock holding up capital and detect urgent re-order limits before stockouts hit. Requires FlowBiz Pro.</p>
+        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
       </div>
     );
   }
 
-  if (loading) return <LoadingSpinner />;
+  if (loading) return <div className="py-12"><LoadingSpinner /></div>;
 
   const potentialProfit = metrics.totalRetail - metrics.totalCost;
   const activeProductsCount = (products || []).length;
+  const totalOverstockValue = metrics.overstocked.reduce((sum, p) => sum + p.value, 0);
 
   const insights = [];
   if (metrics.lowStock.length > 0) {
-    insights.push({ tone: 'negative', text: `${metrics.lowStock.length} product${metrics.lowStock.length === 1 ? ' is' : 's are'} low on stock.` });
+    insights.push({ tone: 'negative', text: `CRITICAL: ${metrics.lowStock.length} product(s) operating below safe threshold. Restock immediately.` });
   }
   if (metrics.outOfStock.length > 0) {
-    insights.push({ tone: 'negative', text: `${metrics.outOfStock.length} product${metrics.outOfStock.length === 1 ? ' is' : 's are'} out of stock — restock to avoid missed sales.` });
+    insights.push({ tone: 'negative', text: `REVENUE LOSS: ${metrics.outOfStock.length} product(s) completely depleted. You are actively losing sales.` });
   }
   if (metrics.overstocked[0]) {
-    insights.push({ tone: 'neutral', text: `"${metrics.overstocked[0].name}" is the biggest capital tie-up, holding ${formatKES(metrics.overstocked[0].value)} in stock.` });
+    insights.push({ tone: 'neutral', text: `CAPITAL TRAP: "${metrics.overstocked[0].name}" alone locks up ${formatKES(metrics.overstocked[0].value)} in inventory.` });
   }
   if (insights.length === 0 && activeProductsCount > 0) {
-    insights.push({ tone: 'positive', text: 'Stock levels look healthy across your product range right now.' });
+    insights.push({ tone: 'positive', text: 'OPTIMAL: Supply distribution perfectly matches current threshold configurations.' });
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
-      <div className="flex justify-between items-center">
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Inventory Intelligence</h1>
-          <p className="text-sm text-ink-400">Where your stock capital is right now</p>
+          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Inventory Intelligence</h1>
+          <p className="text-sm text-ink-500 mt-1">Capital deployment and supply chain health.</p>
         </div>
-        <Link to="/products" className="btn-outline text-xs">Back to Products</Link>
+        <Link to="/products" className="btn-outline text-xs bg-white">
+          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Back to Products
+        </Link>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <KpiCard label="Capital Tied Up" value={formatKES(metrics.totalCost)} />
-        <KpiCard label="Potential Gross Profit" value={formatKES(potentialProfit)} tone="text-moss-700" />
-        <KpiCard label="Units in Stock" value={metrics.unitsInStock.toLocaleString()} />
-        <KpiCard label="Active Products" value={activeProductsCount.toLocaleString()} />
-        <KpiCard label="Low Stock" value={metrics.lowStock.length} tone={metrics.lowStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} />
-        <KpiCard label="Out of Stock" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <KpiCard label="Capital Deployed" value={formatKES(metrics.totalCost)} />
+        <KpiCard label="Projected Gross Profit" value={formatKES(potentialProfit)} tone="text-moss-700" />
+        <KpiCard label="Physical Units" value={metrics.unitsInStock.toLocaleString()} />
+        <KpiCard label="Active SKUs" value={activeProductsCount.toLocaleString()} />
+        <KpiCard label="Low Stock Risk" value={metrics.lowStock.length} tone={metrics.lowStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.lowStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
+        <KpiCard label="Stockout Status" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.outOfStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
+        <KpiCard label="Overstocked SKUs" value={metrics.overstocked.length} tone="text-amber-600" />
+        <KpiCard label="Capital Trapped" value={formatKES(totalOverstockValue)} tone="text-amber-600" />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Section title="Stock Health">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Section title="Global Supply Distribution" subtitle="System-wide inventory health check">
           {activeProductsCount > 0 ? (
-            <DonutChart
-              formatValue={(v) => `${v} product${v === 1 ? '' : 's'}`}
-              segments={[
-                { label: 'Healthy', value: metrics.healthyCount, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
-                { label: 'Low stock', value: metrics.lowStock.length, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
-                { label: 'Out of stock', value: metrics.outOfStock.length, colorClassName: 'text-rust-500', dotClassName: 'bg-rust-500' },
-                { label: 'Overstocked', value: metrics.overstocked.length, colorClassName: 'text-blue-600', dotClassName: 'bg-blue-600' },
-              ]}
-            />
+            <div className="pt-2">
+              <DonutChart
+                size={180}
+                formatValue={(v) => `${v} SKU${v === 1 ? '' : 's'}`}
+                segments={[
+                  { label: 'Optimal Inventory', value: metrics.healthyCount, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
+                  { label: 'Low Stock Risk', value: metrics.lowStock.length, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
+                  { label: 'Critical Stockout', value: metrics.outOfStock.length, colorClassName: 'text-rust-600', dotClassName: 'bg-rust-600' },
+                  { label: 'Capital Surplus (Overstock)', value: metrics.overstocked.length, colorClassName: 'text-ink-800', dotClassName: 'bg-ink-800' },
+                ]}
+              />
+            </div>
           ) : (
-            <NoData>Add products to see stock health here.</NoData>
+            <NoData>System requires active inventory definitions.</NoData>
           )}
         </Section>
 
-        <Section title="Top Capital Tie-Ups" subtitle="Overstocked items holding the most capital">
+        <Section title="Capital Concentration" subtitle="Items holding maximum illiquid capital">
           {metrics.overstocked.length > 0 ? (
-            <MiniBarChart
-              orientation="horizontal"
-              formatValue={formatKES}
-              data={metrics.overstocked.slice(0, 6).map((p) => ({ label: p.name, value: p.value }))}
-            />
+            <div className="pt-2">
+              <MiniBarChart
+                orientation="horizontal"
+                formatValue={formatKES}
+                data={metrics.overstocked.slice(0, 6).map((p) => ({ label: p.name, value: p.value, colorClassName: 'bg-ink-800' }))}
+              />
+            </div>
           ) : (
-            <NoData>No overstock detected.</NoData>
+            <NoData>No significant capital concentration found.</NoData>
           )}
         </Section>
       </div>
 
-      <Section title="Inventory Insights">
-        <ul className="space-y-2.5">
+      <Section title="Automated Intelligence Briefing" subtitle="System-generated supply chain alerts">
+        <div className="space-y-4 pt-1">
           {insights.map((insight, i) => (
-            <li key={i} className="flex items-start gap-2.5 text-sm">
-              <span
-                className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
-                  insight.tone === 'positive' ? 'bg-moss-600' : insight.tone === 'negative' ? 'bg-rust-500' : 'bg-blue-500'
-                }`}
-              />
-              <span className="text-ink-700">{insight.text}</span>
-            </li>
+            <div key={i} className={`flex items-start gap-3 text-sm p-4 rounded-lg border ${insight.tone === 'positive' ? 'bg-moss-50 border-moss-200' : insight.tone === 'negative' ? 'bg-rust-50 border-rust-200' : 'bg-ink-50 border-ink-200'}`}>
+              <div className="shrink-0 mt-0.5">
+                {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
+                 insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
+                 <Info className="h-5 w-5 text-ink-600" strokeWidth={2} />}
+              </div>
+              <span className={`font-medium leading-relaxed ${insight.tone === 'positive' ? 'text-moss-800' : insight.tone === 'negative' ? 'text-rust-800' : 'text-ink-800'}`}>{insight.text}</span>
+            </div>
           ))}
-        </ul>
+        </div>
       </Section>
     </div>
   );
@@ -4577,105 +4569,6 @@ export function raceWithTimeout(promise, timeoutMs = 4000) {
 }
 ````
 
-## File: src/utils/products.js
-````javascript
-import { collection, doc, writeBatch, updateDoc, deleteField, serverTimestamp, getDoc, getDocs, deleteDoc, query, where } from 'firebase/firestore';
-import { db } from '../firebase';
-
-export async function permanentlyDeleteProduct(productId, barcode, businessId) {
-  if (!businessId) throw new Error('permanentlyDeleteProduct() called with no businessId');
-  const productRef = doc(db, 'products', productId);
-  const trimmedBarcode = barcode ? String(barcode).trim() : null;
-
-  const batch = writeBatch(db);
-  if (trimmedBarcode) {
-    const idxRef = barcodeIndexRef(businessId, trimmedBarcode);
-    const idxSnap = await getDoc(idxRef);
-    if (idxSnap.exists() && idxSnap.data().productId === productId) {
-      batch.delete(idxRef);
-    }
-  }
-  batch.delete(productRef);
-  await batch.commit();
-}
-
-export async function cleanupOrphanedBarcodeIndexes(businessId) {
-  if (!businessId) throw new Error('cleanupOrphanedBarcodeIndexes() called with no businessId');
-  const snap = await getDocs(query(collection(db, 'barcodeIndex'), where('businessId', '==', businessId)));
-  let removed = 0;
-  for (const idxDoc of snap.docs) {
-    const { productId } = idxDoc.data();
-    if (!productId) continue;
-    const productSnap = await getDoc(doc(db, 'products', productId));
-    if (!productSnap.exists()) {
-      await deleteDoc(idxDoc.ref);
-      removed += 1;
-    }
-  }
-  return { scanned: snap.docs.length, removed };
-}
-
-function barcodeIndexRef(businessId, barcode) {
-  return doc(db, 'barcodeIndex', `${businessId}__${barcode}`);
-}
-
-// FIX: Offline-safe product creation using writeBatch and generated internalCode
-export async function createProduct(data, businessId) {
-  if (!businessId) throw new Error('createProduct() called with no businessId');
-  const barcode = data.barcode ? String(data.barcode).trim() : null;
-  const newProductRef = doc(collection(db, 'products'));
-
-  // Offline-safe code generation
-  const internalCode = `FB-${Math.floor(Date.now() / 1000).toString().slice(-6)}`;
-  
-  const batch = writeBatch(db);
-  batch.set(newProductRef, {
-    ...data,
-    businessId,
-    barcode: barcode || null,
-    internalCode,
-    deleted: false,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
-  if (barcode) {
-    batch.set(barcodeIndexRef(businessId, barcode), { businessId, barcode, productId: newProductRef.id });
-  }
-  await batch.commit();
-
-  return { id: newProductRef.id };
-}
-
-export async function updateProduct(productId, data, previousBarcode, businessId) {
-  if (!businessId) throw new Error('updateProduct() called with no businessId');
-  const nextBarcode = data.barcode ? String(data.barcode).trim() : null;
-  const prevBarcode = previousBarcode ? String(previousBarcode).trim() : null;
-  const productRef = doc(db, 'products', productId);
-
-  const { stock, businessId: _ignored, ...updatePayload } = data;
-
-  const batch = writeBatch(db);
-  batch.update(productRef, { ...updatePayload, barcode: nextBarcode || null, updatedAt: serverTimestamp() });
-  
-  if (prevBarcode && prevBarcode !== nextBarcode) {
-    batch.delete(barcodeIndexRef(businessId, prevBarcode));
-  }
-  if (nextBarcode && nextBarcode !== prevBarcode) {
-    batch.set(barcodeIndexRef(businessId, nextBarcode), { businessId, barcode: nextBarcode, productId });
-  }
-  await batch.commit();
-}
-
-export async function softDeleteProduct(productId) {
-  await updateDoc(doc(db, 'products', productId), { deleted: true, deletedAt: serverTimestamp() });
-}
-
-export async function restoreProduct(productId) {
-  await updateDoc(doc(db, 'products', productId), { deleted: false, deletedAt: deleteField() });
-}
-````
-
 ## File: src/utils/scannerService.js
 ````javascript
 // src/utils/scannerService.js
@@ -4904,36 +4797,11 @@ export default defineConfig([
 ]);
 ````
 
-## File: firebase.json
+## File: firestore.indexes.json
 ````json
 {
-  "functions": [
-    {
-      "source": "functions",
-      "codebase": "default",
-      "ignore": [
-        "node_modules",
-        ".git",
-        "firebase-debug.log",
-        "firebase-debug.*.log"
-      ]
-    }
-  ],
-  "emulators": {
-    "auth": {
-      "port": 9099
-    },
-    "firestore": {
-      "port": 8080
-    },
-    "functions": {
-      "port": 5001
-    },
-    "ui": {
-      "enabled": true,
-      "port": 4000
-    }
-  }
+  "indexes": [],
+  "fieldOverrides": []
 }
 ````
 
@@ -5146,6 +5014,19 @@ Run the app once — Firestore prints console errors with direct auto-create lin
 }
 ````
 
+## File: storage.rules
+````
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /businesses/{businessId}/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+  }
+}
+````
+
 ## File: tailwind.config.js
 ````javascript
 /** @type {import('tailwindcss').Config} */
@@ -5300,8 +5181,7 @@ import { json, errorResponse } from '../lib/response.js';
 import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
 import { getDocument, createDocument } from '../lib/firestore.js';
 
-const PRO_PLAN_AMOUNT_KES = 500; // Must match what Pro.jsx advertises to the user.
-
+const PRO_PLAN_AMOUNT_KES = 600; 
 export async function handlePaystackInitialize(request, env) {
   const authHeader = request.headers.get('Authorization') || '';
   const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -5381,6 +5261,69 @@ export default function ConfirmDialog({ open, title, message, confirmLabel = 'Co
         </div>
       </div>
     </div>
+  );
+}
+````
+
+## File: src/components/debtors/RepaymentModal.jsx
+````javascript
+import { useEffect, useState } from 'react';
+import Modal from '../common/Modal';
+import { formatKES } from '../../utils/currency';
+import { Banknote, Smartphone } from 'lucide-react';
+
+export default function RepaymentModal({ open, customer, totalOwed, onClose, onSubmit }) {
+  const [amount, setAmount]     = useState('');
+  const [method, setMethod]     = useState('Cash');
+  const [mpesaCode, setMpesa]   = useState('');
+  const [busy, setBusy]         = useState(false);
+  // Freeze the outstanding balance the moment we start saving, so a
+  // background update to totalOwed mid-submission can't make a correct
+  // amount suddenly look like it exceeds the balance.
+  const [lockedOwed, setLockedOwed] = useState(totalOwed);
+
+  useEffect(() => { if (open) setLockedOwed(totalOwed); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!customer) return null;
+  const numeric = Number(amount) || 0;
+  const effectiveOwed = busy ? lockedOwed : totalOwed;
+  const overRepayment = numeric > effectiveOwed + 0.005;
+  const canSubmit = numeric > 0 && !overRepayment && (method !== 'M-Pesa' || mpesaCode.trim()) && !busy;
+
+  const handle = async e => {
+    e.preventDefault();
+    setLockedOwed(totalOwed);
+    setBusy(true);
+    try { await onSubmit({ amount: numeric, method, mpesaCode: method==='M-Pesa'?mpesaCode.trim():null }); setAmount(''); setMpesa(''); onClose(); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Repayment — ${customer.name}`}>
+      <form onSubmit={handle} className="space-y-3">
+        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(effectiveOwed)}</span></div>
+        <div>
+          <label className="label">Amount received (KES)</label>
+          <input type="number" min="0.01" max={effectiveOwed} step="0.01" className="input" value={amount} onChange={e=>setAmount(e.target.value)} autoFocus disabled={busy} />
+          {overRepayment && <p className="mt-1 text-xs text-rust-600">Amount exceeds the outstanding balance of {formatKES(effectiveOwed)}.</p>}
+        </div>
+        <div>
+          <label className="label">Payment method</label>
+          <div className="grid grid-cols-2 gap-2">
+            {['Cash','M-Pesa'].map(m=>(
+              <button key={m} type="button" disabled={busy} onClick={()=>setMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${method===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
+                {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
+              </button>
+            ))}
+          </div>
+        </div>
+        {method==='M-Pesa' && <div><label className="label">M-Pesa code <span className="text-rust-500">*</span></label><input className="input uppercase" disabled={busy} value={mpesaCode} onChange={e=>setMpesa(e.target.value.toUpperCase())} placeholder="QWE1234567" /></div>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={!canSubmit}>{busy?'Saving…':'Record repayment'}</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 ````
@@ -5674,335 +5617,6 @@ const handleConfirm = async () => {
         </div>
       </div>
     </Modal>
-  );
-}
-````
-
-## File: src/components/products/ProductFormModal.jsx
-````javascript
-import { useEffect, useState } from 'react';
-import toast from 'react-hot-toast';
-import Modal from '../common/Modal';
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { db } from '../../firebase';
-import { useAuth } from '../../contexts/AuthContext';
-
-const empty = {
-  name: '', category: '', costPrice: '', sellingPrice: '', stock: '',
-  lowStockThreshold: '5', supplierId: '', barcode: '', description: '',
-};
-
-// FIX: Free plan product limit.
-const FREE_PLAN_PRODUCT_LIMIT = 100;
-
-export default function ProductFormModal({
-   open, onClose, onSave, suppliers, initialProduct, prefillBarcode, onAddSupplier, newSupplierId,
-simplifiedForPurchase = false, productCount = 0,
- }) {
-  const { businessId, isPro } = useAuth();
-  const [form, setForm] = useState(empty);
-  const [categories, setCategories] = useState([]);
-  const [showAddCategory, setShowAddCategory] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  // MULTI-TENANT CHANGE: categories used to live in a single global
-  // settings/categories doc shared by every business in the project.
-  // They now live inside this business's own businessSettings/{businessId}
-  // document, alongside shopName and cashierCanRecordExpenses.
-  useEffect(() => {
-    if (!open || !businessId) return;
-    const unsub = onSnapshot(doc(db, 'businessSettings', businessId), (snap) => {
-      if (snap.exists() && snap.data().categories) {
-        setCategories(snap.data().categories);
-      } else {
-        const defaults = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
-        setCategories(defaults);
-        setDoc(doc(db, 'businessSettings', businessId), { categories: defaults }, { merge: true }).catch(console.error);
-      }
-    });
-    return unsub;
-  }, [open, businessId]);
-
-  useEffect(() => {
-    setBusy(false);
-    if (open) {
-      if (initialProduct) {
-        setForm({
-          ...empty, ...initialProduct,
-          costPrice: initialProduct.costPrice ?? '',
-          sellingPrice: initialProduct.sellingPrice ?? '',
-          stock: initialProduct.stock ?? '',
-          lowStockThreshold: initialProduct.lowStockThreshold ?? '5',
-          supplierId: initialProduct.supplierId ?? '',
-          barcode: initialProduct.barcode ?? '',
-          description: initialProduct.description ?? '',
-        });
-      } else {
-        setForm({ ...empty, barcode: prefillBarcode || '', category: categories[0] || '' });
-      }
-    }
-  }, [initialProduct, prefillBarcode, open]);
-
-  useEffect(() => {
-    if (open && !initialProduct && !form.category && categories.length > 0) {
-      setForm(prev => ({ ...prev, category: categories[0] }));
-    }
-  }, [categories, open, initialProduct, form.category]);
-
-  useEffect(() => {
-    if (newSupplierId) setForm((prev) => ({ ...prev, supplierId: newSupplierId }));
-  }, [newSupplierId]);
-
-  const set = (f) => (e) => setForm((p) => ({ ...p, [f]: e.target.value }));
-
-  const handleAddCategory = async () => {
-    const trimmed = newCategoryName.trim();
-    if (!trimmed) return;
-    if (categories.some(c => c.toLowerCase() === trimmed.toLowerCase())) { toast.error('Category already exists.'); return; }
-    const updated = [...categories, trimmed];
-    try {
-      await setDoc(doc(db, 'businessSettings', businessId), { categories: updated }, { merge: true });
-      setForm(prev => ({ ...prev, category: trimmed }));
-      setShowAddCategory(false);
-      setNewCategoryName('');
-      toast.success('Category added');
-    } catch (err) {
-      toast.error('Failed to add category: ' + err.message);
-    }
-  };
-
-  const handle = async (e) => {
-    e.preventDefault();
-    if (!form.name.trim()) return;
-    if (!form.category) return toast.error('Please select or add a category.');
-    if (!simplifiedForPurchase && Number(form.costPrice) < 0) return toast.error('Cost price cannot be negative.');
-    if (Number(form.sellingPrice) <= 0) return toast.error('Selling price must be greater than zero.');
-   if (!initialProduct && !simplifiedForPurchase && Number(form.stock) < 0) return toast.error('Stock cannot be negative.');
-
-    // FIX: Free plan capped at FREE_PLAN_PRODUCT_LIMIT active products —
-    // only blocks NEW products, never editing an existing one.
-    if (!initialProduct && !isPro && productCount >= FREE_PLAN_PRODUCT_LIMIT) {
-      toast.error(`Free plan is limited to ${FREE_PLAN_PRODUCT_LIMIT} products. Upgrade to FlowBiz Pro to add more.`);
-      return;
-    }
-
-    setBusy(true);
-    try {
-      await onSave({
-        name: form.name.trim(),
-        category: form.category,
-        costPrice: simplifiedForPurchase ? 0 : Number(form.costPrice),
-        sellingPrice: Number(form.sellingPrice),
-        stock: initialProduct ? initialProduct.stock : (simplifiedForPurchase ? 0 : Number(form.stock)),
-       lowStockThreshold: simplifiedForPurchase ? 5 : (Number(form.lowStockThreshold) || 5),
-        supplierId: simplifiedForPurchase ? null : (form.supplierId || null),
-        barcode: form.barcode.trim() || null,
-        description: form.description.trim(),
-      });
-    } catch (err) {
-      setBusy(false);
-    }
-  };
-
-  const handleClose = () => { if (!busy) onClose(); };
-
-  return (
-    <Modal open={open} onClose={handleClose} title={initialProduct ? 'Edit product' : 'Add product'}>
-      <form onSubmit={handle} className="space-y-3">
-        <div><label className="label">Product name</label><input className="input" value={form.name} onChange={set('name')} disabled={busy} required /></div>
-
-        {initialProduct?.internalCode && (
-          <div className="rounded-lg bg-ink-50 px-3 py-2 text-xs text-ink-500">
-            Internal code: <span className="font-mono font-semibold text-ink-700">{initialProduct.internalCode}</span>
-          </div>
-        )}
-
-        <div>
-          <label className="label">Barcode <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
-          <input className="input font-mono" value={form.barcode} onChange={set('barcode')} placeholder="Scan or type manufacturer barcode" disabled={busy} />
-          {!initialProduct && <p className="mt-1 text-xs text-ink-400">Leave blank if this product doesn't have a manufacturer barcode.</p>}
-        </div>
-
-        <div className={simplifiedForPurchase ? '' : 'grid grid-cols-2 gap-3'}>
-          <div>
-            <label className="label">Category</label>
-            <select className="input" value={form.category} onChange={set('category')} disabled={busy} required>
-              <option value="" disabled>— Select Category —</option>
-              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-            {showAddCategory ? (
-              <div className="mt-2 space-y-2 rounded-lg bg-ink-50 p-2.5">
-                <label className="text-[11px] font-semibold text-ink-700 uppercase tracking-wide">New Category</label>
-                <input className="input !py-1 !min-h-0 text-xs" value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="e.g. Fruits" disabled={busy} autoFocus />
-                <div className="flex gap-1.5 justify-end">
-                  <button type="button" className="btn-secondary !py-1 !px-2.5 !min-h-0 text-xs" onClick={() => { setShowAddCategory(false); setNewCategoryName(''); }} disabled={busy}>Cancel</button>
-                  <button type="button" className="btn-primary !py-1 !px-2.5 !min-h-0 text-xs" onClick={handleAddCategory} disabled={busy}>Save</button>
-                </div>
-              </div>
-            ) : (
-             <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={() => setShowAddCategory(true)} disabled={busy}>+ Add Category</button>
-            )}
-          </div>
-          {!simplifiedForPurchase && (
-           <div>
-              <label className="label">Supplier</label>
-             <select className="input" value={form.supplierId} onChange={set('supplierId')} disabled={busy}>
-                <option value="">— None —</option>
-               {(suppliers || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-              {onAddSupplier && <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={onAddSupplier} disabled={busy}>+ Add new supplier</button>}
-            </div>
-          )}
-        </div>
-
-        {simplifiedForPurchase ? (
-          <div>
-            <label className="label">Selling price (KES)</label>
-            <input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required />
-            <p className="mt-1 text-xs text-ink-400">Stock starts at 0. Go back to the purchase form to record what was actually received and its cost.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Buying price (KES)</label><input type="number" min="0" step="0.01" className="input" value={form.costPrice} onChange={set('costPrice')} disabled={busy} required /></div>
-            <div><label className="label">Selling price (KES)</label><input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required /></div>
-          </div>
-        )}
-
-        {!simplifiedForPurchase && (
-         <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Stock qty</label>
-              <input type="number" min="0" className="input disabled:bg-ink-50 disabled:text-ink-400" value={form.stock} onChange={set('stock')} disabled={!!initialProduct || busy} required={!initialProduct} />
-              {initialProduct && <p className="mt-1 text-[11px] text-ink-400">Stock quantity is changed via Purchases, Sales, or Stock Take.</p>}
-            </div>
-            <div><label className="label">Low stock alert</label><input type="number" min="0" className="input" value={form.lowStockThreshold} onChange={set('lowStockThreshold')} disabled={busy} /></div>
-          </div>
-        )}
-
-        <div>
-          <label className="label">Description <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
-          <textarea className="input !min-h-[70px]" rows={2} value={form.description} onChange={set('description')} placeholder="Product details or specifications" disabled={busy} />
-        </div>
-
-        {Number(form.sellingPrice) > 0 && Number(form.costPrice) > 0 && Number(form.sellingPrice) <= Number(form.costPrice) && (
-          <p className="text-xs text-rust-600 font-medium">⚠️ Selling price is at or below cost — you'll make no profit on this item.</p>
-        )}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="btn-primary" disabled={busy}>
-            {busy ? (
-              <span className="flex items-center gap-1.5">
-                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                {initialProduct ? 'Saving...' : 'Adding Product...'}
-              </span>
-            ) : (initialProduct ? 'Save changes' : 'Add product')}
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-````
-
-## File: src/components/scanner/ScannerModal.jsx
-````javascript
-// src/components/scanner/ScannerModal.jsx
-import { useCallback, useEffect, useState } from 'react';
-import { X, Zap, ZapOff, AlertTriangle } from 'lucide-react';
-import { useCameraScanner } from '../../hooks/useCameraScanner';
-
-export default function ScannerModal({ open, onClose, onDetected }) {
-  // Guards against multiple rapid detections firing in the brief window
-  // between "we found something" and the parent page actually closing us.
-  const [paused, setPaused] = useState(false);
-
-  useEffect(() => {
-    if (open) setPaused(false);
-  }, [open]);
-
-  const handleDetected = useCallback((text) => {
-    if (paused) return;
-    setPaused(true);
-    onDetected(text);
-  }, [paused, onDetected]);
-
-const { videoRef, status, torchOn, torchSupported, toggleTorch, retry } = useCameraScanner({
-    onDetected: handleDetected,
-    active: open && !paused,
-  });
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-ink-950">
-      <div className="flex items-center justify-between px-4 py-3 safe-top">
-        <span className="font-display text-sm font-bold text-white">Scan barcode</span>
-        <button onClick={onClose} className="rounded-lg p-2 text-white/80 hover:bg-white/10" aria-label="Close">
-          <X className="h-5 w-5" strokeWidth={1.75} />
-        </button>
-      </div>
-
-      <div className="relative flex-1 overflow-hidden">
-        <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
-
-        {status === 'scanning' && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <div className="h-40 w-64 rounded-xl2 border-2 border-moss-400/80" />
-          </div>
-        )}
-
-        {status === 'denied' && (
-          <ScannerMessage
-            icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
-            title="Camera permission needed"
-            body="FlowBiz needs camera access to scan barcodes. Please allow camera access in your browser settings, then try again."
-            action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
-          />
-        )}
-
-        {status === 'insecure' && (
-          <ScannerMessage
-            icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
-            title="Camera needs a secure connection"
-            body="This page was opened over a plain network address (not HTTPS or localhost), so the browser blocks camera access entirely on this device. Open the app via HTTPS, or via localhost on this device, to use the scanner. You can still find the product by searching its name or code."
-          />
-        )}
-
-        {status === 'unavailable' && (
-          <ScannerMessage
-            icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
-            title="Camera unavailable"
-            body="No usable camera was found on this device. You can still find the product by searching its name or code."
-            action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
-          />
-        )}
-      </div>
-
-      {torchSupported && status === 'scanning' && (
-        <div className="flex justify-center pb-8 pt-4 safe-bottom">
-          <button
-            onClick={toggleTorch}
-            className={`flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold ${torchOn ? 'bg-amber-400 text-ink-900' : 'bg-white/10 text-white'}`}
-          >
-            {torchOn ? <Zap className="h-4 w-4" strokeWidth={1.75} /> : <ZapOff className="h-4 w-4" strokeWidth={1.75} />}
-            Torch
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ScannerMessage({ icon, title, body, action }) {
-  return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
-      {icon}
-      <p className="font-display text-base font-bold text-white">{title}</p>
-      <p className="text-sm text-white/70">{body}</p>
-      {action}
-    </div>
   );
 }
 ````
@@ -6380,236 +5994,6 @@ export function useAuth() {
 }
 ````
 
-## File: src/pages/AuthAction.jsx
-````javascript
-import { useEffect, useState } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
-import { applyActionCode, verifyPasswordResetCode, confirmPasswordReset, reload } from 'firebase/auth';
-import { auth } from '../firebase';
-
-export default function AuthAction() {
-  const [searchParams] = useSearchParams();
-  const mode = searchParams.get('mode');
-  const oobCode = searchParams.get('oobCode');
-
-  if (mode === 'resetPassword') {
-    return <ResetPasswordPanel oobCode={oobCode} />;
-  }
-  return <VerifyEmailPanel mode={mode} oobCode={oobCode} />;
-}
-
-function Shell({ children }) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <div className="w-full max-w-sm card p-6 text-center space-y-4">
-        <img src="/icons/icon-192.png" alt="FlowBiz" className="mx-auto h-14 w-14 rounded-2xl shadow-lg" />
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function VerifyEmailPanel({ mode, oobCode }) {
-  const [status, setStatus] = useState('working'); // working | success | error
-  const [message, setMessage] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function run() {
-      if (oobCode && mode === 'verifyEmail') {
-        try {
-          await applyActionCode(auth, oobCode);
-          if (auth.currentUser) {
-            try { await reload(auth.currentUser); } catch { /* non-fatal */ }
-          }
-          if (!cancelled) { setStatus('success'); setMessage('Your email has been verified.'); }
-        } catch (err) {
-          if (cancelled) return;
-          const code = err.code || '';
-          // FIX: a "code already used" error is exactly what you'd see if
-          // this link was already consumed elsewhere — e.g. an email
-          // provider's link-safety scanner opening it before the person
-          // clicked it. If this browser is signed in and the server now
-          // shows the account as verified, the goal was already achieved
-          // — treat it as success instead of an error.
-          if (code === 'auth/invalid-action-code' && auth.currentUser) {
-            try {
-              await reload(auth.currentUser);
-              if (auth.currentUser.emailVerified) {
-                setStatus('success');
-                setMessage('Your email has been verified.');
-                return;
-              }
-            } catch { /* fall through to error below */ }
-          }
-          setStatus('error');
-          setMessage(
-            code === 'auth/expired-action-code' ? 'This verification link has expired. Please request a new one from the app.' :
-            code === 'auth/invalid-action-code'  ? "This verification link has already been used or has expired. If you're already verified, just sign in." :
-            "We couldn't verify your email. Please request a new verification link."
-          );
-        }
-        return;
-      }
-
-      // FIX: no oobCode present. This legitimately happens when Firebase's
-      // OWN generic hosted verification page completed the verification
-      // first, and its "Continue" button lands here as a plain link with
-      // no code attached (the code was already consumed on Firebase's
-      // side). Rather than assuming failure, check the real, current
-      // server-side verification state before showing an error.
-      if (auth.currentUser) {
-        try {
-          await reload(auth.currentUser);
-          if (!cancelled && auth.currentUser.emailVerified) {
-            setStatus('success');
-            setMessage('Your email has been verified.');
-            return;
-          }
-        } catch { /* fall through to error below */ }
-      }
-
-      if (!cancelled) {
-        setStatus('error');
-        setMessage('This link is missing required information. Please request a new verification email.');
-      }
-    }
-
-    run();
-    return () => { cancelled = true; };
-  }, [mode, oobCode]);
-
-  return (
-    <Shell>
-      {status === 'working' && (
-        <>
-          <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
-          <p className="text-sm text-ink-500">Confirming…</p>
-        </>
-      )}
-      {status === 'success' && (
-        <>
-          <div className="text-4xl">✅</div>
-          <h1 className="font-display text-lg font-bold text-ink-900">Email verified</h1>
-          <p className="text-sm text-ink-500">{message} You can continue to FlowBiz now.</p>
-          <Link to="/" className="btn-primary w-full">Continue to FlowBiz</Link>
-        </>
-      )}
-      {status === 'error' && (
-        <>
-          <div className="text-4xl">⚠️</div>
-          <h1 className="font-display text-lg font-bold text-ink-900">Something went wrong</h1>
-          <p className="text-sm text-ink-500">{message}</p>
-          <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
-        </>
-      )}
-    </Shell>
-  );
-}
-
-function ResetPasswordPanel({ oobCode }) {
-  const [status, setStatus] = useState('checking'); // checking | ready | success | error
-  const [message, setMessage] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!oobCode) {
-      setStatus('error');
-      setMessage('This link is missing required information. Please request a new password reset email.');
-      return;
-    }
-    verifyPasswordResetCode(auth, oobCode)
-      .then((verifiedEmail) => {
-        if (cancelled) return;
-        setEmail(verifiedEmail);
-        setStatus('ready');
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        const code = err.code || '';
-        setStatus('error');
-        setMessage(
-          code === 'auth/expired-action-code' ? 'This reset link has expired. Please request a new one.' :
-          code === 'auth/invalid-action-code'  ? 'This reset link has already been used or is invalid. Please request a new one.' :
-          'This reset link is invalid. Please request a new one.'
-        );
-      });
-    return () => { cancelled = true; };
-  }, [oobCode]);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (password.length < 6) { setMessage('Password must be at least 6 characters.'); return; }
-    if (password !== confirmPassword) { setMessage('Passwords do not match.'); return; }
-    setMessage('');
-    setSubmitting(true);
-    try {
-      await confirmPasswordReset(auth, oobCode, password);
-      setStatus('success');
-    } catch (err) {
-      const code = err.code || '';
-      setMessage(
-        code === 'auth/expired-action-code' ? 'This reset link has expired. Please request a new one.' :
-        code === 'auth/weak-password'        ? 'Please choose a stronger password.' :
-        "Couldn't reset your password. Please request a new link and try again."
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <Shell>
-      {status === 'checking' && (
-        <>
-          <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
-          <p className="text-sm text-ink-500">Checking your link…</p>
-        </>
-      )}
-      {status === 'ready' && (
-        <form onSubmit={handleSubmit} className="space-y-4 text-left">
-          <div className="text-center">
-            <h1 className="font-display text-lg font-bold text-ink-900">Choose a new password</h1>
-            <p className="mt-1 text-sm text-ink-500">for <span className="font-semibold">{email}</span></p>
-          </div>
-          {message && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{message}</div>}
-          <div>
-            <label className="label">New password</label>
-            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters" autoComplete="new-password" autoFocus />
-          </div>
-          <div>
-            <label className="label">Confirm new password</label>
-            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" />
-          </div>
-          <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Saving…' : 'Save new password'}</button>
-        </form>
-      )}
-      {status === 'success' && (
-        <>
-          <div className="text-4xl">✅</div>
-          <h1 className="font-display text-lg font-bold text-ink-900">Password updated</h1>
-          <p className="text-sm text-ink-500">You can now sign in with your new password.</p>
-          <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
-        </>
-      )}
-      {status === 'error' && (
-        <>
-          <div className="text-4xl">⚠️</div>
-          <h1 className="font-display text-lg font-bold text-ink-900">Something went wrong</h1>
-          <p className="text-sm text-ink-500">{message}</p>
-          <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
-        </>
-      )}
-    </Shell>
-  );
-}
-````
-
 ## File: src/pages/CloseDay.jsx
 ````javascript
 // HP-7 FIX: chunk deletions to avoid 500-op batch limit; replace window.location.reload() with React state
@@ -6744,221 +6128,6 @@ function SRow({ label, value, variance }) {
 function Variance({ v }) {
   const tone = v===0?'text-moss-700':v<0?'text-rust-600':'text-amber-600';
   return <p className={`text-sm font-semibold ${tone}`}>{v===0?'✓ Matches exactly':v<0?`Shortage of ${formatKES(Math.abs(v))}`:`Surplus of ${formatKES(v)}`}</p>;
-}
-````
-
-## File: src/pages/CustomerDetail.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { where, orderBy, doc, writeBatch, increment, getDoc, serverTimestamp, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Receipt, Banknote, Smartphone, Undo2 } from 'lucide-react';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import RepaymentModal from '../components/debtors/RepaymentModal';
-import RefundModal from '../components/debtors/RefundModal';
-import { formatKES } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function CustomerDetail() {
-  const { customerId } = useParams();
-  const { profile, isAdmin, businessId } = useAuth();
-
-  const customerQ   = useMemo(() => businessId ? tenantQuery('customers', businessId, where('__name__','==',customerId)) : null, [customerId, businessId]);
-  const creditQ     = useMemo(() => businessId ? tenantQuery('creditSales', businessId, where('customerId','==',customerId)) : null, [customerId, businessId]);
-  const repaymentsQ = useMemo(() => businessId ? tenantQuery('repayments', businessId, where('customerId','==',customerId), orderBy('paidAt','desc')) : null, [customerId, businessId]);
-
-  const { data: customerData, loading: custLoad } = useFirestoreCollection(customerQ);
-  const { data: creditSales, loading: credLoad, error } = useFirestoreCollection(creditQ);
-  const { data: repayments } = useFirestoreCollection(repaymentsQ);
-  
-  const [repayOpen, setRepayOpen]       = useState(false);
-  const [cancelTarget, setCancelTarget] = useState(null);
-  const [refundTarget, setRefundTarget] = useState(null);
-
-  const customer = customerData[0];
-  const sorted = [...creditSales].sort((a,b) => (b.soldAt?.toMillis?.() ?? 0) - (a.soldAt?.toMillis?.() ?? 0));
-  const totalOwed = creditSales
-    .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded')
-    .reduce((acc,cs) => acc + (Number(cs.remainingBalance) || 0), 0);
-
-  const handleRepayment = async ({ amount, method, mpesaCode }) => {
-    const openSales = [...creditSales]
-      .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded' && (Number(cs.remainingBalance) || 0) > 0.005)
-      .sort((a,b) => (a.soldAt?.toMillis?.() ?? 0) - (b.soldAt?.toMillis?.() ?? 0));
-
-    if (!openSales.length) { toast.error('No outstanding balance.'); return; }
-    try {
-      const batch = writeBatch(db);
-      let remaining = amount;
-      for (const cs of openSales) {
-        if (remaining <= 0.005) break;
-        const owed    = Number(cs.remainingBalance) || 0;
-        const portion = Math.min(owed, remaining);
-        remaining    -= portion;
-        const newPaid = (Number(cs.amountPaid) || 0) + portion;
-        const newBal  = owed - portion;
-        batch.update(doc(db,'creditSales',cs.id), { amountPaid: newPaid, remainingBalance: newBal, status: newBal <= 0.005 ? 'paid' : 'partial' });
-        const repRef = doc(collection(db,'repayments'));
-        batch.set(repRef, {
-          businessId,
-          creditSaleId: cs.id,
-          customerId: cs.customerId,
-          customerName: cs.customerName,
-          productName: cs.productName,
-          amount: portion,
-          method,
-          mpesaCode: mpesaCode || null,
-          paidAt: serverTimestamp(),
-          recordedBy: profile.uid,
-          recordedByName: profile.displayName,
-        });
-      }
-      await batch.commit();
-      toast.success(`Recorded ${formatKES(amount)} repayment`);
-    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
-  };
-
-  const handleCancel = async (cs) => {
-    setCancelTarget(null);
-    try {
-      const batch = writeBatch(db);
-      const prodRef = doc(db,'products',cs.productId);
-      const prodSnap = await getDoc(prodRef);
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
-      }
-      batch.update(doc(db,'creditSales',cs.id), {
-        status: 'cancelled', remainingBalance: 0,
-        cancelledAt: serverTimestamp(), cancelledBy: profile.uid,
-      });
-      await batch.commit();
-      toast.success('Credit sale cancelled and stock restored.');
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-  };
-
-  const handleRefund = async (cs, { method }) => {
-    try {
-      const batch = writeBatch(db);
-      const prodRef = doc(db,'products',cs.productId);
-      const prodSnap = await getDoc(prodRef);
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
-      }
-      batch.update(doc(db,'creditSales',cs.id), {
-        status: 'refunded', remainingBalance: 0,
-        refundedAt: serverTimestamp(), refundedBy: profile.uid,
-      });
-      const refundRef = doc(collection(db,'refunds'));
-      batch.set(refundRef, {
-        businessId,
-        creditSaleId: cs.id, customerId: cs.customerId, customerName: cs.customerName,
-        productName: cs.productName, amount: Number(cs.amountPaid) || 0, method,
-        refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName,
-      });
-      await batch.commit();
-      toast.success('Sale refunded and stock restored.');
-      setRefundTarget(null);
-    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
-  };
-
-  if (custLoad || credLoad) return <LoadingSpinner />;
-  if (error) return <ErrorBanner message={`Could not load data. ${error}`} />;
-  if (!customer && creditSales.length === 0) return <EmptyState title="Customer not found" />;
-
-  const displayName = customer?.name || creditSales[0]?.customerName || 'Unknown Customer';
-  const displayPhone = customer?.phone || creditSales[0]?.customerPhone || 'No phone';
-
-  return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <Link to="/customers" className="text-sm font-semibold text-ink-400 hover:text-ink-700">← Back to Customers</Link>
-      <div className="card flex flex-wrap items-center justify-between gap-3 p-5">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">{displayName}</h1>
-          <p className="text-sm text-ink-400">{displayPhone}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-xs text-ink-400">Outstanding Debt</p>
-          <p className={`font-display text-xl font-bold ${totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>{formatKES(totalOwed)}</p>
-        </div>
-      </div>
-      <button className="btn-primary w-full sm:w-auto" disabled={totalOwed <= 0} onClick={() => setRepayOpen(true)}>
-        <Receipt className="h-4 w-4" strokeWidth={1.75}/> Record repayment
-      </button>
-
-      {sorted.length > 0 && (
-        <div className="card p-4">
-          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Credit purchases</h2>
-          <div className="divide-y divide-ink-100">
-            {sorted.map(cs => {
-              const reversed = cs.status === 'cancelled' || cs.status === 'refunded';
-              return (
-                <div key={cs.id} className={`flex items-center justify-between gap-2 py-2.5 text-sm ${reversed ? 'opacity-50' : ''}`}>
-                  <div>
-                    <p className="font-medium text-ink-700">{cs.quantity} × {cs.productName}</p>
-                    <p className="text-xs text-ink-400">{formatDateTime(cs.soldAt)}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="text-right">
-                      <p className={`font-semibold ${reversed ? 'line-through text-ink-400' : 'text-ink-800'}`}>{formatKES(cs.totalAmount)}</p>
-                      <span className={`badge ${cs.status === 'paid' ? 'bg-moss-100 text-moss-700' : cs.status === 'partial' ? 'bg-rust-100 text-rust-700' : 'bg-ink-100 text-ink-500'}`}>{cs.status}</span>
-                    </div>
-                    {isAdmin && !reversed && (
-                      <button
-                        className="rounded-lg p-2 text-ink-400 hover:bg-ink-100"
-                        title={Number(cs.amountPaid) > 0.005 ? 'Refund this sale' : 'Cancel this sale'}
-                        onClick={() => (Number(cs.amountPaid) > 0.005 ? setRefundTarget(cs) : setCancelTarget(cs))}
-                      >
-                        <Undo2 className="h-4 w-4" strokeWidth={1.75}/>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-      
-      {repayments.length > 0 && (
-        <div className="card p-4">
-          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Repayment history</h2>
-          <div className="divide-y divide-ink-100">
-            {repayments.map(r => (
-              <div key={r.id} className="flex items-center justify-between py-2.5 text-sm">
-                <div>
-                  <p className="font-medium text-ink-700">{r.method === 'Cash' ? <><Banknote className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>Cash</> : <><Smartphone className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>M-Pesa {r.mpesaCode ? `(${r.mpesaCode})` : ''}</>}</p>
-                  <p className="text-xs text-ink-400">{formatDateTime(r.paidAt)}</p>
-                </div>
-                <span className="font-semibold text-moss-700">{formatKES(r.amount)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <RepaymentModal open={repayOpen} customer={{ name: displayName }} totalOwed={totalOwed} onClose={() => setRepayOpen(false)} onSubmit={handleRepayment} />
-      <RefundModal open={!!refundTarget} creditSale={refundTarget} onClose={() => setRefundTarget(null)} onSubmit={(opts) => handleRefund(refundTarget, opts)} />
-      <ConfirmDialog
-        open={!!cancelTarget}
-        title="Cancel this credit sale?"
-        message={`"${cancelTarget?.productName}" (×${cancelTarget?.quantity}) will be cancelled and stock restored. Nothing has been paid on this sale yet.`}
-        confirmLabel="Cancel sale"
-        danger
-        onConfirm={() => handleCancel(cancelTarget)}
-        onCancel={() => setCancelTarget(null)}
-      />
-    </div>
-  );
 }
 ````
 
@@ -7274,7 +6443,7 @@ const handleSubscribe = async () => {
       </div>
 
       <div className="card p-8 text-center bg-moss-50 border-moss-200">
-        <h2 className="font-display text-3xl font-bold text-moss-800">KSh 500 <span className="text-lg font-normal text-moss-700">/ 30 days</span></h2>
+        <h2 className="font-display text-3xl font-bold text-moss-800">KSh 600 <span className="text-lg font-normal text-moss-700">/ 30 days</span></h2>
         <p className="mt-2 text-ink-600 max-w-lg mx-auto">No recurring auto-billing. Manual renewal ensures you're always in control of your subscription.</p>
         
         {isPro ? (
@@ -7285,7 +6454,7 @@ const handleSubscribe = async () => {
           </div>
         ) : (
           <button onClick={handleSubscribe} disabled={loading} className="mt-6 btn-primary px-8 py-3 text-lg">
-            {loading ? 'Initializing Payment...' : 'Pay KSh 500'}
+            {loading ? 'Initializing Payment...' : 'Pay KSh 600'}
           </button>
         )}
       </div>
@@ -7329,208 +6498,6 @@ const handleSubscribe = async () => {
 }
 ````
 
-## File: src/pages/Users.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { orderBy } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Trash2, Copy, X } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { tenantQuery } from '../lib/tenant';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import Modal from '../components/common/Modal';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function Users() {
-  const { createStaffInvite, cancelStaffInvite, removeStaffAccount, toggleMemberActive, profile, businessId, isPro } = useAuth();
-  const usersQ = useMemo(() => tenantQuery('users', businessId, orderBy('displayName')), [businessId]);
-  const { data: users, loading } = useFirestoreCollection(usersQ);
-
-  const invitesQ = useMemo(() => tenantQuery('staffInvites', businessId), [businessId]);
-  const { data: allInvites, loading: invitesLoading } = useFirestoreCollection(invitesQ);
-  const invites = allInvites.filter((i) => !i.claimed);
-
-  const ownerCount = users.filter((u) => u.role === 'owner' && u.active !== false).length;
-  const totalUsersCount = users.filter((u) => u.active !== false).length;
-
-  const [modal, setModal]           = useState(false);
-  const [newName, setNewName]       = useState('');
-  const [newRole, setNewRole]       = useState('cashier');
-  const [busy, setBusy]             = useState(false);
-  const [freshInvite, setFreshInvite] = useState(null);
-  const [pendToggle, setPendToggle] = useState(null);
-  const [pendDelete, setPendDelete] = useState(null);
-  const [pendCancelInvite, setPendCancelInvite] = useState(null);
-
-  const inviteLink = (inviteId) => `${window.location.origin}/join/${inviteId}`;
-
-  const copyLink = async (inviteId) => {
-    try { await navigator.clipboard.writeText(inviteLink(inviteId)); toast.success('Invite link copied'); }
-    catch { toast.error('Could not copy — long-press the link to copy it manually.'); }
-  };
-
-  const handleCreateInvite = async (e) => {
-    e.preventDefault();
-    if (!newName.trim()) return;
-    
-    // Feature 14 - Staff limits enforced in frontend for UX, backend rules would prevent it too
-    if (!isPro && (totalUsersCount + invites.length) >= 2) {
-      toast.error('Free plan allows a maximum of 1 Owner and 1 additional Staff member. Upgrade to FlowBiz Pro to add more, or cancel a pending invite first.');
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const invite = await createStaffInvite({ displayName: newName.trim(), role: newRole });
-      setFreshInvite({ id: invite.id, displayName: newName.trim(), role: newRole });
-      setNewName('');
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setBusy(false); }
-  };
-
-  const handleCancelInvite = async () => {
-    try { await cancelStaffInvite(pendCancelInvite.id); toast.success('Invite cancelled'); }
-    catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setPendCancelInvite(null); }
-  };
-
-  const handleToggle = async () => {
-    if (pendToggle.role === 'owner' && pendToggle.active !== false && ownerCount <= 1) {
-      toast.error("This is the only active owner — deactivating them would lock everyone out. Invite another owner first.");
-      setPendToggle(null);
-      return;
-    }
-    try {
-      await toggleMemberActive(pendToggle.id, pendToggle.active === false);
-      toast.success(pendToggle.active !== false ? 'Account deactivated' : 'Account reactivated');
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setPendToggle(null); }
-  };
-
-  const handleDelete = async () => {
-    if (pendDelete.role === 'owner' && ownerCount <= 1) {
-      toast.error('You cannot remove the only owner. Invite another owner first.');
-      setPendDelete(null);
-      return;
-    }
-    try { await removeStaffAccount(pendDelete.id); toast.success('Account removed.'); }
-    catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setPendDelete(null); }
-  };
-
-  return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Team</h1>
-          <p className="text-sm text-ink-400">Manage who has access to this business.</p>
-        </div>
-        <button className="btn-primary" type="button" onClick={() => { setFreshInvite(null); setNewName(''); setNewRole('cashier'); setModal(true); }}>
-          + Invite someone
-        </button>
-      </div>
-
-      {invites.length > 0 && (
-        <div className="card p-4 space-y-2">
-          <h2 className="font-display text-sm font-bold text-ink-800">Pending invites</h2>
-          <div className="divide-y divide-ink-100">
-            {invites.map((inv) => (
-              <div key={inv.id} className="flex items-center justify-between gap-2 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <p className="font-semibold text-ink-800">
-                    {inv.displayName}
-                    <span className={`badge ml-2 ${inv.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{inv.role}</span>
-                  </p>
-                  <p className="text-xs text-ink-400 truncate font-mono">{inviteLink(inv.id)}</p>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => copyLink(inv.id)}>
-                    <Copy className="h-3.5 w-3.5" strokeWidth={1.75} /> Copy link
-                  </button>
-                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[40px] min-w-[40px] flex items-center justify-center" title="Cancel invite" onClick={() => setPendCancelInvite(inv)}>
-                    <X className="h-4 w-4" strokeWidth={1.75} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {loading || invitesLoading ? <LoadingSpinner /> : (
-        <div className="card divide-y divide-ink-100">
-          {users.map(u => (
-            <div key={u.id} className="flex items-center justify-between px-4 py-3 gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-ink-800">
-                  {u.displayName || u.email?.split('@')[0] || 'Unnamed'}
-                  {u.id === profile?.uid && <span className="text-xs font-normal text-ink-400"> (you)</span>}
-                </p>
-                <p className="text-xs text-ink-400 truncate">{u.email || 'No email'}</p>
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <span className={`badge ${u.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{u.role || '—'}</span>
-                <span className={`badge ${u.active !== false ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>{u.active !== false ? 'Active' : 'Deactivated'}</span>
-                <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => setPendToggle(u)}>
-                  {u.active !== false ? 'Deactivate' : 'Reactivate'}
-                </button>
-                {u.id === profile?.uid ? (
-                  <span className="text-xs text-ink-300 px-2 hidden sm:inline">You</span>
-                ) : (
-                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Remove account" onClick={() => setPendDelete(u)}>
-                    <Trash2 className="h-4 w-4" strokeWidth={1.75} />
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <Modal open={modal} onClose={() => setModal(false)} title={freshInvite ? 'Invite ready' : 'Invite someone'}>
-        {!freshInvite ? (
-          <form onSubmit={handleCreateInvite} className="space-y-3">
-            <div>
-              <label className="label">Full name</label>
-              <input className="input" value={newName} onChange={e=>setNewName(e.target.value)} required autoComplete="off" autoFocus />
-            </div>
-            <div>
-              <label className="label">Role</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button type="button" onClick={() => setNewRole('cashier')} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole==='cashier'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Cashier</button>
-                <button type="button" onClick={() => setNewRole('owner')} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole==='owner'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Owner</button>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 pt-1">
-              <button type="button" className="btn-secondary" onClick={() => setModal(false)}>Cancel</button>
-              <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Creating…' : 'Create invite'}</button>
-            </div>
-          </form>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-sm text-ink-600">Send this link to <span className="font-semibold">{freshInvite.displayName}</span> ({freshInvite.role}).</p>
-            <div className="flex items-center gap-2">
-              <input className="input font-mono text-xs" readOnly value={inviteLink(freshInvite.id)} onFocus={(e) => e.target.select()} />
-              <button type="button" className="btn-outline shrink-0" onClick={() => copyLink(freshInvite.id)}>
-                <Copy className="h-4 w-4" strokeWidth={1.75} /> Copy
-              </button>
-            </div>
-            <button type="button" className="btn-primary w-full" onClick={() => setModal(false)}>Done</button>
-          </div>
-        )}
-      </Modal>
-
-      <ConfirmDialog open={!!pendToggle} title="Change Account Status?" confirmLabel="Confirm" onConfirm={handleToggle} onCancel={() => setPendToggle(null)} />
-      <ConfirmDialog open={!!pendDelete} title="Remove Account?" confirmLabel="Remove" danger onConfirm={handleDelete} onCancel={() => setPendDelete(null)} />
-      <ConfirmDialog open={!!pendCancelInvite} title="Cancel Invite?" confirmLabel="Cancel" danger onConfirm={handleCancelInvite} onCancel={() => setPendCancelInvite(null)} />
-    </div>
-  );
-}
-````
-
 ## File: src/utils/documentService.js
 ````javascript
 import { jsPDF } from 'jspdf';
@@ -7554,106 +6521,122 @@ export async function loadImageAsDataUrl(url) {
     }
 }
 
+// Replace the buildDocument function in src/utils/documentService.js
 async function buildDocument(data, settings, typeLabel) {
-    const doc = new jsPDF('p', 'mm', [80, 200]);
-    let y = 10;
-    const centerX = 40;
+    const doc = new jsPDF('p', 'mm', [80, 200]); // Thermal receipt size
+    let y = 8;
+    const marginX = 5;
+    const pageWidth = 75;
 
+    // 1. TOP-LEFT LOGO & BUSINESS DETAILS
     const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
     if (logoDataUrl) {
         try {
             const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
-            doc.addImage(logoDataUrl, format, centerX - 9, y, 18, 18);
-            y += 21;
+            doc.addImage(logoDataUrl, format, marginX, y, 14, 14); // Logo top-left
+            
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(11);
+            doc.text(settings.shopName || 'Business Receipt', marginX + 17, y + 5);
+            
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(8);
+            if (settings.phone) doc.text(`Tel: ${settings.phone}`, marginX + 17, y + 9);
+            if (settings.address) doc.text(settings.address, marginX + 17, y + 13);
+            y += 18;
         } catch (err) {
             console.error('Could not embed business logo in PDF:', err);
         }
+    } else {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(12);
+        doc.text(settings.shopName || 'Business Receipt', marginX, y + 4);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        if (settings.phone) { y += 4; doc.text(`Tel: ${settings.phone}`, marginX, y + 4); }
+        if (settings.address) { y += 4; doc.text(settings.address, marginX, y + 4); }
+        y += 8;
     }
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.text(settings.shopName || 'Business Receipt', centerX, y, { align: 'center' });
+    // 2. DOCUMENT TYPE & META DATA
+    y += 2;
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.4);
+    doc.line(marginX, y, pageWidth, y);
+    
     y += 6;
-
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(typeLabel, marginX, y); // "INVOICE" or "RECEIPT"
+    
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    if (settings.phone) { 
-        doc.text(settings.phone, centerX, y, { align: 'center' }); 
-        y += 5; 
-    }
-    if (settings.email) { 
-        doc.text(settings.email, centerX, y, { align: 'center' }); 
-        y += 5; 
-    }
-    if (settings.address) { 
-        doc.text(settings.address, centerX, y, { align: 'center' }); 
-        y += 5; 
+    doc.setFontSize(8);
+    doc.text(formatDateTime(data.soldAt || data.recordedAt || new Date()), pageWidth, y, { align: 'right' });
+    
+    y += 5;
+    doc.text(`Ref: ${data.id?.substring(0, 8).toUpperCase() || 'N/A'}`, marginX, y);
+    if (data.customerName) {
+        y += 4;
+        doc.text(`To: ${data.customerName}`, marginX, y);
     }
 
+    // 3. ITEMIZED TABLE
     y += 4;
     doc.setDrawColor(200, 200, 200);
-    doc.line(5, y, 75, y);
-    y += 7;
-
-    doc.setFont('helvetica', 'bold');
-    doc.text(typeLabel, centerX, y, { align: 'center' });
-    y += 8;
-
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Ref: ${data.id || 'N/A'}`, 5, y); y += 5;
-    doc.text(`Date: ${formatDateTime(data.soldAt || data.recordedAt || new Date())}`, 5, y); y += 5;
-    if (data.customerName) {
-        doc.text(`Customer: ${data.customerName}`, 5, y); y += 5;
-    }
-    if (data.isCredit) {
-        doc.text(`Status: ${data.status === 'partial' ? 'Partially Paid' : 'Unpaid'}`, 5, y); y += 5;
-    } else if (data.paymentMethod || data.method) {
-        doc.text(`Payment: ${data.paymentMethod || data.method}`, 5, y); y += 5;
-    }
-
-    y += 3;
-    doc.line(5, y, 75, y);
-    y += 7;
-
-    doc.setFont('helvetica', 'bold');
-    doc.text('Item', 5, y);
-    doc.text('Amount', 75, y, { align: 'right' });
-    y += 6;
+    doc.setLineWidth(0.2);
+    doc.line(marginX, y, pageWidth, y);
     
+    y += 5;
+    doc.setFont('helvetica', 'bold');
+    doc.text('ITEM', marginX, y);
+    doc.text('TOTAL', pageWidth, y, { align: 'right' });
+    
+    y += 2;
+    doc.line(marginX, y, pageWidth, y);
+
+    // Items
+    y += 5;
     doc.setFont('helvetica', 'normal');
     const itemName = data.productName || data.description || 'Item';
     const splitName = doc.splitTextToSize(itemName, 45);
-    doc.text(splitName, 5, y);
+    doc.text(splitName, marginX, y);
     
     const amountStr = formatKES(data.totalAmount || data.amount || 0);
-    doc.text(amountStr, 75, y, { align: 'right' });
+    doc.text(amountStr, pageWidth, y, { align: 'right' });
     
-    y += (splitName.length * 4) + 2;
+    y += (splitName.length * 4);
     if (data.quantity) {
-        doc.setFontSize(8);
-        // FIX: Display selling price (@ soldPricePerUnit), not buying price
-        doc.text(`Qty: ${data.quantity} @ ${formatKES(data.soldPricePerUnit || 0)}`, 5, y);
-        y += 6;
+        doc.setTextColor(100, 100, 100);
+        doc.text(`${data.quantity} × @ ${formatKES(data.soldPricePerUnit || 0)}`, marginX, y);
+        doc.setTextColor(0, 0, 0);
+        y += 4;
     }
 
+    // 4. TOTALS SECTION
     y += 2;
-    doc.line(5, y, 75, y);
-    y += 7;
+    doc.line(marginX, y, pageWidth, y);
+    y += 6;
 
     doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
     if (data.isCredit) {
-        doc.text('AMOUNT DUE:', 5, y);
-        doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), 75, y, { align: 'right' });
+        doc.text('TOTAL DUE:', marginX, y);
+        doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth, y, { align: 'right' });
     } else {
-        doc.text('TOTAL:', 5, y);
-        doc.text(amountStr, 75, y, { align: 'right' });
+        doc.text('PAID:', marginX, y);
+        doc.text(amountStr, pageWidth, y, { align: 'right' });
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        y += 4;
+        doc.text(`Via: ${data.paymentMethod || data.method}`, pageWidth, y, { align: 'right' });
     }
 
-    y += 15;
+    // 5. FOOTER
+    y += 12;
     doc.setFontSize(8);
     doc.setFont('helvetica', 'italic');
-    doc.text(data.isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!', centerX, y, { align: 'center' });
+    doc.setTextColor(100, 100, 100);
+    doc.text(data.isCredit ? 'Payment due — thank you!' : 'Thank you for your business!', 40, y, { align: 'center' });
 
     return doc;
 }
@@ -7709,6 +6692,109 @@ export function sendWhatsAppDocument(sale, settings, phone) {
     const message = buildWhatsAppMessage(sale, settings);
     const url = `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
     window.open(url, '_blank', 'noopener,noreferrer');
+}
+````
+
+## File: src/utils/products.js
+````javascript
+import { collection, doc, writeBatch, updateDoc, deleteField, serverTimestamp, getDoc, getDocs, deleteDoc, query, where } from 'firebase/firestore';
+import { db } from '../firebase';
+import { raceWithTimeout } from './offlineWrite';
+
+export async function permanentlyDeleteProduct(productId, barcode, businessId) {
+  if (!businessId) throw new Error('permanentlyDeleteProduct() called with no businessId');
+  const productRef = doc(db, 'products', productId);
+  const trimmedBarcode = barcode ? String(barcode).trim() : null;
+
+  const batch = writeBatch(db);
+  if (trimmedBarcode) {
+    const idxRef = barcodeIndexRef(businessId, trimmedBarcode);
+    const idxSnap = await getDoc(idxRef);
+    if (idxSnap.exists() && idxSnap.data().productId === productId) {
+      batch.delete(idxRef);
+    }
+  }
+  batch.delete(productRef);
+  await batch.commit();
+}
+
+export async function cleanupOrphanedBarcodeIndexes(businessId) {
+  if (!businessId) throw new Error('cleanupOrphanedBarcodeIndexes() called with no businessId');
+  const snap = await getDocs(query(collection(db, 'barcodeIndex'), where('businessId', '==', businessId)));
+  let removed = 0;
+  for (const idxDoc of snap.docs) {
+    const { productId } = idxDoc.data();
+    if (!productId) continue;
+    const productSnap = await getDoc(doc(db, 'products', productId));
+    if (!productSnap.exists()) {
+      await deleteDoc(idxDoc.ref);
+      removed += 1;
+    }
+  }
+  return { scanned: snap.docs.length, removed };
+}
+
+function barcodeIndexRef(businessId, barcode) {
+  return doc(db, 'barcodeIndex', `${businessId}__${barcode}`);
+}
+
+// FIX: Offline-safe product creation using writeBatch and generated internalCode
+export async function createProduct(data, businessId) {
+  if (!businessId) throw new Error('createProduct() called with no businessId');
+  const barcode = data.barcode ? String(data.barcode).trim() : null;
+  const newProductRef = doc(collection(db, 'products'));
+  const internalCode = `FB-${Math.floor(Date.now() / 1000).toString().slice(-6)}`;
+
+  const batch = writeBatch(db);
+  batch.set(newProductRef, {
+    ...data,
+    businessId,
+    barcode: barcode || null,
+    internalCode,
+    deleted: false,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  if (barcode) {
+    batch.set(barcodeIndexRef(businessId, barcode), { businessId, barcode, productId: newProductRef.id });
+  }
+
+  const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+  if (error) throw error;
+
+  return { id: newProductRef.id, queuedOffline };
+}
+
+export async function updateProduct(productId, data, previousBarcode, businessId) {
+  if (!businessId) throw new Error('updateProduct() called with no businessId');
+  const nextBarcode = data.barcode ? String(data.barcode).trim() : null;
+  const prevBarcode = previousBarcode ? String(previousBarcode).trim() : null;
+  const productRef = doc(db, 'products', productId);
+  const { stock, businessId: _ignored, ...updatePayload } = data;
+
+  const batch = writeBatch(db);
+  batch.update(productRef, { ...updatePayload, barcode: nextBarcode || null, updatedAt: serverTimestamp() });
+
+  if (prevBarcode && prevBarcode !== nextBarcode) {
+    batch.delete(barcodeIndexRef(businessId, prevBarcode));
+  }
+  if (nextBarcode && nextBarcode !== prevBarcode) {
+    batch.set(barcodeIndexRef(businessId, nextBarcode), { businessId, barcode: nextBarcode, productId });
+  }
+
+  const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+  if (error) throw error;
+
+  return { queuedOffline };
+}
+
+export async function softDeleteProduct(productId) {
+  await updateDoc(doc(db, 'products', productId), { deleted: true, deletedAt: serverTimestamp() });
+}
+
+export async function restoreProduct(productId) {
+  await updateDoc(doc(db, 'products', productId), { deleted: false, deletedAt: deleteField() });
 }
 ````
 
@@ -7788,225 +6874,6 @@ export function sendWhatsAppDocument(sale, settings, phone) {
   /* Bottom nav safe area support on iOS notched devices */
   .bottom-nav-safe {
     padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
-  }
-}
-````
-
-## File: firestore.rules
-````
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-
-    // ── Helpers ─────────────────────────────────────────────────────────
-    function isSignedIn() { return request.auth != null; }
-
-    function hasProfile() {
-      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
-    }
-
-    function myProfile() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
-
-    function isActive() {
-      let data = myProfile();
-      return !('active' in data) || data.active != false;
-    }
-
-    function isStaff() {
-      return hasProfile() && isActive();
-    }
-
-    function myBusinessId() {
-      return myProfile().businessId;
-    }
-
-    function isOwner() {
-      return isStaff() && myProfile().role == 'owner';
-    }
-
-    function owns(data) {
-      return isStaff() && data.businessId == myBusinessId();
-    }
-
-    function ownsUpdate(existing, incoming) {
-      return owns(existing) && owns(incoming);
-    }
-
-    function isValidInviteClaim(inviteId, businessId, role) {
-      let invite = get(/databases/$(database)/documents/staffInvites/$(inviteId)).data;
-      return invite.claimed == false && invite.businessId == businessId && invite.role == role;
-    }
-
-    // ── Businesses ──────────────────────────────────────────────────────
-    match /businesses/{businessId} {
-      allow get: if isStaff() && myBusinessId() == businessId;
-      allow create: if isSignedIn();
-      allow update: if isOwner() && myBusinessId() == businessId
-                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription']);
-      allow delete: if false;
-    }
-
-    match /barcodeIndex/{docId} {
-      allow read: if isOwner() && owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-      allow update: if false;
-    }
-    match /productCodeCounters/{businessId} {
-      allow read, write: if isOwner() && myBusinessId() == businessId;
-    }
-
-    match /businessSettings/{businessId} {
-      allow get: if isStaff() && myBusinessId() == businessId;
-      allow write: if isOwner() && myBusinessId() == businessId;
-    }
-
-    // ── Users & invites ─────────────────────────────────────────────────
-    match /users/{userId} {
-      allow get: if isSignedIn() && request.auth.uid == userId;
-      allow list: if isOwner() && resource.data.businessId == myBusinessId();
-
-      allow create: if isSignedIn() && request.auth.uid == userId
-                    && request.resource.data.role in ['owner', 'cashier']
-                    && (
-                      (
-                        request.resource.data.role == 'owner'
-                        && !exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
-                        && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.createdBy == request.auth.uid
-                      )
-                      ||
-                      (
-                        request.resource.data.claimedFromInviteId is string
-                        && isValidInviteClaim(request.resource.data.claimedFromInviteId, request.resource.data.businessId, request.resource.data.role)
-                      )
-                    );
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data) && userId != request.auth.uid;
-    }
-
-    match /staffInvites/{inviteId} {
-      allow get: if true;
-      allow list: if isOwner() && resource.data.businessId == myBusinessId();
-      allow create: if isOwner() && request.resource.data.businessId == myBusinessId()
-                    && request.resource.data.role in ['owner', 'cashier'];
-      allow update: if isSignedIn()
-                    && resource.data.claimed == false
-                    && request.resource.data.claimed == true
-                    && request.resource.data.linkedUid == request.auth.uid
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'linkedUid', 'claimedAt']);
-      allow delete: if isOwner() && resource.data.businessId == myBusinessId();
-    }
-
-    // ── Device sessions (Settings > Device Management) ────────────────
-    match /sessions/{sessionId} {
-      allow create: if isStaff() && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == myBusinessId();
-
-      // FIX: Added 'resource == null' so a new device can check if its session exists yet
-      allow read: if isSignedIn() && (
-        resource == null || 
-        resource.data.uid == request.auth.uid || 
-        (isStaff() && resource.data.businessId == myBusinessId())
-      );
-
-      allow update: if isSignedIn() && (
-        (resource.data.uid == request.auth.uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent']))
-        ||
-        (isOwner() && resource.data.businessId == myBusinessId()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked']))
-      );
-      allow delete: if false;
-    }
-
-    // ── Business data ───────────────────────────────────────────────────
-    match /products/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data) && (
-        isOwner() ||
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt'])
-      );
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /suppliers/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /sales/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /customers/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /creditSales/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /repayments/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /refunds/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /expenses/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /purchases/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /supplierPayments/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /stockAdjustments/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /dailySessions/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
   }
 }
 ````
@@ -8153,6 +7020,337 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
         </div>
       </div>
     </Modal>
+  );
+}
+````
+
+## File: src/components/products/ProductFormModal.jsx
+````javascript
+import { useEffect, useState } from 'react';
+import toast from 'react-hot-toast';
+import Modal from '../common/Modal';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { db } from '../../firebase';
+import { useAuth } from '../../contexts/AuthContext';
+import { raceWithTimeout } from '../../utils/offlineWrite';
+
+const empty = {
+  name: '', category: '', costPrice: '', sellingPrice: '', stock: '',
+  lowStockThreshold: '5', supplierId: '', barcode: '', description: '',
+};
+
+// FIX: Free plan product limit.
+const FREE_PLAN_PRODUCT_LIMIT = 100;
+
+export default function ProductFormModal({
+   open, onClose, onSave, suppliers, initialProduct, prefillBarcode, onAddSupplier, newSupplierId,
+simplifiedForPurchase = false, productCount = 0,
+ }) {
+  const { businessId, isPro } = useAuth();
+  const [form, setForm] = useState(empty);
+  const [categories, setCategories] = useState([]);
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [savingCategory, setSavingCategory] = useState(false);
+
+  // MULTI-TENANT CHANGE: categories used to live in a single global
+  // settings/categories doc shared by every business in the project.
+  // They now live inside this business's own businessSettings/{businessId}
+  // document, alongside shopName and cashierCanRecordExpenses.
+  useEffect(() => {
+    if (!open || !businessId) return;
+    const unsub = onSnapshot(doc(db, 'businessSettings', businessId), (snap) => {
+      if (snap.exists() && snap.data().categories) {
+        setCategories(snap.data().categories);
+      } else {
+        const defaults = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
+        setCategories(defaults);
+        setDoc(doc(db, 'businessSettings', businessId), { categories: defaults }, { merge: true }).catch(console.error);
+      }
+    });
+    return unsub;
+  }, [open, businessId]);
+
+  useEffect(() => {
+    setBusy(false);
+    if (open) {
+      if (initialProduct) {
+        setForm({
+          ...empty, ...initialProduct,
+          costPrice: initialProduct.costPrice ?? '',
+          sellingPrice: initialProduct.sellingPrice ?? '',
+          stock: initialProduct.stock ?? '',
+          lowStockThreshold: initialProduct.lowStockThreshold ?? '5',
+          supplierId: initialProduct.supplierId ?? '',
+          barcode: initialProduct.barcode ?? '',
+          description: initialProduct.description ?? '',
+        });
+      } else {
+        setForm({ ...empty, barcode: prefillBarcode || '', category: categories[0] || '' });
+      }
+    }
+  }, [initialProduct, prefillBarcode, open]);
+
+  useEffect(() => {
+    if (open && !initialProduct && !form.category && categories.length > 0) {
+      setForm(prev => ({ ...prev, category: categories[0] }));
+    }
+  }, [categories, open, initialProduct, form.category]);
+
+  useEffect(() => {
+    if (newSupplierId) setForm((prev) => ({ ...prev, supplierId: newSupplierId }));
+  }, [newSupplierId]);
+
+  const set = (f) => (e) => setForm((p) => ({ ...p, [f]: e.target.value }));
+
+const handleAddCategory = async () => {
+    const trimmed = newCategoryName.trim();
+    if (!trimmed || savingCategory) return;
+    if (categories.some(c => c.toLowerCase() === trimmed.toLowerCase())) { toast.error('Category already exists.'); return; }
+    const updated = [...categories, trimmed];
+    setSavingCategory(true);
+    const write = setDoc(doc(db, 'businessSettings', businessId), { categories: updated }, { merge: true });
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    setSavingCategory(false);
+    if (error) { toast.error('Failed to add category: ' + error.message); return; }
+    setForm(prev => ({ ...prev, category: trimmed }));
+    setShowAddCategory(false);
+    setNewCategoryName('');
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Category added');
+  };
+
+  const handle = async (e) => {
+    e.preventDefault();
+    if (!form.name.trim()) return;
+    if (!form.category) return toast.error('Please select or add a category.');
+    if (!simplifiedForPurchase && Number(form.costPrice) < 0) return toast.error('Cost price cannot be negative.');
+    if (Number(form.sellingPrice) <= 0) return toast.error('Selling price must be greater than zero.');
+   if (!initialProduct && !simplifiedForPurchase && Number(form.stock) < 0) return toast.error('Stock cannot be negative.');
+
+    // FIX: Free plan capped at FREE_PLAN_PRODUCT_LIMIT active products —
+    // only blocks NEW products, never editing an existing one.
+    if (!initialProduct && !isPro && productCount >= FREE_PLAN_PRODUCT_LIMIT) {
+      toast.error(`Free plan is limited to ${FREE_PLAN_PRODUCT_LIMIT} products. Upgrade to FlowBiz Pro to add more.`);
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await onSave({
+        name: form.name.trim(),
+        category: form.category,
+        costPrice: simplifiedForPurchase ? 0 : Number(form.costPrice),
+        sellingPrice: Number(form.sellingPrice),
+        stock: initialProduct ? initialProduct.stock : (simplifiedForPurchase ? 0 : Number(form.stock)),
+       lowStockThreshold: simplifiedForPurchase ? 5 : (Number(form.lowStockThreshold) || 5),
+        supplierId: simplifiedForPurchase ? null : (form.supplierId || null),
+        barcode: form.barcode.trim() || null,
+        description: form.description.trim(),
+      });
+    } catch (err) {
+      setBusy(false);
+    }
+  };
+
+  const handleClose = () => { if (!busy) onClose(); };
+
+  return (
+    <Modal open={open} onClose={handleClose} title={initialProduct ? 'Edit product' : 'Add product'}>
+      <form onSubmit={handle} className="space-y-3">
+        <div><label className="label">Product name</label><input className="input" value={form.name} onChange={set('name')} disabled={busy} required /></div>
+
+        {initialProduct?.internalCode && (
+          <div className="rounded-lg bg-ink-50 px-3 py-2 text-xs text-ink-500">
+            Internal code: <span className="font-mono font-semibold text-ink-700">{initialProduct.internalCode}</span>
+          </div>
+        )}
+
+        <div>
+          <label className="label">Barcode <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
+          <input className="input font-mono" value={form.barcode} onChange={set('barcode')} placeholder="Scan or type manufacturer barcode" disabled={busy} />
+          {!initialProduct && <p className="mt-1 text-xs text-ink-400">Leave blank if this product doesn't have a manufacturer barcode.</p>}
+        </div>
+
+        <div className={simplifiedForPurchase ? '' : 'grid grid-cols-2 gap-3'}>
+          <div>
+            <label className="label">Category</label>
+            <select className="input" value={form.category} onChange={set('category')} disabled={busy} required>
+              <option value="" disabled>— Select Category —</option>
+              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+              {showAddCategory ? (
+                <div className="mt-2 space-y-2 rounded-lg bg-ink-50 p-2.5">
+                  <label className="text-[11px] font-semibold text-ink-700 uppercase tracking-wide">New Category</label>
+                  <input className="input !py-1 !min-h-0 text-xs" value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="e.g. Fruits" disabled={busy || savingCategory} autoFocus />
+                  <div className="flex gap-1.5 justify-end">
+                    <button type="button" className="btn-secondary !py-1 !px-2.5 !min-h-0 text-xs" onClick={() => { setShowAddCategory(false); setNewCategoryName(''); }} disabled={busy || savingCategory}>Cancel</button>
+                    <button type="button" className="btn-primary !py-1 !px-2.5 !min-h-0 text-xs" onClick={handleAddCategory} disabled={busy || savingCategory}>{savingCategory ? 'Saving…' : 'Save'}</button>
+                  </div>
+                </div>
+              ) : (
+                <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={() => setShowAddCategory(true)} disabled={busy}>+ Add Category</button>
+              )}
+          </div>
+          {!simplifiedForPurchase && (
+           <div>
+              <label className="label">Supplier</label>
+             <select className="input" value={form.supplierId} onChange={set('supplierId')} disabled={busy}>
+                <option value="">— None —</option>
+               {(suppliers || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              {onAddSupplier && <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={onAddSupplier} disabled={busy}>+ Add new supplier</button>}
+            </div>
+          )}
+        </div>
+
+        {simplifiedForPurchase ? (
+          <div>
+            <label className="label">Selling price (KES)</label>
+            <input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required />
+            <p className="mt-1 text-xs text-ink-400">Stock starts at 0. Go back to the purchase form to record what was actually received and its cost.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="label">Buying price (KES)</label><input type="number" min="0" step="0.01" className="input" value={form.costPrice} onChange={set('costPrice')} disabled={busy} required /></div>
+            <div><label className="label">Selling price (KES)</label><input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required /></div>
+          </div>
+        )}
+
+        {!simplifiedForPurchase && (
+         <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Stock qty</label>
+              <input type="number" min="0" className="input disabled:bg-ink-50 disabled:text-ink-400" value={form.stock} onChange={set('stock')} disabled={!!initialProduct || busy} required={!initialProduct} />
+              {initialProduct && <p className="mt-1 text-[11px] text-ink-400">Stock quantity is changed via Purchases, Sales, or Stock Take.</p>}
+            </div>
+            <div><label className="label">Low stock alert</label><input type="number" min="0" className="input" value={form.lowStockThreshold} onChange={set('lowStockThreshold')} disabled={busy} /></div>
+          </div>
+        )}
+
+        <div>
+          <label className="label">Description <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
+          <textarea className="input !min-h-[70px]" rows={2} value={form.description} onChange={set('description')} placeholder="Product details or specifications" disabled={busy} />
+        </div>
+
+        {Number(form.sellingPrice) > 0 && Number(form.costPrice) > 0 && Number(form.sellingPrice) <= Number(form.costPrice) && (
+          <p className="text-xs text-rust-600 font-medium">⚠️ Selling price is at or below cost — you'll make no profit on this item.</p>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy}>
+            {busy ? (
+              <span className="flex items-center gap-1.5">
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                {initialProduct ? 'Saving...' : 'Adding Product...'}
+              </span>
+            ) : (initialProduct ? 'Save changes' : 'Add product')}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+````
+
+## File: src/components/scanner/ScannerModal.jsx
+````javascript
+// src/components/scanner/ScannerModal.jsx
+import { useCallback, useEffect, useState } from 'react';
+import { X, Zap, ZapOff, AlertTriangle } from 'lucide-react';
+import { useCameraScanner } from '../../hooks/useCameraScanner';
+
+export default function ScannerModal({ open, onClose, onDetected }) {
+  // Guards against multiple rapid detections firing in the brief window
+  // between "we found something" and the parent page actually closing us.
+  const [paused, setPaused] = useState(false);
+
+  useEffect(() => {
+    if (open) setPaused(false);
+  }, [open]);
+
+  const handleDetected = useCallback((text) => {
+    if (paused) return;
+    setPaused(true);
+    onDetected(text);
+  }, [paused, onDetected]);
+
+const { videoRef, status, torchOn, torchSupported, toggleTorch, retry } = useCameraScanner({
+    onDetected: handleDetected,
+    active: open && !paused,
+  });
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-ink-950">
+      <div className="flex items-center justify-between px-4 py-3 safe-top">
+        <span className="font-display text-sm font-bold text-white">Scan barcode</span>
+        <button onClick={onClose} className="rounded-lg p-2 text-white/80 hover:bg-white/10" aria-label="Close">
+          <X className="h-5 w-5" strokeWidth={1.75} />
+        </button>
+      </div>
+
+      <div className="relative flex-1 overflow-hidden">
+        <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
+
+        {status === 'scanning' && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className="h-40 w-64 rounded-xl2 border-2 border-moss-400/80" />
+          </div>
+        )}
+
+        {status === 'denied' && (
+          <ScannerMessage
+            icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
+            title="Camera permission needed"
+            body="Your browser is blocking camera access for FlowBiz. Tap the padlock or (i) icon next to the address bar → Permissions → Camera → Allow, then come back and try again. On some phones this is under Chrome menu (⋮) → Settings → Site settings → flowbiz.pages.dev."
+            action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
+          />
+        )}
+
+        {status === 'insecure' && (
+          <ScannerMessage
+            icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
+            title="Camera needs a secure connection"
+            body="This page was opened over a plain network address (not HTTPS or localhost), so the browser blocks camera access entirely on this device. Open the app via HTTPS, or via localhost on this device, to use the scanner. You can still find the product by searching its name or code."
+          />
+        )}
+
+        {status === 'unavailable' && (
+          <ScannerMessage
+            icon={<AlertTriangle className="h-8 w-8 text-rust-400" strokeWidth={1.75} />}
+            title="Camera unavailable"
+            body="No usable camera was found on this device. You can still find the product by searching its name or code."
+            action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
+          />
+        )}
+      </div>
+
+      {torchSupported && status === 'scanning' && (
+        <div className="flex justify-center pb-8 pt-4 safe-bottom">
+          <button
+            onClick={toggleTorch}
+            className={`flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold ${torchOn ? 'bg-amber-400 text-ink-900' : 'bg-white/10 text-white'}`}
+          >
+            {torchOn ? <Zap className="h-4 w-4" strokeWidth={1.75} /> : <ZapOff className="h-4 w-4" strokeWidth={1.75} />}
+            Torch
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScannerMessage({ icon, title, body, action }) {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
+      {icon}
+      <p className="font-display text-base font-bold text-white">{title}</p>
+      <p className="text-sm text-white/70">{body}</p>
+      {action}
+    </div>
   );
 }
 ````
@@ -8427,857 +7625,245 @@ export function useCameraScanner({ onDetected, active }) {
 }
 ````
 
-## File: src/pages/Counter.jsx
-````javascript
-import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Trash2 } from 'lucide-react';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useDailySession } from '../hooks/useDailySession';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import ProductGrid from '../components/pos/ProductGrid';
-import SaleModal from '../components/pos/SaleModal';
-import SaleCompleteModal from '../components/pos/SaleCompleteModal';
-import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function Counter() {
-  const { profile, isAdmin, businessId } = useAuth();
-  const location = useLocation();
-  const navigate = useNavigate();
-  
-  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const salesQ     = useMemo(() => businessId ? tenantQuery('sales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
-  const creditSalesQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-
-  const { data: products,  loading: prodLoading }  = useFirestoreCollection(productsQ);
-  const { data: customers }                         = useFirestoreCollection(customersQ);
-  const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
-  const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
-  const { data: suppliers }                         = useFirestoreCollection(suppliersQ);
-  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
-
-  const [search, setSearch]           = useState('');
-  const [activeProduct, setActive]    = useState(null);
-  const [completedSale, setCompletedSale] = useState(null);
-  const [pendingVoid, setPendingVoid] = useState(null);
-  const [editProduct, setEditProd]    = useState(null);
-  const [prodModal, setProdModal]     = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [notFoundCode, setNotFoundCode] = useState(null);
-  const [voiding, setVoiding] = useState(false);
-
-  useEffect(() => {
-    if (location.state?.autoScan && session && !isClosed) {
-      setScannerOpen(true);
-      navigate(location.pathname, { replace: true, state: {} });
-    }
-  }, [location, navigate, session, isClosed]);
-
-  const filtered = products.filter(p =>
-    p.name.toLowerCase().includes(search.toLowerCase()) ||
-    (p.barcode && p.barcode.includes(search.trim())) ||
-    (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
-  );
-
-  const mergedSales = useMemo(() => {
-    const list = [];
-    sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
-    creditSales.forEach(cs => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
-    return list.sort((a, b) => {
-      const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
-      const bTime = b.soldAt?.toMillis?.() ?? b.soldAt?.toDate?.()?.getTime?.() ?? new Date(b.soldAt || 0).getTime();
-      return bTime - aTime;
-    }).slice(0, 100);
-  }, [sales, creditSales]);
-
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
-    return { id:ref.id, name, phone };
-  };
-
-  // FIX: Replaced runTransaction with writeBatch(db) and increment() for perfect offline capability.
-const handleSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
-    const productRef = doc(db, 'products', product.id);
-    const saleRef = doc(collection(db, 'sales'));
-    const saleData = withBusiness({
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit,
-      totalAmount: soldPricePerUnit * quantity,
-      profit: (soldPricePerUnit - product.costPrice) * quantity,
-      paymentMethod, mpesaCode: mpesaCode || null,
-      soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(saleRef, saleData);
-
-    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
-  };
-
-  const handleCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
-    const productRef = doc(db, 'products', product.id);
-    const totalAmount = soldPricePerUnit * quantity;
-    const creditRef = doc(collection(db, 'creditSales'));
-    const creditData = withBusiness({
-      customerId, customerName, customerPhone: customerPhone || '',
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
-      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
-      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(creditRef, creditData);
-
-    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
-  };
-
-  // FIX: Voiding a Cash Sale now creates a 'refunds' document to correct CloseDay till shortages.
-const handleVoid = async () => {
-    const sale = pendingVoid;
-    setVoiding(true);
-    try {
-      const batch = writeBatch(db);
-      const prodRef = doc(db, 'products', sale.productId);
-      const prodSnap = await getDoc(prodRef);
-
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(sale.quantity), updatedAt: serverTimestamp() });
-      }
-
-      batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
-
-      if (!sale.isCredit) {
-        const refundRef = doc(collection(db, 'refunds'));
-        batch.set(refundRef, withBusiness({
-          saleId: sale.id, amount: sale.totalAmount, method: sale.paymentMethod,
-          refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName
-        }, businessId));
-      }
-
-      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
-      if (error) throw error;
-      
-      toast.success(queuedOffline ? 'Sale voided offline.' : (prodSnap.exists() ? 'Sale voided and stock restored.' : 'Sale voided (product was deleted, no stock restored).'));
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setVoiding(false); setPendingVoid(null); }
-  };
-
-  const handleProductSave = async (data) => {
-    try {
-      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
-      else { await createProduct(data, businessId); toast.success('Product added'); }
-      setEditProd(null);
-      setProdModal(false);
-      setPrefillBarcode(null);
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err));
-      throw err;
-    }
-  };
-
-const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setActive(found);
-    else setNotFoundCode(code);
-  };
-
-  useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
-  });
-
-  if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
-  if (isClosed) return (
-    <div className="mx-auto max-w-sm pt-8 space-y-4 text-center">
-      <EmptyState title="Today's session is closed" description="Sales are locked. An owner can reopen to continue trading." />
-      {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>}
-    </div>
-  );
-  if (!session) return <OpenSessionPrompt onOpen={floats => openSession({ ...floats, openedBy:profile.uid })} />;
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Tap a product, or scan a barcode, to record a sale.</p></div>
-        {isAdmin && <button className="btn-outline text-xs" onClick={()=>{setEditProd(null);setPrefillBarcode(null);setProdModal(true);}}>+ Quick add product</button>}
-      </div>
-      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
-      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
-        <ProductGrid products={filtered} onSelect={setActive} isAdmin={isAdmin} />}
-
-      {isAdmin && (
-        <div className="mt-4">
-          <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Sales log (last 100)</h2>
-          {salesLoading || creditLoading ? <LoadingSpinner /> : mergedSales.length === 0 ? <EmptyState title="No sales recorded" /> : (
-            <div className="card divide-y divide-ink-100">
-              {mergedSales.map(s=>(
-                <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided?'opacity-40 line-through':''}`}>
-                  <div>
-                    <p className="font-medium text-ink-700">{s.quantity} × {s.productName} — {formatKES(s.totalAmount)}</p>
-                    <p className="text-xs text-ink-400">
-                      {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
-                      {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
-                    </p>
-                  </div>
-                  {!s.isVoided && !s.isCredit && isAdmin && (
-                    <button onClick={()=>setPendingVoid(s)} className="p-1 text-rust-400 hover:text-rust-600 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Void sale"><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
-                  )}
-                  {s.isCredit && isAdmin && (
-                    <Link to={`/customers/${s.customerId}`} className="btn-outline !py-1 !px-2.5 !min-h-0 text-xs text-ink-500 hover:text-ink-700">View Customer</Link>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!notFoundCode} onClose={()=>setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={()=>setNotFoundCode(null)}>Cancel</button>
-          {isAdmin ? (
-            <button className="btn-primary" onClick={()=>{ setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
-          ) : (
-            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
-          )}
-        </div>
-      </Modal>
-
-      <SaleModal 
-        open={!!activeProduct} 
-        product={activeProduct} 
-        customers={customers} 
-        onClose={(record) => {
-          setActive(null);
-          if (record && record.id) {
-            setCompletedSale(record);
-          }
-        }} 
-        onConfirmSale={handleSale} 
-        onConfirmCredit={handleCredit} 
-        onCreateCustomer={handleCreateCustomer} 
-      />
-      <SaleCompleteModal
-        open={!!completedSale}
-        sale={completedSale}
-        onClose={() => setCompletedSale(null)}
-      />
-
-<ProductFormModal
-        open={prodModal}
-        onClose={()=>{setProdModal(false);setEditProd(null);setPrefillBarcode(null);}}
-        onSave={handleProductSave}
-        suppliers={suppliers}
-        initialProduct={editProduct}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-      />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-<ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" (×${pendingVoid?.quantity}) will be restored.`} confirmLabel={voiding ? "Voiding..." : "Void sale"} confirmDisabled={voiding} danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />    </div>
-  );
-}
-````
-
-## File: src/pages/Products.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { Pencil, Trash2, TrendingUp } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function Products() {
-  const { businessId } = useAuth();
-  const productsQ = useMemo(
-    () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
-    [businessId]
-  );
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const { data: products, loading, error } = useFirestoreCollection(productsQ);
-  const { data: suppliers } = useFirestoreCollection(suppliersQ);
-  
-  const [search, setSearch] = useState('');
-  const [modal, setModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [editing, setEditing] = useState(null);
-  const [pendingDel, setPendingDel] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [scanFoundProduct, setScanFoundProduct] = useState(null);
-  const [deleting, setDeleting] = useState(false);
-
-
-  const filtered = products.filter(
-    (p) =>
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.category.toLowerCase().includes(search.toLowerCase()) ||
-      (p.barcode && p.barcode.includes(search.trim())) ||
-      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
-  );
-  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
-
-  const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
-
-  const handleSave = async (data) => {
-    try {
-      if (editing) {
-        await updateProduct(editing.id, data, editing.barcode, businessId);
-        toast.success('Product updated');
-      } else {
-        await createProduct(data, businessId);
-        toast.success('Product added');
-      }
-      closeFormModal();
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-  };
-const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
-const handleDel = async () => {
-    setDeleting(true);
-    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id), 4000);
-    setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
-    setPendingDel(null);
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setScanFoundProduct(found);
-    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
-  };
-
-  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
-
-  return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
-        <div className="flex gap-2">
-          <Link to="/inventory-intelligence" className="btn-outline">
-            <TrendingUp className="h-4 w-4" /> Intelligence
-          </Link>
-          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
-        </div>
-      </div>
-      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      <ErrorBanner message={error} />
-      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
-        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
-      ) : (
-        <>
-          <div className="space-y-2.5 sm:hidden">
-            {filtered.map((p) => (
-              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
-                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
-                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
-                  <div>
-                    <span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span>
-                  </div>
-                  <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="hidden sm:block card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {filtered.map((p) => (
-                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
-                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
-                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
-                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
-                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
-                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
-                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
-          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
-        </div>
-      </Modal>
-
-<ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-<ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    </div>
-  );
-}
-````
-
-## File: src/pages/Settings.jsx
+## File: src/pages/AuthAction.jsx
 ````javascript
 import { useEffect, useState } from 'react';
-import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { db, storage } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { resetBusinessData } from '../utils/businessReset';
-import { restoreProduct, permanentlyDeleteProduct, cleanupOrphanedBarcodeIndexes } from '../utils/products';
-import { isDemoMode } from '../demo/demoMode';
-import { resetDemoData } from '../demo/seedData';
-import { formatDateTime } from '../utils/dateRanges';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import { raceWithTimeout } from '../utils/offlineWrite';
+import { useSearchParams, Link } from 'react-router-dom';
+import { applyActionCode, verifyPasswordResetCode, confirmPasswordReset, reload, checkActionCode } from 'firebase/auth';
+import { auth } from '../firebase';
 
-const RESET_CONFIRM_PHRASE = 'RESET';
+export default function AuthAction() {
+  const [searchParams] = useSearchParams();
+  const urlMode = searchParams.get('mode');
+  const oobCode = searchParams.get('oobCode');
 
-export default function Settings() {
-  const { profile, businessId, isOwner, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, subscription } = useAuth();
-  const demo = isDemoMode();
-  const [loading, setLoading]     = useState(true);
-  
-  const [shopName, setShopName]   = useState('');
-  const [phone, setPhone]         = useState('');
-  const [email, setEmail]         = useState('');
-  const [address, setAddress]     = useState('');
-  const [logoFile, setLogoFile]   = useState(null);
-  const [logoUrl, setLogoUrl]     = useState('');
-  const [cashierExp, setCashierExp] = useState(true);
-  
-  const [saving, setSaving]       = useState(false);
-  const [savingPermissions, setSavingPermissions] = useState(false);
-  const [resetDialogOpen, setResetDialogOpen] = useState(false);
-  const [resetConfirmText, setResetConfirmText] = useState('');
-  const [resetting, setResetting] = useState(false);
+  const [resolvedMode, setResolvedMode] = useState(urlMode || null);
+  const [checkingMode, setCheckingMode] = useState(!urlMode && !!oobCode);
 
-  const [sessions, setSessions] = useState([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
+  useEffect(() => {
+    if (urlMode || !oobCode) return;
+    let cancelled = false;
+    checkActionCode(auth, oobCode)
+      .then((info) => {
+        if (cancelled) return;
+        setResolvedMode(info.operation === 'PASSWORD_RESET' ? 'resetPassword' : 'verifyEmail');
+      })
+      .catch(() => { if (!cancelled) setResolvedMode('verifyEmail'); })
+      .finally(() => { if (!cancelled) setCheckingMode(false); });
+    return () => { cancelled = true; };
+  }, [urlMode, oobCode]);
 
-  const [archived, setArchived] = useState([]);
-  const [archivedLoading, setArchivedLoading] = useState(false);
-  const [archivedOpen, setArchivedOpen] = useState(false);
+  if (checkingMode) {
+    return (
+      <Shell>
+        <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
+        <p className="text-sm text-ink-500">Checking your link…</p>
+      </Shell>
+    );
+  }
 
-  const settingsRef = businessId ? doc(db, 'businessSettings', businessId) : null;
-
-  function compressImage(file, maxDimension = 480, quality = 0.75) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob((blob) => {
-        if (!blob) { reject(new Error('Could not process image.')); return; }
-        resolve(blob);
-      }, 'image/jpeg', quality);
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
-    img.src = url;
-  });
+  if (resolvedMode === 'resetPassword') {
+    return <ResetPasswordPanel oobCode={oobCode} />;
+  }
+  return <VerifyEmailPanel mode={resolvedMode} oobCode={oobCode} />;
 }
 
-  useEffect(() => {
-    if (!settingsRef) return;
-    getDoc(settingsRef).then(snap => {
-      if (snap.exists()) { 
-        const d = snap.data(); 
-        setShopName(d.shopName || ''); 
-        setPhone(d.phone || '');
-        setEmail(d.email || '');
-        setAddress(d.address || '');
-        setLogoUrl(d.logoUrl || '');
-        setCashierExp(d.cashierCanRecordExpenses !== false); 
-      }
-      setLoading(false);
-    });
-  }, [businessId]);
-
-  useEffect(() => {
-    if (!businessId) return;
-    listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
-  }, [businessId]);
-
-  const loadArchived = async () => {
-    if (!businessId) return;
-    setArchivedLoading(true);
-    try {
-      const snap = await getDocs(query(collection(db, 'products'), where('businessId', '==', businessId), where('deleted', '==', true)));
-      setArchived(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } finally {
-      setArchivedLoading(false);
-    }
-  };
-
-const handleSave = async e => {
-    e.preventDefault(); 
-    setSaving(true);
-    try {
-      let finalLogoUrl = logoUrl;
-
-      // Logo upload gets its OWN try/catch (Issue 8): a slow/failed
-      // upload of the (now compressed) image must not block saving the
-      // rest of Business Information, which has nothing to do with it.
-      if (logoFile) {
-        try {
-          const compressed = await compressImage(logoFile, 480, 0.75);
-          const fileRef = ref(storage, `businesses/${businessId}/logo_${Date.now()}`);
-          await uploadBytes(fileRef, compressed);
-          finalLogoUrl = await getDownloadURL(fileRef);
-        } catch (logoErr) {
-          toast.error(`Logo upload failed, but the rest of your settings will still be saved: ${logoErr.message}`);
-        }
-      }
-
-      await setDoc(settingsRef, { 
-        shopName: shopName.trim(), 
-        phone: phone.trim(),
-        email: email.trim(),
-        address: address.trim(),
-        logoUrl: finalLogoUrl,
-      }, { merge: true });
-      
-      setLogoUrl(finalLogoUrl);
-      toast.success('Business information saved'); 
-      setLogoFile(null);
-    } catch (err) { 
-      toast.error(err.message); 
-    } finally { 
-      setSaving(false); 
-    }
-  };
-
-  const handleSavePermissions = async () => {
-    setSavingPermissions(true);
-    try {
-      await setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
-      toast.success('Permissions saved');
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setSavingPermissions(false);
-    }
-  };
-
-  const handleReset = async () => {
-    setResetting(true);
-    try {
-      if (demo) {
-        resetDemoData();
-        toast.success('Demo data reset. Reloading…');
-      } else {
-        await resetBusinessData(businessId, profile?.uid);
-        toast.success('Business data reset. Reloading…');
-      }
-      window.location.href = '/';
-    } catch (err) {
-      toast.error(`Reset failed partway through: ${err.message}`);
-      setResetting(false);
-      setResetDialogOpen(false);
-    }
-  };
-
-  const handleRevoke = async (sessionId) => {
-    try {
-      await revokeSession(sessionId);
-      setSessions(s => s.map(x => x.id === sessionId ? { ...x, revoked: true } : x));
-      toast.success('Device signed out.');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handleRestore = async (productId) => {
-    try { await restoreProduct(productId); setArchived(a => a.filter(p => p.id !== productId)); toast.success('Product restored'); }
-    catch (err) { toast.error(err.message); }
-  };
-
-  const handlePermanentDelete = async (productId) => {
-    const target = archived.find(p => p.id === productId);
-    try {
-      await permanentlyDeleteProduct(productId, target?.barcode, businessId);
-      setArchived(a => a.filter(p => p.id !== productId));
-      toast.success('Product permanently deleted');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const [cleaningOrphans, setCleaningOrphans] = useState(false);
-  const handleCleanupOrphans = async () => {
-    setCleaningOrphans(true);
-    try {
-      const { scanned, removed } = await cleanupOrphanedBarcodeIndexes(businessId);
-      toast.success(removed > 0
-        ? `Checked ${scanned} barcode record(s), freed ${removed} orphaned barcode(s).`
-        : `Checked ${scanned} barcode record(s) — none were orphaned.`);
-    } catch (err) { toast.error(err.message); }
-    finally { setCleaningOrphans(false); }
-  };
-
-  if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
-
+function Shell({ children }) {
   return (
-    <div className="mx-auto max-w-xl space-y-5">
-      <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
-
-      <div className="card p-5 space-y-2">
-        <h2 className="font-display text-base font-bold text-ink-800">Account &amp; Security</h2>
-        <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
-        <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
-        <Row label="Business ID" value={businessId || '—'} mono />
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+      <div className="w-full max-w-sm card p-6 text-center space-y-4">
+        <img src="/icons/icon-192.png" alt="FlowBiz" className="mx-auto h-14 w-14 rounded-2xl shadow-lg" />
+        {children}
       </div>
-
-      <form onSubmit={handleSave} className="card space-y-4 p-5">
-        <h2 className="font-display text-base font-bold text-ink-800">Business Information</h2>
-        <p className="text-sm text-ink-500 mb-2">This info dynamically populates your customer-facing documents (receipts, invoices).</p>
-        
-        <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
-        
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
-          <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
-        </div>
-
-        <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
-        
-        <div>
-          <label className="label">Business Logo</label>
-          <div className="flex items-center gap-4">
-            {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
-            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files[0])} />
-          </div>
-        </div>
-
-<button type="submit" className="btn-primary w-full" disabled={saving}>{saving?'Saving…':'Save settings'}</button>
-      </form>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Permissions</h2>
-        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-3">
-          <div><p className="text-sm font-semibold text-ink-800">Let cashiers record expenses</p><p className="text-xs text-ink-400">Turn off if only owners should log expenses.</p></div>
-          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-moss-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
-            <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition-transform ${cashierExp?'translate-x-5':''}`} />
-          </button>
-        </div>
-        <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
-          {savingPermissions ? 'Saving…' : 'Save permissions'}
-        </button>
-      </div>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Team Management</h2>
-        <p className="text-sm text-ink-500">Invite owners or cashiers, and manage pending invites and access.</p>
-        <Link to="/users" className="btn-outline w-full flex items-center justify-center gap-2">Manage users &amp; invites</Link>
-      </div>
-
-      {!demo && (
-        <div className="card p-5 space-y-3">
-          <h2 className="font-display text-base font-bold text-ink-800">Device Management</h2>
-          {sessionsLoading ? <p className="text-sm text-ink-400">Loading…</p> : sessions.length === 0 ? (
-            <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {sessions.map(s => (
-                <div key={s.id} className="flex items-center justify-between py-2.5 text-sm">
-                  <div>
-                    <p className="font-medium text-ink-700">{s.deviceLabel}{s.id === currentSessionId && <span className="text-xs text-ink-400"> (this device)</span>}</p>
-                    <p className="text-xs text-ink-400">Last active {formatDateTime(s.lastActiveAt)}</p>
-                  </div>
-                  {s.revoked ? (
-                    <span className="badge bg-ink-100 text-ink-500">Signed out</span>
-                  ) : (
-                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRevoke(s.id)}>Sign out</button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="card p-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
-          <div className="flex gap-2">
-            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={handleCleanupOrphans} disabled={cleaningOrphans}>
-              {cleaningOrphans ? 'Checking…' : 'Clean Up Orphaned Barcodes'}
-            </button>
-            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
-              {archivedOpen ? 'Hide' : 'View archive'}
-            </button>
-          </div>
-        </div>
-        <p className="text-sm text-ink-500">Deleted products are archived here first, never destroyed immediately.</p>
-        {archivedOpen && (
-          archivedLoading ? <p className="text-sm text-ink-400">Loading…</p> : archived.length === 0 ? (
-            <p className="text-sm text-ink-400">Nothing archived.</p>
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {archived.map(p => (
-                <div key={p.id} className="flex items-center justify-between py-2.5 text-sm">
-                  <span className="font-medium text-ink-700">{p.name}</span>
-                  <div className="flex gap-2">
-                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRestore(p.id)}>Restore</button>
-                    <button className="btn-danger !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handlePermanentDelete(p.id)}>Delete forever</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )
-        )}
-      </div>
-
-      <div className="card p-5 space-y-2">
-        <h2 className="font-display text-base font-bold text-ink-800">Subscription</h2>
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
-          <Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>
-        </div>
-      </div>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Support</h2>
-        <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
-      </div>
-
-      <div className="card space-y-3 border-rust-200 p-5">
-        <div>
-          <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
-          <p className="mt-1 text-sm text-ink-500">
-            {demo
-              ? 'Demo Reset clears all sample data stored in this browser.'
-              : "Business Reset permanently deletes ALL of this business's data. This cannot be undone."}
-          </p>
-        </div>
-        <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
-          {demo ? 'Demo Reset' : 'Business Reset'}
-        </button>
-      </div>
-
-      <ConfirmDialog
-        open={resetDialogOpen}
-        title={demo ? 'Reset the demo data?' : 'This will permanently delete ALL data for this business'}
-        message={
-          demo ? (
-            <p>All sample data in this browser will be cleared and replaced with the original demo dataset.</p>
-          ) : (
-            <>
-              <p className="mb-2">Everything this business owns will be deleted. This cannot be undone.</p>
-              <label className="label mt-3">Type <span className="font-mono font-bold">{RESET_CONFIRM_PHRASE}</span> to confirm</label>
-              <input className="input" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} autoFocus />
-            </>
-          )
-        }
-        confirmLabel={resetting ? 'Resetting…' : demo ? 'Reset demo data' : 'Delete everything'}
-        danger
-        onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
-        onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
-      />
     </div>
   );
 }
 
-function Row({ label, value, tone = '', mono = false }) {
+function VerifyEmailPanel({ mode, oobCode }) {
+  const [status, setStatus] = useState('working');
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function run() {
+      if (oobCode && mode === 'verifyEmail') {
+        try {
+          await applyActionCode(auth, oobCode);
+          if (auth.currentUser) {
+            try { await reload(auth.currentUser); } catch { /* non-fatal */ }
+          }
+          if (!cancelled) { setStatus('success'); setMessage('Your email has been verified.'); }
+        } catch (err) {
+          if (cancelled) return;
+          const code = err.code || '';
+          if (code === 'auth/invalid-action-code' && auth.currentUser) {
+            try {
+              await reload(auth.currentUser);
+              if (auth.currentUser.emailVerified) {
+                setStatus('success');
+                setMessage('Your email has been verified.');
+                return;
+              }
+            } catch { /* fall through to error below */ }
+          }
+          setStatus('error');
+          setMessage(
+            code === 'auth/expired-action-code' ? 'This verification link has expired. Please request a new one from the app.' :
+            code === 'auth/invalid-action-code'  ? "This verification link has already been used or has expired. If you're already verified, just sign in." :
+            "We couldn't verify your email. Please request a new verification link."
+          );
+        }
+        return;
+      }
+
+      if (auth.currentUser) {
+        try {
+          await reload(auth.currentUser);
+          if (!cancelled && auth.currentUser.emailVerified) {
+            setStatus('success');
+            setMessage('Your email has been verified.');
+            return;
+          }
+        } catch { /* fall through to error below */ }
+      }
+
+      if (!cancelled) {
+        setStatus('error');
+        setMessage('This link is missing required information. Please request a new verification email.');
+      }
+    }
+
+    run();
+    return () => { cancelled = true; };
+  }, [mode, oobCode]);
+
   return (
-    <div className="flex items-center justify-between py-1 text-sm">
-      <span className="text-ink-500">{label}</span>
-      <span className={`font-semibold ${mono ? 'font-mono text-xs' : ''} ${tone || 'text-ink-800'}`}>{value}</span>
-    </div>
+    <Shell>
+      {status === 'working' && (
+        <>
+          <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
+          <p className="text-sm text-ink-500">Confirming…</p>
+        </>
+      )}
+      {status === 'success' && (
+        <>
+          <div className="text-4xl">✅</div>
+          <h1 className="font-display text-lg font-bold text-ink-900">Email verified</h1>
+          <p className="text-sm text-ink-500">{message} You can continue to FlowBiz now.</p>
+          <Link to="/" className="btn-primary w-full">Continue to FlowBiz</Link>
+        </>
+      )}
+      {status === 'error' && (
+        <>
+          <div className="text-4xl">⚠️</div>
+          <h1 className="font-display text-lg font-bold text-ink-900">Something went wrong</h1>
+          <p className="text-sm text-ink-500">{message}</p>
+          <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
+        </>
+      )}
+    </Shell>
+  );
+}
+
+function ResetPasswordPanel({ oobCode }) {
+  const [status, setStatus] = useState('checking');
+  const [message, setMessage] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!oobCode) {
+      setStatus('error');
+      setMessage('This link is missing required information. Please request a new password reset email.');
+      return;
+    }
+    verifyPasswordResetCode(auth, oobCode)
+      .then((verifiedEmail) => {
+        if (cancelled) return;
+        setEmail(verifiedEmail);
+        setStatus('ready');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const code = err.code || '';
+        setStatus('error');
+        setMessage(
+          code === 'auth/expired-action-code' ? 'This reset link has expired. Please request a new one.' :
+          code === 'auth/invalid-action-code'  ? 'This reset link has already been used or is invalid. Please request a new one.' :
+          'This reset link is invalid. Please request a new one.'
+        );
+      });
+    return () => { cancelled = true; };
+  }, [oobCode]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (password.length < 6) { setMessage('Password must be at least 6 characters.'); return; }
+    if (password !== confirmPassword) { setMessage('Passwords do not match.'); return; }
+    setMessage('');
+    setSubmitting(true);
+    try {
+      await confirmPasswordReset(auth, oobCode, password);
+      setStatus('success');
+    } catch (err) {
+      const code = err.code || '';
+      setMessage(
+        code === 'auth/expired-action-code' ? 'This reset link has expired. Please request a new one.' :
+        code === 'auth/weak-password'        ? 'Please choose a stronger password.' :
+        "Couldn't reset your password. Please request a new link and try again."
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Shell>
+      {status === 'checking' && (
+        <>
+          <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
+          <p className="text-sm text-ink-500">Checking your link…</p>
+        </>
+      )}
+      {status === 'ready' && (
+        <form onSubmit={handleSubmit} className="space-y-4 text-left">
+          <div className="text-center">
+            <h1 className="font-display text-lg font-bold text-ink-900">Choose a new password</h1>
+            <p className="mt-1 text-sm text-ink-500">for <span className="font-semibold">{email}</span></p>
+          </div>
+          {message && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{message}</div>}
+          <div>
+            <label className="label">New password</label>
+            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters" autoComplete="new-password" autoFocus />
+          </div>
+          <div>
+            <label className="label">Confirm new password</label>
+            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" />
+          </div>
+          <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Saving…' : 'Save new password'}</button>
+        </form>
+      )}
+      {status === 'success' && (
+        <>
+          <div className="text-4xl">✅</div>
+          <h1 className="font-display text-lg font-bold text-ink-900">Password updated</h1>
+          <p className="text-sm text-ink-500">You can now sign in with your new password.</p>
+          <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
+        </>
+      )}
+      {status === 'error' && (
+        <>
+          <div className="text-4xl">⚠️</div>
+          <h1 className="font-display text-lg font-bold text-ink-900">Something went wrong</h1>
+          <p className="text-sm text-ink-500">{message}</p>
+          <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
+        </>
+      )}
+    </Shell>
   );
 }
 ````
@@ -9460,167 +8046,203 @@ export default function StockTake() {
 }
 ````
 
-## File: src/pages/Suppliers.jsx
+## File: src/pages/Users.jsx
 ````javascript
 import { useMemo, useState } from 'react';
-import { addDoc, updateDoc, deleteDoc, doc, writeBatch, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import { orderBy } from 'firebase/firestore';
 import toast from 'react-hot-toast';
-import { Pencil, Trash2, Banknote, Smartphone } from 'lucide-react';
-import { db } from '../firebase';
+import { Trash2, Copy, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { tenantQuery } from '../lib/tenant';
 import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ConfirmDialog from '../components/common/ConfirmDialog';
 import Modal from '../components/common/Modal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import { formatKES } from '../utils/currency';
-import { computeSupplierBalances } from '../utils/financials';
+import ConfirmDialog from '../components/common/ConfirmDialog';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
 
-export default function Suppliers() {
-  const { profile, businessId } = useAuth();
-  const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const purchQ  = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
-  const paymQ   = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
-  const { data: suppliers, loading } = useFirestoreCollection(suppQ);
-  const { data: purchases }          = useFirestoreCollection(purchQ);
-  const { data: spayments }          = useFirestoreCollection(paymQ);
+export default function Users() {
+  const { createStaffInvite, cancelStaffInvite, removeStaffAccount, toggleMemberActive, profile, businessId, isPro } = useAuth();
+  const usersQ = useMemo(() => tenantQuery('users', businessId, orderBy('displayName')), [businessId]);
+  const { data: users, loading } = useFirestoreCollection(usersQ);
 
-  const [modal, setModal]       = useState(false);
-  const [editing, setEditing]   = useState(null);
-  const [pendDel, setPendDel]   = useState(null);
-  const [payModal, setPayModal] = useState(false);
-  const [selSupp, setSelSupp]   = useState(null);
-  const [payAmt, setPayAmt]     = useState('');
-  const [payMethod, setPayMethod] = useState('Cash');
-  const [payCode, setPayCode]   = useState('');
-  const [paying, setPaying]     = useState(false);
+  const invitesQ = useMemo(() => tenantQuery('staffInvites', businessId), [businessId]);
+  const { data: allInvites, loading: invitesLoading } = useFirestoreCollection(invitesQ);
+  const invites = allInvites.filter((i) => !i.claimed);
 
-  const owedList = useMemo(
-    () => computeSupplierBalances(purchases, spayments, suppliers),
-    [purchases, spayments, suppliers]
-  );
-  const owedMap = useMemo(
-    () => Object.fromEntries(owedList.map((o) => [o.supplierId, o.balance])),
-    [owedList]
-  );
-  const totalOwed = owedList.reduce((a, o) => a + o.balance, 0);
+  const ownerCount = users.filter((u) => u.role === 'owner' && u.active !== false).length;
+  const totalUsersCount = users.filter((u) => u.active !== false).length;
 
-const [deleting, setDeleting] = useState(false);
+  const [modal, setModal]           = useState(false);
+  const [newName, setNewName]       = useState('');
+  const [newRole, setNewRole]       = useState('cashier');
+  const [busy, setBusy]             = useState(false);
+  const [freshInvite, setFreshInvite] = useState(null);
+  const [pendToggle, setPendToggle] = useState(null);
+  const [pendDelete, setPendDelete] = useState(null);
+  const [pendCancelInvite, setPendCancelInvite] = useState(null);
 
-  const handleSave = async data => {
-    const write = editing
-      ? updateDoc(doc(db,'suppliers',editing.id), data)
-      : addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
+  const inviteLink = (inviteId) => `${window.location.origin}/join/${inviteId}`;
 
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
-    setModal(false); setEditing(null);
+  const copyLink = async (inviteId) => {
+    try { await navigator.clipboard.writeText(inviteLink(inviteId)); toast.success('Invite link copied'); }
+    catch { toast.error('Could not copy — long-press the link to copy it manually.'); }
   };
 
-  const handleDel = async () => {
-    const balance = owedMap[pendDel.id] || 0;
-    if (balance > 0.005) {
-      toast.error(`Can't remove "${pendDel.name}" — they still have an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
-      setPendDel(null);
+  const handleCreateInvite = async (e) => {
+    e.preventDefault();
+    if (!newName.trim()) return;
+    
+    // Feature 14 - Staff limits enforced in frontend for UX, backend rules would prevent it too
+    if (!isPro && (totalUsersCount + invites.length) >= 2) {
+      toast.error('Free plan allows a maximum of 1 Owner and 1 additional Staff member. Upgrade to FlowBiz Pro to add more, or cancel a pending invite first.');
       return;
     }
-    setDeleting(true);
-    const { queuedOffline, error } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
-    setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
-    setPendDel(null);
+
+    setBusy(true);
+    try {
+      const invite = await createStaffInvite({ displayName: newName.trim(), role: newRole });
+      setFreshInvite({ id: invite.id, displayName: newName.trim(), role: newRole });
+      setNewName('');
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setBusy(false); }
   };
 
-  const handlePay = async e => {
-    e.preventDefault();
-    const amount = Number(payAmt);
-    const balance = owedMap[selSupp?.id]||0;
-    if (amount<=0) { toast.error('Enter a positive amount.'); return; }
-    if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatKES(balance)}.`); return; }
-    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
-    setPaying(true);
-    const batch = writeBatch(db);
-    const expRef = doc(collection(db,'expenses'));
-    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp() }, businessId));
-    const payRef = doc(collection(db,'supplierPayments'));
-    batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:serverTimestamp(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
-
-    const commit = batch.commit();
-    const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
-    setPaying(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
-    if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
-    setPayModal(false); setPayAmt(''); setPayCode('');
+  const handleCancelInvite = async () => {
+    try { await cancelStaffInvite(pendCancelInvite.id); toast.success('Invite cancelled'); }
+    catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setPendCancelInvite(null); }
   };
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Supplier added');
+
+  const handleToggle = async () => {
+    if (pendToggle.role === 'owner' && pendToggle.active !== false && ownerCount <= 1) {
+      toast.error("This is the only active owner — deactivating them would lock everyone out. Invite another owner first.");
+      setPendToggle(null);
+      return;
+    }
+    try {
+      await toggleMemberActive(pendToggle.id, pendToggle.active === false);
+      toast.success(pendToggle.active !== false ? 'Account deactivated' : 'Account reactivated');
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setPendToggle(null); }
+  };
+
+  const handleDelete = async () => {
+    if (pendDelete.role === 'owner' && ownerCount <= 1) {
+      toast.error('You cannot remove the only owner. Invite another owner first.');
+      setPendDelete(null);
+      return;
+    }
+    try { await removeStaffAccount(pendDelete.id); toast.success('Account removed.'); }
+    catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setPendDelete(null); }
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4">
+    <div className="mx-auto max-w-3xl space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Suppliers</h1><p className="text-sm text-ink-400">Total owed: <span className="font-semibold text-rust-600">{formatKES(totalOwed)}</span></p></div>
-        <button className="btn-primary" onClick={()=>{setEditing(null);setModal(true);}}>+ Add supplier</button>
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Team</h1>
+          <p className="text-sm text-ink-400">Manage who has access to this business.</p>
+        </div>
+        <button className="btn-primary" type="button" onClick={() => { setFreshInvite(null); setNewName(''); setNewRole('cashier'); setModal(true); }}>
+          + Invite someone
+        </button>
       </div>
-      {loading?<LoadingSpinner />:suppliers.length===0?<EmptyState title="No suppliers yet" description="Add suppliers to track restocking and balances." />:(
-        <div className="space-y-3">
-          {suppliers.map(s=>{
-            const balance = owedMap[s.id]||0;
-            return (
-              <div key={s.id} className="card flex flex-wrap items-center justify-between gap-3 p-4">
-                <div><p className="font-semibold text-ink-800">{s.name}</p><p className="text-xs text-ink-400">{s.contactPerson&&`${s.contactPerson} · `}{s.phone||'No phone'}</p></div>
-                <div className="flex items-center gap-3">
-                  <div className="text-right"><p className="text-xs text-ink-400">Outstanding</p><p className={`font-semibold ${balance>0?'text-rust-600':'text-moss-600'}`}>{formatKES(balance)}</p></div>
-                  {balance>0&&<button className="btn-primary !text-xs !px-3 !py-1.5 !min-h-0" onClick={()=>{setSelSupp(s);setPayModal(true);}}>Pay</button>}
-                  <button className="rounded-lg p-2 text-ink-400 hover:bg-ink-100" onClick={()=>{setEditing(s);setModal(true);}}><Pencil className="h-4 w-4" strokeWidth={1.75}/></button>
-                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50" onClick={()=>setPendDel(s)}><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
+
+      {invites.length > 0 && (
+        <div className="card p-4 space-y-2">
+          <h2 className="font-display text-sm font-bold text-ink-800">Pending invites</h2>
+          <div className="divide-y divide-ink-100">
+            {invites.map((inv) => (
+              <div key={inv.id} className="flex items-center justify-between gap-2 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-ink-800">
+                    {inv.displayName}
+                    <span className={`badge ml-2 ${inv.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{inv.role}</span>
+                  </p>
+                  <p className="text-xs text-ink-400 truncate font-mono">{inviteLink(inv.id)}</p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => copyLink(inv.id)}>
+                    <Copy className="h-3.5 w-3.5" strokeWidth={1.75} /> Copy link
+                  </button>
+                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[40px] min-w-[40px] flex items-center justify-center" title="Cancel invite" onClick={() => setPendCancelInvite(inv)}>
+                    <X className="h-4 w-4" strokeWidth={1.75} />
+                  </button>
                 </div>
               </div>
-            );
-          })}
+            ))}
+          </div>
         </div>
       )}
-      <SupplierFormModal open={modal} onClose={()=>{setModal(false);setEditing(null);}} onSave={handleSave} initialSupplier={editing} />
-<ConfirmDialog
-        open={!!pendDel}
-        title="Remove supplier?"
-        message={(owedMap[pendDel?.id]||0) > 0.005
-          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)} — pay it off first.`
-          : `"${pendDel?.name}" will be removed. Purchase records stay intact.`}
-        confirmLabel={deleting ? 'Removing…' : 'Remove'}
-        confirmDisabled={deleting}
-        danger
-        onConfirm={handleDel}
-        onCancel={()=>{ if (!deleting) setPendDel(null); }}
-      />      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
-        <form onSubmit={handlePay} className="space-y-3">
-          <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(owedMap[selSupp?.id]||0)}</span></div>
-          <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
-          <div><label className="label">Method</label>
-            <div className="grid grid-cols-2 gap-2">
-              {['Cash','M-Pesa'].map(m=>(
-                <button key={m} type="button" onClick={()=>setPayMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${payMethod===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
-                  {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
-                </button>
-              ))}
+
+      {loading || invitesLoading ? <LoadingSpinner /> : (
+        <div className="card divide-y divide-ink-100">
+          {users.map(u => (
+<div key={u.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+  <div className="min-w-0 flex-1">
+    <p className="font-semibold text-ink-800 truncate">
+      {u.displayName || u.email?.split('@')[0] || 'Unnamed'}
+      {u.id === profile?.uid && <span className="text-xs font-normal text-ink-400"> (you)</span>}
+    </p>
+    <p className="text-xs text-ink-400 truncate">{u.email || 'No email'}</p>
+  </div>
+  <div className="flex flex-wrap items-center gap-2">
+    <span className={`badge ${u.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{u.role || '—'}</span>
+    <span className={`badge ${u.active !== false ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>{u.active !== false ? 'Active' : 'Deactivated'}</span>
+    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => setPendToggle(u)}>
+      {u.active !== false ? 'Deactivate' : 'Reactivate'}
+    </button>
+    {u.id === profile?.uid ? (
+      <span className="text-xs text-ink-300 px-2">You</span>
+    ) : (
+      <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Remove account" onClick={() => setPendDelete(u)}>
+        <Trash2 className="h-4 w-4" strokeWidth={1.75} />
+      </button>
+    )}
+  </div>
+</div>
+          ))}
+        </div>
+      )}
+
+      <Modal open={modal} onClose={() => setModal(false)} title={freshInvite ? 'Invite ready' : 'Invite someone'}>
+        {!freshInvite ? (
+          <form onSubmit={handleCreateInvite} className="space-y-3">
+            <div>
+              <label className="label">Full name</label>
+              <input className="input" value={newName} onChange={e=>setNewName(e.target.value)} required autoComplete="off" autoFocus />
             </div>
+            <div>
+              <label className="label">Role</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => setNewRole('cashier')} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole==='cashier'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Cashier</button>
+                <button type="button" onClick={() => setNewRole('owner')} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole==='owner'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Owner</button>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" className="btn-secondary" onClick={() => setModal(false)}>Cancel</button>
+              <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Creating…' : 'Create invite'}</button>
+            </div>
+          </form>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-ink-600">Send this link to <span className="font-semibold">{freshInvite.displayName}</span> ({freshInvite.role}).</p>
+            <div className="flex items-center gap-2">
+              <input className="input font-mono text-xs" readOnly value={inviteLink(freshInvite.id)} onFocus={(e) => e.target.select()} />
+              <button type="button" className="btn-outline shrink-0" onClick={() => copyLink(freshInvite.id)}>
+                <Copy className="h-4 w-4" strokeWidth={1.75} /> Copy
+              </button>
+            </div>
+            <button type="button" className="btn-primary w-full" onClick={() => setModal(false)}>Done</button>
           </div>
-          {payMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={payCode} onChange={e=>setPayCode(e.target.value.toUpperCase())} /></div>}
-          <div className="flex justify-end gap-2 pt-1"><button type="button" className="btn-secondary" onClick={()=>setPayModal(false)}>Cancel</button><button type="submit" className="btn-primary" disabled={paying}>{paying?'Recording…':'Record payment'}</button></div>
-        </form>
+        )}
       </Modal>
+
+      <ConfirmDialog open={!!pendToggle} title="Change Account Status?" confirmLabel="Confirm" onConfirm={handleToggle} onCancel={() => setPendToggle(null)} />
+      <ConfirmDialog open={!!pendDelete} title="Remove Account?" confirmLabel="Remove" danger onConfirm={handleDelete} onCancel={() => setPendDelete(null)} />
+      <ConfirmDialog open={!!pendCancelInvite} title="Cancel Invite?" confirmLabel="Cancel" danger onConfirm={handleCancelInvite} onCancel={() => setPendCancelInvite(null)} />
     </div>
   );
 }
@@ -9751,6 +8373,249 @@ export default function AppRouter() {
 }
 ````
 
+## File: firebase.json
+````json
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4000
+    }
+  }
+}
+````
+
+## File: firestore.rules
+````
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ─────────────────────────────────────────────────────────
+    function isSignedIn() { return request.auth != null; }
+
+    function hasProfile() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActive() {
+      let data = myProfile();
+      return !('active' in data) || data.active != false;
+    }
+
+    function isStaff() {
+      return hasProfile() && isActive();
+    }
+
+    function myBusinessId() {
+      return myProfile().businessId;
+    }
+
+    function isOwner() {
+      return isStaff() && myProfile().role == 'owner';
+    }
+
+    function owns(data) {
+      return isStaff() && data.businessId == myBusinessId();
+    }
+
+    function ownsUpdate(existing, incoming) {
+      return owns(existing) && owns(incoming);
+    }
+
+    function isValidInviteClaim(inviteId, businessId, role) {
+      let invite = get(/databases/$(database)/documents/staffInvites/$(inviteId)).data;
+      return invite.claimed == false && invite.businessId == businessId && invite.role == role;
+    }
+
+    // ── Businesses ──────────────────────────────────────────────────────
+    match /businesses/{businessId} {
+      allow get: if isStaff() && myBusinessId() == businessId;
+      allow create: if isSignedIn();
+      allow update: if isOwner() && myBusinessId() == businessId
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription']);
+      allow delete: if false;
+    }
+
+    match /barcodeIndex/{docId} {
+      allow read: if isOwner() && owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+      allow update: if false;
+    }
+    match /productCodeCounters/{businessId} {
+      allow read, write: if isOwner() && myBusinessId() == businessId;
+    }
+
+    match /businessSettings/{businessId} {
+      allow get: if isStaff() && myBusinessId() == businessId;
+      allow write: if isOwner() && myBusinessId() == businessId;
+    }
+
+    // ── Users & invites ─────────────────────────────────────────────────
+    match /users/{userId} {
+      allow get: if isSignedIn() && request.auth.uid == userId;
+      allow list: if isOwner() && resource.data.businessId == myBusinessId();
+
+      allow create: if isSignedIn() && request.auth.uid == userId
+                    && request.resource.data.role in ['owner', 'cashier']
+                    && (
+                      (
+                        request.resource.data.role == 'owner'
+                        && !exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
+                        && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.createdBy == request.auth.uid
+                      )
+                      ||
+                      (
+                        request.resource.data.claimedFromInviteId is string
+                        && isValidInviteClaim(request.resource.data.claimedFromInviteId, request.resource.data.businessId, request.resource.data.role)
+                      )
+                    );
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data) && userId != request.auth.uid;
+    }
+
+    match /staffInvites/{inviteId} {
+      allow get: if true;
+      allow list: if isOwner() && resource.data.businessId == myBusinessId();
+      allow create: if isOwner() && request.resource.data.businessId == myBusinessId()
+                    && request.resource.data.role in ['owner', 'cashier'];
+      allow update: if isSignedIn()
+                    && resource.data.claimed == false
+                    && request.resource.data.claimed == true
+                    && request.resource.data.linkedUid == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'linkedUid', 'claimedAt']);
+      allow delete: if isOwner() && resource.data.businessId == myBusinessId();
+    }
+
+    // ── Device sessions (Settings > Device Management) ────────────────
+    match /sessions/{sessionId} {
+      allow create: if isStaff() && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == myBusinessId();
+
+      allow read: if isSignedIn() && (
+        resource == null || 
+        resource.data.uid == request.auth.uid || 
+        (isStaff() && resource.data.businessId == myBusinessId())
+      );
+
+      allow update: if isSignedIn() && (
+        (resource.data.uid == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent']))
+        ||
+        (isOwner() && resource.data.businessId == myBusinessId()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked']))
+      );
+      allow delete: if false;
+    }
+
+    // ── Business data ───────────────────────────────────────────────────
+    match /products/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if ownsUpdate(resource.data, request.resource.data) && (
+        isOwner() ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt'])
+      );
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /suppliers/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /sales/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /customers/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /creditSales/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /repayments/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /refunds/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /expenses/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /purchases/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /supplierPayments/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /stockAdjustments/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /dailySessions/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+  }
+}
+````
+
 ## File: cloudflare-worker/wrangler.toml
 ````toml
 name = "flowbiz-api"
@@ -9767,6 +8632,881 @@ FIREBASE_PROJECT_ID = "swiftstock-bc6a3"
 ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://flowbiz.pages.dev"
 WHATSAPP_PHONE_NUMBER_ID = "your-whatsapp-phone-number-id"
 PAYSTACK_CALLBACK_URL = "https://flowbiz.pages.dev/pro"
+````
+
+## File: src/pages/Counter.jsx
+````javascript
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Trash2 } from 'lucide-react';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useDailySession } from '../hooks/useDailySession';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import ProductGrid from '../components/pos/ProductGrid';
+import SaleModal from '../components/pos/SaleModal';
+import SaleCompleteModal from '../components/pos/SaleCompleteModal';
+import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Counter() {
+  const { profile, isAdmin, businessId } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  
+  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  const salesQ     = useMemo(() => businessId ? tenantQuery('sales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
+  const creditSalesQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+
+  const { data: products,  loading: prodLoading }  = useFirestoreCollection(productsQ);
+  const { data: customers }                         = useFirestoreCollection(customersQ);
+  const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
+  const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
+  const { data: suppliers }                         = useFirestoreCollection(suppliersQ);
+  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
+
+  const [search, setSearch]           = useState('');
+  const [activeProduct, setActive]    = useState(null);
+  const [completedSale, setCompletedSale] = useState(null);
+  const [pendingVoid, setPendingVoid] = useState(null);
+  const [editProduct, setEditProd]    = useState(null);
+  const [prodModal, setProdModal]     = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [notFoundCode, setNotFoundCode] = useState(null);
+  const [voiding, setVoiding] = useState(false);
+
+  useEffect(() => {
+    if (location.state?.autoScan && session && !isClosed) {
+      setScannerOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location, navigate, session, isClosed]);
+
+  const filtered = products.filter(p =>
+    p.name.toLowerCase().includes(search.toLowerCase()) ||
+    (p.barcode && p.barcode.includes(search.trim())) ||
+    (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  const mergedSales = useMemo(() => {
+    const list = [];
+    sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
+    creditSales.forEach(cs => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
+    return list.sort((a, b) => {
+      const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
+      const bTime = b.soldAt?.toMillis?.() ?? b.soldAt?.toDate?.()?.getTime?.() ?? new Date(b.soldAt || 0).getTime();
+      return bTime - aTime;
+    }).slice(0, 100);
+  }, [sales, creditSales]);
+
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
+    return { id:ref.id, name, phone };
+  };
+
+  // FIX: Replaced runTransaction with writeBatch(db) and increment() for perfect offline capability.
+const handleSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
+    const productRef = doc(db, 'products', product.id);
+    const saleRef = doc(collection(db, 'sales'));
+    const saleData = withBusiness({
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit,
+      totalAmount: soldPricePerUnit * quantity,
+      profit: (soldPricePerUnit - product.costPrice) * quantity,
+      paymentMethod, mpesaCode: mpesaCode || null,
+      soldBy: profile.uid, soldByName: profile.displayName,
+      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(saleRef, saleData);
+
+    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
+    const productRef = doc(db, 'products', product.id);
+    const totalAmount = soldPricePerUnit * quantity;
+    const creditRef = doc(collection(db, 'creditSales'));
+    const creditData = withBusiness({
+      customerId, customerName, customerPhone: customerPhone || '',
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
+      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
+      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
+      isCredit: true
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(creditRef, creditData);
+
+    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  // FIX: Voiding a Cash Sale now creates a 'refunds' document to correct CloseDay till shortages.
+const handleVoid = async () => {
+    const sale = pendingVoid;
+    setVoiding(true);
+    try {
+      const batch = writeBatch(db);
+      const prodRef = doc(db, 'products', sale.productId);
+      const prodSnap = await getDoc(prodRef);
+
+      if (prodSnap.exists()) {
+        batch.update(prodRef, { stock: increment(sale.quantity), updatedAt: serverTimestamp() });
+      }
+
+      batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
+
+      if (!sale.isCredit) {
+        const refundRef = doc(collection(db, 'refunds'));
+        batch.set(refundRef, withBusiness({
+          saleId: sale.id, amount: sale.totalAmount, method: sale.paymentMethod,
+          refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName
+        }, businessId));
+      }
+
+      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+      if (error) throw error;
+      
+      toast.success(queuedOffline ? 'Sale voided offline.' : (prodSnap.exists() ? 'Sale voided and stock restored.' : 'Sale voided (product was deleted, no stock restored).'));
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setVoiding(false); setPendingVoid(null); }
+  };
+
+const handleProductSave = async (data) => {
+    try {
+      if (editProduct) {
+        const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
+      } else {
+        const { queuedOffline } = await createProduct(data, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      }
+      setEditProd(null);
+      setProdModal(false);
+      setPrefillBarcode(null);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+      throw err;
+    }
+  };
+
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setActive(found);
+    else setNotFoundCode(code);
+  };
+
+  useHardwareScanner(handleScanDetected, {
+    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
+  });
+
+  if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
+  if (isClosed) return (
+    <div className="mx-auto max-w-sm pt-8 space-y-4 text-center">
+      <EmptyState title="Today's session is closed" description="Sales are locked. An owner can reopen to continue trading." />
+      {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>}
+    </div>
+  );
+  if (!session) return <OpenSessionPrompt onOpen={floats => openSession({ ...floats, openedBy:profile.uid })} />;
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Tap a product, or scan a barcode, to record a sale.</p></div>
+        {isAdmin && <button className="btn-outline text-xs" onClick={()=>{setEditProd(null);setPrefillBarcode(null);setProdModal(true);}}>+ Quick add product</button>}
+      </div>
+      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
+      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
+        <ProductGrid products={filtered} onSelect={setActive} isAdmin={isAdmin} />}
+
+      {isAdmin && (
+        <div className="mt-4">
+          <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Sales log (last 100)</h2>
+          {salesLoading || creditLoading ? <LoadingSpinner /> : mergedSales.length === 0 ? <EmptyState title="No sales recorded" /> : (
+            <div className="card divide-y divide-ink-100">
+              {mergedSales.map(s=>(
+                <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided?'opacity-40 line-through':''}`}>
+                  <div>
+                    <p className="font-medium text-ink-700">{s.quantity} × {s.productName} — {formatKES(s.totalAmount)}</p>
+                    <p className="text-xs text-ink-400">
+                      {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
+                      {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
+                    </p>
+                  </div>
+                  {!s.isVoided && !s.isCredit && isAdmin && (
+                    <button onClick={()=>setPendingVoid(s)} className="p-1 text-rust-400 hover:text-rust-600 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Void sale"><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
+                  )}
+                  {s.isCredit && isAdmin && (
+                    <Link to={`/customers/${s.customerId}`} className="btn-outline !py-1 !px-2.5 !min-h-0 text-xs text-ink-500 hover:text-ink-700">View Customer</Link>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!notFoundCode} onClose={()=>setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={()=>setNotFoundCode(null)}>Cancel</button>
+          {isAdmin ? (
+            <button className="btn-primary" onClick={()=>{ setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
+          ) : (
+            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
+          )}
+        </div>
+      </Modal>
+
+      <SaleModal 
+        open={!!activeProduct} 
+        product={activeProduct} 
+        customers={customers} 
+        onClose={(record) => {
+          setActive(null);
+          if (record && record.id) {
+            setCompletedSale(record);
+          }
+        }} 
+        onConfirmSale={handleSale} 
+        onConfirmCredit={handleCredit} 
+        onCreateCustomer={handleCreateCustomer} 
+      />
+      <SaleCompleteModal
+        open={!!completedSale}
+        sale={completedSale}
+        onClose={() => setCompletedSale(null)}
+      />
+
+<ProductFormModal
+        open={prodModal}
+        onClose={()=>{setProdModal(false);setEditProd(null);setPrefillBarcode(null);}}
+        onSave={handleProductSave}
+        suppliers={suppliers}
+        initialProduct={editProduct}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+      />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+<ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" (×${pendingVoid?.quantity}) will be restored.`} confirmLabel={voiding ? "Voiding..." : "Void sale"} confirmDisabled={voiding} danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />    </div>
+  );
+}
+````
+
+## File: src/pages/CustomerDetail.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { where, orderBy, doc, writeBatch, increment, getDoc, serverTimestamp, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Receipt, Banknote, Smartphone, Undo2 } from 'lucide-react';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import RepaymentModal from '../components/debtors/RepaymentModal';
+import RefundModal from '../components/debtors/RefundModal';
+import { formatKES } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function CustomerDetail() {
+  const { customerId } = useParams();
+  const { profile, isAdmin, businessId } = useAuth();
+
+  const customerQ   = useMemo(() => businessId ? tenantQuery('customers', businessId, where('__name__','==',customerId)) : null, [customerId, businessId]);
+  const creditQ     = useMemo(() => businessId ? tenantQuery('creditSales', businessId, where('customerId','==',customerId)) : null, [customerId, businessId]);
+  const repaymentsQ = useMemo(() => businessId ? tenantQuery('repayments', businessId, where('customerId','==',customerId), orderBy('paidAt','desc')) : null, [customerId, businessId]);
+
+  const { data: customerData, loading: custLoad } = useFirestoreCollection(customerQ);
+  const { data: creditSales, loading: credLoad, error } = useFirestoreCollection(creditQ);
+  const { data: repayments } = useFirestoreCollection(repaymentsQ);
+  
+  const [repayOpen, setRepayOpen]       = useState(false);
+  const [cancelTarget, setCancelTarget] = useState(null);
+  const [refundTarget, setRefundTarget] = useState(null);
+
+  const customer = customerData[0];
+  const sorted = [...creditSales].sort((a,b) => (b.soldAt?.toMillis?.() ?? 0) - (a.soldAt?.toMillis?.() ?? 0));
+  const totalOwed = creditSales
+    .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded')
+    .reduce((acc,cs) => acc + (Number(cs.remainingBalance) || 0), 0);
+
+const handleRepayment = async ({ amount, method, mpesaCode }) => {
+    const openSales = [...creditSales]
+      .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded' && (Number(cs.remainingBalance) || 0) > 0.005)
+      .sort((a,b) => (a.soldAt?.toMillis?.() ?? 0) - (b.soldAt?.toMillis?.() ?? 0));
+
+    if (!openSales.length) { toast.error('No outstanding balance.'); return; }
+    try {
+      const batch = writeBatch(db);
+      let remaining = amount;
+      for (const cs of openSales) {
+        if (remaining <= 0.005) break;
+        const owed    = Number(cs.remainingBalance) || 0;
+        const portion = Math.min(owed, remaining);
+        remaining    -= portion;
+        const newPaid = (Number(cs.amountPaid) || 0) + portion;
+        const newBal  = owed - portion;
+        batch.update(doc(db,'creditSales',cs.id), { amountPaid: newPaid, remainingBalance: newBal, status: newBal <= 0.005 ? 'paid' : 'partial' });
+        const repRef = doc(collection(db,'repayments'));
+        batch.set(repRef, {
+          businessId,
+          creditSaleId: cs.id,
+          customerId: cs.customerId,
+          customerName: cs.customerName,
+          productName: cs.productName,
+          amount: portion,
+          method,
+          mpesaCode: mpesaCode || null,
+          paidAt: serverTimestamp(),
+          recordedBy: profile.uid,
+          recordedByName: profile.displayName,
+        });
+      }
+      const commit = batch.commit();
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : `Recorded ${formatKES(amount)} repayment`);
+      if (queuedOffline) commit.catch((err) => toast.error(`A repayment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
+  };
+
+  const handleCancel = async (cs) => {
+    setCancelTarget(null);
+    try {
+      const batch = writeBatch(db);
+      const prodRef = doc(db,'products',cs.productId);
+      const prodSnap = await getDoc(prodRef);
+      if (prodSnap.exists()) {
+        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
+      }
+      batch.update(doc(db,'creditSales',cs.id), {
+        status: 'cancelled', remainingBalance: 0,
+        cancelledAt: serverTimestamp(), cancelledBy: profile.uid,
+      });
+      await batch.commit();
+      toast.success('Credit sale cancelled and stock restored.');
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+  };
+
+  const handleRefund = async (cs, { method }) => {
+    try {
+      const batch = writeBatch(db);
+      const prodRef = doc(db,'products',cs.productId);
+      const prodSnap = await getDoc(prodRef);
+      if (prodSnap.exists()) {
+        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
+      }
+      batch.update(doc(db,'creditSales',cs.id), {
+        status: 'refunded', remainingBalance: 0,
+        refundedAt: serverTimestamp(), refundedBy: profile.uid,
+      });
+      const refundRef = doc(collection(db,'refunds'));
+      batch.set(refundRef, {
+        businessId,
+        creditSaleId: cs.id, customerId: cs.customerId, customerName: cs.customerName,
+        productName: cs.productName, amount: Number(cs.amountPaid) || 0, method,
+        refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName,
+      });
+      await batch.commit();
+      toast.success('Sale refunded and stock restored.');
+      setRefundTarget(null);
+    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
+  };
+
+  if (custLoad || credLoad) return <LoadingSpinner />;
+  if (error) return <ErrorBanner message={`Could not load data. ${error}`} />;
+  if (!customer && creditSales.length === 0) return <EmptyState title="Customer not found" />;
+
+  const displayName = customer?.name || creditSales[0]?.customerName || 'Unknown Customer';
+  const displayPhone = customer?.phone || creditSales[0]?.customerPhone || 'No phone';
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4">
+      <Link to="/customers" className="text-sm font-semibold text-ink-400 hover:text-ink-700">← Back to Customers</Link>
+      <div className="card flex flex-wrap items-center justify-between gap-3 p-5">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">{displayName}</h1>
+          <p className="text-sm text-ink-400">{displayPhone}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-xs text-ink-400">Outstanding Debt</p>
+          <p className={`font-display text-xl font-bold ${totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>{formatKES(totalOwed)}</p>
+        </div>
+      </div>
+      <button className="btn-primary w-full sm:w-auto" disabled={totalOwed <= 0} onClick={() => setRepayOpen(true)}>
+        <Receipt className="h-4 w-4" strokeWidth={1.75}/> Record repayment
+      </button>
+
+      {sorted.length > 0 && (
+        <div className="card p-4">
+          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Credit purchases</h2>
+          <div className="divide-y divide-ink-100">
+            {sorted.map(cs => {
+              const reversed = cs.status === 'cancelled' || cs.status === 'refunded';
+              return (
+                <div key={cs.id} className={`flex items-center justify-between gap-2 py-2.5 text-sm ${reversed ? 'opacity-50' : ''}`}>
+                  <div>
+                    <p className="font-medium text-ink-700">{cs.quantity} × {cs.productName}</p>
+                    <p className="text-xs text-ink-400">{formatDateTime(cs.soldAt)}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-right">
+                      <p className={`font-semibold ${reversed ? 'line-through text-ink-400' : 'text-ink-800'}`}>{formatKES(cs.totalAmount)}</p>
+                      <span className={`badge ${cs.status === 'paid' ? 'bg-moss-100 text-moss-700' : cs.status === 'partial' ? 'bg-rust-100 text-rust-700' : 'bg-ink-100 text-ink-500'}`}>{cs.status}</span>
+                    </div>
+                    {isAdmin && !reversed && (
+                      <button
+                        className="rounded-lg p-2 text-ink-400 hover:bg-ink-100"
+                        title={Number(cs.amountPaid) > 0.005 ? 'Refund this sale' : 'Cancel this sale'}
+                        onClick={() => (Number(cs.amountPaid) > 0.005 ? setRefundTarget(cs) : setCancelTarget(cs))}
+                      >
+                        <Undo2 className="h-4 w-4" strokeWidth={1.75}/>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      
+      {repayments.length > 0 && (
+        <div className="card p-4">
+          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Repayment history</h2>
+          <div className="divide-y divide-ink-100">
+            {repayments.map(r => (
+              <div key={r.id} className="flex items-center justify-between py-2.5 text-sm">
+                <div>
+                  <p className="font-medium text-ink-700">{r.method === 'Cash' ? <><Banknote className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>Cash</> : <><Smartphone className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>M-Pesa {r.mpesaCode ? `(${r.mpesaCode})` : ''}</>}</p>
+                  <p className="text-xs text-ink-400">{formatDateTime(r.paidAt)}</p>
+                </div>
+                <span className="font-semibold text-moss-700">{formatKES(r.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <RepaymentModal open={repayOpen} customer={{ name: displayName }} totalOwed={totalOwed} onClose={() => setRepayOpen(false)} onSubmit={handleRepayment} />
+      <RefundModal open={!!refundTarget} creditSale={refundTarget} onClose={() => setRefundTarget(null)} onSubmit={(opts) => handleRefund(refundTarget, opts)} />
+      <ConfirmDialog
+        open={!!cancelTarget}
+        title="Cancel this credit sale?"
+        message={`"${cancelTarget?.productName}" (×${cancelTarget?.quantity}) will be cancelled and stock restored. Nothing has been paid on this sale yet.`}
+        confirmLabel="Cancel sale"
+        danger
+        onConfirm={() => handleCancel(cancelTarget)}
+        onCancel={() => setCancelTarget(null)}
+      />
+    </div>
+  );
+}
+````
+
+## File: src/pages/Products.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { Pencil, Trash2, TrendingUp } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Products() {
+  const { businessId } = useAuth();
+  const productsQ = useMemo(
+    () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
+    [businessId]
+  );
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const { data: products, loading, error } = useFirestoreCollection(productsQ);
+  const { data: suppliers } = useFirestoreCollection(suppliersQ);
+  
+  const [search, setSearch] = useState('');
+  const [modal, setModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [pendingDel, setPendingDel] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanFoundProduct, setScanFoundProduct] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+
+  const filtered = products.filter(
+    (p) =>
+      p.name.toLowerCase().includes(search.toLowerCase()) ||
+      p.category.toLowerCase().includes(search.toLowerCase()) ||
+      (p.barcode && p.barcode.includes(search.trim())) ||
+      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  );
+  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
+
+  const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
+
+const handleSave = async (data) => {
+    try {
+      if (editing) {
+        const { queuedOffline } = await updateProduct(editing.id, data, editing.barcode, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
+      } else {
+        const { queuedOffline } = await createProduct(data, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      }
+      closeFormModal();
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+  };
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+const handleDel = async () => {
+    setDeleting(true);
+    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id), 4000);
+    setDeleting(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
+    setPendingDel(null);
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setScanFoundProduct(found);
+    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
+  };
+
+  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
+        <div className="flex gap-2">
+          <Link to="/inventory-intelligence" className="btn-outline">
+            <TrendingUp className="h-4 w-4" /> Intelligence
+          </Link>
+          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
+        </div>
+      </div>
+      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <ErrorBanner message={error} />
+      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
+        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
+      ) : (
+        <>
+          <div className="space-y-2.5 sm:hidden">
+            {filtered.map((p) => (
+              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
+                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
+                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
+                  </div>
+                </div>
+              <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
+                <div className="space-x-3">
+                  <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
+                  <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
+                </div>
+                <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
+              </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden sm:block card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
+                </thead>
+                <tbody className="divide-y divide-ink-100">
+                  {filtered.map((p) => (
+                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
+                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
+                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
+                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
+                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
+                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
+                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1">
+                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
+          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
+        </div>
+      </Modal>
+
+<ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+<ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    </div>
+  );
+}
+````
+
+## File: src/pages/Suppliers.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { addDoc, updateDoc, deleteDoc, doc, writeBatch, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Pencil, Trash2, Banknote, Smartphone } from 'lucide-react';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import { formatKES } from '../utils/currency';
+import { computeSupplierBalances } from '../utils/financials';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Suppliers() {
+  const { profile, businessId } = useAuth();
+  const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const purchQ  = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
+  const paymQ   = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
+  const { data: suppliers, loading } = useFirestoreCollection(suppQ);
+  const { data: purchases }          = useFirestoreCollection(purchQ);
+  const { data: spayments }          = useFirestoreCollection(paymQ);
+
+  const [modal, setModal]       = useState(false);
+  const [editing, setEditing]   = useState(null);
+  const [pendDel, setPendDel]   = useState(null);
+  const [payModal, setPayModal] = useState(false);
+  const [selSupp, setSelSupp]   = useState(null);
+  const [payAmt, setPayAmt]     = useState('');
+  const [payMethod, setPayMethod] = useState('Cash');
+  const [payCode, setPayCode]   = useState('');
+  const [paying, setPaying]     = useState(false);
+
+  const owedList = useMemo(
+    () => computeSupplierBalances(purchases, spayments, suppliers),
+    [purchases, spayments, suppliers]
+  );
+  const owedMap = useMemo(
+    () => Object.fromEntries(owedList.map((o) => [o.supplierId, o.balance])),
+    [owedList]
+  );
+  const totalOwed = owedList.reduce((a, o) => a + o.balance, 0);
+
+const [deleting, setDeleting] = useState(false);
+
+  const handleSave = async data => {
+    const write = editing
+      ? updateDoc(doc(db,'suppliers',editing.id), data)
+      : addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
+
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
+    setModal(false); setEditing(null);
+  };
+
+const handleDel = async () => {
+    const stillExists = suppliers.some((s) => s.id === pendDel.id);
+    if (!stillExists) {
+      toast.success('Already removed.');
+      setPendDel(null);
+      return;
+    }
+    const balance = owedMap[pendDel.id] || 0;
+    if (balance > 0.005) {
+      toast.error(`Can't remove "${pendDel.name}" — they still have an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
+      setPendDel(null);
+      return;
+    }
+    setDeleting(true);
+    const { queuedOffline, error } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
+    setDeleting(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
+    setPendDel(null);
+  };
+
+  const handlePay = async e => {
+    e.preventDefault();
+    const amount = Number(payAmt);
+    const balance = owedMap[selSupp?.id]||0;
+    if (amount<=0) { toast.error('Enter a positive amount.'); return; }
+    if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatKES(balance)}.`); return; }
+    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
+    setPaying(true);
+    const batch = writeBatch(db);
+    const expRef = doc(collection(db,'expenses'));
+    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp() }, businessId));
+    const payRef = doc(collection(db,'supplierPayments'));
+    batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:serverTimestamp(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
+
+    const commit = batch.commit();
+    const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+    setPaying(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
+    if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+    setPayModal(false); setPayAmt(''); setPayCode('');
+  };
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Supplier added');
+  };
+
+  return (
+    <div className="mx-auto max-w-4xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Suppliers</h1><p className="text-sm text-ink-400">Total owed: <span className="font-semibold text-rust-600">{formatKES(totalOwed)}</span></p></div>
+        <button className="btn-primary" onClick={()=>{setEditing(null);setModal(true);}}>+ Add supplier</button>
+      </div>
+      {loading?<LoadingSpinner />:suppliers.length===0?<EmptyState title="No suppliers yet" description="Add suppliers to track restocking and balances." />:(
+        <div className="space-y-3">
+          {suppliers.map(s=>{
+            const balance = owedMap[s.id]||0;
+            return (
+              <div key={s.id} className="card flex flex-wrap items-center justify-between gap-3 p-4">
+                <div><p className="font-semibold text-ink-800">{s.name}</p><p className="text-xs text-ink-400">{s.contactPerson&&`${s.contactPerson} · `}{s.phone||'No phone'}</p></div>
+                <div className="flex items-center gap-3">
+                  <div className="text-right"><p className="text-xs text-ink-400">Outstanding</p><p className={`font-semibold ${balance>0?'text-rust-600':'text-moss-600'}`}>{formatKES(balance)}</p></div>
+                  {balance>0&&<button className="btn-primary !text-xs !px-3 !py-1.5 !min-h-0" onClick={()=>{setSelSupp(s);setPayModal(true);}}>Pay</button>}
+                  <button className="rounded-lg p-2 text-ink-400 hover:bg-ink-100" onClick={()=>{setEditing(s);setModal(true);}}><Pencil className="h-4 w-4" strokeWidth={1.75}/></button>
+                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50" onClick={()=>setPendDel(s)}><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <SupplierFormModal open={modal} onClose={()=>{setModal(false);setEditing(null);}} onSave={handleSave} initialSupplier={editing} />
+<ConfirmDialog
+        open={!!pendDel}
+        title="Remove supplier?"
+        message={(owedMap[pendDel?.id]||0) > 0.005
+          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)} — pay it off first.`
+          : `"${pendDel?.name}" will be removed. Purchase records stay intact.`}
+        confirmLabel={deleting ? 'Removing…' : 'Remove'}
+        confirmDisabled={deleting}
+        danger
+        onConfirm={handleDel}
+        onCancel={()=>{ if (!deleting) setPendDel(null); }}
+      />      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
+        <form onSubmit={handlePay} className="space-y-3">
+          <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(owedMap[selSupp?.id]||0)}</span></div>
+          <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
+          <div><label className="label">Method</label>
+            <div className="grid grid-cols-2 gap-2">
+              {['Cash','M-Pesa'].map(m=>(
+                <button key={m} type="button" onClick={()=>setPayMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${payMethod===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
+                  {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
+                </button>
+              ))}
+            </div>
+          </div>
+          {payMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={payCode} onChange={e=>setPayCode(e.target.value.toUpperCase())} /></div>}
+          <div className="flex justify-end gap-2 pt-1"><button type="button" className="btn-secondary" onClick={()=>setPayModal(false)}>Cancel</button><button type="submit" className="btn-primary" disabled={paying}>{paying?'Recording…':'Record payment'}</button></div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
 ````
 
 ## File: src/pages/Dashboard.jsx
@@ -9922,10 +9662,15 @@ const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod,
     return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
   };
 
-  const handleProductSave = async (data) => {
+const handleProductSave = async (data) => {
     try {
-      if (editProduct) { await updateProduct(editProduct.id, data, editProduct.barcode, businessId); toast.success('Product updated'); }
-      else { await createProduct(data, businessId); toast.success('Product added'); }
+      if (editProduct) {
+        const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
+      } else {
+        const { queuedOffline } = await createProduct(data, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      }
     } catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
   };
@@ -10232,15 +9977,15 @@ const handleSupplierSave = async (supplierData) => {
 <ProductFormModal
         open={productModal}
         onClose={()=>{setProductModal(false);setPrefillBarcode(null);}}
-        onSave={async (data) => {
-          try {
-            const { id } = await createProduct(data, businessId);
-            setForm(p=>({...p, productId: id}));
-            setProductModal(false);
-            setPrefillBarcode(null);
-            toast.success('Product added');
-          } catch (err) { toast.error(friendlyErrorMessage(err)); }
-        }}
+onSave={async (data) => {
+  try {
+    const { id, queuedOffline } = await createProduct(data, businessId);
+    setForm(p=>({...p, productId: id}));
+    setProductModal(false);
+    setPrefillBarcode(null);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+  } catch (err) { toast.error(friendlyErrorMessage(err)); }
+}}
         suppliers={suppliers}
         prefillBarcode={prefillBarcode}
         onAddSupplier={() => setSupplierModal(true)}
@@ -10259,6 +10004,389 @@ const handleSupplierSave = async (supplierData) => {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+````
+
+## File: src/pages/Settings.jsx
+````javascript
+import { useEffect, useState } from 'react';
+import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { resetBusinessData } from '../utils/businessReset';
+import { restoreProduct, permanentlyDeleteProduct, cleanupOrphanedBarcodeIndexes } from '../utils/products';
+import { isDemoMode } from '../demo/demoMode';
+import { resetDemoData } from '../demo/seedData';
+import { formatDateTime } from '../utils/dateRanges';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import { raceWithTimeout } from '../utils/offlineWrite';
+
+const RESET_CONFIRM_PHRASE = 'RESET';
+
+export default function Settings() {
+  const { profile, businessId, isOwner, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, subscription } = useAuth();
+  const demo = isDemoMode();
+  const [loading, setLoading]     = useState(true);
+  
+  const [shopName, setShopName]   = useState('');
+  const [phone, setPhone]         = useState('');
+  const [email, setEmail]         = useState('');
+  const [address, setAddress]     = useState('');
+  const [logoFile, setLogoFile]   = useState(null);
+  const [logoUrl, setLogoUrl]     = useState('');
+  const [cashierExp, setCashierExp] = useState(true);
+  
+  const [saving, setSaving]       = useState(false);
+  const [savingPermissions, setSavingPermissions] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resetting, setResetting] = useState(false);
+
+  const [sessions, setSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+
+  const [archived, setArchived] = useState([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+
+  const settingsRef = businessId ? doc(db, 'businessSettings', businessId) : null;
+
+  
+  function compressImage(file, maxDimension = 480, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        if (!blob) { reject(new Error('Could not process image.')); return; }
+        resolve(blob);
+      }, 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
+    img.src = url;
+  });
+}
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+  useEffect(() => {
+    if (!settingsRef) return;
+    getDoc(settingsRef).then(snap => {
+      if (snap.exists()) { 
+        const d = snap.data(); 
+        setShopName(d.shopName || ''); 
+        setPhone(d.phone || '');
+        setEmail(d.email || '');
+        setAddress(d.address || '');
+        setLogoUrl(d.logoUrl || '');
+        setCashierExp(d.cashierCanRecordExpenses !== false); 
+      }
+      setLoading(false);
+    });
+  }, [businessId]);
+
+  useEffect(() => {
+    if (!businessId) return;
+    listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
+  }, [businessId]);
+
+  const loadArchived = async () => {
+    if (!businessId) return;
+    setArchivedLoading(true);
+    try {
+      const snap = await getDocs(query(collection(db, 'products'), where('businessId', '==', businessId), where('deleted', '==', true)));
+      setArchived(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } finally {
+      setArchivedLoading(false);
+    }
+  };
+
+const handleSave = async e => {
+    e.preventDefault(); 
+    setSaving(true);
+    try {
+      let finalLogoUrl = logoUrl;
+
+      if (logoFile) {
+        try {
+          const compressed = await compressImage(logoFile, 480, 0.75);
+          if (compressed.size > 700 * 1024) {
+            toast.error('Logo is still too large after compression — try a simpler image.');
+          } else {
+            finalLogoUrl = await blobToDataUrl(compressed);
+          }
+        } catch (logoErr) {
+          toast.error(`Logo processing failed, but the rest of your settings will still be saved: ${logoErr.message}`);
+        }
+      }
+
+      const write = setDoc(settingsRef, { 
+        shopName: shopName.trim(), 
+        phone: phone.trim(),
+        email: email.trim(),
+        address: address.trim(),
+        logoUrl: finalLogoUrl,
+      }, { merge: true });
+
+      const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+      if (error) throw error;
+
+      setLogoUrl(finalLogoUrl);
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Business information saved');
+      setLogoFile(null);
+    } catch (err) { 
+      toast.error(err.message); 
+    } finally { 
+      setSaving(false); 
+    }
+  };
+
+const handleSavePermissions = async () => {
+    setSavingPermissions(true);
+    const write = setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    setSavingPermissions(false);
+    if (error) { toast.error(error.message); return; }
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Permissions saved');
+  };
+
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      if (demo) {
+        resetDemoData();
+        toast.success('Demo data reset. Reloading…');
+      } else {
+        await resetBusinessData(businessId, profile?.uid);
+        toast.success('Business data reset. Reloading…');
+      }
+      window.location.href = '/';
+    } catch (err) {
+      toast.error(`Reset failed partway through: ${err.message}`);
+      setResetting(false);
+      setResetDialogOpen(false);
+    }
+  };
+
+  const handleRevoke = async (sessionId) => {
+    try {
+      await revokeSession(sessionId);
+      setSessions(s => s.map(x => x.id === sessionId ? { ...x, revoked: true } : x));
+      toast.success('Device signed out.');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const handleRestore = async (productId) => {
+    try { await restoreProduct(productId); setArchived(a => a.filter(p => p.id !== productId)); toast.success('Product restored'); }
+    catch (err) { toast.error(err.message); }
+  };
+
+  const handlePermanentDelete = async (productId) => {
+    const target = archived.find(p => p.id === productId);
+    try {
+      await permanentlyDeleteProduct(productId, target?.barcode, businessId);
+      setArchived(a => a.filter(p => p.id !== productId));
+      toast.success('Product permanently deleted');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const [cleaningOrphans, setCleaningOrphans] = useState(false);
+  const handleCleanupOrphans = async () => {
+    setCleaningOrphans(true);
+    try {
+      const { scanned, removed } = await cleanupOrphanedBarcodeIndexes(businessId);
+      toast.success(removed > 0
+        ? `Checked ${scanned} barcode record(s), freed ${removed} orphaned barcode(s).`
+        : `Checked ${scanned} barcode record(s) — none were orphaned.`);
+    } catch (err) { toast.error(err.message); }
+    finally { setCleaningOrphans(false); }
+  };
+
+  if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
+
+  return (
+    <div className="mx-auto max-w-xl space-y-5">
+      <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
+
+      <div className="card p-5 space-y-2">
+        <h2 className="font-display text-base font-bold text-ink-800">Account &amp; Security</h2>
+        <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
+        <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
+        <Row label="Business ID" value={businessId || '—'} mono />
+      </div>
+
+      <form onSubmit={handleSave} className="card space-y-4 p-5">
+        <h2 className="font-display text-base font-bold text-ink-800">Business Information</h2>
+        <p className="text-sm text-ink-500 mb-2">This info dynamically populates your customer-facing documents (receipts, invoices).</p>
+        
+        <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
+        
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
+          <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
+        </div>
+
+        <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
+        
+        <div>
+          <label className="label">Business Logo</label>
+          <div className="flex items-center gap-4">
+            {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
+            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files[0])} />
+          </div>
+        </div>
+
+<button type="submit" className="btn-primary w-full" disabled={saving}>{saving?'Saving…':'Save settings'}</button>
+      </form>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Permissions</h2>
+        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-3">
+          <div><p className="text-sm font-semibold text-ink-800">Let cashiers record expenses</p><p className="text-xs text-ink-400">Turn off if only owners should log expenses.</p></div>
+          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-moss-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
+            <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition-transform ${cashierExp?'translate-x-5':''}`} />
+          </button>
+        </div>
+        <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
+          {savingPermissions ? 'Saving…' : 'Save permissions'}
+        </button>
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Team Management</h2>
+        <p className="text-sm text-ink-500">Invite owners or cashiers, and manage pending invites and access.</p>
+        <Link to="/users" className="btn-outline w-full flex items-center justify-center gap-2">Manage users &amp; invites</Link>
+      </div>
+
+      {!demo && (
+        <div className="card p-5 space-y-3">
+          <h2 className="font-display text-base font-bold text-ink-800">Device Management</h2>
+          {sessionsLoading ? <p className="text-sm text-ink-400">Loading…</p> : sessions.length === 0 ? (
+            <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {sessions.map(s => (
+                <div key={s.id} className="flex items-center justify-between py-2.5 text-sm">
+                  <div>
+                    <p className="font-medium text-ink-700">{s.deviceLabel}{s.id === currentSessionId && <span className="text-xs text-ink-400"> (this device)</span>}</p>
+                    <p className="text-xs text-ink-400">Last active {formatDateTime(s.lastActiveAt)}</p>
+                  </div>
+                  {s.revoked ? (
+                    <span className="badge bg-ink-100 text-ink-500">Signed out</span>
+                  ) : (
+                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRevoke(s.id)}>Sign out</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="card p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
+          <div className="flex gap-2">
+            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={handleCleanupOrphans} disabled={cleaningOrphans}>
+              {cleaningOrphans ? 'Checking…' : 'Clean Up Orphaned Barcodes'}
+            </button>
+            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
+              {archivedOpen ? 'Hide' : 'View archive'}
+            </button>
+          </div>
+        </div>
+        <p className="text-sm text-ink-500">Deleted products are archived here first, never destroyed immediately.</p>
+        {archivedOpen && (
+          archivedLoading ? <p className="text-sm text-ink-400">Loading…</p> : archived.length === 0 ? (
+            <p className="text-sm text-ink-400">Nothing archived.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {archived.map(p => (
+                <div key={p.id} className="flex items-center justify-between py-2.5 text-sm">
+                  <span className="font-medium text-ink-700">{p.name}</span>
+                  <div className="flex gap-2">
+                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRestore(p.id)}>Restore</button>
+                    <button className="btn-danger !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handlePermanentDelete(p.id)}>Delete forever</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </div>
+
+      <div className="card p-5 space-y-2">
+        <h2 className="font-display text-base font-bold text-ink-800">Subscription</h2>
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
+          <Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>
+        </div>
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Support</h2>
+        <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
+      </div>
+
+      <div className="card space-y-3 border-rust-200 p-5">
+        <div>
+          <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
+          <p className="mt-1 text-sm text-ink-500">
+            {demo
+              ? 'Demo Reset clears all sample data stored in this browser.'
+              : "Business Reset permanently deletes ALL of this business's data. This cannot be undone."}
+          </p>
+        </div>
+        <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
+          {demo ? 'Demo Reset' : 'Business Reset'}
+        </button>
+      </div>
+
+      <ConfirmDialog
+        open={resetDialogOpen}
+        title={demo ? 'Reset the demo data?' : 'This will permanently delete ALL data for this business'}
+        message={
+          demo ? (
+            <p>All sample data in this browser will be cleared and replaced with the original demo dataset.</p>
+          ) : (
+            <>
+              <p className="mb-2">Everything this business owns will be deleted. This cannot be undone.</p>
+              <label className="label mt-3">Type <span className="font-mono font-bold">{RESET_CONFIRM_PHRASE}</span> to confirm</label>
+              <input className="input" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} autoFocus />
+            </>
+          )
+        }
+        confirmLabel={resetting ? 'Resetting…' : demo ? 'Reset demo data' : 'Delete everything'}
+        danger
+        onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
+        onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
+      />
+    </div>
+  );
+}
+
+function Row({ label, value, tone = '', mono = false }) {
+  return (
+    <div className="flex items-center justify-between py-1 text-sm">
+      <span className="text-ink-500">{label}</span>
+      <span className={`font-semibold ${mono ? 'font-mono text-xs' : ''} ${tone || 'text-ink-800'}`}>{value}</span>
     </div>
   );
 }

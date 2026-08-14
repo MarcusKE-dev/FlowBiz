@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { resetBusinessData } from '../utils/businessReset';
-import { restoreProduct, permanentlyDeleteProduct, cleanupOrphanedBarcodeIndexes } from '../utils/products';
+import { restoreProduct, permanentlyDeleteProduct } from '../utils/products';
 import { isDemoMode } from '../demo/demoMode';
 import { resetDemoData } from '../demo/seedData';
 import { formatDateTime } from '../utils/dateRanges';
@@ -180,9 +180,15 @@ const handleSavePermissions = async () => {
     } catch (err) { toast.error(err.message); }
   };
 
-  const handleRestore = async (productId) => {
-    try { await restoreProduct(productId); setArchived(a => a.filter(p => p.id !== productId)); toast.success('Product restored'); }
-    catch (err) { toast.error(err.message); }
+const handleRestore = async (productId) => {
+    const target = archived.find(p => p.id === productId);
+    try {
+      const { barcodeCleared } = await restoreProduct(productId, target?.barcode, businessId);
+      setArchived(a => a.filter(p => p.id !== productId));
+      toast.success(barcodeCleared
+        ? 'Product restored — its old barcode is now used by another product, so it was cleared. Add a new one from Products if needed.'
+        : 'Product restored');
+    } catch (err) { toast.error(err.message); }
   };
 
   const handlePermanentDelete = async (productId) => {
@@ -192,18 +198,6 @@ const handleSavePermissions = async () => {
       setArchived(a => a.filter(p => p.id !== productId));
       toast.success('Product permanently deleted');
     } catch (err) { toast.error(err.message); }
-  };
-
-  const [cleaningOrphans, setCleaningOrphans] = useState(false);
-  const handleCleanupOrphans = async () => {
-    setCleaningOrphans(true);
-    try {
-      const { scanned, removed } = await cleanupOrphanedBarcodeIndexes(businessId);
-      toast.success(removed > 0
-        ? `Checked ${scanned} barcode record(s), freed ${removed} orphaned barcode(s).`
-        : `Checked ${scanned} barcode record(s) — none were orphaned.`);
-    } catch (err) { toast.error(err.message); }
-    finally { setCleaningOrphans(false); }
   };
 
   if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
@@ -291,9 +285,7 @@ const handleSavePermissions = async () => {
         <div className="flex items-center justify-between">
           <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
           <div className="flex gap-2">
-            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={handleCleanupOrphans} disabled={cleaningOrphans}>
-              {cleaningOrphans ? 'Checking…' : 'Clean Up Orphaned Barcodes'}
-            </button>
+
             <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
               {archivedOpen ? 'Hide' : 'View archive'}
             </button>

@@ -77,7 +77,7 @@ const handleSupplierSave = async (supplierData) => {
   };
 const handleDel = async () => {
     setDeleting(true);
-    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id), 4000);
+    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id, pendingDel.barcode, businessId), 4000);
     setDeleting(false);
     if (error) { toast.error(friendlyErrorMessage(error)); return; }
     toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
