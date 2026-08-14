@@ -6,9 +6,6 @@ import LoadingSpinner from '../components/common/LoadingSpinner';
 import { useAuth } from '../contexts/AuthContext';
 import { prefetchRoutes } from './routePrefetch';
 
-// Defined once, reused by both lazy() and the prefetcher below — calling
-// the same import() specifier twice is free (the module system dedupes
-// it), so the prefetcher just warms the same chunks lazy() will need.
 const routeLoaders = {
   setup: () => import('../pages/Setup'),
   login: () => import('../pages/Login'),
@@ -32,6 +29,8 @@ const routeLoaders = {
   pro: () => import('../pages/Pro'),
   advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
   inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
+  privacy: () => import('../pages/Privacy'),
+  terms: () => import('../pages/Terms'),
 };
 
 const Setup      = lazy(routeLoaders.setup);
@@ -56,6 +55,8 @@ const HelpGuide  = lazy(routeLoaders.helpGuide);
 const Pro        = lazy(routeLoaders.pro);
 const AdvancedAnalytics = lazy(routeLoaders.advancedAnalytics);
 const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
+const Privacy    = lazy(routeLoaders.privacy);
+const Terms      = lazy(routeLoaders.terms);
 
 function Page({ children, adminOnly = false }) {
   return (
@@ -87,7 +88,7 @@ function RoutePrefetcher() {
 
 export default function AppRouter() {
   return (
-    <Suspense fallback={<LoadingSpinner label="Starting FlowBiz…" />}>
+    <Suspense fallback={<LoadingSpinner label="Loading..." />}>
       <RoutePrefetcher />
       <Routes>
         <Route path="/setup" element={<PublicOnly><Setup /></PublicOnly>} />
@@ -95,6 +96,10 @@ export default function AppRouter() {
         <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
         <Route path="/join/:inviteId" element={<JoinStaff />} />
         <Route path="/auth/action" element={<AuthAction />} />
+        
+        {/* Public Legal Pages */}
+        <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
+        <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
 
         <Route path="/"             element={<Page adminOnly><Dashboard /></Page>} />
         <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />

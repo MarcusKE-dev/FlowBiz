@@ -84,7 +84,10 @@ src/
       LoadingSpinner.jsx
       Modal.jsx
       ProtectedRoute.jsx
+    customers/
+      AddCustomerModal.jsx
     debtors/
+      DebtPaymentReceiptModal.jsx
       RefundModal.jsx
       RepaymentModal.jsx
     layout/
@@ -156,6 +159,7 @@ src/
     businessReset.js
     csvExport.js
     currency.js
+    customers.js
     dateRanges.js
     documentService.js
     errorMessages.js
@@ -164,6 +168,7 @@ src/
     offlineWrite.js
     products.js
     scannerService.js
+    whatsapp.js
   App.jsx
   firebase.js
   index.css
@@ -1429,6 +1434,219 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
 }
 ````
 
+## File: src/components/customers/AddCustomerModal.jsx
+````javascript
+import { useState } from 'react';
+import toast from 'react-hot-toast';
+import Modal from '../common/Modal';
+import { isValidWhatsAppPhone } from '../../utils/whatsapp';
+
+// Lets an owner/cashier create a customer record directly, without an
+// accompanying credit sale — so the Customers page can represent the
+// business's actual customer list, not just people who currently owe
+// money. Duplicate handling is a client-side heuristic (same name AND
+// either no phone given or a matching phone) since FlowBiz doesn't
+// enforce a uniqueness constraint on customer names server-side.
+export default function AddCustomerModal({ open, onClose, onSave, existingCustomers = [] }) {
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const reset = () => { setName(''); setPhone(''); };
+  const handleClose = () => { if (!busy) { reset(); onClose(); } };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const trimmedName = name.trim();
+    const trimmedPhone = phone.trim();
+
+    if (!trimmedName) { toast.error('Enter a customer name.'); return; }
+    if (trimmedPhone && !isValidWhatsAppPhone(trimmedPhone)) {
+      toast.error("That phone number doesn't look right — check it and try again.");
+      return;
+    }
+
+    const duplicate = existingCustomers.find((c) => {
+      const sameName = (c.name || '').trim().toLowerCase() === trimmedName.toLowerCase();
+      if (!sameName) return false;
+      return !trimmedPhone || !c.phone || c.phone === trimmedPhone;
+    });
+    if (duplicate) {
+      toast.error(`"${trimmedName}" already exists in your customer list.`);
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await onSave({ name: trimmedName, phone: trimmedPhone });
+      reset();
+      onClose();
+    } catch {
+      // onSave already surfaces its own error toast — keep the modal open
+      // with whatever the person typed so they don't have to retype it.
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={handleClose} title="Add customer" widthClass="max-w-sm">
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <div>
+          <label className="label">Customer name</label>
+          <input
+            className="input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. John Kamau"
+            disabled={busy}
+            autoFocus
+            required
+          />
+        </div>
+        <div>
+          <label className="label">Phone number <span className="text-ink-300 font-normal normal-case">(recommended)</span></label>
+          <input
+            className="input"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="07xx xxx xxx"
+            disabled={busy}
+          />
+          <p className="mt-1 text-xs text-ink-400">Needed later to send WhatsApp reminders and receipts.</p>
+        </div>
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save customer'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+````
+
+## File: src/components/debtors/DebtPaymentReceiptModal.jsx
+````javascript
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { Printer, Download, MessageCircle, CheckCircle2, Clock } from 'lucide-react';
+import Modal from '../common/Modal';
+import { useAuth } from '../../contexts/AuthContext';
+import { useSettings } from '../../hooks/useSettings';
+import { formatKES } from '../../utils/currency';
+import { openWhatsApp, buildDebtPaymentReceiptMessage, isValidWhatsAppPhone } from '../../utils/whatsapp';
+import { printDebtPaymentReceipt, generateDebtPaymentReceiptPDF } from '../../utils/documentService';
+
+// Shown right after a debt repayment is successfully recorded (never
+// before — see CustomerDetail.jsx's handleRepayment). Print/Download/
+// WhatsApp are Pro-gated here for the same reason they're Pro-gated on a
+// normal sale's receipt (SaleCompleteModal.jsx): that's FlowBiz's existing
+// established Pro boundary, not something this feature invents new.
+export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
+  const { isPro } = useAuth();
+  const { settings } = useSettings();
+  const [phone, setPhone] = useState('');
+
+  useEffect(() => { setPhone(receipt?.customerPhone || ''); }, [receipt]);
+
+  if (!receipt) return null;
+
+  const handlePrint = () => {
+    if (!isPro) { toast.error('WhatsApp sharing is available on FlowBiz Pro.'); return; }
+    printDebtPaymentReceipt(receipt, settings);
+  };
+
+  const handleDownload = () => {
+    if (!isPro) { toast.error('Professional receipts require FlowBiz Pro.'); return; }
+    generateDebtPaymentReceiptPDF(receipt, settings);
+  };
+
+  const handleWhatsApp = () => {
+    if (!isPro) { toast.error('WhatsApp sharing is available on FlowBiz Pro.'); return; }
+    if (!phone.trim() || !isValidWhatsAppPhone(phone)) {
+      toast.error('Add a valid phone number for this customer before sending a WhatsApp reminder.');
+      return;
+    }
+    const message = buildDebtPaymentReceiptMessage({
+      shopName: settings.shopName || 'FlowBiz Store',
+      customerName: receipt.customerName,
+      amountPaid: receipt.amountPaid,
+      previousBalance: receipt.previousBalance,
+      remainingBalance: receipt.remainingBalance,
+      isCleared: receipt.isCleared,
+      formatKES,
+    });
+    const opened = openWhatsApp(phone, message);
+    toast[opened ? 'success' : 'error'](opened ? 'WhatsApp opened.' : 'WhatsApp could not be opened.');
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Debt Payment Receipt">
+      <div className="space-y-4">
+        <div className={`flex flex-col items-center justify-center py-4 rounded-2xl border ${receipt.isCleared ? 'bg-moss-50 border-moss-200' : 'bg-amber-50 border-amber-200'}`}>
+          <div className={`h-10 w-10 rounded-full flex items-center justify-center mb-2 ${receipt.isCleared ? 'bg-moss-100 text-moss-700' : 'bg-amber-100 text-amber-700'}`}>
+            {receipt.isCleared ? <CheckCircle2 className="h-5 w-5" strokeWidth={2} /> : <Clock className="h-5 w-5" strokeWidth={2} />}
+          </div>
+          <h2 className={`font-display font-bold ${receipt.isCleared ? 'text-moss-800' : 'text-amber-800'}`}>
+            {receipt.isCleared ? 'Debt cleared' : 'Partially paid'}
+          </h2>
+          <p className="text-sm font-semibold mt-2 text-ink-800">{receipt.customerName}</p>
+          <p className="text-lg font-bold text-ink-900">{formatKES(receipt.amountPaid)} received</p>
+          <p className="text-xs mt-1 font-semibold text-ink-500">
+            {receipt.method}{receipt.mpesaCode ? ` · ${receipt.mpesaCode}` : ''}
+          </p>
+        </div>
+
+        <div className="card divide-y divide-ink-100">
+          <Row label="Previous balance" value={formatKES(receipt.previousBalance)} />
+          <Row label="Payment received" value={formatKES(receipt.amountPaid)} />
+          <Row label="Remaining balance" value={formatKES(receipt.remainingBalance)} bold />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <button className="btn-outline flex items-center justify-center gap-2" onClick={handlePrint}>
+            <Printer className="h-4 w-4" /> Print
+          </button>
+          <button className="btn-outline flex items-center justify-center gap-2" onClick={handleDownload}>
+            <Download className="h-4 w-4" /> Download PDF
+          </button>
+        </div>
+
+        <div className="rounded-lg border border-ink-100 p-3 space-y-2">
+          <label className="label">
+            Send receipt via WhatsApp {!isPro && <span className="text-amber-600">— PRO</span>}
+          </label>
+          <div className="flex gap-2">
+            <input className="input flex-1" placeholder="Customer phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+            {isPro ? (
+              <button className="btn-primary flex items-center justify-center gap-2 shrink-0" onClick={handleWhatsApp}>
+                <MessageCircle className="h-4 w-4" /> Send
+              </button>
+            ) : (
+              <Link to="/pro" className="btn-primary flex items-center justify-center gap-2 shrink-0">
+                <MessageCircle className="h-4 w-4" /> Unlock
+              </Link>
+            )}
+          </div>
+        </div>
+
+        <button className="btn-secondary w-full" onClick={onClose}>Done</button>
+      </div>
+    </Modal>
+  );
+}
+
+function Row({ label, value, bold }) {
+  return (
+    <div className={`flex items-center justify-between px-4 py-2.5 text-sm ${bold ? 'bg-ink-50/60' : ''}`}>
+      <span className={bold ? 'font-bold text-ink-900' : 'text-ink-500'}>{label}</span>
+      <span className={bold ? 'font-bold text-ink-900' : 'text-ink-700'}>{value}</span>
+    </div>
+  );
+}
+````
+
 ## File: src/components/debtors/RefundModal.jsx
 ````javascript
 import { useState } from 'react';
@@ -2270,59 +2488,6 @@ export function useFirestoreCollection(queryRef) {
 }
 ````
 
-## File: src/hooks/useHardwareScanner.js
-````javascript
-// src/hooks/useHardwareScanner.js
-import { useEffect, useRef } from 'react';
-
-// USB/Bluetooth barcode scanners behave like a keyboard: they "type" the
-// barcode's characters very fast (each keystroke well under 40ms apart)
-// and then send Enter. Human typing is much slower per keystroke — that
-// timing gap is what tells a scan apart from someone typing in a text
-// field, without needing any special driver or pairing step, since the
-// OS just sees a generic keyboard either way.
-//
-// Known limitation: a person typing a short word very fast right before
-// hitting Enter could theoretically be misread as a scan. In practice
-// this is rare enough not to matter for a POS used by real staff — but
-// worth knowing about if you ever see an unexpected scan trigger.
-export function useHardwareScanner(onScan, { enabled = true, maxIntervalMs = 40, minLength = 4 } = {}) {
-  const bufferRef = useRef('');
-  const lastKeyTimeRef = useRef(0);
-
-  useEffect(() => {
-    if (!enabled) return;
-
-    const handleKeyDown = (e) => {
-      const now = Date.now();
-      const elapsed = now - lastKeyTimeRef.current;
-      lastKeyTimeRef.current = now;
-
-      if (e.key === 'Enter') {
-        const code = bufferRef.current;
-        bufferRef.current = '';
-        if (code.length >= minLength) {
-          onScan(code);
-        }
-        return;
-      }
-
-      if (e.key.length !== 1) return; // ignore Shift, Tab, arrow keys, etc.
-
-      // A gap longer than maxIntervalMs means this keystroke isn't part
-      // of a fast scanner burst — start the buffer over.
-      if (elapsed > maxIntervalMs) {
-        bufferRef.current = '';
-      }
-      bufferRef.current += e.key;
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [enabled, onScan, maxIntervalMs, minLength]);
-}
-````
-
 ## File: src/hooks/useOnlineStatus.js
 ````javascript
 import { useEffect, useState } from 'react';
@@ -2451,432 +2616,6 @@ export function tenantCollection(collectionName) {
 export function withBusiness(data, businessId) {
   if (!businessId) throw new Error('withBusiness() called with no businessId');
   return { ...data, businessId };
-}
-````
-
-## File: src/pages/AdvancedAnalytics.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { where } from 'firebase/firestore';
-import { useAuth } from '../contexts/AuthContext';
-import { useFinancialsForRange } from '../hooks/useFinancials';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { tenantQuery } from '../lib/tenant';
-import { startOfDay, endOfDay, buildDateBuckets, toMillisValue } from '../utils/dateRanges';
-import { formatKES } from '../utils/currency';
-import { computeFinancials } from '../utils/financials';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import MiniLineChart from '../components/charts/MiniLineChart';
-import MiniBarChart from '../components/charts/MiniBarChart';
-import DonutChart from '../components/charts/DonutChart';
-import { TrendingUp, TrendingDown, Lock, AlertCircle, CheckCircle2, Info, ArrowLeft } from 'lucide-react';
-
-const PERIOD_OPTIONS = [
-  { id: '7', label: '7 Days' },
-  { id: '30', label: '30 Days' },
-  { id: '90', label: '90 Days' },
-  { id: 'custom', label: 'Custom' },
-];
-
-function KpiCard({ label, value, tone = 'text-ink-900', deltaPct }) {
-  const isPositive = deltaPct !== null && deltaPct >= 0;
-  const isNegative = deltaPct !== null && deltaPct < 0;
-
-  return (
-    <div className="card p-4 sm:p-5 flex flex-col justify-between bg-white hover:shadow-md transition-shadow">
-      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
-      <div className="mt-2">
-        <p className={`font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
-      </div>
-      {deltaPct !== null && deltaPct !== undefined && Number.isFinite(deltaPct) && (
-        <div className={`mt-3 flex items-center gap-1.5 text-xs font-semibold ${isPositive ? 'text-moss-700' : 'text-rust-600'}`}>
-          {isPositive ? <TrendingUp className="h-3.5 w-3.5" strokeWidth={2.5} /> : <TrendingDown className="h-3.5 w-3.5" strokeWidth={2.5} />}
-          <span>{Math.abs(deltaPct).toFixed(1)}% vs prior period</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Section({ title, subtitle, children }) {
-  return (
-    <div className="card p-5 bg-white">
-      <div className="mb-4 border-b border-ink-100 pb-3">
-        <h2 className="font-display text-sm font-bold text-ink-900 uppercase tracking-wide">{title}</h2>
-        {subtitle && <p className="mt-1 text-xs text-ink-500">{subtitle}</p>}
-      </div>
-      <div>{children}</div>
-    </div>
-  );
-}
-
-function NoData({ children }) {
-  return <div className="py-8 flex flex-col items-center justify-center text-center"><Info className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5}/><p className="text-sm text-ink-500">{children}</p></div>;
-}
-
-export default function AdvancedAnalytics() {
-  const { isPro, businessId } = useAuth();
-  
-  const [period, setPeriod] = useState('30');
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd, setCustomEnd] = useState('');
-
-  const range = useMemo(() => {
-    if (period === 'custom' && customStart && customEnd) {
-      return { start: startOfDay(new Date(customStart)), end: endOfDay(new Date(customEnd)) };
-    }
-    const days = Number(period) || 30;
-    return { start: startOfDay(new Date(Date.now() - (days - 1) * 86400000)), end: endOfDay() };
-  }, [period, customStart, customEnd]);
-
-  const prevRange = useMemo(() => {
-    if (period === 'custom' && customStart && customEnd) {
-      const diff = range.end.getTime() - range.start.getTime();
-      const prevEnd = new Date(range.start.getTime() - 1);
-      const prevStart = new Date(prevEnd.getTime() - diff);
-      return { start: startOfDay(prevStart), end: endOfDay(prevEnd) };
-    }
-    const days = Number(period) || 30;
-    const prevEnd = endOfDay(new Date(range.start.getTime() - 1));
-    const prevStart = startOfDay(new Date(range.start.getTime() - days * 86400000));
-    return { start: prevStart, end: prevEnd };
-  }, [range, period, customStart, customEnd]);
-
-  const { loading, sales, creditSales, expenses, repayments, summary } = useFinancialsForRange(range.start, range.end);
-  const { loading: prevLoading, summary: prevSummary } = useFinancialsForRange(prevRange.start, prevRange.end);
-
-  const allCreditSalesQ = useMemo(() => (businessId ? tenantQuery('creditSales', businessId) : null), [businessId]);
-  const { data: allCreditSales } = useFirestoreCollection(allCreditSalesQ);
-
-  const outstandingCreditQ = useMemo(
-    () => (businessId ? tenantQuery('creditSales', businessId, where('status', 'in', ['pending', 'partial'])) : null),
-    [businessId]
-  );
-  const { data: outstandingCreditSales } = useFirestoreCollection(outstandingCreditQ);
-  const totalOutstanding = useMemo(
-    () => outstandingCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0),
-    [outstandingCreditSales]
-  );
-
-  const granularity = (range.end.getTime() - range.start.getTime()) > (45 * 86400000) ? 'week' : 'day';
-  const buckets = useMemo(() => buildDateBuckets(range.start, range.end, granularity), [range, granularity]);
-
-  const trend = useMemo(() => {
-    if (!buckets.length) return [];
-    const inBucket = (record, field, bucket) => {
-      const t = toMillisValue(record[field]);
-      return t !== null && t >= bucket.start.getTime() && t <= bucket.end.getTime();
-    };
-    return buckets.map((bucket) => {
-      const bucketSales = (sales || []).filter((s) => inBucket(s, 'soldAt', bucket));
-      const bucketExpenses = (expenses || []).filter((e) => inBucket(e, 'recordedAt', bucket));
-      const bucketRepayments = (repayments || []).filter((r) => inBucket(r, 'paidAt', bucket));
-      const f = computeFinancials({
-        sales: bucketSales,
-        creditSales: [],
-        allCreditSales,
-        expenses: bucketExpenses,
-        debtRepayments: bucketRepayments,
-      });
-      return { label: bucket.label, revenue: f.revenue, netProfit: f.netProfit };
-    });
-  }, [buckets, sales, expenses, repayments, allCreditSales]);
-
-  const productPerf = useMemo(() => {
-    const map = {};
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      if (!map[s.productName]) map[s.productName] = { name: s.productName, qty: 0, revenue: 0, profit: 0 };
-      map[s.productName].qty += Number(s.quantity) || 0;
-      map[s.productName].revenue += Number(s.totalAmount) || 0;
-      map[s.productName].profit += Number(s.profit) || 0;
-    });
-    (creditSales || []).forEach((cs) => {
-      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-      if (!map[cs.productName]) map[cs.productName] = { name: cs.productName, qty: 0, revenue: 0, profit: 0 };
-      map[cs.productName].qty += Number(cs.quantity) || 0;
-    });
-    return Object.values(map);
-  }, [sales, creditSales]);
-
-  const bestSelling = useMemo(() => [...productPerf].sort((a, b) => b.qty - a.qty).slice(0, 5), [productPerf]);
-  const mostProfitable = useMemo(() => [...productPerf].sort((a, b) => b.profit - a.profit).slice(0, 5), [productPerf]);
-
-  const staffPerformance = useMemo(() => {
-    const m = {};
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      if (!s.soldByName) return;
-      if (!m[s.soldByName]) m[s.soldByName] = { name: s.soldByName, qty: 0, revenue: 0 };
-      m[s.soldByName].qty += Number(s.quantity) || 0;
-      m[s.soldByName].revenue += Number(s.totalAmount) || 0;
-    });
-    return Object.values(m).sort((a, b) => b.revenue - a.revenue);
-  }, [sales]);
-
-  const revenueChangePct = !prevLoading && prevSummary.revenue > 0 ? ((summary.revenue - prevSummary.revenue) / prevSummary.revenue) * 100 : null;
-  const profitChangePct = !prevLoading && prevSummary.netProfit !== 0 ? ((summary.netProfit - prevSummary.netProfit) / Math.abs(prevSummary.netProfit)) * 100 : null;
-
-  const insights = useMemo(() => {
-    const list = [];
-    if (revenueChangePct !== null) {
-      list.push({ tone: revenueChangePct >= 0 ? 'positive' : 'negative', text: `Recognized revenue is ${revenueChangePct >= 0 ? 'up' : 'down'} ${Math.abs(revenueChangePct).toFixed(1)}% vs prior period.` });
-    }
-    if (profitChangePct !== null) {
-      list.push({ tone: profitChangePct >= 0 ? 'positive' : 'negative', text: `Net profit is ${profitChangePct >= 0 ? 'up' : 'down'} ${Math.abs(profitChangePct).toFixed(1)}% vs prior period.` });
-    }
-    if (mostProfitable[0]) {
-      list.push({ tone: 'neutral', text: `"${mostProfitable[0].name}" drove the highest gross profit margin (${formatKES(mostProfitable[0].profit)}).` });
-    }
-    const salesActivity = summary.revenue + summary.totalCreditSales;
-    if (salesActivity > 0 && summary.totalCreditSales > 0) {
-      const pct = (summary.totalCreditSales / salesActivity) * 100;
-      list.push({ tone: pct > 30 ? 'negative' : 'neutral', text: `Credit exposure: ${pct.toFixed(0)}% of sales activity was issued on credit.` });
-    }
-    return list;
-  }, [revenueChangePct, profitChangePct, mostProfitable, summary, period]);
-
-  if (!isPro) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
-        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
-          <Lock className="h-7 w-7" strokeWidth={2} />
-        </div>
-        <h2 className="font-display text-2xl font-bold text-ink-900">Enterprise Analytics Locked</h2>
-        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Advanced Analytics provides institutional-grade visibility into profit margins, capital exposure, and staff performance trends. Requires FlowBiz Pro.</p>
-        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
-      </div>
-    );
-  }
-
-  const margin = summary.revenue > 0 ? (summary.grossProfit / summary.revenue) * 100 : 0;
-  const avgTransactionValue = sales.length > 0 ? summary.revenue / sales.length : 0;
-  const hasSalesData = sales.length > 0;
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Advanced Analytics</h1>
-          <p className="text-sm text-ink-500 mt-1">Deep financial insights and performance tracking.</p>
-        </div>
-        <Link to="/reports" className="btn-outline text-xs bg-white">
-          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Standard Reports
-        </Link>
-      </div>
-
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-white p-3 rounded-xl border border-ink-200">
-        <span className="text-xs font-semibold text-ink-500 uppercase tracking-wider pl-1">Date Range:</span>
-        <div className="flex flex-wrap items-center gap-2">
-          {PERIOD_OPTIONS.map((opt) => (
-            <button
-              key={opt.id}
-              onClick={() => setPeriod(opt.id)}
-              className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors ${period === opt.id ? 'bg-ink-900 text-white shadow-sm' : 'bg-ink-50 text-ink-600 hover:bg-ink-100'}`}
-            >
-              {opt.label}
-            </button>
-          ))}
-          {period === 'custom' && (
-            <div className="flex items-center gap-2 ml-1 animate-fade-in">
-              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customStart} onChange={e=>setCustomStart(e.target.value)} />
-              <span className="text-ink-400 text-sm font-medium">to</span>
-              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} />
-            </div>
-          )}
-        </div>
-      </div>
-
-      {loading ? <div className="py-12"><LoadingSpinner /></div> : (
-        <>
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <KpiCard label="Recognized Revenue" value={formatKES(summary.revenue)} deltaPct={revenueChangePct} />
-            <KpiCard label="Gross Profit" value={formatKES(summary.grossProfit)} tone="text-moss-700" />
-            <KpiCard label="Net Profit" value={formatKES(summary.netProfit)} tone="text-moss-700" deltaPct={profitChangePct} />
-            <KpiCard label="Profit Margin" value={`${margin.toFixed(1)}%`} tone={margin > 20 ? 'text-moss-700' : margin < 10 ? 'text-rust-600' : 'text-ink-900'} />
-            <KpiCard label="Total Expenses" value={formatKES(summary.totalExpenses)} tone="text-rust-600" />
-            <KpiCard label="Avg Transaction Size" value={hasSalesData ? formatKES(avgTransactionValue) : 'KES 0'} />
-            <KpiCard label="Credit Issued" value={formatKES(summary.totalCreditSales)} tone="text-amber-600" />
-            <KpiCard label="Total Outstanding Debt" value={formatKES(totalOutstanding)} tone="text-rust-600" />
-          </div>
-
-          <div className="grid gap-6 lg:grid-cols-2">
-            <Section title="Revenue Trajectory" subtitle="Recognized revenue tracking over selected period">
-              {hasSalesData ? (
-                <MiniLineChart data={trend.map((t) => ({ label: t.label, value: t.revenue }))} formatValue={formatKES} ariaLabel="Sales trend" colorClassName="text-moss-600" />
-              ) : (
-                <NoData>Insufficient data to chart trajectory.</NoData>
-              )}
-            </Section>
-            <Section title="Net Profit Trend" subtitle="Actual profit realized after expenses">
-              {hasSalesData ? (
-                <MiniBarChart data={trend.map((t) => ({ label: t.label, value: t.netProfit }))} orientation="vertical" formatValue={formatKES} ariaLabel="Profit trend" />
-              ) : (
-                <NoData>Insufficient data to chart profit.</NoData>
-              )}
-            </Section>
-          </div>
-
-          <div className="grid gap-6 lg:grid-cols-2">
-            <Section title="Volume Drivers" subtitle="Highest quantity moved">
-              {bestSelling.length > 0 ? (
-                <MiniBarChart orientation="horizontal" formatValue={(v) => `${v.toLocaleString()} units`} data={bestSelling.map((p) => ({ label: p.name, value: p.qty, colorClassName: 'bg-ink-800' }))} />
-              ) : (
-                <NoData>No product movement detected.</NoData>
-              )}
-            </Section>
-            <Section title="Margin Drivers" subtitle="Highest gross profit generated">
-              {mostProfitable.length > 0 ? (
-                <MiniBarChart orientation="horizontal" formatValue={formatKES} data={mostProfitable.map((p) => ({ label: p.name, value: p.profit, colorClassName: 'bg-moss-600' }))} />
-              ) : (
-                <NoData>No profit data generated.</NoData>
-              )}
-            </Section>
-          </div>
-
-          <div className="grid gap-6 lg:grid-cols-2">
-            <Section title="Capital & Credit Exposure" subtitle="Liquidity analysis">
-              <div className="space-y-4 pt-1">
-                <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
-                  <span className="text-ink-600 font-medium">Credit Issued (This Period)</span>
-                  <span className="font-semibold text-ink-900">{formatKES(summary.totalCreditSales)}</span>
-                </div>
-                <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
-                  <span className="text-ink-600 font-medium">Debt Collected (This Period)</span>
-                  <span className="font-semibold text-moss-700">{formatKES(summary.totalDebtRepayments)}</span>
-                </div>
-                <div className="flex items-center justify-between pt-1 text-sm bg-rust-50 p-3 rounded-lg border border-rust-100">
-                  <span className="font-bold text-rust-800 uppercase tracking-wide text-xs">Total Market Exposure</span>
-                  <span className="font-bold text-rust-700 text-base">{formatKES(totalOutstanding)}</span>
-                </div>
-              </div>
-            </Section>
-
-            <Section title="Executive Summary" subtitle="Automated business intelligence">
-              {insights.length > 0 ? (
-                <div className="space-y-4 pt-1">
-                  {insights.map((insight, i) => (
-                    <div key={i} className="flex items-start gap-3 text-sm bg-ink-50 p-3 rounded-lg border border-ink-100">
-                      <div className="shrink-0 mt-0.5">
-                        {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
-                         insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
-                         <Info className="h-5 w-5 text-ink-500" strokeWidth={2} />}
-                      </div>
-                      <span className="text-ink-800 font-medium leading-relaxed">{insight.text}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <NoData>More transaction volume required to generate insights.</NoData>
-              )}
-            </Section>
-          </div>
-
-          <Section title="Staff Performance Index" subtitle="Revenue attribution by cashier">
-            {staffPerformance.length === 0 ? (
-              <NoData>No staff attribution data found.</NoData>
-            ) : (
-              <div className="overflow-hidden rounded-lg border border-ink-200">
-                <table className="w-full text-sm text-left">
-                  <thead className="bg-ink-50 text-xs uppercase tracking-wider font-semibold text-ink-500">
-                    <tr><th className="px-4 py-3 border-b border-ink-200">Staff Member</th><th className="px-4 py-3 border-b border-ink-200 text-right">Items Sold</th><th className="px-4 py-3 border-b border-ink-200 text-right">Revenue Generated</th></tr>
-                  </thead>
-                  <tbody className="divide-y divide-ink-100 bg-white">
-                    {staffPerformance.map((st) => (
-                      <tr key={st.name} className="hover:bg-ink-50/50 transition-colors">
-                        <td className="px-4 py-3 font-semibold text-ink-900">{st.name}</td>
-                        <td className="px-4 py-3 text-right text-ink-600">{st.qty.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-right font-semibold text-moss-700">{formatKES(st.revenue)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Section>
-        </>
-      )}
-    </div>
-  );
-}
-````
-
-## File: src/pages/Customers.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { orderBy } from 'firebase/firestore';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import { formatKES } from '../utils/currency';
-import { formatDate } from '../utils/dateRanges';
-
-export default function Customers() {
-  const { businessId } = useAuth();
-  
-  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const creditQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
-
-  const { data: customers, loading: custLoading } = useFirestoreCollection(customersQ);
-  const { data: creditSales, loading: credLoading } = useFirestoreCollection(creditQ);
-  
-  const [search, setSearch] = useState('');
-
-  const customerList = useMemo(() => {
-    const map = {};
-    for (const c of customers) {
-      map[c.id] = { customerId: c.id, name: c.name, phone: c.phone, totalOwed: 0, purchaseCount: 0, lastPurchase: null };
-    }
-    for (const cs of creditSales) {
-      if (!cs.customerId) continue;
-      if (!map[cs.customerId]) {
-        map[cs.customerId] = { customerId: cs.customerId, name: cs.customerName, phone: cs.customerPhone, totalOwed: 0, purchaseCount: 0, lastPurchase: null };
-      }
-      const e = map[cs.customerId];
-      if (cs.status === 'pending' || cs.status === 'partial') {
-        e.totalOwed += Number(cs.remainingBalance) || 0;
-      }
-      e.purchaseCount++;
-      if (!e.lastPurchase || (cs.soldAt?.toMillis?.() ?? 0) > (e.lastPurchase?.toMillis?.() ?? 0)) {
-        e.lastPurchase = cs.soldAt;
-      }
-    }
-    return Object.values(map)
-      .filter(d => d.name?.toLowerCase().includes(search.toLowerCase()) || d.phone?.includes(search))
-      .sort((a, b) => b.totalOwed - a.totalOwed);
-  }, [customers, creditSales, search]);
-
-  const loading = custLoading || credLoading;
-  const totalOut = customerList.reduce((acc, d) => acc + d.totalOwed, 0);
-
-  return (
-    <div className="mx-auto max-w-4xl space-y-4">
-      <div>
-        <h1 className="font-display text-xl font-bold text-ink-900">Customers</h1>
-        <p className="text-sm text-ink-400">Total outstanding debt: <span className="font-semibold text-rust-600">{formatKES(totalOut)}</span></p>
-      </div>
-      <input className="input" placeholder="Search customer…" value={search} onChange={e => setSearch(e.target.value)} />
-      {loading ? <LoadingSpinner /> : customerList.length === 0 ? <EmptyState title="No customers found" description="Customers will appear here when recorded." /> : (
-        <div className="space-y-2">
-          {customerList.map(d => (
-            <Link key={d.customerId} to={`/customers/${d.customerId}`} className="card flex items-center justify-between p-4 hover:shadow-md">
-              <div>
-                <p className="font-semibold text-ink-800">{d.name}</p>
-                <p className="text-xs text-ink-400">{d.phone || 'No phone'} · {d.purchaseCount} purchase{d.purchaseCount > 1 ? 's' : ''} {d.lastPurchase ? `· last ${formatDate(d.lastPurchase)}` : ''}</p>
-              </div>
-              <span className={`font-display text-base font-bold ${d.totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>
-                {d.totalOwed > 0 ? formatKES(d.totalOwed) : 'Paid'}
-              </span>
-            </Link>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 ````
 
@@ -3166,200 +2905,6 @@ export default function HelpGuide() {
           })}
         </div>
       </div>
-    </div>
-  );
-}
-````
-
-## File: src/pages/InventoryIntelligence.jsx
-````javascript
-import { useMemo } from 'react';
-import { Link } from 'react-router-dom';
-import { orderBy, where } from 'firebase/firestore';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { formatKES } from '../utils/currency';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import MiniBarChart from '../components/charts/MiniBarChart';
-import DonutChart from '../components/charts/DonutChart';
-import { Lock, ArrowLeft, AlertCircle, CheckCircle2, Info, PackageOpen } from 'lucide-react';
-
-function KpiCard({ label, value, tone = 'text-ink-900', bg = 'bg-white' }) {
-  return (
-    <div className={`card p-4 sm:p-5 ${bg} hover:shadow-md transition-shadow`}>
-      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
-      <p className={`mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
-    </div>
-  );
-}
-
-function Section({ title, subtitle, children }) {
-  return (
-    <div className="card p-5 bg-white">
-      <div className="mb-4 border-b border-ink-100 pb-3">
-        <h2 className="font-display text-sm font-bold text-ink-900 uppercase tracking-wide">{title}</h2>
-        {subtitle && <p className="mt-1 text-xs text-ink-500">{subtitle}</p>}
-      </div>
-      <div>{children}</div>
-    </div>
-  );
-}
-
-function NoData({ children }) {
-  return <div className="py-8 flex flex-col items-center justify-center text-center"><PackageOpen className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5}/><p className="text-sm text-ink-500">{children}</p></div>;
-}
-
-export default function InventoryIntelligence() {
-  const { isPro, businessId } = useAuth();
-  
-  const productsQ = useMemo(
-    () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
-    [businessId]
-  );
-  const { data: products, loading } = useFirestoreCollection(productsQ);
-
-  const metrics = useMemo(() => {
-    let totalCost = 0;
-    let totalRetail = 0;
-    let unitsInStock = 0;
-    const overstocked = [];
-    const outOfStock = [];
-    const lowStock = [];
-
-    (products || []).forEach((p) => {
-      const stock = Number(p.stock) || 0;
-      const cost = Number(p.costPrice) || 0;
-      const retail = Number(p.sellingPrice) || 0;
-      const threshold = Number(p.lowStockThreshold) || 5;
-
-      if (stock > 0) {
-        totalCost += stock * cost;
-        totalRetail += stock * retail;
-        unitsInStock += stock;
-      }
-
-      if (stock <= 0) {
-        outOfStock.push(p);
-      } else if (stock > threshold * 4) {
-        // Lowered threshold multiplier to catch capital traps sooner
-        overstocked.push({ ...p, value: stock * cost });
-      } else if (stock <= threshold) {
-        lowStock.push(p);
-      }
-    });
-
-    overstocked.sort((a, b) => b.value - a.value);
-    const healthyCount = (products || []).length - outOfStock.length - overstocked.length - lowStock.length;
-
-    return { totalCost, totalRetail, unitsInStock, outOfStock, overstocked, lowStock, healthyCount };
-  }, [products]);
-
-  if (!isPro) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
-        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
-          <Lock className="h-7 w-7" strokeWidth={2} />
-        </div>
-        <h2 className="font-display text-2xl font-bold text-ink-900">Inventory Intelligence Locked</h2>
-        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Instantly uncover dead stock holding up capital and detect urgent re-order limits before stockouts hit. Requires FlowBiz Pro.</p>
-        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
-      </div>
-    );
-  }
-
-  if (loading) return <div className="py-12"><LoadingSpinner /></div>;
-
-  const potentialProfit = metrics.totalRetail - metrics.totalCost;
-  const activeProductsCount = (products || []).length;
-  const totalOverstockValue = metrics.overstocked.reduce((sum, p) => sum + p.value, 0);
-
-  const insights = [];
-  if (metrics.lowStock.length > 0) {
-    insights.push({ tone: 'negative', text: `CRITICAL: ${metrics.lowStock.length} product(s) operating below safe threshold. Restock immediately.` });
-  }
-  if (metrics.outOfStock.length > 0) {
-    insights.push({ tone: 'negative', text: `REVENUE LOSS: ${metrics.outOfStock.length} product(s) completely depleted. You are actively losing sales.` });
-  }
-  if (metrics.overstocked[0]) {
-    insights.push({ tone: 'neutral', text: `CAPITAL TRAP: "${metrics.overstocked[0].name}" alone locks up ${formatKES(metrics.overstocked[0].value)} in inventory.` });
-  }
-  if (insights.length === 0 && activeProductsCount > 0) {
-    insights.push({ tone: 'positive', text: 'OPTIMAL: Supply distribution perfectly matches current threshold configurations.' });
-  }
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Inventory Intelligence</h1>
-          <p className="text-sm text-ink-500 mt-1">Capital deployment and supply chain health.</p>
-        </div>
-        <Link to="/products" className="btn-outline text-xs bg-white">
-          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Back to Products
-        </Link>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <KpiCard label="Capital Deployed" value={formatKES(metrics.totalCost)} />
-        <KpiCard label="Projected Gross Profit" value={formatKES(potentialProfit)} tone="text-moss-700" />
-        <KpiCard label="Physical Units" value={metrics.unitsInStock.toLocaleString()} />
-        <KpiCard label="Active SKUs" value={activeProductsCount.toLocaleString()} />
-        <KpiCard label="Low Stock Risk" value={metrics.lowStock.length} tone={metrics.lowStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.lowStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
-        <KpiCard label="Stockout Status" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.outOfStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
-        <KpiCard label="Overstocked SKUs" value={metrics.overstocked.length} tone="text-amber-600" />
-        <KpiCard label="Capital Trapped" value={formatKES(totalOverstockValue)} tone="text-amber-600" />
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Global Supply Distribution" subtitle="System-wide inventory health check">
-          {activeProductsCount > 0 ? (
-            <div className="pt-2">
-              <DonutChart
-                size={180}
-                formatValue={(v) => `${v} SKU${v === 1 ? '' : 's'}`}
-                segments={[
-                  { label: 'Optimal Inventory', value: metrics.healthyCount, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
-                  { label: 'Low Stock Risk', value: metrics.lowStock.length, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
-                  { label: 'Critical Stockout', value: metrics.outOfStock.length, colorClassName: 'text-rust-600', dotClassName: 'bg-rust-600' },
-                  { label: 'Capital Surplus (Overstock)', value: metrics.overstocked.length, colorClassName: 'text-ink-800', dotClassName: 'bg-ink-800' },
-                ]}
-              />
-            </div>
-          ) : (
-            <NoData>System requires active inventory definitions.</NoData>
-          )}
-        </Section>
-
-        <Section title="Capital Concentration" subtitle="Items holding maximum illiquid capital">
-          {metrics.overstocked.length > 0 ? (
-            <div className="pt-2">
-              <MiniBarChart
-                orientation="horizontal"
-                formatValue={formatKES}
-                data={metrics.overstocked.slice(0, 6).map((p) => ({ label: p.name, value: p.value, colorClassName: 'bg-ink-800' }))}
-              />
-            </div>
-          ) : (
-            <NoData>No significant capital concentration found.</NoData>
-          )}
-        </Section>
-      </div>
-
-      <Section title="Automated Intelligence Briefing" subtitle="System-generated supply chain alerts">
-        <div className="space-y-4 pt-1">
-          {insights.map((insight, i) => (
-            <div key={i} className={`flex items-start gap-3 text-sm p-4 rounded-lg border ${insight.tone === 'positive' ? 'bg-moss-50 border-moss-200' : insight.tone === 'negative' ? 'bg-rust-50 border-rust-200' : 'bg-ink-50 border-ink-200'}`}>
-              <div className="shrink-0 mt-0.5">
-                {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
-                 insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
-                 <Info className="h-5 w-5 text-ink-600" strokeWidth={2} />}
-              </div>
-              <span className={`font-medium leading-relaxed ${insight.tone === 'positive' ? 'text-moss-800' : insight.tone === 'negative' ? 'text-rust-800' : 'text-ink-800'}`}>{insight.text}</span>
-            </div>
-          ))}
-        </div>
-      </Section>
     </div>
   );
 }
@@ -4065,6 +3610,70 @@ export function formatKESCompact(amount) {
 }
 ````
 
+## File: src/utils/customers.js
+````javascript
+// src/utils/customers.js
+import { doc, addDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
+import { tenantCollection, withBusiness } from '../lib/tenant';
+import { raceWithTimeout } from './offlineWrite';
+import { normalizePhone } from './documentService';
+
+export async function createCustomer(data, businessId) {
+  if (!businessId) throw new Error('createCustomer() called with no businessId');
+  const name = String(data.name || '').trim();
+  if (!name) throw new Error('Customer name is required.');
+
+  const phone = data.phone ? normalizePhone(data.phone) : '';
+  const customerCode = `CUS-${Math.floor(Date.now() / 1000).toString().slice(-6)}`;
+
+  const customerPayload = withBusiness({
+    name,
+    phone: phone || '',
+    customerCode,
+    email: data.email || '',
+    address: data.address || '',
+    notes: data.notes || '',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, businessId);
+
+  const write = addDoc(tenantCollection('customers'), customerPayload);
+  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+  if (error) throw error;
+
+  return {
+    id: ref ? ref.id : null,
+    customerCode,
+    name,
+    phone,
+    queuedOffline,
+  };
+}
+
+export async function updateCustomer(customerId, data, businessId) {
+  if (!businessId) throw new Error('updateCustomer() called with no businessId');
+  if (!customerId) throw new Error('updateCustomer() called with no customerId');
+
+  const customerRef = doc(db, 'customers', customerId);
+  const { businessId: _ignored, id: _ignoredId, ...updates } = data;
+
+  if (updates.phone) {
+    updates.phone = normalizePhone(updates.phone);
+  }
+
+  const write = updateDoc(customerRef, {
+    ...updates,
+    updatedAt: serverTimestamp(),
+  });
+
+  const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+  if (error) throw error;
+
+  return { queuedOffline };
+}
+````
+
 ## File: src/utils/dateRanges.js
 ````javascript
 // Africa/Nairobi is a fixed UTC+3 with no DST, so business-day boundaries
@@ -4607,6 +4216,117 @@ export function findProductByCode(products, rawCode) {
 // uses it needing to change. Today every scan is just a product code.
 export function parseScanPayload(rawText) {
   return { kind: 'product-code', code: normalizeCode(rawText) };
+}
+````
+
+## File: src/utils/whatsapp.js
+````javascript
+// src/utils/whatsapp.js
+//
+// Centralized WhatsApp deep-link utilities — the ONLY place in FlowBiz that
+// builds a wa.me URL or normalizes a phone number for WhatsApp purposes.
+// Every component that needs to "send via WhatsApp" imports from here
+// instead of re-implementing phone normalization / URL construction
+// (previously duplicated between documentService.js and nowhere else —
+// this file is now the single source so future WhatsApp features don't
+// grow a third copy).
+//
+// STRICTLY a wa.me deep link mechanism: FlowBiz opens WhatsApp with a
+// pre-filled message and the person using FlowBiz presses Send themselves.
+// There is no WhatsApp Business API call, no webhook, no automated
+// sending anywhere in this file.
+
+// Turns a locally-typed Kenyan number (07xx…, 01xx…, or a bare 7xx…/1xx…)
+// into the international-format digits WhatsApp's wa.me links expect.
+// Numbers that already look international (start with a country code) are
+// left alone — FlowBiz doesn't assume every customer is Kenyan.
+export function normalizePhone(rawPhone) {
+  const digits = String(rawPhone || '').replace(/[^\d]/g, '');
+  if (!digits) return '';
+
+  if (digits.startsWith('0') && digits.length === 10) {
+    return '254' + digits.slice(1);
+  }
+  if (digits.length === 9 && (digits.startsWith('7') || digits.startsWith('1'))) {
+    return '254' + digits;
+  }
+  return digits;
+}
+
+// A WhatsApp/E.164-style number is roughly 8–15 digits once normalized.
+// This is a sanity check, not full validation — it's what stands between
+// a typo and a broken WhatsApp link.
+export function isValidWhatsAppPhone(rawPhone) {
+  const digits = normalizePhone(rawPhone);
+  return digits.length >= 8 && digits.length <= 15;
+}
+
+// Returns null (never a broken URL) if the phone number doesn't pass
+// isValidWhatsAppPhone.
+export function createWhatsAppLink(rawPhone, message) {
+  if (!isValidWhatsAppPhone(rawPhone)) return null;
+  const digits = normalizePhone(rawPhone);
+  return `https://wa.me/${digits}?text=${encodeURIComponent(message || '')}`;
+}
+
+// Opens the link in a new tab/window and returns whether it actually did.
+// Callers use the return value to show the correct toast — FlowBiz never
+// claims a message was "sent"; only that WhatsApp was opened.
+export function openWhatsApp(rawPhone, message) {
+  const url = createWhatsAppLink(rawPhone, message);
+  if (!url) return false;
+  window.open(url, '_blank', 'noopener,noreferrer');
+  return true;
+}
+
+// ── Message templates ──────────────────────────────────────────────────
+// Kept here rather than in documentService.js so every message FlowBiz
+// ever pre-fills into WhatsApp is defined in exactly one place. All of
+// these are generated dynamically from real FlowBiz data — nothing here
+// is a hardcoded business name, amount, or date.
+
+export function buildReceiptMessage({
+  shopName, customerName, productName, quantity, totalAmount,
+  isCredit, remainingBalance, businessPhone, formatKES,
+}) {
+  const label = isCredit ? 'Invoice' : 'Receipt';
+  const lines = [`*${shopName}*`];
+  if (customerName) lines.push(`Hello ${customerName},`);
+  lines.push(`${label} — ${quantity} × ${productName}`);
+  lines.push(`Total: ${formatKES(totalAmount)}`);
+  if (isCredit) lines.push(`Amount due: ${formatKES(remainingBalance)}`);
+  if (businessPhone) lines.push(`Contact: ${businessPhone}`);
+  lines.push('', isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!');
+  return lines.join('\n');
+}
+
+export function buildDebtReminderMessage({ shopName, customerName, outstandingAmount, businessPhone, formatKES }) {
+  const lines = [
+    `Hello ${customerName || 'there'},`,
+    '',
+    `This is a friendly reminder from ${shopName} regarding your outstanding balance of ${formatKES(outstandingAmount)}.`,
+    '',
+    'Please arrange payment at your earliest convenience.',
+  ];
+  if (businessPhone) lines.push('', `Contact: ${businessPhone}`);
+  lines.push('', 'Thank you.');
+  return lines.join('\n');
+}
+
+export function buildDebtPaymentReceiptMessage({
+  shopName, customerName, amountPaid, previousBalance, remainingBalance, isCleared, formatKES,
+}) {
+  const lines = [`Hello ${customerName || 'there'},`, '', `We have received your payment of ${formatKES(amountPaid)}.`, ''];
+  if (isCleared) {
+    lines.push('This payment clears your outstanding balance with us.');
+    lines.push('', `Remaining balance: ${formatKES(0)}`);
+  } else {
+    lines.push(`Previous balance: ${formatKES(previousBalance)}`);
+    lines.push(`Payment received: ${formatKES(amountPaid)}`);
+    lines.push(`Remaining balance: ${formatKES(remainingBalance)}`);
+  }
+  lines.push('', `— ${shopName}`, '', 'Thank you.');
+  return lines.join('\n');
 }
 ````
 
@@ -5164,79 +4884,6 @@ export default defineConfig(({ mode }) => ({
     }),
   ],
 }));
-````
-
-## File: cloudflare-worker/src/routes/paystackInitialize.js
-````javascript
-// src/routes/paystackInitialize.js
-//
-// POST /api/paystack/initialize
-//
-// Starts a Paystack transaction for the FlowBiz Pro plan. The price is
-// fixed SERVER-SIDE — the browser never gets to say what the amount is.
-// Records a pending payment doc first, so the webhook always has
-// something authoritative to check the eventual callback against.
-
-import { json, errorResponse } from '../lib/response.js';
-import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
-import { getDocument, createDocument } from '../lib/firestore.js';
-
-const PRO_PLAN_AMOUNT_KES = 600; 
-export async function handlePaystackInitialize(request, env) {
-  const authHeader = request.headers.get('Authorization') || '';
-  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!idToken) return errorResponse('Missing Authorization header.', 401);
-
-  let caller;
-  try {
-    caller = await verifyFirebaseIdToken(idToken, env.FIREBASE_PROJECT_ID);
-  } catch (err) {
-    return errorResponse(`Invalid session: ${err.message}`, 401);
-  }
-
-  const callerProfile = await getDocument(env, 'users', caller.uid);
-  if (!callerProfile) return errorResponse('Profile not found.', 403);
-  if (callerProfile.role !== 'owner') return errorResponse('Only an owner can manage the subscription.', 403);
-  if (callerProfile.active === false) return errorResponse('Your account is deactivated.', 403);
-  if (!callerProfile.businessId) return errorResponse('No business associated with this account.', 400);
-
-  const email = callerProfile.email || caller.email;
-  if (!email) return errorResponse('No email on file for this account.', 400);
-
-  const reference = `flowbiz_${callerProfile.businessId}_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
-  const amountKobo = PRO_PLAN_AMOUNT_KES * 100;
-
-  const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email,
-      amount: amountKobo,
-      currency: 'KES',
-      reference,
-      callback_url: env.PAYSTACK_CALLBACK_URL || undefined,
-      metadata: { businessId: callerProfile.businessId, plan: 'pro' },
-    }),
-  });
-
-  const paystackData = await paystackRes.json();
-  if (!paystackRes.ok || !paystackData.status) {
-    return errorResponse(paystackData.message || 'Could not start payment with Paystack.', 502);
-  }
-
-  // Recorded BEFORE handing the reference back to the browser — the
-  // webhook checks the eventual payment against this, not the other way
-  // around, so nothing the frontend says here needs to be trusted later.
-  await createDocument(env, 'payments', reference, {
-    businessId: callerProfile.businessId,
-    plan: 'pro',
-    amountKes: PRO_PLAN_AMOUNT_KES,
-    status: 'pending',
-    createdAt: new Date(),
-    initializedBy: caller.uid,
-  });
-
-return json({ authorization_url: paystackData.data.authorization_url, access_code: paystackData.data.access_code, reference });}
 ````
 
 ## File: src/components/common/ConfirmDialog.jsx
@@ -5994,6 +5641,406 @@ export function useAuth() {
 }
 ````
 
+## File: src/hooks/useHardwareScanner.js
+````javascript
+// src/hooks/useHardwareScanner.js
+import { useEffect, useRef } from 'react';
+
+function isTypingTarget(el) {
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
+}
+
+
+export function useHardwareScanner(onScan, { enabled = true, maxIntervalMs = 80, minLength = 4 } = {}) {
+  const bufferRef = useRef('');
+  const lastKeyTimeRef = useRef(0);
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    const handleKeyDown = (e) => {
+      if (isTypingTarget(document.activeElement)) {
+        bufferRef.current = '';
+        return;
+      }
+
+      const now = Date.now();
+      const elapsed = now - lastKeyTimeRef.current;
+      lastKeyTimeRef.current = now;
+
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        const code = bufferRef.current;
+        bufferRef.current = '';
+        if (code.length >= minLength) {
+          onScan(code);
+        }
+        return;
+      }
+
+      if (e.key.length !== 1) return; // ignore Shift, arrow keys, etc.
+
+      if (elapsed > maxIntervalMs) {
+        bufferRef.current = '';
+      }
+      bufferRef.current += e.key;
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [enabled, onScan, maxIntervalMs, minLength]);
+}
+````
+
+## File: src/pages/AdvancedAnalytics.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { where } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
+import { useFinancialsForRange } from '../hooks/useFinancials';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { tenantQuery } from '../lib/tenant';
+import { startOfDay, endOfDay, buildDateBuckets, toMillisValue } from '../utils/dateRanges';
+import { formatKES } from '../utils/currency';
+import { computeFinancials } from '../utils/financials';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import MiniLineChart from '../components/charts/MiniLineChart';
+import MiniBarChart from '../components/charts/MiniBarChart';
+import DonutChart from '../components/charts/DonutChart';
+import { TrendingUp, TrendingDown, Lock, AlertCircle, CheckCircle2, Info, ArrowLeft } from 'lucide-react';
+
+const PERIOD_OPTIONS = [
+  { id: '7', label: '7 Days' },
+  { id: '30', label: '30 Days' },
+  { id: '90', label: '90 Days' },
+  { id: 'custom', label: 'Custom' },
+];
+
+function KpiCard({ label, value, tone = 'text-ink-900', deltaPct }) {
+  const isPositive = deltaPct !== null && deltaPct >= 0;
+  const isNegative = deltaPct !== null && deltaPct < 0;
+
+  return (
+    <div className="card p-4 sm:p-5 flex flex-col justify-between bg-white hover:shadow-md transition-shadow">
+      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
+      <div className="mt-2">
+        <p className={`font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
+      </div>
+      {deltaPct !== null && deltaPct !== undefined && Number.isFinite(deltaPct) && (
+        <div className={`mt-3 flex items-center gap-1.5 text-xs font-semibold ${isPositive ? 'text-moss-700' : 'text-rust-600'}`}>
+          {isPositive ? <TrendingUp className="h-3.5 w-3.5" strokeWidth={2.5} /> : <TrendingDown className="h-3.5 w-3.5" strokeWidth={2.5} />}
+          <span>{Math.abs(deltaPct).toFixed(1)}% vs prior period</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Section({ title, subtitle, children }) {
+  return (
+    <div className="card p-5 bg-white">
+      <div className="mb-4 border-b border-ink-100 pb-3">
+        <h2 className="font-display text-sm font-bold text-ink-900 uppercase tracking-wide">{title}</h2>
+        {subtitle && <p className="mt-1 text-xs text-ink-500">{subtitle}</p>}
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function NoData({ children }) {
+  return <div className="py-8 flex flex-col items-center justify-center text-center"><Info className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5}/><p className="text-sm text-ink-500">{children}</p></div>;
+}
+
+export default function AdvancedAnalytics() {
+  const { isPro, businessId } = useAuth();
+  
+  const [period, setPeriod] = useState('30');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+
+  const range = useMemo(() => {
+    if (period === 'custom' && customStart && customEnd) {
+      return { start: startOfDay(new Date(customStart)), end: endOfDay(new Date(customEnd)) };
+    }
+    const days = Number(period) || 30;
+    return { start: startOfDay(new Date(Date.now() - (days - 1) * 86400000)), end: endOfDay() };
+  }, [period, customStart, customEnd]);
+
+  const prevRange = useMemo(() => {
+    if (period === 'custom' && customStart && customEnd) {
+      const diff = range.end.getTime() - range.start.getTime();
+      const prevEnd = new Date(range.start.getTime() - 1);
+      const prevStart = new Date(prevEnd.getTime() - diff);
+      return { start: startOfDay(prevStart), end: endOfDay(prevEnd) };
+    }
+    const days = Number(period) || 30;
+    const prevEnd = endOfDay(new Date(range.start.getTime() - 1));
+    const prevStart = startOfDay(new Date(range.start.getTime() - days * 86400000));
+    return { start: prevStart, end: prevEnd };
+  }, [range, period, customStart, customEnd]);
+
+  const { loading, sales, creditSales, expenses, repayments, summary } = useFinancialsForRange(range.start, range.end);
+  const { loading: prevLoading, summary: prevSummary } = useFinancialsForRange(prevRange.start, prevRange.end);
+
+  const allCreditSalesQ = useMemo(() => (businessId ? tenantQuery('creditSales', businessId) : null), [businessId]);
+  const { data: allCreditSales } = useFirestoreCollection(allCreditSalesQ);
+
+  const outstandingCreditQ = useMemo(
+    () => (businessId ? tenantQuery('creditSales', businessId, where('status', 'in', ['pending', 'partial'])) : null),
+    [businessId]
+  );
+  const { data: outstandingCreditSales } = useFirestoreCollection(outstandingCreditQ);
+  const totalOutstanding = useMemo(
+    () => outstandingCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0),
+    [outstandingCreditSales]
+  );
+
+  const granularity = (range.end.getTime() - range.start.getTime()) > (45 * 86400000) ? 'week' : 'day';
+  const buckets = useMemo(() => buildDateBuckets(range.start, range.end, granularity), [range, granularity]);
+
+  const trend = useMemo(() => {
+    if (!buckets.length) return [];
+    const inBucket = (record, field, bucket) => {
+      const t = toMillisValue(record[field]);
+      return t !== null && t >= bucket.start.getTime() && t <= bucket.end.getTime();
+    };
+    return buckets.map((bucket) => {
+      const bucketSales = (sales || []).filter((s) => inBucket(s, 'soldAt', bucket));
+      const bucketExpenses = (expenses || []).filter((e) => inBucket(e, 'recordedAt', bucket));
+      const bucketRepayments = (repayments || []).filter((r) => inBucket(r, 'paidAt', bucket));
+      const f = computeFinancials({
+        sales: bucketSales,
+        creditSales: [],
+        allCreditSales,
+        expenses: bucketExpenses,
+        debtRepayments: bucketRepayments,
+      });
+      return { label: bucket.label, revenue: f.revenue, netProfit: f.netProfit };
+    });
+  }, [buckets, sales, expenses, repayments, allCreditSales]);
+
+  const productPerf = useMemo(() => {
+    const map = {};
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      if (!map[s.productName]) map[s.productName] = { name: s.productName, qty: 0, revenue: 0, profit: 0 };
+      map[s.productName].qty += Number(s.quantity) || 0;
+      map[s.productName].revenue += Number(s.totalAmount) || 0;
+      map[s.productName].profit += Number(s.profit) || 0;
+    });
+    (creditSales || []).forEach((cs) => {
+      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+      if (!map[cs.productName]) map[cs.productName] = { name: cs.productName, qty: 0, revenue: 0, profit: 0 };
+      map[cs.productName].qty += Number(cs.quantity) || 0;
+    });
+    return Object.values(map);
+  }, [sales, creditSales]);
+
+  const bestSelling = useMemo(() => [...productPerf].sort((a, b) => b.qty - a.qty).slice(0, 5), [productPerf]);
+  const mostProfitable = useMemo(() => [...productPerf].sort((a, b) => b.profit - a.profit).slice(0, 5), [productPerf]);
+
+  const staffPerformance = useMemo(() => {
+    const m = {};
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      if (!s.soldByName) return;
+      if (!m[s.soldByName]) m[s.soldByName] = { name: s.soldByName, qty: 0, revenue: 0 };
+      m[s.soldByName].qty += Number(s.quantity) || 0;
+      m[s.soldByName].revenue += Number(s.totalAmount) || 0;
+    });
+    return Object.values(m).sort((a, b) => b.revenue - a.revenue);
+  }, [sales]);
+
+  const revenueChangePct = !prevLoading && prevSummary.revenue > 0 ? ((summary.revenue - prevSummary.revenue) / prevSummary.revenue) * 100 : null;
+  const profitChangePct = !prevLoading && prevSummary.netProfit !== 0 ? ((summary.netProfit - prevSummary.netProfit) / Math.abs(prevSummary.netProfit)) * 100 : null;
+
+  const insights = useMemo(() => {
+    const list = [];
+    if (revenueChangePct !== null) {
+      list.push({ tone: revenueChangePct >= 0 ? 'positive' : 'negative', text: `Recognized revenue is ${revenueChangePct >= 0 ? 'up' : 'down'} ${Math.abs(revenueChangePct).toFixed(1)}% vs prior period.` });
+    }
+    if (profitChangePct !== null) {
+      list.push({ tone: profitChangePct >= 0 ? 'positive' : 'negative', text: `Net profit is ${profitChangePct >= 0 ? 'up' : 'down'} ${Math.abs(profitChangePct).toFixed(1)}% vs prior period.` });
+    }
+    if (mostProfitable[0]) {
+      list.push({ tone: 'neutral', text: `"${mostProfitable[0].name}" drove the highest gross profit margin (${formatKES(mostProfitable[0].profit)}).` });
+    }
+    const salesActivity = summary.revenue + summary.totalCreditSales;
+    if (salesActivity > 0 && summary.totalCreditSales > 0) {
+      const pct = (summary.totalCreditSales / salesActivity) * 100;
+      list.push({ tone: pct > 30 ? 'negative' : 'neutral', text: `Credit exposure: ${pct.toFixed(0)}% of sales activity was issued on credit.` });
+    }
+    return list;
+  }, [revenueChangePct, profitChangePct, mostProfitable, summary, period]);
+
+  if (!isPro) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
+        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
+          <Lock className="h-7 w-7" strokeWidth={2} />
+        </div>
+        <h2 className="font-display text-2xl font-bold text-ink-900">Enterprise Analytics Locked</h2>
+        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Advanced Analytics provides institutional-grade visibility into profit margins, capital exposure, and staff performance trends. Requires FlowBiz Pro.</p>
+        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
+      </div>
+    );
+  }
+
+  const margin = summary.revenue > 0 ? (summary.grossProfit / summary.revenue) * 100 : 0;
+  const avgTransactionValue = sales.length > 0 ? summary.revenue / sales.length : 0;
+  const hasSalesData = sales.length > 0;
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Advanced Analytics</h1>
+          <p className="text-sm text-ink-500 mt-1">Deep financial insights and performance tracking.</p>
+        </div>
+        <Link to="/reports" className="btn-outline text-xs bg-white">
+          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Standard Reports
+        </Link>
+      </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-white p-3 rounded-xl border border-ink-200">
+        <span className="text-xs font-semibold text-ink-500 uppercase tracking-wider pl-1">Date Range:</span>
+        <div className="flex flex-wrap items-center gap-2">
+          {PERIOD_OPTIONS.map((opt) => (
+            <button
+              key={opt.id}
+              onClick={() => setPeriod(opt.id)}
+              className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors ${period === opt.id ? 'bg-ink-900 text-white shadow-sm' : 'bg-ink-50 text-ink-600 hover:bg-ink-100'}`}
+            >
+              {opt.label}
+            </button>
+          ))}
+          {period === 'custom' && (
+            <div className="flex items-center gap-2 ml-1 animate-fade-in">
+              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customStart} onChange={e=>setCustomStart(e.target.value)} />
+              <span className="text-ink-400 text-sm font-medium">to</span>
+              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {loading ? <div className="py-12"><LoadingSpinner /></div> : (
+        <>
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <KpiCard label="Recognized Revenue" value={formatKES(summary.revenue)} deltaPct={revenueChangePct} />
+            <KpiCard label="Gross Profit" value={formatKES(summary.grossProfit)} tone="text-moss-700" />
+            <KpiCard label="Net Profit" value={formatKES(summary.netProfit)} tone="text-moss-700" deltaPct={profitChangePct} />
+            <KpiCard label="Profit Margin" value={`${margin.toFixed(1)}%`} tone={margin > 20 ? 'text-moss-700' : margin < 10 ? 'text-rust-600' : 'text-ink-900'} />
+            <KpiCard label="Total Expenses" value={formatKES(summary.totalExpenses)} tone="text-rust-600" />
+            <KpiCard label="Avg Transaction Size" value={hasSalesData ? formatKES(avgTransactionValue) : 'KES 0'} />
+            <KpiCard label="Credit Issued" value={formatKES(summary.totalCreditSales)} tone="text-amber-600" />
+            <KpiCard label="Total Outstanding Debt" value={formatKES(totalOutstanding)} tone="text-rust-600" />
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Section title="Revenue Trajectory" subtitle="Recognized revenue tracking over selected period">
+              {hasSalesData ? (
+                <MiniLineChart data={trend.map((t) => ({ label: t.label, value: t.revenue }))} formatValue={formatKES} ariaLabel="Sales trend" colorClassName="text-moss-600" />
+              ) : (
+                <NoData>Insufficient data to chart trajectory.</NoData>
+              )}
+            </Section>
+            <Section title="Net Profit Trend" subtitle="Actual profit realized after expenses">
+              {hasSalesData ? (
+                <MiniBarChart data={trend.map((t) => ({ label: t.label, value: t.netProfit }))} orientation="vertical" formatValue={formatKES} ariaLabel="Profit trend" />
+              ) : (
+                <NoData>Insufficient data to chart profit.</NoData>
+              )}
+            </Section>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Section title="Volume Drivers" subtitle="Highest quantity moved">
+              {bestSelling.length > 0 ? (
+                <MiniBarChart orientation="horizontal" formatValue={(v) => `${v.toLocaleString()} units`} data={bestSelling.map((p) => ({ label: p.name, value: p.qty, colorClassName: 'bg-ink-800' }))} />
+              ) : (
+                <NoData>No product movement detected.</NoData>
+              )}
+            </Section>
+            <Section title="Margin Drivers" subtitle="Highest gross profit generated">
+              {mostProfitable.length > 0 ? (
+                <MiniBarChart orientation="horizontal" formatValue={formatKES} data={mostProfitable.map((p) => ({ label: p.name, value: p.profit, colorClassName: 'bg-moss-600' }))} />
+              ) : (
+                <NoData>No profit data generated.</NoData>
+              )}
+            </Section>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Section title="Capital & Credit Exposure" subtitle="Liquidity analysis">
+              <div className="space-y-4 pt-1">
+                <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
+                  <span className="text-ink-600 font-medium">Credit Issued (This Period)</span>
+                  <span className="font-semibold text-ink-900">{formatKES(summary.totalCreditSales)}</span>
+                </div>
+                <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
+                  <span className="text-ink-600 font-medium">Debt Collected (This Period)</span>
+                  <span className="font-semibold text-moss-700">{formatKES(summary.totalDebtRepayments)}</span>
+                </div>
+                <div className="flex items-center justify-between pt-1 text-sm bg-rust-50 p-3 rounded-lg border border-rust-100">
+                  <span className="font-bold text-rust-800 uppercase tracking-wide text-xs">Total Market Exposure</span>
+                  <span className="font-bold text-rust-700 text-base">{formatKES(totalOutstanding)}</span>
+                </div>
+              </div>
+            </Section>
+
+            <Section title="Executive Summary" subtitle="Automated business intelligence">
+              {insights.length > 0 ? (
+                <div className="space-y-4 pt-1">
+                  {insights.map((insight, i) => (
+                    <div key={i} className="flex items-start gap-3 text-sm bg-ink-50 p-3 rounded-lg border border-ink-100">
+                      <div className="shrink-0 mt-0.5">
+                        {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
+                         insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
+                         <Info className="h-5 w-5 text-ink-500" strokeWidth={2} />}
+                      </div>
+                      <span className="text-ink-800 font-medium leading-relaxed">{insight.text}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <NoData>More transaction volume required to generate insights.</NoData>
+              )}
+            </Section>
+          </div>
+
+          <Section title="Staff Performance Index" subtitle="Revenue attribution by cashier">
+            {staffPerformance.length === 0 ? (
+              <NoData>No staff attribution data found.</NoData>
+            ) : (
+              <div className="overflow-hidden rounded-lg border border-ink-200">
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-ink-50 text-xs uppercase tracking-wider font-semibold text-ink-500">
+                    <tr><th className="px-4 py-3 border-b border-ink-200">Staff Member</th><th className="px-4 py-3 border-b border-ink-200 text-right">Items Sold</th><th className="px-4 py-3 border-b border-ink-200 text-right">Revenue Generated</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-ink-100 bg-white">
+                    {staffPerformance.map((st) => (
+                      <tr key={st.name} className="hover:bg-ink-50/50 transition-colors">
+                        <td className="px-4 py-3 font-semibold text-ink-900">{st.name}</td>
+                        <td className="px-4 py-3 text-right text-ink-600">{st.qty.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right font-semibold text-moss-700">{formatKES(st.revenue)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Section>
+        </>
+      )}
+    </div>
+  );
+}
+````
+
 ## File: src/pages/CloseDay.jsx
 ````javascript
 // HP-7 FIX: chunk deletions to avoid 500-op batch limit; replace window.location.reload() with React state
@@ -6128,6 +6175,162 @@ function SRow({ label, value, variance }) {
 function Variance({ v }) {
   const tone = v===0?'text-moss-700':v<0?'text-rust-600':'text-amber-600';
   return <p className={`text-sm font-semibold ${tone}`}>{v===0?'✓ Matches exactly':v<0?`Shortage of ${formatKES(Math.abs(v))}`:`Surplus of ${formatKES(v)}`}</p>;
+}
+````
+
+## File: src/pages/Customers.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { orderBy, addDoc, serverTimestamp } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { UserPlus, MessageCircle } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useSettings } from '../hooks/useSettings';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import AddCustomerModal from '../components/customers/AddCustomerModal';
+import { formatKES } from '../utils/currency';
+import { formatDate } from '../utils/dateRanges';
+import { openWhatsApp, buildDebtReminderMessage, isValidWhatsAppPhone } from '../utils/whatsapp';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Customers() {
+  const { businessId, isPro } = useAuth();
+  const { settings } = useSettings();
+
+  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  const creditQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
+
+  const { data: customers, loading: custLoading } = useFirestoreCollection(customersQ);
+  const { data: creditSales, loading: credLoading } = useFirestoreCollection(creditQ);
+  
+  const [search, setSearch] = useState('');
+  const [addModalOpen, setAddModalOpen] = useState(false);
+
+  // Customers shown here come from two sources: customers created
+  // directly (Part 1) and customers implied by a past credit sale that
+  // predates this feature. Both resolve to ONE canonical entry keyed by
+  // customerId — a credit sale never creates a second record for a
+  // customer that already has one (Part 3).
+  const customerList = useMemo(() => {
+    const map = {};
+    for (const c of customers) {
+      map[c.id] = { customerId: c.id, name: c.name, phone: c.phone, totalOwed: 0, purchaseCount: 0, lastPurchase: null };
+    }
+    for (const cs of creditSales) {
+      if (!cs.customerId) continue;
+      if (!map[cs.customerId]) {
+        map[cs.customerId] = { customerId: cs.customerId, name: cs.customerName, phone: cs.customerPhone, totalOwed: 0, purchaseCount: 0, lastPurchase: null };
+      }
+      const e = map[cs.customerId];
+      if (cs.status === 'pending' || cs.status === 'partial') {
+        e.totalOwed += Number(cs.remainingBalance) || 0;
+      }
+      e.purchaseCount++;
+      if (!e.lastPurchase || (cs.soldAt?.toMillis?.() ?? 0) > (e.lastPurchase?.toMillis?.() ?? 0)) {
+        e.lastPurchase = cs.soldAt;
+      }
+    }
+    return Object.values(map)
+      .filter(d => d.name?.toLowerCase().includes(search.toLowerCase()) || d.phone?.includes(search))
+      .sort((a, b) => b.totalOwed - a.totalOwed);
+  }, [customers, creditSales, search]);
+
+  const loading = custLoading || credLoading;
+  const totalOut = customerList.reduce((acc, d) => acc + d.totalOwed, 0);
+
+  const handleAddCustomer = async ({ name, phone }) => {
+    const write = addDoc(tenantCollection('customers'), withBusiness({
+      name, phone: phone || '', email: '', address: '', notes: '', createdAt: serverTimestamp(),
+    }, businessId));
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    if (error) {
+      toast.error(friendlyErrorMessage(error, { fallback: 'Unable to save customer. Please try again.' }));
+      throw error;
+    }
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Customer saved successfully.');
+  };
+
+  const handleSendReminder = (d) => {
+    if (!isPro) {
+      toast.error('WhatsApp sharing is available on FlowBiz Pro.');
+      return;
+    }
+    if (!d.phone || !isValidWhatsAppPhone(d.phone)) {
+      toast.error('Add a valid phone number for this customer before sending a WhatsApp reminder.');
+      return;
+    }
+    const message = buildDebtReminderMessage({
+      shopName: settings.shopName || 'FlowBiz Store',
+      customerName: d.name,
+      outstandingAmount: d.totalOwed,
+      businessPhone: settings.phone,
+      formatKES,
+    });
+    const opened = openWhatsApp(d.phone, message);
+    toast[opened ? 'success' : 'error'](opened ? 'WhatsApp opened.' : 'WhatsApp could not be opened.');
+  };
+
+  return (
+    <div className="mx-auto max-w-4xl space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Customers</h1>
+          <p className="text-sm text-ink-400">Total outstanding debt: <span className="font-semibold text-rust-600">{formatKES(totalOut)}</span></p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setAddModalOpen(true)}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-600 shadow-sm hover:bg-ink-50 active:bg-ink-100"
+          aria-label="Add customer"
+          title="Add customer"
+        >
+          <UserPlus className="h-5 w-5" strokeWidth={1.75} />
+        </button>
+      </div>
+      <input className="input" placeholder="Search customer…" value={search} onChange={e => setSearch(e.target.value)} />
+      {loading ? <LoadingSpinner /> : customerList.length === 0 ? (
+        <EmptyState title="No customers found" description="Add a customer, or they'll appear here after a credit sale." />
+      ) : (
+        <div className="space-y-2">
+          {customerList.map(d => (
+            <div key={d.customerId} className="card flex items-center justify-between gap-2 p-4 hover:shadow-md">
+              <Link to={`/customers/${d.customerId}`} className="min-w-0 flex-1">
+                <p className="font-semibold text-ink-800 truncate">{d.name}</p>
+                <p className="text-xs text-ink-400">{d.phone || 'No phone'} · {d.purchaseCount} purchase{d.purchaseCount !== 1 ? 's' : ''} {d.lastPurchase ? `· last ${formatDate(d.lastPurchase)}` : ''}</p>
+              </Link>
+              <div className="flex items-center gap-2 shrink-0">
+                {d.totalOwed > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleSendReminder(d)}
+                    className="flex items-center gap-1 rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-semibold text-ink-600 hover:bg-ink-50"
+                    title={isPro ? 'Send reminder via WhatsApp' : 'FlowBiz Pro feature'}
+                  >
+                    <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    Remind{!isPro && <span className="text-amber-600"> · PRO</span>}
+                  </button>
+                )}
+                <Link to={`/customers/${d.customerId}`} className={`font-display text-base font-bold ${d.totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>
+                  {d.totalOwed > 0 ? formatKES(d.totalOwed) : 'Paid'}
+                </Link>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <AddCustomerModal
+        open={addModalOpen}
+        onClose={() => setAddModalOpen(false)}
+        onSave={handleAddCustomer}
+        existingCustomers={customerList.map(d => ({ name: d.name, phone: d.phone }))}
+      />
+    </div>
+  );
 }
 ````
 
@@ -6314,6 +6517,200 @@ export default function ForgotPassword() {
 }
 ````
 
+## File: src/pages/InventoryIntelligence.jsx
+````javascript
+import { useMemo } from 'react';
+import { Link } from 'react-router-dom';
+import { orderBy, where } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { formatKES } from '../utils/currency';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import MiniBarChart from '../components/charts/MiniBarChart';
+import DonutChart from '../components/charts/DonutChart';
+import { Lock, ArrowLeft, AlertCircle, CheckCircle2, Info, PackageOpen } from 'lucide-react';
+
+function KpiCard({ label, value, tone = 'text-ink-900', bg = 'bg-white' }) {
+  return (
+    <div className={`card p-4 sm:p-5 ${bg} hover:shadow-md transition-shadow`}>
+      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
+      <p className={`mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
+    </div>
+  );
+}
+
+function Section({ title, subtitle, children }) {
+  return (
+    <div className="card p-5 bg-white">
+      <div className="mb-4 border-b border-ink-100 pb-3">
+        <h2 className="font-display text-sm font-bold text-ink-900 uppercase tracking-wide">{title}</h2>
+        {subtitle && <p className="mt-1 text-xs text-ink-500">{subtitle}</p>}
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function NoData({ children }) {
+  return <div className="py-8 flex flex-col items-center justify-center text-center"><PackageOpen className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5}/><p className="text-sm text-ink-500">{children}</p></div>;
+}
+
+export default function InventoryIntelligence() {
+  const { isPro, businessId } = useAuth();
+  
+  const productsQ = useMemo(
+    () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
+    [businessId]
+  );
+  const { data: products, loading } = useFirestoreCollection(productsQ);
+
+  const metrics = useMemo(() => {
+    let totalCost = 0;
+    let totalRetail = 0;
+    let unitsInStock = 0;
+    const overstocked = [];
+    const outOfStock = [];
+    const lowStock = [];
+
+    (products || []).forEach((p) => {
+      const stock = Number(p.stock) || 0;
+      const cost = Number(p.costPrice) || 0;
+      const retail = Number(p.sellingPrice) || 0;
+      const threshold = Number(p.lowStockThreshold) || 5;
+
+      if (stock > 0) {
+        totalCost += stock * cost;
+        totalRetail += stock * retail;
+        unitsInStock += stock;
+      }
+
+      if (stock <= 0) {
+        outOfStock.push(p);
+      } else if (stock > threshold * 4) {
+        // Lowered threshold multiplier to catch capital traps sooner
+        overstocked.push({ ...p, value: stock * cost });
+      } else if (stock <= threshold) {
+        lowStock.push(p);
+      }
+    });
+
+    overstocked.sort((a, b) => b.value - a.value);
+    const healthyCount = (products || []).length - outOfStock.length - overstocked.length - lowStock.length;
+
+    return { totalCost, totalRetail, unitsInStock, outOfStock, overstocked, lowStock, healthyCount };
+  }, [products]);
+
+  if (!isPro) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
+        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
+          <Lock className="h-7 w-7" strokeWidth={2} />
+        </div>
+        <h2 className="font-display text-2xl font-bold text-ink-900">Inventory Intelligence Locked</h2>
+        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Instantly uncover dead stock holding up capital and detect urgent re-order limits before stockouts hit. Requires FlowBiz Pro.</p>
+        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
+      </div>
+    );
+  }
+
+  if (loading) return <div className="py-12"><LoadingSpinner /></div>;
+
+  const potentialProfit = metrics.totalRetail - metrics.totalCost;
+  const activeProductsCount = (products || []).length;
+  const totalOverstockValue = metrics.overstocked.reduce((sum, p) => sum + p.value, 0);
+
+  const insights = [];
+  if (metrics.lowStock.length > 0) {
+    insights.push({ tone: 'negative', text: `CRITICAL: ${metrics.lowStock.length} product(s) operating below safe threshold. Restock immediately.` });
+  }
+  if (metrics.outOfStock.length > 0) {
+    insights.push({ tone: 'negative', text: `REVENUE LOSS: ${metrics.outOfStock.length} product(s) completely depleted. You are actively losing sales.` });
+  }
+  if (metrics.overstocked[0]) {
+    insights.push({ tone: 'neutral', text: `CAPITAL TRAP: "${metrics.overstocked[0].name}" alone locks up ${formatKES(metrics.overstocked[0].value)} in inventory.` });
+  }
+  if (insights.length === 0 && activeProductsCount > 0) {
+    insights.push({ tone: 'positive', text: 'OPTIMAL: Supply distribution perfectly matches current threshold configurations.' });
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Inventory Intelligence</h1>
+          <p className="text-sm text-ink-500 mt-1">Capital deployment and supply chain health.</p>
+        </div>
+        <Link to="/products" className="btn-outline text-xs bg-white">
+          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Back to Products
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <KpiCard label="Capital Deployed" value={formatKES(metrics.totalCost)} />
+        <KpiCard label="Projected Gross Profit" value={formatKES(potentialProfit)} tone="text-moss-700" />
+        <KpiCard label="Physical Units" value={metrics.unitsInStock.toLocaleString()} />
+        <KpiCard label="Active SKUs" value={activeProductsCount.toLocaleString()} />
+        <KpiCard label="Low Stock Risk" value={metrics.lowStock.length} tone={metrics.lowStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.lowStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
+        <KpiCard label="Stockout Status" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.outOfStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
+        <KpiCard label="Overstocked SKUs" value={metrics.overstocked.length} tone="text-amber-600" />
+        <KpiCard label="Capital Trapped" value={formatKES(totalOverstockValue)} tone="text-amber-600" />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Section title="Global Supply Distribution" subtitle="System-wide inventory health check">
+          {activeProductsCount > 0 ? (
+            <div className="pt-2">
+              <DonutChart
+                size={180}
+                formatValue={(v) => `${v} SKU${v === 1 ? '' : 's'}`}
+                segments={[
+                  { label: 'Optimal Inventory', value: metrics.healthyCount, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
+                  { label: 'Low Stock Risk', value: metrics.lowStock.length, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
+                  { label: 'Critical Stockout', value: metrics.outOfStock.length, colorClassName: 'text-rust-600', dotClassName: 'bg-rust-600' },
+                  { label: 'Capital Surplus (Overstock)', value: metrics.overstocked.length, colorClassName: 'text-ink-800', dotClassName: 'bg-ink-800' },
+                ]}
+              />
+            </div>
+          ) : (
+            <NoData>System requires active inventory definitions.</NoData>
+          )}
+        </Section>
+
+        <Section title="Capital Concentration" subtitle="Items holding maximum illiquid capital">
+          {metrics.overstocked.length > 0 ? (
+            <div className="pt-2">
+              <MiniBarChart
+                orientation="horizontal"
+                formatValue={formatKES}
+                data={metrics.overstocked.slice(0, 6).map((p) => ({ label: p.name, value: p.value, colorClassName: 'bg-ink-800' }))}
+              />
+            </div>
+          ) : (
+            <NoData>No significant capital concentration found.</NoData>
+          )}
+        </Section>
+      </div>
+
+      <Section title="Automated Intelligence Briefing" subtitle="System-generated supply chain alerts">
+        <div className="space-y-4 pt-1">
+          {insights.map((insight, i) => (
+            <div key={i} className={`flex items-start gap-3 text-sm p-4 rounded-lg border ${insight.tone === 'positive' ? 'bg-moss-50 border-moss-200' : insight.tone === 'negative' ? 'bg-rust-50 border-rust-200' : 'bg-ink-50 border-ink-200'}`}>
+              <div className="shrink-0 mt-0.5">
+                {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
+                 insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
+                 <Info className="h-5 w-5 text-ink-600" strokeWidth={2} />}
+              </div>
+              <span className={`font-medium leading-relaxed ${insight.tone === 'positive' ? 'text-moss-800' : insight.tone === 'negative' ? 'text-rust-800' : 'text-ink-800'}`}>{insight.text}</span>
+            </div>
+          ))}
+        </div>
+      </Section>
+    </div>
+  );
+}
+````
+
 ## File: src/pages/Login.jsx
 ````javascript
 import { useEffect, useState } from 'react';
@@ -6384,417 +6781,6 @@ finally {
       </div>
     </div>
   );
-}
-````
-
-## File: src/pages/Pro.jsx
-````javascript
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { auth } from '../firebase';
-import toast from 'react-hot-toast';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-
-export default function Pro() {
-  const { isPro, subscription } = useAuth();
-  const [loading, setLoading] = useState(false);
-
-  // FIX: Shifted from missing Firebase Function to the existing Cloudflare Worker API
-const handleSubscribe = async () => {
-    setLoading(true);
-    try {
-      const idToken = await auth.currentUser.getIdToken(true);
-      const response = await fetch(`${FLOWBIZ_API_URL}/api/paystack/initialize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-      });
-      const data = await response.json();
-
-      if (data?.access_code && window.PaystackPop) {
-        const popup = new window.PaystackPop();
-        popup.resumeTransaction(data.access_code, {
-          onSuccess: () => toast.success('Payment received — activating your subscription…'),
-          onCancel: () => toast('Payment cancelled.'),
-        });
-      } else if (data?.authorization_url) {
-        // Fallback if the Paystack script hasn't loaded yet.
-        window.location.href = data.authorization_url;
-      } else {
-        toast.error(data?.error || "Couldn't initialize payment. Please try again.");
-      }
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, { fallback: 'Payment initiation failed.' }));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="mx-auto max-w-4xl space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900">FlowBiz Pro</h1>
-          <p className="text-sm text-ink-500">Supercharge your shop operations.</p>
-        </div>
-        <Link to="/" className="btn-outline text-xs">Back to Dashboard</Link>
-      </div>
-
-      <div className="card p-8 text-center bg-moss-50 border-moss-200">
-        <h2 className="font-display text-3xl font-bold text-moss-800">KSh 600 <span className="text-lg font-normal text-moss-700">/ 30 days</span></h2>
-        <p className="mt-2 text-ink-600 max-w-lg mx-auto">No recurring auto-billing. Manual renewal ensures you're always in control of your subscription.</p>
-        
-        {isPro ? (
-          <div className="mt-6 inline-flex flex-col items-center">
-            <span className="badge bg-amber-100 text-amber-800 px-4 py-2 text-sm">FlowBiz Pro Active</span>
-            {subscription?.expiresAt && <p className="text-xs text-ink-500 mt-2">Expires on {new Date(subscription.expiresAt.toMillis ? subscription.expiresAt.toMillis() : subscription.expiresAt).toLocaleDateString()}</p>}
-            <button onClick={handleSubscribe} disabled={loading} className="mt-4 btn-outline">Extend Subscription</button>
-          </div>
-        ) : (
-          <button onClick={handleSubscribe} disabled={loading} className="mt-6 btn-primary px-8 py-3 text-lg">
-            {loading ? 'Initializing Payment...' : 'Pay KSh 600'}
-          </button>
-        )}
-      </div>
-
-      <div className="grid sm:grid-cols-2 gap-6 pt-4">
-        <div>
-          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Advanced Analytics</h3>
-          <ul className="space-y-2 text-sm text-ink-600">
-            <li><span className="text-moss-700 mr-2">✓</span>Business Health Dashboard</li>
-            <li><span className="text-moss-700 mr-2">✓</span>Sales insights & Profit analysis</li>
-            <li><span className="text-moss-700 mr-2">✓</span>Staff Analytics and performance tracking</li>
-          </ul>
-        </div>
-        <div>
-          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Inventory Intelligence</h3>
-          <ul className="space-y-2 text-sm text-ink-600">
-            <li><span className="text-moss-700 mr-2">✓</span>Detect overstocked items holding capital</li>
-            <li><span className="text-moss-700 mr-2">✓</span>Predictive stockout warnings</li>
-            <li><span className="text-moss-700 mr-2">✓</span>Total capital & potential profit insights</li>
-          </ul>
-        </div>
-        <div>
-          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Professional Documents</h3>
-          <ul className="space-y-2 text-sm text-ink-600">
-            <li><span className="text-moss-700 mr-2">✓</span>Professional invoices and receipts</li>
-            <li><span className="text-moss-700 mr-2">✓</span>PDF generation and direct printing</li>
-            <li><span className="text-moss-700 mr-2">✓</span>Business logo prominently displayed</li>
-          </ul>
-        </div>
-        <div>
-          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Communication & Team</h3>
-          <ul className="space-y-2 text-sm text-ink-600">
-            <li><span className="text-moss-700 mr-2">✓</span>WhatsApp receipts directly to customers</li>
-            <li><span className="text-moss-700 mr-2">✓</span>WhatsApp invoice sending</li>
-            <li><span className="text-moss-700 mr-2">✓</span>Unlimited staff members (Free plan limits to 1)</li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  );
-}
-````
-
-## File: src/utils/documentService.js
-````javascript
-import { jsPDF } from 'jspdf';
-import { formatKES } from './currency';
-import { formatDateTime } from './dateRanges';
-
-export async function loadImageAsDataUrl(url) {
-    if (!url) return null;
-    try {
-        const response = await fetch(url);
-        const blob = await response.blob();
-        return await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-        });
-    } catch (err) {
-        console.error('Could not load business logo for PDF:', err);
-        return null;
-    }
-}
-
-// Replace the buildDocument function in src/utils/documentService.js
-async function buildDocument(data, settings, typeLabel) {
-    const doc = new jsPDF('p', 'mm', [80, 200]); // Thermal receipt size
-    let y = 8;
-    const marginX = 5;
-    const pageWidth = 75;
-
-    // 1. TOP-LEFT LOGO & BUSINESS DETAILS
-    const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
-    if (logoDataUrl) {
-        try {
-            const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
-            doc.addImage(logoDataUrl, format, marginX, y, 14, 14); // Logo top-left
-            
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(11);
-            doc.text(settings.shopName || 'Business Receipt', marginX + 17, y + 5);
-            
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(8);
-            if (settings.phone) doc.text(`Tel: ${settings.phone}`, marginX + 17, y + 9);
-            if (settings.address) doc.text(settings.address, marginX + 17, y + 13);
-            y += 18;
-        } catch (err) {
-            console.error('Could not embed business logo in PDF:', err);
-        }
-    } else {
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(12);
-        doc.text(settings.shopName || 'Business Receipt', marginX, y + 4);
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(8);
-        if (settings.phone) { y += 4; doc.text(`Tel: ${settings.phone}`, marginX, y + 4); }
-        if (settings.address) { y += 4; doc.text(settings.address, marginX, y + 4); }
-        y += 8;
-    }
-
-    // 2. DOCUMENT TYPE & META DATA
-    y += 2;
-    doc.setDrawColor(0, 0, 0);
-    doc.setLineWidth(0.4);
-    doc.line(marginX, y, pageWidth, y);
-    
-    y += 6;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text(typeLabel, marginX, y); // "INVOICE" or "RECEIPT"
-    
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text(formatDateTime(data.soldAt || data.recordedAt || new Date()), pageWidth, y, { align: 'right' });
-    
-    y += 5;
-    doc.text(`Ref: ${data.id?.substring(0, 8).toUpperCase() || 'N/A'}`, marginX, y);
-    if (data.customerName) {
-        y += 4;
-        doc.text(`To: ${data.customerName}`, marginX, y);
-    }
-
-    // 3. ITEMIZED TABLE
-    y += 4;
-    doc.setDrawColor(200, 200, 200);
-    doc.setLineWidth(0.2);
-    doc.line(marginX, y, pageWidth, y);
-    
-    y += 5;
-    doc.setFont('helvetica', 'bold');
-    doc.text('ITEM', marginX, y);
-    doc.text('TOTAL', pageWidth, y, { align: 'right' });
-    
-    y += 2;
-    doc.line(marginX, y, pageWidth, y);
-
-    // Items
-    y += 5;
-    doc.setFont('helvetica', 'normal');
-    const itemName = data.productName || data.description || 'Item';
-    const splitName = doc.splitTextToSize(itemName, 45);
-    doc.text(splitName, marginX, y);
-    
-    const amountStr = formatKES(data.totalAmount || data.amount || 0);
-    doc.text(amountStr, pageWidth, y, { align: 'right' });
-    
-    y += (splitName.length * 4);
-    if (data.quantity) {
-        doc.setTextColor(100, 100, 100);
-        doc.text(`${data.quantity} × @ ${formatKES(data.soldPricePerUnit || 0)}`, marginX, y);
-        doc.setTextColor(0, 0, 0);
-        y += 4;
-    }
-
-    // 4. TOTALS SECTION
-    y += 2;
-    doc.line(marginX, y, pageWidth, y);
-    y += 6;
-
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    if (data.isCredit) {
-        doc.text('TOTAL DUE:', marginX, y);
-        doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth, y, { align: 'right' });
-    } else {
-        doc.text('PAID:', marginX, y);
-        doc.text(amountStr, pageWidth, y, { align: 'right' });
-        doc.setFontSize(8);
-        doc.setFont('helvetica', 'normal');
-        y += 4;
-        doc.text(`Via: ${data.paymentMethod || data.method}`, pageWidth, y, { align: 'right' });
-    }
-
-    // 5. FOOTER
-    y += 12;
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'italic');
-    doc.setTextColor(100, 100, 100);
-    doc.text(data.isCredit ? 'Payment due — thank you!' : 'Thank you for your business!', 40, y, { align: 'center' });
-
-    return doc;
-}
-
-export async function generateReceiptPDF(sale, settings) {
-    const doc = await buildDocument(sale, settings, 'RECEIPT');
-    doc.save(`receipt-${sale.id}.pdf`);
-}
-
-export async function printReceipt(sale, settings) {
-    const doc = await buildDocument(sale, settings, 'RECEIPT');
-    doc.autoPrint();
-    window.open(doc.output('bloburl'), '_blank');
-}
-
-export async function generateInvoicePDF(creditSale, settings) {
-    const doc = await buildDocument(creditSale, settings, 'INVOICE');
-    doc.save(`invoice-${creditSale.id}.pdf`);
-}
-
-export async function printInvoice(creditSale, settings) {
-    const doc = await buildDocument(creditSale, settings, 'INVOICE');
-    doc.autoPrint();
-    window.open(doc.output('bloburl'), '_blank');
-}
-
-function normalizeKenyanPhone(rawPhone) {
-    let digits = String(rawPhone || '').replace(/[^\d]/g, '');
-    if (!digits) return '';
-    if (digits.startsWith('0')) digits = '254' + digits.slice(1);
-    else if (!digits.startsWith('254') && digits.length === 9) digits = '254' + digits;
-    return digits;
-}
-
-function buildWhatsAppMessage(sale, settings) {
-    const shopName = settings.shopName || 'FlowBiz Store';
-    const label = sale.isCredit ? 'Invoice' : 'Receipt';
-    const amountDue = sale.isCredit ? (sale.remainingBalance ?? sale.totalAmount) : sale.totalAmount;
-    const lines = [
-        `*${shopName}*`,
-        `${label} — ${sale.quantity} × ${sale.productName}`,
-        `Total: ${formatKES(sale.totalAmount)}`,
-    ];
-    if (sale.isCredit) lines.push(`Amount due: ${formatKES(amountDue)}`);
-    if (settings.phone) lines.push(`Contact: ${settings.phone}`);
-    lines.push('', sale.isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!');
-    return lines.join('\n');
-}
-
-export function sendWhatsAppDocument(sale, settings, phone) {
-    const digits = normalizeKenyanPhone(phone);
-    if (!digits) throw new Error('Enter a valid phone number.');
-    const message = buildWhatsAppMessage(sale, settings);
-    const url = `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
-}
-````
-
-## File: src/utils/products.js
-````javascript
-import { collection, doc, writeBatch, updateDoc, deleteField, serverTimestamp, getDoc, getDocs, deleteDoc, query, where } from 'firebase/firestore';
-import { db } from '../firebase';
-import { raceWithTimeout } from './offlineWrite';
-
-export async function permanentlyDeleteProduct(productId, barcode, businessId) {
-  if (!businessId) throw new Error('permanentlyDeleteProduct() called with no businessId');
-  const productRef = doc(db, 'products', productId);
-  const trimmedBarcode = barcode ? String(barcode).trim() : null;
-
-  const batch = writeBatch(db);
-  if (trimmedBarcode) {
-    const idxRef = barcodeIndexRef(businessId, trimmedBarcode);
-    const idxSnap = await getDoc(idxRef);
-    if (idxSnap.exists() && idxSnap.data().productId === productId) {
-      batch.delete(idxRef);
-    }
-  }
-  batch.delete(productRef);
-  await batch.commit();
-}
-
-export async function cleanupOrphanedBarcodeIndexes(businessId) {
-  if (!businessId) throw new Error('cleanupOrphanedBarcodeIndexes() called with no businessId');
-  const snap = await getDocs(query(collection(db, 'barcodeIndex'), where('businessId', '==', businessId)));
-  let removed = 0;
-  for (const idxDoc of snap.docs) {
-    const { productId } = idxDoc.data();
-    if (!productId) continue;
-    const productSnap = await getDoc(doc(db, 'products', productId));
-    if (!productSnap.exists()) {
-      await deleteDoc(idxDoc.ref);
-      removed += 1;
-    }
-  }
-  return { scanned: snap.docs.length, removed };
-}
-
-function barcodeIndexRef(businessId, barcode) {
-  return doc(db, 'barcodeIndex', `${businessId}__${barcode}`);
-}
-
-// FIX: Offline-safe product creation using writeBatch and generated internalCode
-export async function createProduct(data, businessId) {
-  if (!businessId) throw new Error('createProduct() called with no businessId');
-  const barcode = data.barcode ? String(data.barcode).trim() : null;
-  const newProductRef = doc(collection(db, 'products'));
-  const internalCode = `FB-${Math.floor(Date.now() / 1000).toString().slice(-6)}`;
-
-  const batch = writeBatch(db);
-  batch.set(newProductRef, {
-    ...data,
-    businessId,
-    barcode: barcode || null,
-    internalCode,
-    deleted: false,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
-  if (barcode) {
-    batch.set(barcodeIndexRef(businessId, barcode), { businessId, barcode, productId: newProductRef.id });
-  }
-
-  const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
-  if (error) throw error;
-
-  return { id: newProductRef.id, queuedOffline };
-}
-
-export async function updateProduct(productId, data, previousBarcode, businessId) {
-  if (!businessId) throw new Error('updateProduct() called with no businessId');
-  const nextBarcode = data.barcode ? String(data.barcode).trim() : null;
-  const prevBarcode = previousBarcode ? String(previousBarcode).trim() : null;
-  const productRef = doc(db, 'products', productId);
-  const { stock, businessId: _ignored, ...updatePayload } = data;
-
-  const batch = writeBatch(db);
-  batch.update(productRef, { ...updatePayload, barcode: nextBarcode || null, updatedAt: serverTimestamp() });
-
-  if (prevBarcode && prevBarcode !== nextBarcode) {
-    batch.delete(barcodeIndexRef(businessId, prevBarcode));
-  }
-  if (nextBarcode && nextBarcode !== prevBarcode) {
-    batch.set(barcodeIndexRef(businessId, nextBarcode), { businessId, barcode: nextBarcode, productId });
-  }
-
-  const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
-  if (error) throw error;
-
-  return { queuedOffline };
-}
-
-export async function softDeleteProduct(productId) {
-  await updateDoc(doc(db, 'products', productId), { deleted: true, deletedAt: serverTimestamp() });
-}
-
-export async function restoreProduct(productId) {
-  await updateDoc(doc(db, 'products', productId), { deleted: false, deletedAt: deleteField() });
 }
 ````
 
@@ -7420,208 +7406,6 @@ export async function verifyPasswordResetCode() {
 
 export async function confirmPasswordReset() {
   return Promise.resolve();
-}
-````
-
-## File: src/hooks/useCameraScanner.js
-````javascript
-// src/hooks/useCameraScanner.js
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { BrowserMultiFormatReader } from '@zxing/browser';
-
-// Dev-only diagnostics — never runs in production, never changes `status`.
-const DEV = import.meta.env.DEV;
-const devLog = (...args) => { if (DEV) console.log('[Scanner]', ...args); };
-const devError = (...args) => { if (DEV) console.error('[Scanner]', ...args); };
-
-function getInsecureContextReason() {
-  if (typeof window === 'undefined') return null;
-  if (window.isSecureContext) return null;
-  return { protocol: window.location.protocol, hostname: window.location.hostname };
-}
-
-// Fallback cascade instead of a single fixed constraint set — covers
-// exact vs ideal facingMode and an environment→user→any-camera fallback,
-// so one rejected constraint doesn't fail the whole scan attempt outright.
-function buildConstraintAttempts() {
-  return [
-    { label: 'exact environment', constraints: { video: { facingMode: { exact: 'environment' } } } },
-    { label: 'ideal environment', constraints: { video: { facingMode: 'environment' } } },
-    { label: 'user-facing', constraints: { video: { facingMode: 'user' } } },
-    { label: 'any camera', constraints: { video: true } },
-  ];
-}
-
-export function useCameraScanner({ onDetected, active }) {
-  // FIX: Moved inside the hook body
-  const [retryToken, setRetryToken] = useState(0);
-  const retry = useCallback(() => setRetryToken((t) => t + 1), []);
-
-  const videoRef = useRef(null);
-  const readerRef = useRef(null);
-  // decodeFromConstraints() resolves with an IScannerControls object —
-  // THAT is what exposes .stop() for a continuous decode session in this
-  // @zxing/browser version. Cleanup must go through it, not the reader.
-  const controlsRef = useRef(null);
-  const streamRef = useRef(null);
-  const [status, setStatus] = useState('idle'); // idle | starting | scanning | denied | unavailable | insecure
-  const [torchOn, setTorchOn] = useState(false);
-  const [torchSupported, setTorchSupported] = useState(false);
-
-  const stop = useCallback(() => {
-    try {
-      controlsRef.current?.stop();
-    } catch (err) {
-      devError('controls.stop() failed', err);
-    }
-    controlsRef.current = null;
-
-    try {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    } catch (err) {
-      devError('manual track stop failed', err);
-    }
-    streamRef.current = null;
-
-    setTorchOn(false);
-    setTorchSupported(false);
-  }, []);
-
-  useEffect(() => {
-    if (!active) {
-      stop();
-      setStatus('idle');
-      return;
-    }
-
-    let cancelled = false;
-    setStatus('starting');
-
-    // Secure-context guard — checked BEFORE touching mediaDevices at all,
-    // so the real cause is surfaced instead of a generic "unavailable".
-    const insecure = getInsecureContextReason();
-    if (insecure) {
-      devError(
-        'Insecure context — navigator.mediaDevices is unavailable.',
-        'protocol:', insecure.protocol,
-        'hostname:', insecure.hostname,
-        'window.isSecureContext:', window.isSecureContext
-      );
-      setStatus('insecure');
-      return () => { cancelled = true; stop(); };
-    }
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      devError('navigator.mediaDevices.getUserMedia is not available in this browser.');
-      setStatus('unavailable');
-      return () => { cancelled = true; stop(); };
-    }
-
-    const reader = new BrowserMultiFormatReader();
-    readerRef.current = reader;
-
-    if (DEV) {
-      devLog(
-        'window.isSecureContext:', window.isSecureContext,
-        'protocol:', window.location.protocol,
-        'hostname:', window.location.hostname
-      );
-      navigator.mediaDevices.enumerateDevices()
-        .then((devices) => {
-          const cams = devices.filter((d) => d.kind === 'videoinput');
-          devLog(
-            'videoinput devices (labels blank until permission is granted):',
-            cams.length,
-            cams.map((c) => ({ deviceId: c.deviceId, label: c.label || '(hidden)' }))
-          );
-        })
-        .catch((err) => devError('enumerateDevices() failed', err));
-    }
-
-    (async () => {
-      const attempts = buildConstraintAttempts();
-      let lastError = null;
-
-      for (const attempt of attempts) {
-        if (cancelled) return;
-        devLog(`trying constraints [${attempt.label}]:`, attempt.constraints);
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          const controls = await reader.decodeFromConstraints(
-            attempt.constraints,
-            videoRef.current,
-            (result, err) => {
-              if (cancelled) return;
-              if (result) {
-                onDetected(result.getText());
-                return;
-              }
-              // NotFoundException fires continuously between frames while
-              // scanning with nothing in view — that's expected, not an error.
-              if (DEV && err && err.name !== 'NotFoundException') {
-                devError('decode callback error:', err.name, err.message);
-              }
-            }
-          );
-
-          if (cancelled) {
-            try { controls.stop(); } catch (err) { devError('post-cancel controls.stop() failed', err); }
-            return;
-          }
-
-          controlsRef.current = controls;
-          setStatus('scanning');
-          streamRef.current = videoRef.current?.srcObject || null;
-          const track = streamRef.current?.getVideoTracks?.()[0];
-          const capabilities = track?.getCapabilities?.();
-          setTorchSupported(!!capabilities?.torch);
-          devLog(`camera started using [${attempt.label}] — track:`, track?.label, 'capabilities:', capabilities);
-          return; // success — stop trying further constraint attempts
-        } catch (err) {
-          lastError = err;
-          devError(`constraints [${attempt.label}] failed:`, err?.name, err?.message);
-          // A denial should stop the cascade immediately — retrying with
-          // looser constraints won't change the user's answer.
-          if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError' || err?.name === 'SecurityError') {
-            break;
-          }
-          // Otherwise (OverconstrainedError, NotFoundError, NotReadableError,
-          // AbortError, ...) fall through and try the next, looser constraint set.
-        }
-      }
-
-      if (cancelled) return;
-      devError('all camera constraint attempts failed. Last error:', lastError?.name, lastError?.message, lastError);
-      const name = lastError?.name;
-      setStatus(
-        name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError'
-          ? 'denied'
-          : 'unavailable'
-      );
-    })();
-
-    return () => {
-      cancelled = true;
-      stop();
-    };
-  }, [active, onDetected, stop, retryToken]);
-
-  const toggleTorch = useCallback(async () => {
-    const track = streamRef.current?.getVideoTracks?.()[0];
-    if (!track || !torchSupported) return;
-    try {
-      const next = !torchOn;
-      await track.applyConstraints({ advanced: [{ torch: next }] });
-      setTorchOn(next);
-    } catch (err) {
-      // Some devices report torch as supported but reject the constraint
-      // anyway — fail silently rather than surface a confusing error for
-      // what's meant to be a nice-to-have.
-      devError('toggleTorch failed', err);
-    }
-  }, [torchOn, torchSupported]);
-
-  return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };
 }
 ````
 
@@ -8373,6 +8157,131 @@ export default function AppRouter() {
 }
 ````
 
+## File: src/utils/products.js
+````javascript
+import { collection, doc, writeBatch, updateDoc, deleteField, serverTimestamp, getDoc, setDoc } from 'firebase/firestore';
+import { db } from '../firebase';
+import { raceWithTimeout } from './offlineWrite';
+
+function barcodeIndexRef(businessId, barcode) {
+  return doc(db, 'barcodeIndex', `${businessId}__${barcode}`);
+}
+
+export async function permanentlyDeleteProduct(productId, barcode, businessId) {
+  if (!businessId) throw new Error('permanentlyDeleteProduct() called with no businessId');
+  const productRef = doc(db, 'products', productId);
+  const trimmedBarcode = barcode ? String(barcode).trim() : null;
+
+  const batch = writeBatch(db);
+  if (trimmedBarcode) {
+    const idxRef = barcodeIndexRef(businessId, trimmedBarcode);
+    const idxSnap = await getDoc(idxRef);
+    if (idxSnap.exists() && idxSnap.data().productId === productId) {
+      batch.delete(idxRef);
+    }
+  }
+  batch.delete(productRef);
+  await batch.commit();
+}
+
+export async function createProduct(data, businessId) {
+  if (!businessId) throw new Error('createProduct() called with no businessId');
+  const barcode = data.barcode ? String(data.barcode).trim() : null;
+  const newProductRef = doc(collection(db, 'products'));
+  const internalCode = `FB-${Math.floor(Date.now() / 1000).toString().slice(-6)}`;
+
+  const batch = writeBatch(db);
+  batch.set(newProductRef, {
+    ...data,
+    businessId,
+    barcode: barcode || null,
+    internalCode,
+    deleted: false,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  if (barcode) {
+    batch.set(barcodeIndexRef(businessId, barcode), { businessId, barcode, productId: newProductRef.id });
+  }
+
+  const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+  if (error) throw error;
+
+  return { id: newProductRef.id, queuedOffline };
+}
+
+export async function updateProduct(productId, data, previousBarcode, businessId) {
+  if (!businessId) throw new Error('updateProduct() called with no businessId');
+  const nextBarcode = data.barcode ? String(data.barcode).trim() : null;
+  const prevBarcode = previousBarcode ? String(previousBarcode).trim() : null;
+  const productRef = doc(db, 'products', productId);
+  const { stock, businessId: _ignored, ...updatePayload } = data;
+
+  const batch = writeBatch(db);
+  batch.update(productRef, { ...updatePayload, barcode: nextBarcode || null, updatedAt: serverTimestamp() });
+
+  if (prevBarcode && prevBarcode !== nextBarcode) {
+    batch.delete(barcodeIndexRef(businessId, prevBarcode));
+  }
+  if (nextBarcode && nextBarcode !== prevBarcode) {
+    batch.set(barcodeIndexRef(businessId, nextBarcode), { businessId, barcode: nextBarcode, productId });
+  }
+
+  const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+  if (error) throw error;
+
+  return { queuedOffline };
+}
+
+// FIX: archiving now also removes the barcode from barcodeIndex —
+// previously only a *permanent* delete did this, so an archived product
+// silently kept its barcode "reserved" behind the scenes.
+export async function softDeleteProduct(productId, barcode, businessId) {
+  const productRef = doc(db, 'products', productId);
+  const trimmedBarcode = barcode ? String(barcode).trim() : null;
+
+  const batch = writeBatch(db);
+  batch.update(productRef, { deleted: true, deletedAt: serverTimestamp() });
+
+  if (trimmedBarcode && businessId) {
+    const idxRef = barcodeIndexRef(businessId, trimmedBarcode);
+    const idxSnap = await getDoc(idxRef);
+    if (idxSnap.exists() && idxSnap.data().productId === productId) {
+      batch.delete(idxRef);
+    }
+  }
+
+  await batch.commit();
+}
+
+// Restoring re-creates the barcode index entry — unless another product
+// has since claimed that exact barcode while this one was archived, in
+// which case we restore the product but clear its barcode rather than
+// silently taking over the other product's index entry.
+export async function restoreProduct(productId, barcode, businessId) {
+  const productRef = doc(db, 'products', productId);
+  const trimmedBarcode = barcode ? String(barcode).trim() : null;
+
+  if (trimmedBarcode && businessId) {
+    const idxRef = barcodeIndexRef(businessId, trimmedBarcode);
+    const idxSnap = await getDoc(idxRef);
+    if (idxSnap.exists()) {
+      if (idxSnap.data().productId !== productId) {
+        await updateDoc(productRef, { deleted: false, deletedAt: deleteField(), barcode: null });
+        return { barcodeCleared: true };
+      }
+      // Already correctly indexed to this same product — nothing to do.
+    } else {
+      await setDoc(idxRef, { businessId, barcode: trimmedBarcode, productId });
+    }
+  }
+
+  await updateDoc(productRef, { deleted: false, deletedAt: deleteField() });
+  return { barcodeCleared: false };
+}
+````
+
 ## File: firebase.json
 ````json
 {
@@ -8616,6 +8525,79 @@ service cloud.firestore {
 }
 ````
 
+## File: cloudflare-worker/src/routes/paystackInitialize.js
+````javascript
+// src/routes/paystackInitialize.js
+//
+// POST /api/paystack/initialize
+//
+// Starts a Paystack transaction for the FlowBiz Pro plan. The price is
+// fixed SERVER-SIDE — the browser never gets to say what the amount is.
+// Records a pending payment doc first, so the webhook always has
+// something authoritative to check the eventual callback against.
+
+import { json, errorResponse } from '../lib/response.js';
+import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
+import { getDocument, createDocument } from '../lib/firestore.js';
+
+const PRO_PLAN_AMOUNT_KES = 599; 
+export async function handlePaystackInitialize(request, env) {
+  const authHeader = request.headers.get('Authorization') || '';
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!idToken) return errorResponse('Missing Authorization header.', 401);
+
+  let caller;
+  try {
+    caller = await verifyFirebaseIdToken(idToken, env.FIREBASE_PROJECT_ID);
+  } catch (err) {
+    return errorResponse(`Invalid session: ${err.message}`, 401);
+  }
+
+  const callerProfile = await getDocument(env, 'users', caller.uid);
+  if (!callerProfile) return errorResponse('Profile not found.', 403);
+  if (callerProfile.role !== 'owner') return errorResponse('Only an owner can manage the subscription.', 403);
+  if (callerProfile.active === false) return errorResponse('Your account is deactivated.', 403);
+  if (!callerProfile.businessId) return errorResponse('No business associated with this account.', 400);
+
+  const email = callerProfile.email || caller.email;
+  if (!email) return errorResponse('No email on file for this account.', 400);
+
+  const reference = `flowbiz_${callerProfile.businessId}_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  const amountKobo = PRO_PLAN_AMOUNT_KES * 100;
+
+  const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email,
+      amount: amountKobo,
+      currency: 'KES',
+      reference,
+      callback_url: env.PAYSTACK_CALLBACK_URL || undefined,
+      metadata: { businessId: callerProfile.businessId, plan: 'pro' },
+    }),
+  });
+
+  const paystackData = await paystackRes.json();
+  if (!paystackRes.ok || !paystackData.status) {
+    return errorResponse(paystackData.message || 'Could not start payment with Paystack.', 502);
+  }
+
+  // Recorded BEFORE handing the reference back to the browser — the
+  // webhook checks the eventual payment against this, not the other way
+  // around, so nothing the frontend says here needs to be trusted later.
+  await createDocument(env, 'payments', reference, {
+    businessId: callerProfile.businessId,
+    plan: 'pro',
+    amountKes: PRO_PLAN_AMOUNT_KES,
+    status: 'pending',
+    createdAt: new Date(),
+    initializedBy: caller.uid,
+  });
+
+return json({ authorization_url: paystackData.data.authorization_url, access_code: paystackData.data.access_code, reference });}
+````
+
 ## File: cloudflare-worker/wrangler.toml
 ````toml
 name = "flowbiz-api"
@@ -8632,6 +8614,272 @@ FIREBASE_PROJECT_ID = "swiftstock-bc6a3"
 ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://flowbiz.pages.dev"
 WHATSAPP_PHONE_NUMBER_ID = "your-whatsapp-phone-number-id"
 PAYSTACK_CALLBACK_URL = "https://flowbiz.pages.dev/pro"
+````
+
+## File: src/hooks/useCameraScanner.js
+````javascript
+// src/hooks/useCameraScanner.js
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { BrowserMultiFormatReader } from '@zxing/browser';
+
+const DEV = import.meta.env.DEV;
+const devLog = (...args) => { if (DEV) console.log('[Scanner]', ...args); };
+const devError = (...args) => { if (DEV) console.error('[Scanner]', ...args); };
+
+function getInsecureContextReason() {
+  if (typeof window === 'undefined') return null;
+  if (window.isSecureContext) return null;
+  return { protocol: window.location.protocol, hostname: window.location.hostname };
+}
+
+// Retail barcode formats we actually need, plus our own product QR
+// codes. Kept narrow on purpose — fewer formats to check per frame
+// means both the native detector and the ZXing fallback decide
+// "nothing here yet" faster on every frame that isn't a hit.
+const BARCODE_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code'];
+
+// High enough resolution to read a barcode clearly, low enough to keep
+// every frame cheap to process — and continuous autofocus so the
+// camera keeps re-focusing on whatever's held up to it (most phone
+// cameras default to a slower focus mode for plain video capture).
+// `advanced` constraints are silently ignored by devices/browsers that
+// don't support them, so this is safe everywhere.
+function buildConstraintAttempts() {
+  const base = { width: { ideal: 1280 }, height: { ideal: 720 }, advanced: [{ focusMode: 'continuous' }] };
+  return [
+    { label: 'exact environment', constraints: { video: { ...base, facingMode: { exact: 'environment' } } } },
+    { label: 'ideal environment', constraints: { video: { ...base, facingMode: 'environment' } } },
+    { label: 'user-facing', constraints: { video: { ...base, facingMode: 'user' } } },
+    { label: 'any camera', constraints: { video: true } },
+  ];
+}
+
+// Native, hardware-accelerated barcode decoding — the same engine behind
+// the phone's own camera app / Google Lens. Where it's available and
+// working well (mainly Chrome/Edge/Samsung Internet on Android) this is
+// dramatically faster than software decoding. Not available at all on
+// Safari/iOS, and quality can vary by Android device, which is why ZXing
+// stays in place as the fallback below rather than being replaced.
+let nativeFormatsPromise = null;
+function getNativeSupportedFormats() {
+  if (typeof window === 'undefined' || !('BarcodeDetector' in window)) return Promise.resolve(null);
+  if (!nativeFormatsPromise) {
+    nativeFormatsPromise = window.BarcodeDetector.getSupportedFormats()
+      .then((supported) => {
+        const usable = BARCODE_FORMATS.filter((f) => supported.includes(f));
+        return usable.length > 0 ? usable : null;
+      })
+      .catch(() => null);
+  }
+  return nativeFormatsPromise;
+}
+
+export function useCameraScanner({ onDetected, active }) {
+  const [retryToken, setRetryToken] = useState(0);
+  const retry = useCallback(() => setRetryToken((t) => t + 1), []);
+
+  const videoRef = useRef(null);
+  const readerRef = useRef(null);
+  const controlsRef = useRef(null);
+  const detectorLoopRef = useRef(null);
+  const streamRef = useRef(null);
+  const [status, setStatus] = useState('idle');
+  const [torchOn, setTorchOn] = useState(false);
+  const [torchSupported, setTorchSupported] = useState(false);
+
+  const stopNativeLoop = useCallback(() => {
+    const loop = detectorLoopRef.current;
+    if (!loop) return;
+    loop.cancelled = true;
+    const video = videoRef.current;
+    if (loop.frameHandle != null) {
+      if (video?.cancelVideoFrameCallback) video.cancelVideoFrameCallback(loop.frameHandle);
+      else cancelAnimationFrame(loop.frameHandle);
+    }
+    detectorLoopRef.current = null;
+  }, []);
+
+  const stop = useCallback(() => {
+    stopNativeLoop();
+
+    try { controlsRef.current?.stop(); } catch (err) { devError('controls.stop() failed', err); }
+    controlsRef.current = null;
+
+    try { streamRef.current?.getTracks().forEach((t) => t.stop()); } catch (err) { devError('manual track stop failed', err); }
+    streamRef.current = null;
+
+    if (videoRef.current) videoRef.current.srcObject = null;
+
+    setTorchOn(false);
+    setTorchSupported(false);
+  }, [stopNativeLoop]);
+
+  useEffect(() => {
+    if (!active) { stop(); setStatus('idle'); return; }
+
+    let cancelled = false;
+    setStatus('starting');
+
+    const insecure = getInsecureContextReason();
+    if (insecure) {
+      devError('Insecure context — navigator.mediaDevices is unavailable.', insecure);
+      setStatus('insecure');
+      return () => { cancelled = true; stop(); };
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      devError('navigator.mediaDevices.getUserMedia is not available in this browser.');
+      setStatus('unavailable');
+      return () => { cancelled = true; stop(); };
+    }
+
+    (async () => {
+      const nativeFormats = await getNativeSupportedFormats();
+      if (cancelled) return;
+      devLog(nativeFormats ? `Using native BarcodeDetector (${nativeFormats.join(', ')})` : 'Native BarcodeDetector unavailable — using ZXing fallback');
+
+      if (nativeFormats) {
+        // ── FAST PATH ──────────────────────────────────────────────
+        const attempts = buildConstraintAttempts();
+        let stream = null;
+        let usedLabel = null;
+        let lastError = null;
+
+        for (const attempt of attempts) {
+          if (cancelled) return;
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            stream = await navigator.mediaDevices.getUserMedia(attempt.constraints);
+            usedLabel = attempt.label;
+            break;
+          } catch (err) {
+            lastError = err;
+            devError(`[native] constraints [${attempt.label}] failed:`, err?.name, err?.message);
+            if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError' || err?.name === 'SecurityError') break;
+          }
+        }
+
+        if (cancelled) { stream?.getTracks().forEach((t) => t.stop()); return; }
+
+        if (!stream) {
+          devError('[native] all camera constraint attempts failed:', lastError?.name, lastError?.message);
+          const name = lastError?.name;
+          setStatus(name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError' ? 'denied' : 'unavailable');
+          return;
+        }
+
+        const video = videoRef.current;
+        if (!video) { stream.getTracks().forEach((t) => t.stop()); return; }
+        streamRef.current = stream;
+        video.srcObject = stream;
+        try { await video.play(); } catch { /* muted video autoplay quirk on some browsers — safe to ignore */ }
+
+        const track = stream.getVideoTracks()[0];
+        const capabilities = track?.getCapabilities?.();
+        setTorchSupported(!!capabilities?.torch);
+        devLog(`[native] camera started using [${usedLabel}] — track:`, track?.label, 'capabilities:', capabilities);
+
+        const detector = new window.BarcodeDetector({ formats: nativeFormats });
+        const loop = { cancelled: false, frameHandle: null };
+        detectorLoopRef.current = loop;
+        let busy = false;
+
+        const scanFrame = async () => {
+          if (loop.cancelled) return;
+          if (!busy && video.readyState >= 2) {
+            busy = true;
+            try {
+              const results = await detector.detect(video);
+              if (results.length > 0 && !loop.cancelled) {
+                onDetected(results[0].rawValue);
+                busy = false;
+                return; // caller flips `active` off once a code is found
+              }
+            } catch (err) {
+              devError('[native] detect() failed', err);
+            }
+            busy = false;
+          }
+          if (loop.cancelled) return;
+          loop.frameHandle = video.requestVideoFrameCallback
+            ? video.requestVideoFrameCallback(scanFrame)
+            : requestAnimationFrame(scanFrame);
+        };
+
+        loop.frameHandle = video.requestVideoFrameCallback
+          ? video.requestVideoFrameCallback(scanFrame)
+          : requestAnimationFrame(scanFrame);
+        setStatus('scanning');
+        return;
+      }
+
+      // ── FALLBACK PATH (same proven ZXing flow, just better camera constraints) ──
+      const reader = new BrowserMultiFormatReader();
+      readerRef.current = reader;
+      const attempts = buildConstraintAttempts();
+      let lastError = null;
+
+      for (const attempt of attempts) {
+        if (cancelled) return;
+        devLog(`[zxing] trying constraints [${attempt.label}]:`, attempt.constraints);
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const controls = await reader.decodeFromConstraints(
+            attempt.constraints,
+            videoRef.current,
+            (result, err) => {
+              if (cancelled) return;
+              if (result) { onDetected(result.getText()); return; }
+              if (DEV && err && err.name !== 'NotFoundException') devError('[zxing] decode callback error:', err.name, err.message);
+            }
+          );
+
+          if (cancelled) {
+            try { controls.stop(); } catch (err) { devError('post-cancel controls.stop() failed', err); }
+            return;
+          }
+
+          controlsRef.current = controls;
+          setStatus('scanning');
+          streamRef.current = videoRef.current?.srcObject || null;
+          const track = streamRef.current?.getVideoTracks?.()[0];
+          const capabilities = track?.getCapabilities?.();
+          setTorchSupported(!!capabilities?.torch);
+          devLog(`[zxing] camera started using [${attempt.label}] — track:`, track?.label, 'capabilities:', capabilities);
+          return;
+        } catch (err) {
+          lastError = err;
+          devError(`[zxing] constraints [${attempt.label}] failed:`, err?.name, err?.message);
+          if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError' || err?.name === 'SecurityError') break;
+        }
+      }
+
+      if (cancelled) return;
+      devError('[zxing] all camera constraint attempts failed. Last error:', lastError?.name, lastError?.message);
+      const name = lastError?.name;
+      setStatus(
+        name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError'
+          ? 'denied'
+          : 'unavailable'
+      );
+    })();
+
+    return () => { cancelled = true; stop(); };
+  }, [active, onDetected, stop, retryToken]);
+
+  const toggleTorch = useCallback(async () => {
+    const track = streamRef.current?.getVideoTracks?.()[0];
+    if (!track || !torchSupported) return;
+    try {
+      const next = !torchOn;
+      await track.applyConstraints({ advanced: [{ torch: next }] });
+      setTorchOn(next);
+    } catch (err) {
+      devError('toggleTorch failed', err);
+    }
+  }, [torchOn, torchSupported]);
+
+  return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };
+}
 ````
 
 ## File: src/pages/Counter.jsx
@@ -8934,405 +9182,113 @@ const handleSupplierSave = async (supplierData) => {
 }
 ````
 
-## File: src/pages/CustomerDetail.jsx
+## File: src/pages/Pro.jsx
 ````javascript
-import { useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { where, orderBy, doc, writeBatch, increment, getDoc, serverTimestamp, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Receipt, Banknote, Smartphone, Undo2 } from 'lucide-react';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import RepaymentModal from '../components/debtors/RepaymentModal';
-import RefundModal from '../components/debtors/RefundModal';
-import { formatKES } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function CustomerDetail() {
-  const { customerId } = useParams();
-  const { profile, isAdmin, businessId } = useAuth();
-
-  const customerQ   = useMemo(() => businessId ? tenantQuery('customers', businessId, where('__name__','==',customerId)) : null, [customerId, businessId]);
-  const creditQ     = useMemo(() => businessId ? tenantQuery('creditSales', businessId, where('customerId','==',customerId)) : null, [customerId, businessId]);
-  const repaymentsQ = useMemo(() => businessId ? tenantQuery('repayments', businessId, where('customerId','==',customerId), orderBy('paidAt','desc')) : null, [customerId, businessId]);
-
-  const { data: customerData, loading: custLoad } = useFirestoreCollection(customerQ);
-  const { data: creditSales, loading: credLoad, error } = useFirestoreCollection(creditQ);
-  const { data: repayments } = useFirestoreCollection(repaymentsQ);
-  
-  const [repayOpen, setRepayOpen]       = useState(false);
-  const [cancelTarget, setCancelTarget] = useState(null);
-  const [refundTarget, setRefundTarget] = useState(null);
-
-  const customer = customerData[0];
-  const sorted = [...creditSales].sort((a,b) => (b.soldAt?.toMillis?.() ?? 0) - (a.soldAt?.toMillis?.() ?? 0));
-  const totalOwed = creditSales
-    .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded')
-    .reduce((acc,cs) => acc + (Number(cs.remainingBalance) || 0), 0);
-
-const handleRepayment = async ({ amount, method, mpesaCode }) => {
-    const openSales = [...creditSales]
-      .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded' && (Number(cs.remainingBalance) || 0) > 0.005)
-      .sort((a,b) => (a.soldAt?.toMillis?.() ?? 0) - (b.soldAt?.toMillis?.() ?? 0));
-
-    if (!openSales.length) { toast.error('No outstanding balance.'); return; }
-    try {
-      const batch = writeBatch(db);
-      let remaining = amount;
-      for (const cs of openSales) {
-        if (remaining <= 0.005) break;
-        const owed    = Number(cs.remainingBalance) || 0;
-        const portion = Math.min(owed, remaining);
-        remaining    -= portion;
-        const newPaid = (Number(cs.amountPaid) || 0) + portion;
-        const newBal  = owed - portion;
-        batch.update(doc(db,'creditSales',cs.id), { amountPaid: newPaid, remainingBalance: newBal, status: newBal <= 0.005 ? 'paid' : 'partial' });
-        const repRef = doc(collection(db,'repayments'));
-        batch.set(repRef, {
-          businessId,
-          creditSaleId: cs.id,
-          customerId: cs.customerId,
-          customerName: cs.customerName,
-          productName: cs.productName,
-          amount: portion,
-          method,
-          mpesaCode: mpesaCode || null,
-          paidAt: serverTimestamp(),
-          recordedBy: profile.uid,
-          recordedByName: profile.displayName,
-        });
-      }
-      const commit = batch.commit();
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
-      if (error) throw error;
-      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : `Recorded ${formatKES(amount)} repayment`);
-      if (queuedOffline) commit.catch((err) => toast.error(`A repayment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
-    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
-  };
-
-  const handleCancel = async (cs) => {
-    setCancelTarget(null);
-    try {
-      const batch = writeBatch(db);
-      const prodRef = doc(db,'products',cs.productId);
-      const prodSnap = await getDoc(prodRef);
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
-      }
-      batch.update(doc(db,'creditSales',cs.id), {
-        status: 'cancelled', remainingBalance: 0,
-        cancelledAt: serverTimestamp(), cancelledBy: profile.uid,
-      });
-      await batch.commit();
-      toast.success('Credit sale cancelled and stock restored.');
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-  };
-
-  const handleRefund = async (cs, { method }) => {
-    try {
-      const batch = writeBatch(db);
-      const prodRef = doc(db,'products',cs.productId);
-      const prodSnap = await getDoc(prodRef);
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
-      }
-      batch.update(doc(db,'creditSales',cs.id), {
-        status: 'refunded', remainingBalance: 0,
-        refundedAt: serverTimestamp(), refundedBy: profile.uid,
-      });
-      const refundRef = doc(collection(db,'refunds'));
-      batch.set(refundRef, {
-        businessId,
-        creditSaleId: cs.id, customerId: cs.customerId, customerName: cs.customerName,
-        productName: cs.productName, amount: Number(cs.amountPaid) || 0, method,
-        refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName,
-      });
-      await batch.commit();
-      toast.success('Sale refunded and stock restored.');
-      setRefundTarget(null);
-    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
-  };
-
-  if (custLoad || credLoad) return <LoadingSpinner />;
-  if (error) return <ErrorBanner message={`Could not load data. ${error}`} />;
-  if (!customer && creditSales.length === 0) return <EmptyState title="Customer not found" />;
-
-  const displayName = customer?.name || creditSales[0]?.customerName || 'Unknown Customer';
-  const displayPhone = customer?.phone || creditSales[0]?.customerPhone || 'No phone';
-
-  return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <Link to="/customers" className="text-sm font-semibold text-ink-400 hover:text-ink-700">← Back to Customers</Link>
-      <div className="card flex flex-wrap items-center justify-between gap-3 p-5">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">{displayName}</h1>
-          <p className="text-sm text-ink-400">{displayPhone}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-xs text-ink-400">Outstanding Debt</p>
-          <p className={`font-display text-xl font-bold ${totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>{formatKES(totalOwed)}</p>
-        </div>
-      </div>
-      <button className="btn-primary w-full sm:w-auto" disabled={totalOwed <= 0} onClick={() => setRepayOpen(true)}>
-        <Receipt className="h-4 w-4" strokeWidth={1.75}/> Record repayment
-      </button>
-
-      {sorted.length > 0 && (
-        <div className="card p-4">
-          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Credit purchases</h2>
-          <div className="divide-y divide-ink-100">
-            {sorted.map(cs => {
-              const reversed = cs.status === 'cancelled' || cs.status === 'refunded';
-              return (
-                <div key={cs.id} className={`flex items-center justify-between gap-2 py-2.5 text-sm ${reversed ? 'opacity-50' : ''}`}>
-                  <div>
-                    <p className="font-medium text-ink-700">{cs.quantity} × {cs.productName}</p>
-                    <p className="text-xs text-ink-400">{formatDateTime(cs.soldAt)}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="text-right">
-                      <p className={`font-semibold ${reversed ? 'line-through text-ink-400' : 'text-ink-800'}`}>{formatKES(cs.totalAmount)}</p>
-                      <span className={`badge ${cs.status === 'paid' ? 'bg-moss-100 text-moss-700' : cs.status === 'partial' ? 'bg-rust-100 text-rust-700' : 'bg-ink-100 text-ink-500'}`}>{cs.status}</span>
-                    </div>
-                    {isAdmin && !reversed && (
-                      <button
-                        className="rounded-lg p-2 text-ink-400 hover:bg-ink-100"
-                        title={Number(cs.amountPaid) > 0.005 ? 'Refund this sale' : 'Cancel this sale'}
-                        onClick={() => (Number(cs.amountPaid) > 0.005 ? setRefundTarget(cs) : setCancelTarget(cs))}
-                      >
-                        <Undo2 className="h-4 w-4" strokeWidth={1.75}/>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-      
-      {repayments.length > 0 && (
-        <div className="card p-4">
-          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Repayment history</h2>
-          <div className="divide-y divide-ink-100">
-            {repayments.map(r => (
-              <div key={r.id} className="flex items-center justify-between py-2.5 text-sm">
-                <div>
-                  <p className="font-medium text-ink-700">{r.method === 'Cash' ? <><Banknote className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>Cash</> : <><Smartphone className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>M-Pesa {r.mpesaCode ? `(${r.mpesaCode})` : ''}</>}</p>
-                  <p className="text-xs text-ink-400">{formatDateTime(r.paidAt)}</p>
-                </div>
-                <span className="font-semibold text-moss-700">{formatKES(r.amount)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <RepaymentModal open={repayOpen} customer={{ name: displayName }} totalOwed={totalOwed} onClose={() => setRepayOpen(false)} onSubmit={handleRepayment} />
-      <RefundModal open={!!refundTarget} creditSale={refundTarget} onClose={() => setRefundTarget(null)} onSubmit={(opts) => handleRefund(refundTarget, opts)} />
-      <ConfirmDialog
-        open={!!cancelTarget}
-        title="Cancel this credit sale?"
-        message={`"${cancelTarget?.productName}" (×${cancelTarget?.quantity}) will be cancelled and stock restored. Nothing has been paid on this sale yet.`}
-        confirmLabel="Cancel sale"
-        danger
-        onConfirm={() => handleCancel(cancelTarget)}
-        onCancel={() => setCancelTarget(null)}
-      />
-    </div>
-  );
-}
-````
-
-## File: src/pages/Products.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { Pencil, Trash2, TrendingUp } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { raceWithTimeout } from '../utils/offlineWrite';
+import { auth } from '../firebase';
+import toast from 'react-hot-toast';
 import { friendlyErrorMessage } from '../utils/errorMessages';
 
-export default function Products() {
-  const { businessId } = useAuth();
-  const productsQ = useMemo(
-    () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
-    [businessId]
-  );
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const { data: products, loading, error } = useFirestoreCollection(productsQ);
-  const { data: suppliers } = useFirestoreCollection(suppliersQ);
-  
-  const [search, setSearch] = useState('');
-  const [modal, setModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [editing, setEditing] = useState(null);
-  const [pendingDel, setPendingDel] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [scanFoundProduct, setScanFoundProduct] = useState(null);
-  const [deleting, setDeleting] = useState(false);
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
+export default function Pro() {
+  const { isPro, subscription } = useAuth();
+  const [loading, setLoading] = useState(false);
 
-  const filtered = products.filter(
-    (p) =>
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.category.toLowerCase().includes(search.toLowerCase()) ||
-      (p.barcode && p.barcode.includes(search.trim())) ||
-      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
-  );
-  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
-
-  const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
-
-const handleSave = async (data) => {
+  // FIX: Shifted from missing Firebase Function to the existing Cloudflare Worker API
+const handleSubscribe = async () => {
+    setLoading(true);
     try {
-      if (editing) {
-        const { queuedOffline } = await updateProduct(editing.id, data, editing.barcode, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
+      const idToken = await auth.currentUser.getIdToken(true);
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/paystack/initialize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      });
+      const data = await response.json();
+
+      if (data?.access_code && window.PaystackPop) {
+        const popup = new window.PaystackPop();
+        popup.resumeTransaction(data.access_code, {
+          onSuccess: () => toast.success('Payment received — activating your subscription…'),
+          onCancel: () => toast('Payment cancelled.'),
+        });
+      } else if (data?.authorization_url) {
+        // Fallback if the Paystack script hasn't loaded yet.
+        window.location.href = data.authorization_url;
       } else {
-        const { queuedOffline } = await createProduct(data, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+        toast.error(data?.error || "Couldn't initialize payment. Please try again.");
       }
-      closeFormModal();
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, { fallback: 'Payment initiation failed.' }));
+    } finally {
+      setLoading(false);
+    }
   };
-const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
-const handleDel = async () => {
-    setDeleting(true);
-    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id), 4000);
-    setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
-    setPendingDel(null);
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setScanFoundProduct(found);
-    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
-  };
-
-  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
-        <div className="flex gap-2">
-          <Link to="/inventory-intelligence" className="btn-outline">
-            <TrendingUp className="h-4 w-4" /> Intelligence
-          </Link>
-          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
+    <div className="mx-auto max-w-4xl space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="font-display text-2xl font-bold text-ink-900">FlowBiz Pro</h1>
+          <p className="text-sm text-ink-500">Supercharge your shop operations.</p>
+        </div>
+        <Link to="/" className="btn-outline text-xs">Back to Dashboard</Link>
+      </div>
+
+      <div className="card p-8 text-center bg-moss-50 border-moss-200">
+        <h2 className="font-display text-3xl font-bold text-moss-800">KSh 599 <span className="text-lg font-normal text-moss-700">/ 30 days</span></h2>
+        <p className="mt-2 text-ink-600 max-w-lg mx-auto">No recurring auto-billing. Manual renewal ensures you're always in control of your subscription.</p>
+        
+        {isPro ? (
+          <div className="mt-6 inline-flex flex-col items-center">
+            <span className="badge bg-amber-100 text-amber-800 px-4 py-2 text-sm">FlowBiz Pro Active</span>
+            {subscription?.expiresAt && <p className="text-xs text-ink-500 mt-2">Expires on {new Date(subscription.expiresAt.toMillis ? subscription.expiresAt.toMillis() : subscription.expiresAt).toLocaleDateString()}</p>}
+            <button onClick={handleSubscribe} disabled={loading} className="mt-4 btn-outline">Extend Subscription</button>
+          </div>
+        ) : (
+          <button onClick={handleSubscribe} disabled={loading} className="mt-6 btn-primary px-8 py-3 text-lg">
+            {loading ? 'Initializing Payment...' : 'Pay KSh 599'}
+          </button>
+        )}
+      </div>
+
+      <div className="grid sm:grid-cols-2 gap-6 pt-4">
+        <div>
+          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Advanced Analytics</h3>
+          <ul className="space-y-2 text-sm text-ink-600">
+            <li><span className="text-moss-700 mr-2">✓</span>Business Health Dashboard</li>
+            <li><span className="text-moss-700 mr-2">✓</span>Sales insights & Profit analysis</li>
+            <li><span className="text-moss-700 mr-2">✓</span>Staff Analytics and performance tracking</li>
+          </ul>
+        </div>
+        <div>
+          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Inventory Intelligence</h3>
+          <ul className="space-y-2 text-sm text-ink-600">
+            <li><span className="text-moss-700 mr-2">✓</span>Detect overstocked items holding capital</li>
+            <li><span className="text-moss-700 mr-2">✓</span>Predictive stockout warnings</li>
+            <li><span className="text-moss-700 mr-2">✓</span>Total capital & potential profit insights</li>
+          </ul>
+        </div>
+        <div>
+          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Professional Documents</h3>
+          <ul className="space-y-2 text-sm text-ink-600">
+            <li><span className="text-moss-700 mr-2">✓</span>Professional invoices and receipts</li>
+            <li><span className="text-moss-700 mr-2">✓</span>PDF generation and direct printing</li>
+            <li><span className="text-moss-700 mr-2">✓</span>Business logo prominently displayed</li>
+          </ul>
+        </div>
+        <div>
+          <h3 className="font-display text-lg font-bold text-ink-900 mb-3">Communication & Team</h3>
+          <ul className="space-y-2 text-sm text-ink-600">
+            <li><span className="text-moss-700 mr-2">✓</span>WhatsApp receipts directly to customers</li>
+            <li><span className="text-moss-700 mr-2">✓</span>WhatsApp invoice sending</li>
+            <li><span className="text-moss-700 mr-2">✓</span>Unlimited staff members (Free plan limits to 1)</li>
+          </ul>
         </div>
       </div>
-      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      <ErrorBanner message={error} />
-      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
-        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
-      ) : (
-        <>
-          <div className="space-y-2.5 sm:hidden">
-            {filtered.map((p) => (
-              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
-                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
-                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
-                  </div>
-                </div>
-              <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
-                <div className="space-x-3">
-                  <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
-                  <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
-                </div>
-                <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
-              </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="hidden sm:block card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {filtered.map((p) => (
-                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
-                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
-                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
-                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
-                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
-                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
-                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
-          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
-        </div>
-      </Modal>
-
-<ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-<ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    </div>
+    </div>
   );
 }
 ````
@@ -9504,6 +9460,544 @@ const handleDel = async () => {
           <div className="flex justify-end gap-2 pt-1"><button type="button" className="btn-secondary" onClick={()=>setPayModal(false)}>Cancel</button><button type="submit" className="btn-primary" disabled={paying}>{paying?'Recording…':'Record payment'}</button></div>
         </form>
       </Modal>
+    </div>
+  );
+}
+````
+
+## File: src/utils/documentService.js
+````javascript
+import { jsPDF } from 'jspdf';
+import { formatKES } from './currency';
+import { formatDateTime } from './dateRanges';
+import { openWhatsApp, buildReceiptMessage } from './whatsapp';
+
+export async function loadImageAsDataUrl(url) {
+    if (!url) return null;
+    try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    } catch (err) {
+        console.error('Could not load business logo for PDF:', err);
+        return null;
+    }
+}
+
+// Shared header used by every thermal-receipt-style document this file
+// generates (sale receipts/invoices, and now debt payment receipts) —
+// keeps the logo/business-info block identical across document types
+// instead of re-implementing it per document.
+async function drawDocumentHeader(doc, settings, marginX, startY) {
+    let y = startY;
+    const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
+    if (logoDataUrl) {
+        try {
+            const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
+            doc.addImage(logoDataUrl, format, marginX, y, 14, 14);
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(11);
+            doc.text(settings.shopName || 'Business Receipt', marginX + 17, y + 5);
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(8);
+            if (settings.phone) doc.text(`Tel: ${settings.phone}`, marginX + 17, y + 9);
+            if (settings.address) doc.text(settings.address, marginX + 17, y + 13);
+            return y + 18;
+        } catch (err) {
+            console.error('Could not embed business logo in PDF:', err);
+        }
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text(settings.shopName || 'Business Receipt', marginX, y + 4);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    if (settings.phone) { y += 4; doc.text(`Tel: ${settings.phone}`, marginX, y + 4); }
+    if (settings.address) { y += 4; doc.text(settings.address, marginX, y + 4); }
+    return y + 8;
+}
+
+// Replace the buildDocument function in src/utils/documentService.js
+async function buildDocument(data, settings, typeLabel) {
+    const doc = new jsPDF('p', 'mm', [80, 200]); // Thermal receipt size
+    const marginX = 5;
+    const pageWidth = 75;
+    let y = await drawDocumentHeader(doc, settings, marginX, 8);
+
+    // 2. DOCUMENT TYPE & META DATA
+    y += 2;
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.4);
+    doc.line(marginX, y, pageWidth, y);
+    
+    y += 6;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(typeLabel, marginX, y); // "INVOICE" or "RECEIPT"
+    
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(formatDateTime(data.soldAt || data.recordedAt || new Date()), pageWidth, y, { align: 'right' });
+    
+    y += 5;
+    doc.text(`Ref: ${data.id?.substring(0, 8).toUpperCase() || 'N/A'}`, marginX, y);
+    if (data.customerName) {
+        y += 4;
+        doc.text(`To: ${data.customerName}`, marginX, y);
+    }
+
+    // 3. ITEMIZED TABLE
+    y += 4;
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(0.2);
+    doc.line(marginX, y, pageWidth, y);
+    
+    y += 5;
+    doc.setFont('helvetica', 'bold');
+    doc.text('ITEM', marginX, y);
+    doc.text('TOTAL', pageWidth, y, { align: 'right' });
+    
+    y += 2;
+    doc.line(marginX, y, pageWidth, y);
+
+    // Items
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    const itemName = data.productName || data.description || 'Item';
+    const splitName = doc.splitTextToSize(itemName, 45);
+    doc.text(splitName, marginX, y);
+    
+    const amountStr = formatKES(data.totalAmount || data.amount || 0);
+    doc.text(amountStr, pageWidth, y, { align: 'right' });
+    
+    y += (splitName.length * 4);
+    if (data.quantity) {
+        doc.setTextColor(100, 100, 100);
+        doc.text(`${data.quantity} × @ ${formatKES(data.soldPricePerUnit || 0)}`, marginX, y);
+        doc.setTextColor(0, 0, 0);
+        y += 4;
+    }
+
+    // 4. TOTALS SECTION
+    y += 2;
+    doc.line(marginX, y, pageWidth, y);
+    y += 6;
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    if (data.isCredit) {
+        doc.text('TOTAL DUE:', marginX, y);
+        doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth, y, { align: 'right' });
+    } else {
+        doc.text('PAID:', marginX, y);
+        doc.text(amountStr, pageWidth, y, { align: 'right' });
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        y += 4;
+        doc.text(`Via: ${data.paymentMethod || data.method}`, pageWidth, y, { align: 'right' });
+    }
+
+    // 5. FOOTER
+    y += 12;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'italic');
+    doc.setTextColor(100, 100, 100);
+    doc.text(data.isCredit ? 'Payment due — thank you!' : 'Thank you for your business!', 40, y, { align: 'center' });
+
+    return doc;
+}
+
+// A debt payment receipt is deliberately its own document shape — a
+// payment against an existing debt is not a sale, and PART 15 requires it
+// to visually read as a distinct document ("DEBT PAYMENT RECEIPT"), not a
+// sales receipt with different labels bolted on.
+async function buildDebtPaymentDocument(receipt, settings) {
+    const doc = new jsPDF('p', 'mm', [80, 200]);
+    const marginX = 5;
+    const pageWidth = 75;
+    let y = await drawDocumentHeader(doc, settings, marginX, 8);
+
+    y += 2;
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.4);
+    doc.line(marginX, y, pageWidth, y);
+
+    y += 6;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('DEBT PAYMENT RECEIPT', marginX, y);
+
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(formatDateTime(receipt.paidAt || new Date()), marginX, y);
+    y += 4;
+    doc.text(`Customer: ${receipt.customerName || '—'}`, marginX, y);
+    y += 4;
+    doc.text(`Payment method: ${receipt.method}${receipt.mpesaCode ? ` (${receipt.mpesaCode})` : ''}`, marginX, y);
+    if (receipt.paymentReferences?.length) {
+        y += 4;
+        const refText = receipt.paymentReferences.join(', ');
+        const splitRef = doc.splitTextToSize(`Ref: ${refText}`, pageWidth - marginX);
+        doc.text(splitRef, marginX, y);
+        y += (splitRef.length - 1) * 3.5;
+    }
+
+    y += 6;
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(0.2);
+    doc.line(marginX, y, pageWidth, y);
+    y += 6;
+
+    const row = (label, value, boldRow = false) => {
+        doc.setFont('helvetica', boldRow ? 'bold' : 'normal');
+        doc.setFontSize(9);
+        doc.text(label, marginX, y);
+        doc.text(value, pageWidth, y, { align: 'right' });
+        y += 5.5;
+    };
+    row('Previous balance', formatKES(receipt.previousBalance));
+    row('Payment received', formatKES(receipt.amountPaid));
+    y += 1;
+    doc.line(marginX, y, pageWidth, y);
+    y += 5;
+    row('Remaining balance', formatKES(receipt.remainingBalance), true);
+
+    y += 4;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    if (receipt.isCleared) {
+        doc.setTextColor(26, 98, 60); // moss
+        doc.text('STATUS: DEBT CLEARED', marginX, y);
+    } else {
+        doc.setTextColor(196, 68, 29); // rust
+        doc.text('STATUS: PARTIALLY PAID', marginX, y);
+    }
+    doc.setTextColor(0, 0, 0);
+
+    y += 10;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'italic');
+    doc.setTextColor(100, 100, 100);
+    doc.text('Thank you for your payment!', 40, y, { align: 'center' });
+
+    return doc;
+}
+
+export async function generateReceiptPDF(sale, settings) {
+    const doc = await buildDocument(sale, settings, 'RECEIPT');
+    doc.save(`receipt-${sale.id}.pdf`);
+}
+
+export async function printReceipt(sale, settings) {
+    const doc = await buildDocument(sale, settings, 'RECEIPT');
+    doc.autoPrint();
+    window.open(doc.output('bloburl'), '_blank');
+}
+
+export async function generateInvoicePDF(creditSale, settings) {
+    const doc = await buildDocument(creditSale, settings, 'INVOICE');
+    doc.save(`invoice-${creditSale.id}.pdf`);
+}
+
+export async function printInvoice(creditSale, settings) {
+    const doc = await buildDocument(creditSale, settings, 'INVOICE');
+    doc.autoPrint();
+    window.open(doc.output('bloburl'), '_blank');
+}
+
+export async function generateDebtPaymentReceiptPDF(receipt, settings) {
+    const doc = await buildDebtPaymentDocument(receipt, settings);
+    doc.save(`debt-payment-receipt-${Date.now()}.pdf`);
+}
+
+export async function printDebtPaymentReceipt(receipt, settings) {
+    const doc = await buildDebtPaymentDocument(receipt, settings);
+    doc.autoPrint();
+    window.open(doc.output('bloburl'), '_blank');
+}
+
+// FIX (Part 24 — centralize WhatsApp deep-link construction): phone
+// normalization and wa.me URL building used to live here directly; they
+// now live in ./whatsapp.js so every WhatsApp-sharing feature (sale
+// receipts, debt reminders, debt payment receipts) shares one
+// implementation. Callers of this function are unchanged.
+export function sendWhatsAppDocument(sale, settings, phone) {
+    const message = buildReceiptMessage({
+        shopName: settings.shopName || 'FlowBiz Store',
+        customerName: sale.customerName,
+        productName: sale.productName,
+        quantity: sale.quantity,
+        totalAmount: sale.totalAmount,
+        isCredit: sale.isCredit,
+        remainingBalance: sale.remainingBalance ?? sale.totalAmount,
+        businessPhone: settings.phone,
+        formatKES,
+    });
+    const opened = openWhatsApp(phone, message);
+    if (!opened) throw new Error('Enter a valid phone number.');
+}
+````
+
+## File: src/pages/CustomerDetail.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { where, orderBy, doc, writeBatch, increment, getDoc, serverTimestamp, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Receipt, Banknote, Smartphone, Undo2 } from 'lucide-react';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import RepaymentModal from '../components/debtors/RepaymentModal';
+import RefundModal from '../components/debtors/RefundModal';
+import DebtPaymentReceiptModal from '../components/debtors/DebtPaymentReceiptModal';
+import { formatKES } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function CustomerDetail() {
+  const { customerId } = useParams();
+  const { profile, isAdmin, businessId } = useAuth();
+
+  const customerQ   = useMemo(() => businessId ? tenantQuery('customers', businessId, where('__name__','==',customerId)) : null, [customerId, businessId]);
+  const creditQ     = useMemo(() => businessId ? tenantQuery('creditSales', businessId, where('customerId','==',customerId)) : null, [customerId, businessId]);
+  const repaymentsQ = useMemo(() => businessId ? tenantQuery('repayments', businessId, where('customerId','==',customerId), orderBy('paidAt','desc')) : null, [customerId, businessId]);
+
+  const { data: customerData, loading: custLoad } = useFirestoreCollection(customerQ);
+  const { data: creditSales, loading: credLoad, error } = useFirestoreCollection(creditQ);
+  const { data: repayments } = useFirestoreCollection(repaymentsQ);
+  
+  const [repayOpen, setRepayOpen]       = useState(false);
+  const [cancelTarget, setCancelTarget] = useState(null);
+  const [refundTarget, setRefundTarget] = useState(null);
+  const [receiptData, setReceiptData]   = useState(null);
+
+  const customer = customerData[0];
+  const sorted = [...creditSales].sort((a,b) => (b.soldAt?.toMillis?.() ?? 0) - (a.soldAt?.toMillis?.() ?? 0));
+  const totalOwed = creditSales
+    .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded')
+    .reduce((acc,cs) => acc + (Number(cs.remainingBalance) || 0), 0);
+
+  const displayName = customer?.name || creditSales[0]?.customerName || 'Unknown Customer';
+  const displayPhone = customer?.phone || creditSales[0]?.customerPhone || '';
+
+  // A debt payment is a payment against existing debt — it updates the
+  // credit sale(s) it applies to and nothing else. It never creates a new
+  // sale or a second financial transaction (Part 28). If the customer has
+  // more than one open credit sale, a single payment can span several of
+  // them (oldest first, unchanged from the app's existing allocation
+  // rule) — the receipt below reflects the payment at the customer level
+  // (previous total owed → new total owed), with each sale's own
+  // reference number kept for traceability (Part 18/19).
+  const handleRepayment = async ({ amount, method, mpesaCode }) => {
+    const openSales = [...creditSales]
+      .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded' && (Number(cs.remainingBalance) || 0) > 0.005)
+      .sort((a,b) => (a.soldAt?.toMillis?.() ?? 0) - (b.soldAt?.toMillis?.() ?? 0));
+
+    if (!openSales.length) { toast.error('No outstanding balance.'); return; }
+
+    const previousBalance = totalOwed;
+
+    try {
+      const batch = writeBatch(db);
+      let remaining = amount;
+      const paymentReferences = [];
+
+      for (const cs of openSales) {
+        if (remaining <= 0.005) break;
+        const owed    = Number(cs.remainingBalance) || 0;
+        const portion = Math.min(owed, remaining);
+        remaining    -= portion;
+        const newPaid = (Number(cs.amountPaid) || 0) + portion;
+        const newBal  = owed - portion;
+        batch.update(doc(db,'creditSales',cs.id), { amountPaid: newPaid, remainingBalance: newBal, status: newBal <= 0.005 ? 'paid' : 'partial' });
+
+        const repRef = doc(collection(db,'repayments'));
+        // Reuses Firestore's own unique doc id for traceability rather than
+        // introducing a second, parallel counter/ID system (Part 18) —
+        // adapted to this app's existing ID conventions rather than
+        // literally implementing PAY-000381-style sequential numbering.
+        const paymentReference = `PAY-${repRef.id.slice(-6).toUpperCase()}`;
+        paymentReferences.push(paymentReference);
+        batch.set(repRef, {
+          businessId,
+          creditSaleId: cs.id,
+          customerId: cs.customerId,
+          customerName: cs.customerName,
+          productName: cs.productName,
+          amount: portion,
+          method,
+          mpesaCode: mpesaCode || null,
+          paymentReference,
+          paidAt: serverTimestamp(),
+          recordedBy: profile.uid,
+          recordedByName: profile.displayName,
+        });
+      }
+
+      const commit = batch.commit();
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : `Recorded ${formatKES(amount)} repayment`);
+      if (queuedOffline) commit.catch((err) => toast.error(`A repayment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+
+      const newTotalOwed = Math.max(0, previousBalance - amount);
+      setReceiptData({
+        customerName: displayName,
+        customerPhone: displayPhone,
+        amountPaid: amount,
+        previousBalance,
+        remainingBalance: newTotalOwed,
+        isCleared: newTotalOwed <= 0.005,
+        method,
+        mpesaCode,
+        paidAt: new Date(),
+        paymentReferences,
+      });
+    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
+  };
+
+  const handleCancel = async (cs) => {
+    setCancelTarget(null);
+    try {
+      const batch = writeBatch(db);
+      const prodRef = doc(db,'products',cs.productId);
+      const prodSnap = await getDoc(prodRef);
+      if (prodSnap.exists()) {
+        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
+      }
+      batch.update(doc(db,'creditSales',cs.id), {
+        status: 'cancelled', remainingBalance: 0,
+        cancelledAt: serverTimestamp(), cancelledBy: profile.uid,
+      });
+      await batch.commit();
+      toast.success('Credit sale cancelled and stock restored.');
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+  };
+
+  const handleRefund = async (cs, { method }) => {
+    try {
+      const batch = writeBatch(db);
+      const prodRef = doc(db,'products',cs.productId);
+      const prodSnap = await getDoc(prodRef);
+      if (prodSnap.exists()) {
+        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
+      }
+      batch.update(doc(db,'creditSales',cs.id), {
+        status: 'refunded', remainingBalance: 0,
+        refundedAt: serverTimestamp(), refundedBy: profile.uid,
+      });
+      const refundRef = doc(collection(db,'refunds'));
+      batch.set(refundRef, {
+        businessId,
+        creditSaleId: cs.id, customerId: cs.customerId, customerName: cs.customerName,
+        productName: cs.productName, amount: Number(cs.amountPaid) || 0, method,
+        refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName,
+      });
+      await batch.commit();
+      toast.success('Sale refunded and stock restored.');
+      setRefundTarget(null);
+    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
+  };
+
+  if (custLoad || credLoad) return <LoadingSpinner />;
+  if (error) return <ErrorBanner message={`Could not load data. ${error}`} />;
+  if (!customer && creditSales.length === 0) return <EmptyState title="Customer not found" />;
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4">
+      <Link to="/customers" className="text-sm font-semibold text-ink-400 hover:text-ink-700">← Back to Customers</Link>
+      <div className="card flex flex-wrap items-center justify-between gap-3 p-5">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">{displayName}</h1>
+          <p className="text-sm text-ink-400">{displayPhone || 'No phone'}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-xs text-ink-400">Outstanding Debt</p>
+          <p className={`font-display text-xl font-bold ${totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>{formatKES(totalOwed)}</p>
+        </div>
+      </div>
+      <button className="btn-primary w-full sm:w-auto" disabled={totalOwed <= 0} onClick={() => setRepayOpen(true)}>
+        <Receipt className="h-4 w-4" strokeWidth={1.75}/> Record repayment
+      </button>
+
+      {sorted.length > 0 && (
+        <div className="card p-4">
+          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Credit purchases</h2>
+          <div className="divide-y divide-ink-100">
+            {sorted.map(cs => {
+              const reversed = cs.status === 'cancelled' || cs.status === 'refunded';
+              return (
+                <div key={cs.id} className={`flex items-center justify-between gap-2 py-2.5 text-sm ${reversed ? 'opacity-50' : ''}`}>
+                  <div>
+                    <p className="font-medium text-ink-700">{cs.quantity} × {cs.productName}</p>
+                    <p className="text-xs text-ink-400">{formatDateTime(cs.soldAt)}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-right">
+                      <p className={`font-semibold ${reversed ? 'line-through text-ink-400' : 'text-ink-800'}`}>{formatKES(cs.totalAmount)}</p>
+                      <span className={`badge ${cs.status === 'paid' ? 'bg-moss-100 text-moss-700' : cs.status === 'partial' ? 'bg-rust-100 text-rust-700' : 'bg-ink-100 text-ink-500'}`}>{cs.status}</span>
+                    </div>
+                    {isAdmin && !reversed && (
+                      <button
+                        className="rounded-lg p-2 text-ink-400 hover:bg-ink-100"
+                        title={Number(cs.amountPaid) > 0.005 ? 'Refund this sale' : 'Cancel this sale'}
+                        onClick={() => (Number(cs.amountPaid) > 0.005 ? setRefundTarget(cs) : setCancelTarget(cs))}
+                      >
+                        <Undo2 className="h-4 w-4" strokeWidth={1.75}/>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      
+      {repayments.length > 0 && (
+        <div className="card p-4">
+          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Repayment history</h2>
+          <div className="divide-y divide-ink-100">
+            {repayments.map(r => (
+              <div key={r.id} className="flex items-center justify-between py-2.5 text-sm">
+                <div>
+                  <p className="font-medium text-ink-700">{r.method === 'Cash' ? <><Banknote className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>Cash</> : <><Smartphone className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>M-Pesa {r.mpesaCode ? `(${r.mpesaCode})` : ''}</>}</p>
+                  <p className="text-xs text-ink-400">
+                    {formatDateTime(r.paidAt)}{r.paymentReference ? ` · ${r.paymentReference}` : ''}
+                  </p>
+                </div>
+                <span className="font-semibold text-moss-700">{formatKES(r.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <RepaymentModal open={repayOpen} customer={{ name: displayName }} totalOwed={totalOwed} onClose={() => setRepayOpen(false)} onSubmit={handleRepayment} />
+      <RefundModal open={!!refundTarget} creditSale={refundTarget} onClose={() => setRefundTarget(null)} onSubmit={(opts) => handleRefund(refundTarget, opts)} />
+      <DebtPaymentReceiptModal open={!!receiptData} receipt={receiptData} onClose={() => setReceiptData(null)} />
+      <ConfirmDialog
+        open={!!cancelTarget}
+        title="Cancel this credit sale?"
+        message={`"${cancelTarget?.productName}" (×${cancelTarget?.quantity}) will be cancelled and stock restored. Nothing has been paid on this sale yet.`}
+        confirmLabel="Cancel sale"
+        danger
+        onConfirm={() => handleCancel(cancelTarget)}
+        onCancel={() => setCancelTarget(null)}
+      />
     </div>
   );
 }
@@ -9819,6 +10313,191 @@ const handleSupplierSave = async (supplierData) => {
 }
 ````
 
+## File: src/pages/Products.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { Pencil, Trash2, TrendingUp } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Products() {
+  const { businessId } = useAuth();
+  const productsQ = useMemo(
+    () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
+    [businessId]
+  );
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const { data: products, loading, error } = useFirestoreCollection(productsQ);
+  const { data: suppliers } = useFirestoreCollection(suppliersQ);
+  
+  const [search, setSearch] = useState('');
+  const [modal, setModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [pendingDel, setPendingDel] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanFoundProduct, setScanFoundProduct] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+
+  const filtered = products.filter(
+    (p) =>
+      p.name.toLowerCase().includes(search.toLowerCase()) ||
+      p.category.toLowerCase().includes(search.toLowerCase()) ||
+      (p.barcode && p.barcode.includes(search.trim())) ||
+      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  );
+  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
+
+  const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
+
+const handleSave = async (data) => {
+    try {
+      if (editing) {
+        const { queuedOffline } = await updateProduct(editing.id, data, editing.barcode, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
+      } else {
+        const { queuedOffline } = await createProduct(data, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      }
+      closeFormModal();
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+  };
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+const handleDel = async () => {
+    setDeleting(true);
+    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id, pendingDel.barcode, businessId), 4000);
+    setDeleting(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
+    setPendingDel(null);
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setScanFoundProduct(found);
+    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
+  };
+
+  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
+        <div className="flex gap-2">
+          <Link to="/inventory-intelligence" className="btn-outline">
+            <TrendingUp className="h-4 w-4" /> Intelligence
+          </Link>
+          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
+        </div>
+      </div>
+      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <ErrorBanner message={error} />
+      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
+        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
+      ) : (
+        <>
+          <div className="space-y-2.5 sm:hidden">
+            {filtered.map((p) => (
+              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
+                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
+                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
+                  </div>
+                </div>
+              <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
+                <div className="space-x-3">
+                  <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
+                  <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
+                </div>
+                <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
+              </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden sm:block card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
+                </thead>
+                <tbody className="divide-y divide-ink-100">
+                  {filtered.map((p) => (
+                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
+                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
+                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
+                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
+                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
+                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
+                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1">
+                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
+          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
+        </div>
+      </Modal>
+
+<ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+<ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    </div>
+  );
+}
+````
+
 ## File: src/pages/Purchases.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -10018,7 +10697,7 @@ import toast from 'react-hot-toast';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { resetBusinessData } from '../utils/businessReset';
-import { restoreProduct, permanentlyDeleteProduct, cleanupOrphanedBarcodeIndexes } from '../utils/products';
+import { restoreProduct, permanentlyDeleteProduct } from '../utils/products';
 import { isDemoMode } from '../demo/demoMode';
 import { resetDemoData } from '../demo/seedData';
 import { formatDateTime } from '../utils/dateRanges';
@@ -10193,9 +10872,15 @@ const handleSavePermissions = async () => {
     } catch (err) { toast.error(err.message); }
   };
 
-  const handleRestore = async (productId) => {
-    try { await restoreProduct(productId); setArchived(a => a.filter(p => p.id !== productId)); toast.success('Product restored'); }
-    catch (err) { toast.error(err.message); }
+const handleRestore = async (productId) => {
+    const target = archived.find(p => p.id === productId);
+    try {
+      const { barcodeCleared } = await restoreProduct(productId, target?.barcode, businessId);
+      setArchived(a => a.filter(p => p.id !== productId));
+      toast.success(barcodeCleared
+        ? 'Product restored — its old barcode is now used by another product, so it was cleared. Add a new one from Products if needed.'
+        : 'Product restored');
+    } catch (err) { toast.error(err.message); }
   };
 
   const handlePermanentDelete = async (productId) => {
@@ -10205,18 +10890,6 @@ const handleSavePermissions = async () => {
       setArchived(a => a.filter(p => p.id !== productId));
       toast.success('Product permanently deleted');
     } catch (err) { toast.error(err.message); }
-  };
-
-  const [cleaningOrphans, setCleaningOrphans] = useState(false);
-  const handleCleanupOrphans = async () => {
-    setCleaningOrphans(true);
-    try {
-      const { scanned, removed } = await cleanupOrphanedBarcodeIndexes(businessId);
-      toast.success(removed > 0
-        ? `Checked ${scanned} barcode record(s), freed ${removed} orphaned barcode(s).`
-        : `Checked ${scanned} barcode record(s) — none were orphaned.`);
-    } catch (err) { toast.error(err.message); }
-    finally { setCleaningOrphans(false); }
   };
 
   if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
@@ -10304,9 +10977,7 @@ const handleSavePermissions = async () => {
         <div className="flex items-center justify-between">
           <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
           <div className="flex gap-2">
-            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={handleCleanupOrphans} disabled={cleaningOrphans}>
-              {cleaningOrphans ? 'Checking…' : 'Clean Up Orphaned Barcodes'}
-            </button>
+
             <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
               {archivedOpen ? 'Hide' : 'View archive'}
             </button>

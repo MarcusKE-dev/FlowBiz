@@ -11,8 +11,8 @@ export default function Pro() {
   const { isPro, subscription } = useAuth();
   const [loading, setLoading] = useState(false);
 
-  // FIX: Shifted from missing Firebase Function to the existing Cloudflare Worker API
-const handleSubscribe = async () => {
+  const handleSubscribe = async () => {
+    if (loading) return; 
     setLoading(true);
     try {
       const idToken = await auth.currentUser.getIdToken(true);
@@ -29,13 +29,12 @@ const handleSubscribe = async () => {
           onCancel: () => toast('Payment cancelled.'),
         });
       } else if (data?.authorization_url) {
-        // Fallback if the Paystack script hasn't loaded yet.
         window.location.href = data.authorization_url;
       } else {
         toast.error(data?.error || "Couldn't initialize payment. Please try again.");
       }
     } catch (err) {
-      toast.error(friendlyErrorMessage(err, { fallback: 'Payment initiation failed.' }));
+      toast.error(friendlyErrorMessage(err, { fallback: 'Unable to load the payment page. Please check your connection and try again.' }));
     } finally {
       setLoading(false);
     }
@@ -63,7 +62,12 @@ const handleSubscribe = async () => {
           </div>
         ) : (
           <button onClick={handleSubscribe} disabled={loading} className="mt-6 btn-primary px-8 py-3 text-lg">
-            {loading ? 'Initializing Payment...' : 'Pay KSh 599'}
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                Loading payment page...
+              </span>
+            ) : 'Pay KSh 599'}
           </button>
         )}
       </div>

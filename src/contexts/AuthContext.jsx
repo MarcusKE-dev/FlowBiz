@@ -66,7 +66,7 @@ export function AuthProvider({ children }) {
     businessUnsubRef.current = null;
   }, []);
 
-  const registerSession = useCallback(async (uid, businessId) => {
+  const registerSession = useCallback(async (uid, businessId, userName) => {
     const sessionId = getDeviceId();
     const ref = doc(db, 'sessions', sessionId);
     const currentSnap = await getDoc(ref);
@@ -75,6 +75,7 @@ export function AuthProvider({ children }) {
       await setDoc(ref, {
         uid,
         businessId,
+        lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
         deviceLabel: guessDeviceLabel(),
         userAgent: navigator.userAgent,
         lastActiveAt: serverTimestamp(),
@@ -83,9 +84,13 @@ export function AuthProvider({ children }) {
       });
     } else {
       await updateDoc(ref, {
+        uid,
+        businessId,
+        lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
         lastActiveAt: serverTimestamp(),
         deviceLabel: guessDeviceLabel(),
         userAgent: navigator.userAgent,
+        revoked: false, 
       }).catch(() => {});
     }
 
@@ -97,7 +102,20 @@ export function AuthProvider({ children }) {
     });
   }, []);
 
-  const loadProfile = useCallback((user, retryCount = 0) => {
+  // Background heartbeat to keep the "last seen" time accurate for active devices
+  useEffect(() => {
+    if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        const ref = doc(db, 'sessions', getDeviceId());
+        updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
+      }
+    }, 15 * 60 * 1000); // 15 mins
+    return () => clearInterval(interval);
+  }, [firebaseUser, profile?.businessId, sessionRevoked]);
+
+  // FIX: Used a named function 'doLoad' to resolve the recursive ESLint error
+  const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
     stopListeners();
     setAuthError(null);
     setAccountRemoved(false);
@@ -141,7 +159,7 @@ export function AuthProvider({ children }) {
         setLoading(false);
 
         if (data.businessId) {
-          registerSession(user.uid, data.businessId).catch(console.error);
+          registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
           businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
             if (bizSnap.exists()) {
               setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
@@ -150,22 +168,11 @@ export function AuthProvider({ children }) {
         }
       },
       (err) => {
-        // FIX: right after createUserWithEmailAndPassword (or any fresh
-        // sign-in), Firestore's listener can attach a beat before the
-        // fresh ID token is fully live on this connection, producing a
-        // ONE-TIME permission-denied even though the rules and the
-        // document are both completely fine. Firestore does not
-        // auto-retry a listener after an explicit permission-denied (it
-        // does retry plain network errors), so without this the app was
-        // permanently stuck on "Profile unavailable" right after a
-        // successful signup — even though the account and business were
-        // created correctly. Auto-retry a few times with backoff before
-        // ever surfacing this as a real error.
         if (err.code === 'permission-denied' && retryCount < 3) {
           const delay = 700 * (retryCount + 1);
-          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying in ${delay}ms (attempt ${retryCount + 1}/3)`);
+          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying`);
           setTimeout(() => {
-            if (auth.currentUser?.uid === user.uid) loadProfile(user, retryCount + 1);
+            if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
           }, delay);
           return;
         }
@@ -187,6 +194,7 @@ export function AuthProvider({ children }) {
 
   const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
   const logout = () => { stopListeners(); return fbSignOut(auth); };
+  
   const resendVerificationEmail = async () => {
     if (!auth.currentUser) throw new Error('Not signed in.');
     await sendEmailVerification(auth.currentUser, {
@@ -255,7 +263,7 @@ export function AuthProvider({ children }) {
         body: JSON.stringify({ targetUid: uid }),
       });
     } catch (networkErr) {
-      throw new Error(`Failed to reach the API server. Ensure your Cloudflare Worker is deployed and VITE_FLOWBIZ_API_URL is correctly set. [${networkErr.message}]`);
+      throw new Error(`Failed to reach the API server. Check your connection.`);
     }
 
     let result = null;
@@ -298,8 +306,15 @@ export function AuthProvider({ children }) {
   };
 
   const isOwner = profile?.role === 'owner';
-  const isPro = subscription?.plan === 'pro' && subscription?.status === 'active' &&
-                (!subscription.expiresAt || (subscription.expiresAt.toMillis ? subscription.expiresAt.toMillis() : subscription.expiresAt) > Date.now());
+  
+  // FIX: Explicitly convert Timestamp to milliseconds to satisfy strict linters
+  const expiresMs = subscription?.expiresAt?.toMillis 
+    ? subscription.expiresAt.toMillis() 
+    : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
+
+  const isPro = subscription?.plan === 'pro' && 
+                subscription?.status === 'active' &&
+                (!subscription.expiresAt || expiresMs > Date.now());
 
   return (
     <AuthContext.Provider

@@ -1,26 +1,26 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { orderBy, addDoc, serverTimestamp } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { UserPlus, MessageCircle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { tenantQuery } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { useSettings } from '../hooks/useSettings';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
 import AddCustomerModal from '../components/customers/AddCustomerModal';
+import { createCustomer } from '../utils/customers';
 import { formatKES } from '../utils/currency';
 import { formatDate } from '../utils/dateRanges';
 import { openWhatsApp, buildDebtReminderMessage, isValidWhatsAppPhone } from '../utils/whatsapp';
-import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
 
 export default function Customers() {
   const { businessId, isPro } = useAuth();
   const { settings } = useSettings();
 
-  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  // Removing orderBy('name') which causes silent listener failures without a composite index.
+  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId) : null, [businessId]);
   const creditQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
 
   const { data: customers, loading: custLoading } = useFirestoreCollection(customersQ);
@@ -29,11 +29,6 @@ export default function Customers() {
   const [search, setSearch] = useState('');
   const [addModalOpen, setAddModalOpen] = useState(false);
 
-  // Customers shown here come from two sources: customers created
-  // directly (Part 1) and customers implied by a past credit sale that
-  // predates this feature. Both resolve to ONE canonical entry keyed by
-  // customerId — a credit sale never creates a second record for a
-  // customer that already has one (Part 3).
   const customerList = useMemo(() => {
     const map = {};
     for (const c of customers) {
@@ -62,15 +57,13 @@ export default function Customers() {
   const totalOut = customerList.reduce((acc, d) => acc + d.totalOwed, 0);
 
   const handleAddCustomer = async ({ name, phone }) => {
-    const write = addDoc(tenantCollection('customers'), withBusiness({
-      name, phone: phone || '', email: '', address: '', notes: '', createdAt: serverTimestamp(),
-    }, businessId));
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-    if (error) {
+    try {
+      const { queuedOffline } = await createCustomer({ name, phone }, businessId);
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Customer saved successfully.');
+      setAddModalOpen(false);
+    } catch (error) {
       toast.error(friendlyErrorMessage(error, { fallback: 'Unable to save customer. Please try again.' }));
-      throw error;
     }
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Customer saved successfully.');
   };
 
   const handleSendReminder = (d) => {
@@ -104,7 +97,6 @@ export default function Customers() {
           type="button"
           onClick={() => setAddModalOpen(true)}
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-600 shadow-sm hover:bg-ink-50 active:bg-ink-100"
-          aria-label="Add customer"
           title="Add customer"
         >
           <UserPlus className="h-5 w-5" strokeWidth={1.75} />
@@ -116,27 +108,31 @@ export default function Customers() {
       ) : (
         <div className="space-y-2">
           {customerList.map(d => (
-            <div key={d.customerId} className="card flex items-center justify-between gap-2 p-4 hover:shadow-md">
-              <Link to={`/customers/${d.customerId}`} className="min-w-0 flex-1">
-                <p className="font-semibold text-ink-800 truncate">{d.name}</p>
-                <p className="text-xs text-ink-400">{d.phone || 'No phone'} · {d.purchaseCount} purchase{d.purchaseCount !== 1 ? 's' : ''} {d.lastPurchase ? `· last ${formatDate(d.lastPurchase)}` : ''}</p>
-              </Link>
-              <div className="flex items-center gap-2 shrink-0">
-                {d.totalOwed > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => handleSendReminder(d)}
-                    className="flex items-center gap-1 rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-semibold text-ink-600 hover:bg-ink-50"
-                    title={isPro ? 'Send reminder via WhatsApp' : 'FlowBiz Pro feature'}
-                  >
-                    <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
-                    Remind{!isPro && <span className="text-amber-600"> · PRO</span>}
-                  </button>
-                )}
-                <Link to={`/customers/${d.customerId}`} className={`font-display text-base font-bold ${d.totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>
-                  {d.totalOwed > 0 ? formatKES(d.totalOwed) : 'Paid'}
+            <div key={d.customerId} className="card flex flex-col p-4 hover:shadow-md gap-2">
+              <div className="flex items-start justify-between gap-2">
+                <Link to={`/customers/${d.customerId}`} className="min-w-0 flex-1">
+                  <p className="font-semibold text-ink-800 truncate">{d.name}</p>
+                  <p className="text-xs text-ink-400">{d.phone || 'No phone'} · {d.purchaseCount} purchase{d.purchaseCount !== 1 ? 's' : ''} {d.lastPurchase ? `· last ${formatDate(d.lastPurchase)}` : ''}</p>
                 </Link>
+                <div className="text-right shrink-0">
+                  <Link to={`/customers/${d.customerId}`} className={`font-display text-base font-bold ${d.totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>
+                    {d.totalOwed > 0 ? formatKES(d.totalOwed) : (d.purchaseCount > 0 ? 'Paid' : 'No history')}
+                  </Link>
+                </div>
               </div>
+              {d.totalOwed > 0 && (
+                 <div className="flex justify-end border-t border-ink-100 pt-2 mt-1">
+                    <button
+                      type="button"
+                      onClick={() => handleSendReminder(d)}
+                      className="flex items-center gap-1.5 rounded-lg border border-ink-200 px-3 py-1.5 text-xs font-semibold text-ink-600 hover:bg-ink-50"
+                      title={isPro ? 'Send reminder via WhatsApp' : 'FlowBiz Pro feature'}
+                    >
+                      <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
+                      Send reminder{!isPro && <span className="text-amber-600"> · PRO</span>}
+                    </button>
+                 </div>
+              )}
             </div>
           ))}
         </div>

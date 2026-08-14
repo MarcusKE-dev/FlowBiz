@@ -23,6 +23,7 @@ export default function StockTake() {
   const [confirm, setConfirm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [selectedProductId, setSelectedProductId] = useState(null);
   const rowRefs = useRef({});
 
   const getPhysical = (p) => (counts[p.id] !== undefined && counts[p.id] !== '' ? counts[p.id] : p.stock);
@@ -99,7 +100,7 @@ export default function StockTake() {
         {products.map((p) => {
           const diff = diffFor(p);
           return (
-            <div key={p.id} ref={(el) => { rowRefs.current[p.id] = el; }} className={`card p-4 space-y-3 ${diff !== 0 ? 'border-rust-200 bg-rust-50/20' : ''}`}>
+            <div key={p.id} ref={(el) => { rowRefs.current[p.id] = el; }} className={`card p-4 space-y-3 transition-colors ${selectedProductId === p.id ? 'border-moss-500 bg-moss-50 shadow-md ring-1 ring-moss-500' : (diff !== 0 ? 'border-rust-200 bg-rust-50/20' : '')}`}>
               <div className="flex items-center justify-between gap-2">
                 <span className="font-semibold text-ink-800">{p.name}</span>
                 <span className="badge bg-ink-100 text-ink-600 text-xs">System: {p.stock}</span>
@@ -107,7 +108,7 @@ export default function StockTake() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="label">Physical count</label>
-                  <input id={`stocktake-count-mobile-${p.id}`} type="number" min="0" className="input !py-2" value={counts[p.id] ?? ''} placeholder={String(p.stock)} onChange={(e) => setCounts((c) => ({ ...c, [p.id]: e.target.value }))} />
+                  <input id={`stocktake-count-mobile-${p.id}`} type="number" min="0" className="input !py-2" value={counts[p.id] ?? ''} placeholder={String(p.stock)} onFocus={() => setSelectedProductId(p.id)} onBlur={() => setSelectedProductId(null)} onChange={(e) => setCounts((c) => ({ ...c, [p.id]: e.target.value }))} />
                 </div>
                 <div>
                   <label className="label">Difference</label>
@@ -137,11 +138,11 @@ export default function StockTake() {
               {products.map((p) => {
                 const diff = diffFor(p);
                 return (
-                  <tr key={p.id} ref={(el) => { rowRefs.current[p.id] = el; }} className={diff !== 0 ? 'bg-rust-50/30' : ''}>
+                  <tr key={p.id} ref={(el) => { rowRefs.current[p.id] = el; }} className={`transition-colors ${selectedProductId === p.id ? 'bg-moss-50 shadow-inner' : (diff !== 0 ? 'bg-rust-50/30' : '')}`}>
                     <td className="px-4 py-3 font-medium text-ink-800">{p.name}</td>
                     <td className="px-4 py-3 text-ink-500">{p.stock}</td>
                     <td className="px-4 py-3">
-                      <input id={`stocktake-count-${p.id}`} type="number" min="0" className="input !w-24 !py-1.5" value={counts[p.id] ?? ''} placeholder={String(p.stock)} onChange={(e) => setCounts((c) => ({ ...c, [p.id]: e.target.value }))} />
+                      <input id={`stocktake-count-${p.id}`} type="number" min="0" className="input !w-24 !py-1.5" value={counts[p.id] ?? ''} placeholder={String(p.stock)} onFocus={() => setSelectedProductId(p.id)} onBlur={() => setSelectedProductId(null)} onChange={(e) => setCounts((c) => ({ ...c, [p.id]: e.target.value }))} />
                     </td>
                     <td className={`px-4 py-3 font-semibold ${diff < 0 ? 'text-rust-600' : diff > 0 ? 'text-moss-600' : 'text-ink-300'}`}>
                       {diff !== 0 ? (diff > 0 ? `+${diff}` : diff) : '—'}

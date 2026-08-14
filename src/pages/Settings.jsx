@@ -15,7 +15,8 @@ import { raceWithTimeout } from '../utils/offlineWrite';
 const RESET_CONFIRM_PHRASE = 'RESET';
 
 export default function Settings() {
-  const { profile, businessId, isOwner, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, subscription } = useAuth();
+  // FIX: Removed unused 'isOwner' and 'subscription' variables from extraction
+  const { profile, businessId, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro } = useAuth();
   const demo = isDemoMode();
   const [loading, setLoading]     = useState(true);
   
@@ -42,36 +43,36 @@ export default function Settings() {
 
   const settingsRef = businessId ? doc(db, 'businessSettings', businessId) : null;
 
-  
   function compressImage(file, maxDimension = 480, quality = 0.75) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob((blob) => {
-        if (!blob) { reject(new Error('Could not process image.')); return; }
-        resolve(blob);
-      }, 'image/jpeg', quality);
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
-    img.src = url;
-  });
-}
-function blobToDataUrl(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (!blob) { reject(new Error('Could not process image.')); return; }
+          resolve(blob);
+        }, 'image/jpeg', quality);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
+      img.src = url;
+    });
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
 
   useEffect(() => {
     if (!settingsRef) return;
@@ -105,7 +106,7 @@ function blobToDataUrl(blob) {
     }
   };
 
-const handleSave = async e => {
+  const handleSave = async e => {
     e.preventDefault(); 
     setSaving(true);
     try {
@@ -145,7 +146,7 @@ const handleSave = async e => {
     }
   };
 
-const handleSavePermissions = async () => {
+  const handleSavePermissions = async () => {
     setSavingPermissions(true);
     const write = setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
     const { queuedOffline, error } = await raceWithTimeout(write, 4000);
@@ -180,7 +181,7 @@ const handleSavePermissions = async () => {
     } catch (err) { toast.error(err.message); }
   };
 
-const handleRestore = async (productId) => {
+  const handleRestore = async (productId) => {
     const target = archived.find(p => p.id === productId);
     try {
       const { barcodeCleared } = await restoreProduct(productId, target?.barcode, businessId);
@@ -234,7 +235,7 @@ const handleRestore = async (productId) => {
           </div>
         </div>
 
-<button type="submit" className="btn-primary w-full" disabled={saving}>{saving?'Saving…':'Save settings'}</button>
+        <button type="submit" className="btn-primary w-full" disabled={saving}>{saving?'Saving…':'Save settings'}</button>
       </form>
 
       <div className="card p-5 space-y-3">
@@ -258,24 +259,44 @@ const handleRestore = async (productId) => {
 
       {!demo && (
         <div className="card p-5 space-y-3">
-          <h2 className="font-display text-base font-bold text-ink-800">Device Management</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="font-display text-base font-bold text-ink-800">Logged-in Devices</h2>
+          </div>
+          <p className="text-sm text-ink-500 mb-2">Devices currently or recently associated with your business.</p>
           {sessionsLoading ? <p className="text-sm text-ink-400">Loading…</p> : sessions.length === 0 ? (
             <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
           ) : (
             <div className="divide-y divide-ink-100">
-              {sessions.map(s => (
-                <div key={s.id} className="flex items-center justify-between py-2.5 text-sm">
-                  <div>
-                    <p className="font-medium text-ink-700">{s.deviceLabel}{s.id === currentSessionId && <span className="text-xs text-ink-400"> (this device)</span>}</p>
-                    <p className="text-xs text-ink-400">Last active {formatDateTime(s.lastActiveAt)}</p>
+              {sessions.sort((a,b) => (b.lastActiveAt?.toMillis?.() ?? 0) - (a.lastActiveAt?.toMillis?.() ?? 0)).map(s => {
+                const isCurrent = s.id === currentSessionId;
+                
+                // FIX: Explicitly parsing Timestamps to numbers to satisfy strict linters
+                const lastActiveMs = s.lastActiveAt?.toMillis 
+                  ? s.lastActiveAt.toMillis() 
+                  : (s.lastActiveAt ? new Date(s.lastActiveAt).getTime() : 0);
+                
+                const isActiveNow = isCurrent || (Date.now() - lastActiveMs < 20 * 60 * 1000);
+                
+                return (
+                <div key={s.id} className="flex items-center justify-between py-3 text-sm">
+                  <div className="min-w-0 pr-3">
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                      <p className="font-semibold text-ink-800 truncate">{s.deviceLabel}</p>
+                      {isCurrent && <span className="badge bg-ink-900 text-white border border-ink-900 shrink-0">This device</span>}
+                      {!isCurrent && isActiveNow && !s.revoked && <span className="badge bg-moss-50 text-moss-700 border border-moss-200 shrink-0">Active</span>}
+                      {!isCurrent && !isActiveNow && !s.revoked && <span className="badge bg-ink-50 text-ink-600 border border-ink-200 shrink-0">Inactive</span>}
+                    </div>
+                    <p className="text-[11px] text-ink-500 truncate">
+                      <span className="font-medium text-ink-700">{s.lastUserName || 'Unknown User'}</span> &middot; {isActiveNow ? 'Last seen: Just now' : `Last seen: ${formatDateTime(s.lastActiveAt)}`}
+                    </p>
                   </div>
                   {s.revoked ? (
-                    <span className="badge bg-ink-100 text-ink-500">Signed out</span>
+                    <span className="badge bg-rust-50 text-rust-600 border border-rust-200 shrink-0">Signed out</span>
                   ) : (
-                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRevoke(s.id)}>Sign out</button>
+                    !isCurrent && <button className="btn-outline !px-3 !py-1.5 !min-h-0 text-xs shrink-0" onClick={() => handleRevoke(s.id)}>Sign out</button>
                   )}
                 </div>
-              ))}
+              )})}
             </div>
           )}
         </div>
@@ -320,7 +341,7 @@ const handleRestore = async (productId) => {
       </div>
 
       <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Support</h2>
+        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Guide</h2>
         <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
       </div>
 
@@ -336,6 +357,16 @@ const handleRestore = async (productId) => {
         <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
           {demo ? 'Demo Reset' : 'Business Reset'}
         </button>
+      </div>
+
+      {/* Legal & Privacy Section pushed securely to the bottom */}
+      <div className="pt-6 pb-2 text-center space-y-3">
+        <div className="flex items-center justify-center gap-4 text-sm font-semibold">
+          <Link to="/privacy" className="text-ink-500 hover:text-ink-800 transition-colors">Privacy Policy</Link>
+          <span className="text-ink-300">&middot;</span>
+          <Link to="/terms" className="text-ink-500 hover:text-ink-800 transition-colors">Terms of Service</Link>
+        </div>
+        <p className="text-xs text-ink-400">FlowBiz ensures all data handling complies with Kenyan Data Protection Act.</p>
       </div>
 
       <ConfirmDialog

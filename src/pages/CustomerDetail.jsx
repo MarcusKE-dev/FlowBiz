@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { where, orderBy, doc, writeBatch, increment, getDoc, serverTimestamp, collection } from 'firebase/firestore';
+import { documentId, where, orderBy, doc, writeBatch, increment, getDoc, serverTimestamp, collection } from 'firebase/firestore';
 import toast from 'react-hot-toast';
-import { Receipt, Banknote, Smartphone, Undo2 } from 'lucide-react';
+import { Receipt, Banknote, Smartphone, Undo2, Pencil } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { tenantQuery } from '../lib/tenant';
+import { updateCustomer } from '../utils/customers';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
@@ -14,6 +15,7 @@ import ConfirmDialog from '../components/common/ConfirmDialog';
 import RepaymentModal from '../components/debtors/RepaymentModal';
 import RefundModal from '../components/debtors/RefundModal';
 import DebtPaymentReceiptModal from '../components/debtors/DebtPaymentReceiptModal';
+import AddCustomerModal from '../components/customers/AddCustomerModal';
 import { formatKES } from '../utils/currency';
 import { formatDateTime } from '../utils/dateRanges';
 import { raceWithTimeout } from '../utils/offlineWrite';
@@ -23,7 +25,7 @@ export default function CustomerDetail() {
   const { customerId } = useParams();
   const { profile, isAdmin, businessId } = useAuth();
 
-  const customerQ   = useMemo(() => businessId ? tenantQuery('customers', businessId, where('__name__','==',customerId)) : null, [customerId, businessId]);
+  const customerQ   = useMemo(() => businessId ? tenantQuery('customers', businessId, where(documentId(), '==', customerId)) : null, [customerId, businessId]);
   const creditQ     = useMemo(() => businessId ? tenantQuery('creditSales', businessId, where('customerId','==',customerId)) : null, [customerId, businessId]);
   const repaymentsQ = useMemo(() => businessId ? tenantQuery('repayments', businessId, where('customerId','==',customerId), orderBy('paidAt','desc')) : null, [customerId, businessId]);
 
@@ -32,6 +34,7 @@ export default function CustomerDetail() {
   const { data: repayments } = useFirestoreCollection(repaymentsQ);
   
   const [repayOpen, setRepayOpen]       = useState(false);
+  const [editOpen, setEditOpen]         = useState(false);
   const [cancelTarget, setCancelTarget] = useState(null);
   const [refundTarget, setRefundTarget] = useState(null);
   const [receiptData, setReceiptData]   = useState(null);
@@ -45,14 +48,6 @@ export default function CustomerDetail() {
   const displayName = customer?.name || creditSales[0]?.customerName || 'Unknown Customer';
   const displayPhone = customer?.phone || creditSales[0]?.customerPhone || '';
 
-  // A debt payment is a payment against existing debt — it updates the
-  // credit sale(s) it applies to and nothing else. It never creates a new
-  // sale or a second financial transaction (Part 28). If the customer has
-  // more than one open credit sale, a single payment can span several of
-  // them (oldest first, unchanged from the app's existing allocation
-  // rule) — the receipt below reflects the payment at the customer level
-  // (previous total owed → new total owed), with each sale's own
-  // reference number kept for traceability (Part 18/19).
   const handleRepayment = async ({ amount, method, mpesaCode }) => {
     const openSales = [...creditSales]
       .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded' && (Number(cs.remainingBalance) || 0) > 0.005)
@@ -77,10 +72,6 @@ export default function CustomerDetail() {
         batch.update(doc(db,'creditSales',cs.id), { amountPaid: newPaid, remainingBalance: newBal, status: newBal <= 0.005 ? 'paid' : 'partial' });
 
         const repRef = doc(collection(db,'repayments'));
-        // Reuses Firestore's own unique doc id for traceability rather than
-        // introducing a second, parallel counter/ID system (Part 18) —
-        // adapted to this app's existing ID conventions rather than
-        // literally implementing PAY-000381-style sequential numbering.
         const paymentReference = `PAY-${repRef.id.slice(-6).toUpperCase()}`;
         paymentReferences.push(paymentReference);
         batch.set(repRef, {
@@ -173,8 +164,15 @@ export default function CustomerDetail() {
       <Link to="/customers" className="text-sm font-semibold text-ink-400 hover:text-ink-700">← Back to Customers</Link>
       <div className="card flex flex-wrap items-center justify-between gap-3 p-5">
         <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">{displayName}</h1>
-          <p className="text-sm text-ink-400">{displayPhone || 'No phone'}</p>
+          <h1 className="font-display text-xl font-bold text-ink-900 flex items-center gap-2">
+            {displayName}
+            {customer && (
+              <button type="button" onClick={() => setEditOpen(true)} className="p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-700 rounded-lg transition-colors" title="Edit customer">
+                <Pencil className="h-4 w-4" strokeWidth={2} />
+              </button>
+            )}
+          </h1>
+          <p className="text-sm text-ink-400 mt-1">{displayPhone || 'No phone'}</p>
         </div>
         <div className="text-right">
           <p className="text-xs text-ink-400">Outstanding Debt</p>
@@ -239,6 +237,20 @@ export default function CustomerDetail() {
       )}
 
       <RepaymentModal open={repayOpen} customer={{ name: displayName }} totalOwed={totalOwed} onClose={() => setRepayOpen(false)} onSubmit={handleRepayment} />
+      <AddCustomerModal
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        onSave={async (data) => {
+          try {
+            const { queuedOffline } = await raceWithTimeout(updateCustomer(customerId, data, businessId), 4000);
+            toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Customer updated successfully.');
+            setEditOpen(false);
+          } catch (error) {
+            toast.error(friendlyErrorMessage(error, { fallback: 'Unable to update customer. Please try again.' }));
+          }
+        }}
+        initialData={customer}
+      />
       <RefundModal open={!!refundTarget} creditSale={refundTarget} onClose={() => setRefundTarget(null)} onSubmit={(opts) => handleRefund(refundTarget, opts)} />
       <DebtPaymentReceiptModal open={!!receiptData} receipt={receiptData} onClose={() => setReceiptData(null)} />
       <ConfirmDialog
