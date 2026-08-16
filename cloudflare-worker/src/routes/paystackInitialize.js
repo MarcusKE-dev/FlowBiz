@@ -11,7 +11,7 @@ import { json, errorResponse } from '../lib/response.js';
 import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
 import { getDocument, createDocument } from '../lib/firestore.js';
 
-const PRO_PLAN_AMOUNT_KES = 599; 
+export const PRO_PLAN_AMOUNT_KES = 599; 
 export async function handlePaystackInitialize(request, env) {
   const authHeader = request.headers.get('Authorization') || '';
   const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;

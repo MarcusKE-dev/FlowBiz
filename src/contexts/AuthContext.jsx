@@ -116,7 +116,7 @@ export function AuthProvider({ children }) {
         revoked: false, 
       }).catch(() => {});
     }
-
+    sessionUnsubRef.current?.(); // defensive: clear any stale listener first
     sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
       if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
         setSessionRevoked(true);
