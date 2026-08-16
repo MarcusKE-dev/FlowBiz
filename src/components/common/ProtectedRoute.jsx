@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { isDemoMode } from '../../demo/demoMode';
 import LoadingSpinner from './LoadingSpinner';
+import { Lock, Ban, AlertCircle, Mail } from 'lucide-react';
 
 export default function ProtectedRoute({ children, adminOnly = false }) {
   const {
@@ -57,7 +58,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-sand p-6">
         <div className="card max-w-sm w-full p-6 text-center space-y-4">
-          <div className="text-4xl">🔒</div>
+          <Lock className="h-12 w-12 text-ink-400" strokeWidth={1.5} />
           <h2 className="font-display text-lg font-bold text-ink-900">This device was signed out</h2>
           <p className="text-sm text-ink-500">An owner revoked access for this device from Settings → Device Management.</p>
           <button className="btn-primary w-full" onClick={() => (window.location.href = '/login')}>Go to sign in</button>
@@ -70,7 +71,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-sand p-6">
         <div className="card max-w-sm w-full p-6 text-center space-y-4">
-          <div className="text-4xl">🚫</div>
+          <Ban className="h-12 w-12 text-rust-500" strokeWidth={1.5} />
           <h2 className="font-display text-lg font-bold text-ink-900">This account has been removed</h2>
           <p className="text-sm text-ink-500">Please contact your business owner.</p>
           <button className="btn-primary w-full" onClick={logout}>Sign Out</button>
@@ -83,7 +84,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-sand p-6">
         <div className="card max-w-md w-full p-6 text-center space-y-4">
-          <div className="text-4xl">⚠️</div>
+          <AlertCircle className="h-12 w-12 text-amber-500" strokeWidth={1.5} />
           <h2 className="font-display text-lg font-bold text-ink-900">Profile unavailable</h2>
           <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-left">
             <p className="text-xs font-semibold text-rust-700 uppercase tracking-wide">Error details</p>
@@ -114,7 +115,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-sand p-6">
         <div className="card max-w-sm w-full p-6 text-center space-y-4">
-          <div className="text-4xl">📧</div>
+          <Mail className="h-12 w-12 text-moss-500" strokeWidth={1.5} />
           <h2 className="font-display text-lg font-bold text-ink-900">Verify your email</h2>
           <p className="text-sm text-ink-500">We sent a verification link to your email address. Click it, then come back to this tab — FlowBiz will pick it up automatically.</p>
           <div className="flex flex-col gap-2">

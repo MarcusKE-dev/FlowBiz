@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { auth } from '../firebase';
@@ -76,7 +76,7 @@ export default function Pro() {
                 <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
                 Loading payment page...
               </span>
-            ) : 'Pay KSh 599'}
+            ) : `Pay KSh ${proPrice != null ? proPrice.toLocaleString('en-KE') : '599'}`}
           </button>
         )}
       </div>

@@ -76,9 +76,9 @@ export function buildReceiptMessage({
   lines.push(`${label} — ${quantity} × ${productName}`);
   lines.push(`Total: ${formatKES(totalAmount)}`);
   if (isCredit) lines.push(`Amount due: ${formatKES(remainingBalance)}`);
-  if (documentUrl) lines.push('', `View or download your ${label.toLowerCase()}:`, documentUrl);
-  const contactLink = businessPhone ? createWhatsAppLink(businessPhone, `Hello ${shopName}`) : null;
-  if (contactLink) lines.push('', `Contact ${shopName}:`, contactLink);
+  if (documentUrl) lines.push('', `Download ${label}:`, documentUrl);
+  const contactDigits = businessPhone ? normalizePhone(businessPhone) : '';
+  if (contactDigits) lines.push('', `Contact ${shopName}: +${contactDigits}`);
   lines.push('', isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!');
   return lines.join('\n');
 }
@@ -91,8 +91,8 @@ export function buildDebtReminderMessage({ shopName, customerName, outstandingAm
     '',
     'Please arrange payment at your earliest convenience.',
   ];
-  if (businessPhone) lines.push('', `Contact: ${businessPhone}`);
-  lines.push('', 'Thank you.');
+const contactDigits = businessPhone ? normalizePhone(businessPhone) : '';
+  if (contactDigits) lines.push('', `Contact: +${contactDigits}`);  lines.push('', 'Thank you.');
   return lines.join('\n');
 }
 
@@ -108,7 +108,6 @@ export function buildDebtPaymentReceiptMessage({
     lines.push(`Payment received: ${formatKES(amountPaid)}`);
     lines.push(`Remaining balance: ${formatKES(remainingBalance)}`);
   }
-  if (documentUrl) lines.push('', 'View/download your payment receipt:', documentUrl);
-  lines.push('', `— ${shopName}`, '', 'Thank you.');
+if (documentUrl) lines.push('', 'Download your payment receipt:', documentUrl);  lines.push('', `— ${shopName}`, '', 'Thank you.');
   return lines.join('\n');
 }

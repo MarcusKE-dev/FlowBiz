@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
+import { Store } from 'lucide-react';
 
 export default function OpenSessionPrompt({ onOpen }) {
   const [cash, setCash]     = useState('');
@@ -20,7 +21,7 @@ export default function OpenSessionPrompt({ onOpen }) {
   return (
     <div className="mx-auto max-w-sm pt-8">
       <div className="card p-6 space-y-4">
-        <div className="text-center"><div className="text-3xl mb-2">🏪</div>
+        <div className="text-center"><Store className="h-10 w-10 text-moss-600 mx-auto mb-2" strokeWidth={1.5} />
           <h2 className="font-display text-lg font-bold text-ink-900">Open today's counter</h2>
           <p className="text-sm text-ink-400 mt-1">Enter starting balances for accurate end-of-day reconciliation.</p>
         </div>

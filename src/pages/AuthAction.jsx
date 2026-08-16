@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { applyActionCode, verifyPasswordResetCode, confirmPasswordReset, reload, checkActionCode } from 'firebase/auth';
 import { auth } from '../firebase';
+import { CheckCircle2, AlertCircle } from 'lucide-react';
 
 export default function AuthAction() {
   const [searchParams] = useSearchParams();
@@ -119,7 +120,7 @@ function VerifyEmailPanel({ mode, oobCode }) {
       )}
       {status === 'success' && (
         <>
-          <div className="text-4xl">✅</div>
+          <CheckCircle2 className="h-12 w-12 text-moss-600" strokeWidth={1.5} />
           <h1 className="font-display text-lg font-bold text-ink-900">Email verified</h1>
           <p className="text-sm text-ink-500">{message} You can continue to FlowBiz now.</p>
           <Link to="/" className="btn-primary w-full">Continue to FlowBiz</Link>
@@ -127,7 +128,7 @@ function VerifyEmailPanel({ mode, oobCode }) {
       )}
       {status === 'error' && (
         <>
-          <div className="text-4xl">⚠️</div>
+          <AlertCircle className="h-12 w-12 text-rust-500" strokeWidth={1.5} />
           <h1 className="font-display text-lg font-bold text-ink-900">Something went wrong</h1>
           <p className="text-sm text-ink-500">{message}</p>
           <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
@@ -220,7 +221,7 @@ function ResetPasswordPanel({ oobCode }) {
       )}
       {status === 'success' && (
         <>
-          <div className="text-4xl">✅</div>
+          <CheckCircle2 className="h-12 w-12 text-moss-600" strokeWidth={1.5} />
           <h1 className="font-display text-lg font-bold text-ink-900">Password updated</h1>
           <p className="text-sm text-ink-500">You can now sign in with your new password.</p>
           <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
@@ -228,7 +229,7 @@ function ResetPasswordPanel({ oobCode }) {
       )}
       {status === 'error' && (
         <>
-          <div className="text-4xl">⚠️</div>
+          <AlertCircle className="h-12 w-12 text-rust-500" strokeWidth={1.5} />
           <h1 className="font-display text-lg font-bold text-ink-900">Something went wrong</h1>
           <p className="text-sm text-ink-500">{message}</p>
           <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
