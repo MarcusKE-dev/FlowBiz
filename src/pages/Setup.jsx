@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { resetBusinessData } from '../utils/businessReset';
-import { restoreProduct, permanentlyDeleteProduct, cleanupOrphanedBarcodeIndexes } from '../utils/products';
+import { restoreProduct, permanentlyDeleteProduct } from '../utils/products';
 import { isDemoMode } from '../demo/demoMode';
 import { resetDemoData } from '../demo/seedData';
 import { formatDateTime } from '../utils/dateRanges';
