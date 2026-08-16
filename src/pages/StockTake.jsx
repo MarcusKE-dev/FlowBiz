@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
-import { doc, collection, writeBatch, increment, serverTimestamp, orderBy, where } from 'firebase/firestore';
-import toast from 'react-hot-toast';
+import { doc, collection, writeBatch, increment, serverTimestamp, orderBy, where, limit } from 'firebase/firestore';
+import { formatDateTime } from '../utils/dateRanges';import toast from 'react-hot-toast';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { tenantQuery } from '../lib/tenant';
@@ -62,11 +62,16 @@ export default function StockTake() {
           physicalQty,
           difference,
           reason: reasons[p.id] || '',
-          adjustedBy: profile.uid,
-          adjustedByName: profile.displayName,
-          adjustedAt: serverTimestamp(),
+          adjustedBy: profile.uid, 
+          adjustedByName: profile.displayName, 
+          adjustedAt: new Date(),
         });
       }
+      const adjustmentsQ = useMemo(
+  () => businessId ? tenantQuery('stockAdjustments', businessId, orderBy('adjustedAt', 'desc'), limit(20)) : null,
+  [businessId]
+);
+const { data: recentAdjustments } = useFirestoreCollection(adjustmentsQ);
 
       const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
       if (error) throw error;
@@ -157,7 +162,24 @@ export default function StockTake() {
           </table>
         </div>
       </div>
-
+{recentAdjustments.length > 0 && (
+  <div className="card p-4">
+    <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Recent stock adjustments</h2>
+    <div className="divide-y divide-ink-100">
+      {recentAdjustments.map((a) => (
+        <div key={a.id} className="py-2.5 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-ink-700">{a.productName}</span>
+            <span className={`font-semibold ${a.difference < 0 ? 'text-rust-600' : 'text-moss-600'}`}>
+              {a.systemQty} → {a.physicalQty} ({a.difference > 0 ? '+' : ''}{a.difference})
+            </span>
+          </div>
+          <p className="text-xs text-ink-400">{a.reason || 'No reason given'} · {formatDateTime(a.adjustedAt)} · {a.adjustedByName}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
       <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
       <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
 

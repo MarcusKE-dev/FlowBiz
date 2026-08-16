@@ -31,7 +31,7 @@ export function useDailySession() {
       date: todayKey(),
       openingCashFloat:  Number(openingCashFloat)  || 0,
       openingMpesaFloat: Number(openingMpesaFloat) || 0,
-      openedBy, openedAt: serverTimestamp(),
+      openedBy, openedAt: new Date(),
       closedAt: null, closedBy: null,
     }, { merge: true });
     // FIX: don't rely solely on onSnapshot to reflect a write we just

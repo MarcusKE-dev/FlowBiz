@@ -52,8 +52,13 @@ export default function Users() {
     setBusy(true);
     try {
       const invite = await createStaffInvite({ displayName: newName.trim(), role: newRole });
-      setFreshInvite({ id: invite.id, displayName: newName.trim(), role: newRole });
-      setNewName('');
+     if (invite.queuedOffline) {
+       toast.success("Invite saved — the link will be ready once you're back online.");
+       setModal(false);
+     } else {
+       setFreshInvite({ id: invite.id, displayName: newName.trim(), role: newRole });
+     }   
+        setNewName('');
     } catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setBusy(false); }
   };

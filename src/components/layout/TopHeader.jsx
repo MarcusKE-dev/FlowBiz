@@ -1,6 +1,7 @@
 import { useAuth } from '../../contexts/AuthContext';
 import ConnectivityIndicator from '../common/ConnectivityIndicator';
 import { isDemoMode } from '../../demo/demoMode';
+import { Link } from 'react-router-dom';
 
 export default function TopHeader() {
   const { profile, logout } = useAuth();
@@ -8,10 +9,7 @@ export default function TopHeader() {
 
   return (
     <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-ink-100 bg-sand/95 px-4 py-2 backdrop-blur sm:px-6 safe-top">
-      <div className="flex items-center gap-2 lg:hidden">
-        <img src="/icons/icon-72.png" alt="FlowBiz" className="h-7 w-7 rounded-lg" />
-        <span className="font-display text-sm font-bold text-ink-900">FlowBiz</span>
-      </div>
+
       <div className="hidden text-sm text-ink-500 lg:block">
         Welcome, <span className="font-semibold text-ink-800">{profile?.displayName}</span>
       </div>

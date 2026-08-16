@@ -21,6 +21,7 @@ import {
   getDoc,
 } from 'firebase/firestore';
 import { auth, db } from '../firebase';
+import { raceWithTimeout } from '../utils/offlineWrite';
 
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 const AuthContext = createContext(null);
@@ -34,13 +35,26 @@ function getDeviceId() {
   return id;
 }
 
+// src/contexts/AuthContext.jsx — replace guessDeviceLabel()
 function guessDeviceLabel() {
   const ua = navigator.userAgent || '';
-  if (/Android/i.test(ua)) return 'Android device';
-  if (/iPhone|iPad|iPod/i.test(ua)) return 'iOS device';
-  if (/Windows/i.test(ua)) return 'Windows PC';
-  if (/Macintosh/i.test(ua)) return 'Mac';
-  return 'Unknown device';
+  let os = 'Unknown device';
+  if (/Android/i.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+  else if (/Windows/i.test(ua)) os = 'Windows';
+  else if (/Macintosh/i.test(ua)) os = 'Mac';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+
+  let browser = '';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/OPR\//i.test(ua)) browser = 'Opera';
+  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
+
+  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches;
+  if (isStandalone) return browser ? `${os} app (${browser})` : `${os} app`;
+  return browser ? `${browser} on ${os}` : os;
 }
 
 export function AuthProvider({ children }) {
@@ -56,6 +70,7 @@ export function AuthProvider({ children }) {
   const profileUnsubRef = useRef(null);
   const sessionUnsubRef = useRef(null);
   const businessUnsubRef = useRef(null);
+  const sessionRegisteredRef = useRef(null); // `${uid}:${businessId}` already registered this auth session
 
   const stopListeners = useCallback(() => {
     profileUnsubRef.current?.();
@@ -64,9 +79,17 @@ export function AuthProvider({ children }) {
     sessionUnsubRef.current = null;
     businessUnsubRef.current?.();
     businessUnsubRef.current = null;
+    sessionRegisteredRef.current = null;
   }, []);
 
   const registerSession = useCallback(async (uid, businessId, userName) => {
+   // FIX (#16-19/22): loadProfile's onSnapshot re-fires this on every
+   // profile change, not just at sign-in. Without a guard, each call
+   // attached a brand-new listener on sessions/{id} without ever
+   // unsubscribing the last one — a real leak, and wasted re-writes.
+   const key = `${uid}:${businessId}`;
+   if (sessionRegisteredRef.current === key) return;
+   sessionRegisteredRef.current = key;
     const sessionId = getDeviceId();
     const ref = doc(db, 'sessions', sessionId);
     const currentSnap = await getDoc(ref);
@@ -221,17 +244,20 @@ export function AuthProvider({ children }) {
     if (!['owner', 'cashier'].includes(role)) throw new Error('Invalid role.');
     const trimmed = (displayName || '').trim();
     if (!trimmed) throw new Error('Enter a name.');
-    const ref = await addDoc(collection(db, 'staffInvites'), {
-      businessId: profile.businessId,
-      displayName: trimmed,
-      role,
-      createdBy: profile.uid,
-      createdByName: profile.displayName,
-      createdAt: serverTimestamp(),
-      claimed: false,
-      linkedUid: null,
-    });
-    return { id: ref.id };
+   const write = addDoc(collection(db, 'staffInvites'), {
+     businessId: profile.businessId,
+     displayName: trimmed,
+     role,
+     createdBy: profile.uid,
+     createdByName: profile.displayName,
+     createdAt: serverTimestamp(),
+     claimed: false,
+     linkedUid: null,
+   });
+   const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
+   if (error) throw error;
+   if (queuedOffline) return { id: null, queuedOffline: true };
+   return { id: value.id };
   };
 
   const cancelStaffInvite = async (inviteId) => {

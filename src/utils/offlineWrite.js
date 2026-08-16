@@ -1,10 +1,15 @@
-// Resolves within `timeoutMs` no matter what: with the real
-// success/failure if the write settles in time, or with
-// `{ queuedOffline: true }` if it's still pending once the timeout
-// hits. The original promise keeps running in the background so the
-// caller can still react if it eventually fails for real.
+// src/utils/offlineWrite.js — full file (small, and every call site depends on this exact contract)
 export function raceWithTimeout(promise, timeoutMs = 4000) {
   return new Promise((resolve) => {
+    // Already offline? There's no point waiting out the full timeout to
+    // "discover" that — resolve as queued immediately instead of padding
+    // every offline action with a fixed ~4s stall.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      resolve({ queuedOffline: true });
+      promise.catch(() => {}); // still observed, just not blocking anything
+      return;
+    }
+
     let settled = false;
     const timer = setTimeout(() => {
       if (!settled) { settled = true; resolve({ queuedOffline: true }); }
@@ -20,8 +25,6 @@ export function raceWithTimeout(promise, timeoutMs = 4000) {
       (err) => {
         clearTimeout(timer);
         if (!settled) { settled = true; resolve({ queuedOffline: false, error: err }); }
-        // else: caller already moved on optimistically — it attaches
-        // its own .catch() to the original promise for this case.
       }
     );
   });

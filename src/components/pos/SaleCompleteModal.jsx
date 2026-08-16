@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import Modal from '../common/Modal';
 import { generateReceiptPDF, printReceipt, generateInvoicePDF, printInvoice, sendWhatsAppDocument } from '../../utils/documentService';
+import { getOrCreateShareLink } from '../../utils/documentSharing';
 import { useSettings } from '../../hooks/useSettings';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatKES } from '../../utils/currency';
@@ -9,8 +11,9 @@ import toast from 'react-hot-toast';
 
 export default function SaleCompleteModal({ open, sale, onClose }) {
   const { settings } = useSettings();
-  const { isPro } = useAuth();
+  const { isPro, businessId, profile } = useAuth();
   const [phone, setPhone] = useState(sale?.customerPhone || '');
+  const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
 
   // Keep phone input synced when a new sale is opened
   useEffect(() => {
@@ -25,28 +28,41 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
 
   const docLabel = sale.isCredit ? 'Invoice' : 'Receipt';
 
+  // FIX (Pro-gating correction): View, Download, and Print are FlowBiz's
+  // basic document access and stay free on every plan. Only WhatsApp
+  // sharing — the convenience of pushing the document straight to the
+  // customer's phone — is the Pro feature. Print/Download used to be
+  // gated behind isPro here; that was a bug, not an intentional product
+  // rule (nothing else in the app treats PDF access as paid), so it's
+  // removed rather than preserved.
   const handlePrint = () => {
-    if (!isPro) { toast.error(`Professional printing requires FlowBiz Pro.`); return; }
     if (sale.isCredit) printInvoice(sale, settings);
     else printReceipt(sale, settings);
   };
 
   const handleDownload = () => {
-    if (!isPro) { toast.error(`Professional ${docLabel.toLowerCase()}s require FlowBiz Pro.`); return; }
     if (sale.isCredit) generateInvoicePDF(sale, settings);
     else generateReceiptPDF(sale, settings);
   };
 
-  const handleWhatsApp = () => {
-    if (!isPro) { toast.error("WhatsApp integration requires FlowBiz Pro."); return; }
+  const handleWhatsApp = async () => {
     if (!phone.trim()) {
-      toast.error("Please enter a valid customer phone number.");
+      toast.error('Please enter a valid customer phone number.');
       return;
     }
+    setSendingWhatsApp(true);
     try {
-      sendWhatsAppDocument(sale, settings, phone.trim());
+      const documentUrl = await getOrCreateShareLink({
+        businessId,
+        documentType: sale.isCredit ? 'invoice' : 'receipt',
+        documentId: sale.id,
+        createdBy: profile?.uid,
+      });
+      sendWhatsAppDocument(sale, settings, phone.trim(), documentUrl);
     } catch (e) {
-      toast.error(e.message);
+      toast.error(e.message || 'Unable to generate the receipt link. Please try again.');
+    } finally {
+      setSendingWhatsApp(false);
     }
   };
 
@@ -79,17 +95,26 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
         </div>
 
         <div className="rounded-lg border border-ink-100 p-3 space-y-2">
-          <label className="label">WhatsApp {docLabel}</label>
+          <label className="label">
+            WhatsApp {docLabel} {!isPro && <span className="text-amber-600">— PRO</span>}
+          </label>
           <div className="flex gap-2">
-            <input 
-              className="input flex-1" 
-              placeholder="Customer Phone" 
-              value={phone} 
-              onChange={e => setPhone(e.target.value)} 
+            <input
+              className="input flex-1"
+              placeholder="Customer Phone"
+              value={phone}
+              onChange={e => setPhone(e.target.value)}
+              disabled={sendingWhatsApp}
             />
-            <button className="btn-primary flex items-center justify-center gap-2" onClick={handleWhatsApp}>
-              <MessageCircle className="h-4 w-4" /> Send via WhatsApp
-            </button>
+            {isPro ? (
+              <button className="btn-primary flex items-center justify-center gap-2 shrink-0" onClick={handleWhatsApp} disabled={sendingWhatsApp}>
+                <MessageCircle className="h-4 w-4" /> {sendingWhatsApp ? 'Preparing…' : 'Send'}
+              </button>
+            ) : (
+              <Link to="/pro" className="btn-primary flex items-center justify-center gap-2 shrink-0">
+                <MessageCircle className="h-4 w-4" /> Unlock
+              </Link>
+            )}
           </div>
         </div>
 

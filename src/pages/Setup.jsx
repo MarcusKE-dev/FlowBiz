@@ -1,123 +1,406 @@
-import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword, sendEmailVerification, deleteUser } from 'firebase/auth';
-import { doc, collection, serverTimestamp, runTransaction } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
+import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { auth, db } from '../firebase';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { resetBusinessData } from '../utils/businessReset';
+import { restoreProduct, permanentlyDeleteProduct, cleanupOrphanedBarcodeIndexes } from '../utils/products';
+import { isDemoMode } from '../demo/demoMode';
+import { resetDemoData } from '../demo/seedData';
+import { formatDateTime } from '../utils/dateRanges';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import { raceWithTimeout } from '../utils/offlineWrite';
 
-export default function Setup() {
-  const navigate = useNavigate();
-  const [businessName, setBusinessName] = useState('');
-  const [ownerName, setOwnerName]       = useState('');
-  const [email, setEmail]               = useState('');
-  const [password, setPassword]         = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [submitting, setSubmitting]     = useState(false);
-  const [error, setError]               = useState(null);
+const RESET_CONFIRM_PHRASE = 'RESET';
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
-    if (!businessName.trim() || !ownerName.trim() || !email.trim()) { setError('Please fill in all fields.'); return; }
-    if (password.length < 6) { setError('Password must be at least 6 characters.'); return; }
-    if (password !== confirmPassword) { setError('Passwords do not match.'); return; }
+export default function Settings() {
+  const { profile, businessId, isOwner, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, subscription } = useAuth();
+  const demo = isDemoMode();
+  const [loading, setLoading]     = useState(true);
+  
+  const [shopName, setShopName]   = useState('');
+  const [phone, setPhone]         = useState('');
+  const [email, setEmail]         = useState('');
+  const [address, setAddress]     = useState('');
+  const [logoFile, setLogoFile]   = useState(null);
+  const [logoUrl, setLogoUrl]     = useState('');
+  const [cashierExp, setCashierExp] = useState(true);
+  // FIX (thermal printer compatibility, Level 1): which physical paper
+  // width printed/downloaded receipts should target. Read by
+  // documentService.js's PDF builders and by the public receipt page
+  // (cloudflare-worker/src/routes/publicDocument.js) via
+  // businessSettings.receiptPaperWidth — a single setting drives both.
+  const [receiptPaperWidth, setReceiptPaperWidth] = useState(80);
+  
+  const [saving, setSaving]       = useState(false);
+  const [savingPermissions, setSavingPermissions] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resetting, setResetting] = useState(false);
 
-    setSubmitting(true);
+  const [sessions, setSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
 
-    let cred;
-    try {
-      cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-    } catch (err) {
-      const message =
-        err.code === 'auth/email-already-in-use' ? "An account with this email already exists in Firebase Authentication. If it was used for a business before, sign in with that account instead — the current system can't reuse the exact same email for a brand-new business." :
-        err.code === 'auth/invalid-email'         ? 'Please enter a valid email address.' :
-        err.code === 'auth/weak-password'          ? 'Password is too weak.' :
-        'Could not create your account. Please try again.';
-      setError(message);
-      setSubmitting(false);
-      return;
-    }
+  const [archived, setArchived] = useState([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
 
-    const businessRef = doc(collection(db, 'businesses'));
-    const userRef      = doc(db, 'users', cred.user.uid);
-    try {
-      await runTransaction(db, async (tx) => {
-        tx.set(businessRef, {
-          name: businessName.trim(),
-          ownerIds: [cred.user.uid],
-          createdAt: serverTimestamp(),
-          createdBy: cred.user.uid,
-          subscription: { plan: 'free', status: 'active', expiry: null },
-        });
-        tx.set(userRef, {
-          uid: cred.user.uid,
-          email: email.trim(),
-          displayName: ownerName.trim(),
-          role: 'owner',
-          businessId: businessRef.id,
-          active: true,
-          createdAt: serverTimestamp(),
-        });
-      });
-    } catch (err) {
-      console.error('[Setup] Business/profile creation failed after Auth account creation — rolling back:', err.code || err.name, err.message);
-      try {
-        await deleteUser(cred.user);
-      } catch (rollbackErr) {
-        console.error('[Setup] Rollback failed — an orphaned Auth account may remain:', rollbackErr);
-        setError('Something went wrong finishing setup, and we could not fully undo it. Please contact support before trying again with this email.');
-        setSubmitting(false);
-        return;
+  const settingsRef = businessId ? doc(db, 'businessSettings', businessId) : null;
+
+  
+  function compressImage(file, maxDimension = 480, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        if (!blob) { reject(new Error('Could not process image.')); return; }
+        resolve(blob);
+      }, 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
+    img.src = url;
+  });
+}
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+  useEffect(() => {
+    if (!settingsRef) return;
+    getDoc(settingsRef).then(snap => {
+      if (snap.exists()) { 
+        const d = snap.data(); 
+        setShopName(d.shopName || ''); 
+        setPhone(d.phone || '');
+        setEmail(d.email || '');
+        setAddress(d.address || '');
+        setLogoUrl(d.logoUrl || '');
+        setCashierExp(d.cashierCanRecordExpenses !== false); 
+        setReceiptPaperWidth(d.receiptPaperWidth === 58 ? 58 : 80);
       }
-      setError('Something went wrong finishing setup. Please try again.');
-      setSubmitting(false);
-      return;
-    }
+      setLoading(false);
+    });
+  }, [businessId]);
 
-    // FIX: handleCodeInApp: true routes the verification link through
-    // FlowBiz's own /auth/action page instead of Firebase's generic
-    // hosted page — see src/pages/AuthAction.jsx.
+  useEffect(() => {
+    if (!businessId) return;
+    listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
+  }, [businessId]);
+
+  const loadArchived = async () => {
+    if (!businessId) return;
+    setArchivedLoading(true);
     try {
-      await sendEmailVerification(cred.user, {
-        url: `${window.location.origin}/auth/action`,
-        handleCodeInApp: true,
-      });
-      toast.success(`Welcome, ${ownerName.trim()}! Check your email to verify your account.`);
-    } catch (err) {
-      console.error('[Setup] sendEmailVerification failed after successful setup:', err.code || err.name, err.message);
-      toast.success(
-        err.code === 'auth/too-many-requests'
-          ? `Welcome, ${ownerName.trim()}! Your business was created, but too many verification emails have been requested. Use "Resend verification email" in a bit.`
-          : `Welcome, ${ownerName.trim()}! Your business was created, but we couldn't send the verification email. You can request a new one once you're signed in.`,
-        { duration: 6000 }
-      );
+      const snap = await getDocs(query(collection(db, 'products'), where('businessId', '==', businessId), where('deleted', '==', true)));
+      setArchived(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } finally {
+      setArchivedLoading(false);
     }
-
-    setSubmitting(false);
-    navigate('/', { replace: true });
   };
 
+const handleSave = async e => {
+    e.preventDefault(); 
+    setSaving(true);
+    try {
+      let finalLogoUrl = logoUrl;
+
+      if (logoFile) {
+        try {
+          const compressed = await compressImage(logoFile, 480, 0.75);
+          if (compressed.size > 700 * 1024) {
+            toast.error('Logo is still too large after compression — try a simpler image.');
+          } else {
+            finalLogoUrl = await blobToDataUrl(compressed);
+          }
+        } catch (logoErr) {
+          toast.error(`Logo processing failed, but the rest of your settings will still be saved: ${logoErr.message}`);
+        }
+      }
+
+      const write = setDoc(settingsRef, { 
+        shopName: shopName.trim(), 
+        phone: phone.trim(),
+        email: email.trim(),
+        address: address.trim(),
+        logoUrl: finalLogoUrl,
+        receiptPaperWidth,
+      }, { merge: true });
+
+      const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+      if (error) throw error;
+
+      setLogoUrl(finalLogoUrl);
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Business information saved');
+      setLogoFile(null);
+    } catch (err) { 
+      toast.error(err.message); 
+    } finally { 
+      setSaving(false); 
+    }
+  };
+
+const handleSavePermissions = async () => {
+    setSavingPermissions(true);
+    const write = setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    setSavingPermissions(false);
+    if (error) { toast.error(error.message); return; }
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Permissions saved');
+  };
+
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      if (demo) {
+        resetDemoData();
+        toast.success('Demo data reset. Reloading…');
+      } else {
+        await resetBusinessData(businessId, profile?.uid);
+        toast.success('Business data reset. Reloading…');
+      }
+      window.location.href = '/';
+    } catch (err) {
+      toast.error(`Reset failed partway through: ${err.message}`);
+      setResetting(false);
+      setResetDialogOpen(false);
+    }
+  };
+
+  const handleRevoke = async (sessionId) => {
+    try {
+      await revokeSession(sessionId);
+      setSessions(s => s.map(x => x.id === sessionId ? { ...x, revoked: true } : x));
+      toast.success('Device signed out.');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const handleRestore = async (productId) => {
+    try { await restoreProduct(productId); setArchived(a => a.filter(p => p.id !== productId)); toast.success('Product restored'); }
+    catch (err) { toast.error(err.message); }
+  };
+
+  const handlePermanentDelete = async (productId) => {
+    const target = archived.find(p => p.id === productId);
+    try {
+      await permanentlyDeleteProduct(productId, target?.barcode, businessId);
+      setArchived(a => a.filter(p => p.id !== productId));
+      toast.success('Product permanently deleted');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const [cleaningOrphans, setCleaningOrphans] = useState(false);
+  const handleCleanupOrphans = async () => {
+    setCleaningOrphans(true);
+    try {
+      const { scanned, removed } = await cleanupOrphanedBarcodeIndexes(businessId);
+      toast.success(removed > 0
+        ? `Checked ${scanned} barcode record(s), freed ${removed} orphaned barcode(s).`
+        : `Checked ${scanned} barcode record(s) — none were orphaned.`);
+    } catch (err) { toast.error(err.message); }
+    finally { setCleaningOrphans(false); }
+  };
+
+  if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-white">Create your business</h1>
-            <p className="text-sm text-ink-400">Set up a new FlowBiz account for your shop</p>
+    <div className="mx-auto max-w-xl space-y-5">
+      <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
+
+      <div className="card p-5 space-y-2">
+        <h2 className="font-display text-base font-bold text-ink-800">Account &amp; Security</h2>
+        <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
+        <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
+        <Row label="Business ID" value={businessId || '—'} mono />
+      </div>
+
+      <form onSubmit={handleSave} className="card space-y-4 p-5">
+        <h2 className="font-display text-base font-bold text-ink-800">Business Information</h2>
+        <p className="text-sm text-ink-500 mb-2">This info dynamically populates your customer-facing documents (receipts, invoices).</p>
+        
+        <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
+        
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
+          <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
+        </div>
+
+        <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
+        
+        <div>
+          <label className="label">Business Logo</label>
+          <div className="flex items-center gap-4">
+            {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
+            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files[0])} />
           </div>
         </div>
-        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
-          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-          <div><label className="label">Business name</label><input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="e.g. Mama Njeri General Store" autoComplete="organization" /></div>
-          <div><label className="label">Your name</label><input className="input" required value={ownerName} onChange={e=>setOwnerName(e.target.value)} placeholder="e.g. Jane Njeri" autoComplete="name" /></div>
-          <div><label className="label">Email</label><input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="owner@yourbusiness.co.ke" autoComplete="username" /></div>
-          <div><label className="label">Password</label><input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters" autoComplete="new-password" /></div>
-          <div><label className="label">Confirm password</label><input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" /></div>
-          <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Setting up…' : 'Create business account'}</button>
-        </form>
-        <p className="text-center text-sm text-ink-400">Already have a business? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link></p>
+
+        <div>
+          <label className="label">Receipt paper width</label>
+          <div className="grid grid-cols-2 gap-2">
+            {[80, 58].map((w) => (
+              <button
+                key={w}
+                type="button"
+                onClick={() => setReceiptPaperWidth(w)}
+                className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${receiptPaperWidth === w ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}
+              >
+                {w}mm
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-ink-400">
+            Matches the paper your receipt printer takes. Print receipts using your device's available printer, including compatible thermal receipt printers.
+          </p>
+        </div>
+
+<button type="submit" className="btn-primary w-full" disabled={saving}>{saving?'Saving…':'Save settings'}</button>
+      </form>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Permissions</h2>
+        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-3">
+          <div><p className="text-sm font-semibold text-ink-800">Let cashiers record expenses</p><p className="text-xs text-ink-400">Turn off if only owners should log expenses.</p></div>
+          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-moss-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
+            <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition-transform ${cashierExp?'translate-x-5':''}`} />
+          </button>
+        </div>
+        <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
+          {savingPermissions ? 'Saving…' : 'Save permissions'}
+        </button>
       </div>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Team Management</h2>
+        <p className="text-sm text-ink-500">Invite owners or cashiers, and manage pending invites and access.</p>
+        <Link to="/users" className="btn-outline w-full flex items-center justify-center gap-2">Manage users &amp; invites</Link>
+      </div>
+
+      {!demo && (
+        <div className="card p-5 space-y-3">
+          <h2 className="font-display text-base font-bold text-ink-800">Device Management</h2>
+          {sessionsLoading ? <p className="text-sm text-ink-400">Loading…</p> : sessions.length === 0 ? (
+            <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {sessions.map(s => (
+                <div key={s.id} className="flex items-center justify-between py-2.5 text-sm">
+                  <div>
+                    <p className="font-medium text-ink-700">{s.deviceLabel}{s.id === currentSessionId && <span className="text-xs text-ink-400"> (this device)</span>}</p>
+                    <p className="text-xs text-ink-400">Last active {formatDateTime(s.lastActiveAt)}</p>
+                  </div>
+                  {s.revoked ? (
+                    <span className="badge bg-ink-100 text-ink-500">Signed out</span>
+                  ) : (
+                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRevoke(s.id)}>Sign out</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="card p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
+          <div className="flex gap-2">
+            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={handleCleanupOrphans} disabled={cleaningOrphans}>
+              {cleaningOrphans ? 'Checking…' : 'Clean Up Orphaned Barcodes'}
+            </button>
+            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
+              {archivedOpen ? 'Hide' : 'View archive'}
+            </button>
+          </div>
+        </div>
+        <p className="text-sm text-ink-500">Deleted products are archived here first, never destroyed immediately.</p>
+        {archivedOpen && (
+          archivedLoading ? <p className="text-sm text-ink-400">Loading…</p> : archived.length === 0 ? (
+            <p className="text-sm text-ink-400">Nothing archived.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {archived.map(p => (
+                <div key={p.id} className="flex items-center justify-between py-2.5 text-sm">
+                  <span className="font-medium text-ink-700">{p.name}</span>
+                  <div className="flex gap-2">
+                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRestore(p.id)}>Restore</button>
+                    <button className="btn-danger !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handlePermanentDelete(p.id)}>Delete forever</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </div>
+
+      <div className="card p-5 space-y-2">
+        <h2 className="font-display text-base font-bold text-ink-800">Subscription</h2>
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
+          <Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>
+        </div>
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Support</h2>
+        <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
+      </div>
+
+      <div className="card space-y-3 border-rust-200 p-5">
+        <div>
+          <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
+          <p className="mt-1 text-sm text-ink-500">
+            {demo
+              ? 'Demo Reset clears all sample data stored in this browser.'
+              : "Business Reset permanently deletes ALL of this business's data. This cannot be undone."}
+          </p>
+        </div>
+        <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
+          {demo ? 'Demo Reset' : 'Business Reset'}
+        </button>
+      </div>
+
+      <ConfirmDialog
+        open={resetDialogOpen}
+        title={demo ? 'Reset the demo data?' : 'This will permanently delete ALL data for this business'}
+        message={
+          demo ? (
+            <p>All sample data in this browser will be cleared and replaced with the original demo dataset.</p>
+          ) : (
+            <>
+              <p className="mb-2">Everything this business owns will be deleted. This cannot be undone.</p>
+              <label className="label mt-3">Type <span className="font-mono font-bold">{RESET_CONFIRM_PHRASE}</span> to confirm</label>
+              <input className="input" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} autoFocus />
+            </>
+          )
+        }
+        confirmLabel={resetting ? 'Resetting…' : demo ? 'Reset demo data' : 'Delete everything'}
+        danger
+        onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
+        onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
+      />
+    </div>
+  );
+}
+
+function Row({ label, value, tone = '', mono = false }) {
+  return (
+    <div className="flex items-center justify-between py-1 text-sm">
+      <span className="text-ink-500">{label}</span>
+      <span className={`font-semibold ${mono ? 'font-mono text-xs' : ''} ${tone || 'text-ink-800'}`}>{value}</span>
     </div>
   );
 }

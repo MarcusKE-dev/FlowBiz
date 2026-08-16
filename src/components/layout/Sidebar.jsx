@@ -1,5 +1,4 @@
-import { NavLink } from 'react-router-dom';
-import * as Lucide from 'lucide-react';
+import { NavLink, Link } from 'react-router-dom';import * as Lucide from 'lucide-react';
 import { NAV_ITEMS } from './navConfig';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSettings } from '../../hooks/useSettings';
@@ -12,9 +11,13 @@ export default function Sidebar() {
     .filter(i => i.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses);
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r border-ink-100 bg-white lg:flex">
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-ink-100">
-        <img src="/icons/icon-72.png" alt="FlowBiz" className="h-9 w-9 rounded-lg" />
-        <div><p className="font-display text-sm font-bold leading-tight text-ink-900">FlowBiz</p><p className="text-[11px] leading-tight text-ink-400">Business Manager</p></div>
+      <div className="border-b border-ink-100 p-3">
+        <Link
+          to="/pro"
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-moss-600 px-3 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-moss-700 active:bg-moss-800"
+        >
+          Explore FlowBiz Pro
+       </Link>
       </div>
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
         {items.map(item => (

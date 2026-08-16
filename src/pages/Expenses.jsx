@@ -43,7 +43,7 @@ const handle = async e => {
     const write = addDoc(tenantCollection('expenses'), withBusiness({
       description:form.description.trim(), category:form.category, amount:Number(form.amount),
       paymentMethod:form.paymentMethod, mpesaCode:form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
-      recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp(),
+      recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:new Date(),
     }, businessId));
 
     const { queuedOffline, error } = await raceWithTimeout(write, 4000);

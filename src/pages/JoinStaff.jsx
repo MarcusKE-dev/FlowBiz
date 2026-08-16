@@ -169,9 +169,7 @@ export default function JoinStaff() {
         </div>
         <form onSubmit={handleSubmit} className="card space-y-4 p-6">
           {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            Already signed in as the business owner in this browser? Open this invitation link in a different browser or a private/incognito window so your owner session isn't affected.
-          </div>
+
           <div>
             <label className="label">Your email</label>
             <input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" autoComplete="username" />

@@ -8,48 +8,66 @@ import { useSettings } from '../../hooks/useSettings';
 import { formatKES } from '../../utils/currency';
 import { openWhatsApp, buildDebtPaymentReceiptMessage, isValidWhatsAppPhone } from '../../utils/whatsapp';
 import { printDebtPaymentReceipt, generateDebtPaymentReceiptPDF } from '../../utils/documentService';
+import { getOrCreateShareLink } from '../../utils/documentSharing';
 
 // Shown right after a debt repayment is successfully recorded (never
-// before — see CustomerDetail.jsx's handleRepayment). Print/Download/
-// WhatsApp are Pro-gated here for the same reason they're Pro-gated on a
-// normal sale's receipt (SaleCompleteModal.jsx): that's FlowBiz's existing
-// established Pro boundary, not something this feature invents new.
+// before — see CustomerDetail.jsx's handleRepayment).
+//
+// FIX (Pro-gating correction): View/Print/Download are free on every
+// plan — Print and Download used to be gated behind isPro here, which was
+// a bug (this app's Pro boundary has never been "can you access your own
+// documents", it's specifically the WhatsApp convenience). Only WhatsApp
+// sharing stays Pro-gated below.
 export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
-  const { isPro } = useAuth();
+  const { isPro, businessId, profile } = useAuth();
   const { settings } = useSettings();
   const [phone, setPhone] = useState('');
+  const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
 
   useEffect(() => { setPhone(receipt?.customerPhone || ''); }, [receipt]);
 
   if (!receipt) return null;
 
-  const handlePrint = () => {
-    if (!isPro) { toast.error('WhatsApp sharing is available on FlowBiz Pro.'); return; }
-    printDebtPaymentReceipt(receipt, settings);
-  };
+  const handlePrint = () => printDebtPaymentReceipt(receipt, settings);
+  const handleDownload = () => generateDebtPaymentReceiptPDF(receipt, settings);
 
-  const handleDownload = () => {
-    if (!isPro) { toast.error('Professional receipts require FlowBiz Pro.'); return; }
-    generateDebtPaymentReceiptPDF(receipt, settings);
-  };
-
-  const handleWhatsApp = () => {
-    if (!isPro) { toast.error('WhatsApp sharing is available on FlowBiz Pro.'); return; }
+  const handleWhatsApp = async () => {
     if (!phone.trim() || !isValidWhatsAppPhone(phone)) {
       toast.error('Add a valid phone number for this customer before sending a WhatsApp reminder.');
       return;
     }
-    const message = buildDebtPaymentReceiptMessage({
-      shopName: settings.shopName || 'FlowBiz Store',
-      customerName: receipt.customerName,
-      amountPaid: receipt.amountPaid,
-      previousBalance: receipt.previousBalance,
-      remainingBalance: receipt.remainingBalance,
-      isCleared: receipt.isCleared,
-      formatKES,
-    });
-    const opened = openWhatsApp(phone, message);
-    toast[opened ? 'success' : 'error'](opened ? 'WhatsApp opened.' : 'WhatsApp could not be opened.');
+    setSendingWhatsApp(true);
+    try {
+      // receiptDocId is the persisted debtPaymentReceipts/{id} document
+      // CustomerDetail.jsx writes in the same batch as the repayment
+      // itself (see handleRepayment) — that's what the public link
+      // resolves to, so the shared page always reflects the real,
+      // already-committed payment, never a value recomputed later.
+      const documentUrl = receipt.receiptDocId
+        ? await getOrCreateShareLink({
+            businessId,
+            documentType: 'debtPaymentReceipt',
+            documentId: receipt.receiptDocId,
+            createdBy: profile?.uid,
+          })
+        : null;
+      const message = buildDebtPaymentReceiptMessage({
+        shopName: settings.shopName || 'FlowBiz Store',
+        customerName: receipt.customerName,
+        amountPaid: receipt.amountPaid,
+        previousBalance: receipt.previousBalance,
+        remainingBalance: receipt.remainingBalance,
+        isCleared: receipt.isCleared,
+        documentUrl,
+        formatKES,
+      });
+      const opened = openWhatsApp(phone, message);
+      toast[opened ? 'success' : 'error'](opened ? 'WhatsApp opened.' : 'WhatsApp could not be opened.');
+    } catch (err) {
+      toast.error('Unable to generate the receipt link. Please try again.');
+    } finally {
+      setSendingWhatsApp(false);
+    }
   };
 
   return (
@@ -89,10 +107,10 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
             Send receipt via WhatsApp {!isPro && <span className="text-amber-600">— PRO</span>}
           </label>
           <div className="flex gap-2">
-            <input className="input flex-1" placeholder="Customer phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+            <input className="input flex-1" placeholder="Customer phone" value={phone} onChange={(e) => setPhone(e.target.value)} disabled={sendingWhatsApp} />
             {isPro ? (
-              <button className="btn-primary flex items-center justify-center gap-2 shrink-0" onClick={handleWhatsApp}>
-                <MessageCircle className="h-4 w-4" /> Send
+              <button className="btn-primary flex items-center justify-center gap-2 shrink-0" onClick={handleWhatsApp} disabled={sendingWhatsApp}>
+                <MessageCircle className="h-4 w-4" /> {sendingWhatsApp ? 'Preparing…' : 'Send'}
               </button>
             ) : (
               <Link to="/pro" className="btn-primary flex items-center justify-center gap-2 shrink-0">

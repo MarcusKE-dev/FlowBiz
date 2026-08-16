@@ -99,8 +99,7 @@ const handleSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaC
       profit: (soldPricePerUnit - product.costPrice) * quantity,
       paymentMethod, mpesaCode: mpesaCode || null,
       soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
-    }, businessId);
+      soldAt: new Date(), isCredit: false, isVoided: false,    }, businessId);
 
     const batch = writeBatch(db);
     batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });

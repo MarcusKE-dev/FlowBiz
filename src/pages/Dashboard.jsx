@@ -96,7 +96,16 @@ export default function Dashboard() {
     (repayments || []).forEach((r) => {
       list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
     });
-    return list.sort((a, b) => {
+      (creditSales || []).forEach((cs) => {
+     if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+     list.push({
+       id: `credit-${cs.id}`, type: 'Credit Sale',
+       title: `${cs.quantity} × ${cs.productName}`,
+       subtitle: `${cs.customerName || 'Customer'} · Sold by ${cs.soldByName || 'Staff'}`,
+       amount: cs.totalAmount, method: 'Credit', timestamp: cs.soldAt, isPositive: false,
+     });
+   });
+   return list.sort((a, b) => {
       const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
       const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
       return bTime - aTime;
@@ -119,7 +128,7 @@ const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod,
       profit: (soldPricePerUnit - product.costPrice) * quantity,
       paymentMethod, mpesaCode: mpesaCode || null,
       soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: serverTimestamp(), isCredit: false, isVoided: false,
+      soldAt: new Date(), isCredit: false, isVoided: false,
     }, businessId);
 
     const batch = writeBatch(db);

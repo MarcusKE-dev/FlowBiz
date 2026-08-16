@@ -10,6 +10,14 @@ const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz
 export default function Pro() {
   const { isPro, subscription } = useAuth();
   const [loading, setLoading] = useState(false);
+ const [proPrice, setProPrice] = useState(null);
+
+ useEffect(() => {
+   fetch(`${FLOWBIZ_API_URL}/api/pro/price`)
+     .then((r) => r.json())
+     .then((data) => setProPrice(data.amountKes))
+     .catch(() => {}); // stays on the loading placeholder rather than guessing a number
+ }, []);
 
   const handleSubscribe = async () => {
     if (loading) return; 
@@ -51,8 +59,9 @@ export default function Pro() {
       </div>
 
       <div className="card p-8 text-center bg-moss-50 border-moss-200">
-        <h2 className="font-display text-3xl font-bold text-moss-800">KSh 599 <span className="text-lg font-normal text-moss-700">/ 30 days</span></h2>
-        <p className="mt-2 text-ink-600 max-w-lg mx-auto">No recurring auto-billing. Manual renewal ensures you're always in control of your subscription.</p>
+        <h2 className="font-display text-3xl font-bold text-moss-800">
+          {proPrice != null ? `KSh ${proPrice.toLocaleString('en-KE')}` : '…'} <span className="text-lg font-normal text-moss-700">/ 30 days</span>
+        </h2>        <p className="mt-2 text-ink-600 max-w-lg mx-auto">No recurring auto-billing. Manual renewal ensures you're always in control of your subscription.</p>
         
         {isPro ? (
           <div className="mt-6 inline-flex flex-col items-center">

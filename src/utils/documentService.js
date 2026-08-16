@@ -24,41 +24,55 @@ export async function loadImageAsDataUrl(url) {
 // generates (sale receipts/invoices, and now debt payment receipts) —
 // keeps the logo/business-info block identical across document types
 // instead of re-implementing it per document.
-async function drawDocumentHeader(doc, settings, marginX, startY) {
+async function drawDocumentHeader(doc, settings, marginX, startY, paperWidthMm = 80) {
     let y = startY;
     const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
+    const logoSize = paperWidthMm <= 58 ? 11 : 14;
+    const textX = logoDataUrl ? marginX + logoSize + 3 : marginX;
+
     if (logoDataUrl) {
         try {
             const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
-            doc.addImage(logoDataUrl, format, marginX, y, 14, 14);
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(11);
-            doc.text(settings.shopName || 'Business Receipt', marginX + 17, y + 5);
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(8);
-            if (settings.phone) doc.text(`Tel: ${settings.phone}`, marginX + 17, y + 9);
-            if (settings.address) doc.text(settings.address, marginX + 17, y + 13);
-            return y + 18;
+            doc.addImage(logoDataUrl, format, marginX, y, logoSize, logoSize);
         } catch (err) {
             console.error('Could not embed business logo in PDF:', err);
         }
     }
+
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.text(settings.shopName || 'Business Receipt', marginX, y + 4);
+    doc.setFontSize(paperWidthMm <= 58 && logoDataUrl ? 9 : 11);
+    doc.text(settings.shopName || 'Business Receipt', textX, y + 5);
+
+    let lineY = y + 9;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
-    if (settings.phone) { y += 4; doc.text(`Tel: ${settings.phone}`, marginX, y + 4); }
-    if (settings.address) { y += 4; doc.text(settings.address, marginX, y + 4); }
-    return y + 8;
+    // FIX (#14): shows whichever of phone/email/address are actually
+    // configured — never a placeholder — same "only if set" rule the
+    // phone line already followed. Pulled straight from businessSettings,
+    // nothing hardcoded.
+    if (settings.phone) { doc.text(`Tel: ${settings.phone}`, textX, lineY); lineY += 4; }
+    if (settings.email) { doc.text(settings.email, textX, lineY); lineY += 4; }
+    if (settings.address && paperWidthMm > 58) { doc.text(settings.address, textX, lineY); lineY += 4; }
+
+    return Math.max(y + (logoDataUrl ? logoSize + 4 : 8), lineY + 2);
+}
+// FIX (thermal paper width): FlowBiz's receipts were always generated at
+// a fixed 80mm width. Some businesses' printers use 58mm paper — read
+// from businessSettings.receiptPaperWidth (defaults to 80, set in
+// Settings.jsx) so both PDF layouts, and the public receipt page's own
+// PDF/print output, size correctly for whichever paper the business
+// actually uses. Nothing else about the layout changes.
+function resolvePaperWidthMm(settings) {
+    return settings?.receiptPaperWidth === 58 ? 58 : 80;
 }
 
 // Replace the buildDocument function in src/utils/documentService.js
 async function buildDocument(data, settings, typeLabel) {
-    const doc = new jsPDF('p', 'mm', [80, 200]); // Thermal receipt size
+    const paperWidthMm = resolvePaperWidthMm(settings);
+    const doc = new jsPDF('p', 'mm', [paperWidthMm, 200]); // Thermal receipt size
     const marginX = 5;
-    const pageWidth = 75;
-    let y = await drawDocumentHeader(doc, settings, marginX, 8);
+    const pageWidth = paperWidthMm - marginX;
+    let y = await drawDocumentHeader(doc, settings, marginX, 8, paperWidthMm);
 
     // 2. DOCUMENT TYPE & META DATA
     y += 2;
@@ -100,7 +114,10 @@ async function buildDocument(data, settings, typeLabel) {
     y += 5;
     doc.setFont('helvetica', 'normal');
     const itemName = data.productName || data.description || 'Item';
-    const splitName = doc.splitTextToSize(itemName, 45);
+    // Proportional to page width so the item name doesn't crowd out the
+    // right-aligned amount on narrower 58mm paper — matches the original
+    // fixed 45mm exactly when paperWidthMm is 80.
+    const splitName = doc.splitTextToSize(itemName, Math.max(pageWidth - 30, 20));
     doc.text(splitName, marginX, y);
     
     const amountStr = formatKES(data.totalAmount || data.amount || 0);
@@ -138,7 +155,7 @@ async function buildDocument(data, settings, typeLabel) {
     doc.setFontSize(8);
     doc.setFont('helvetica', 'italic');
     doc.setTextColor(100, 100, 100);
-    doc.text(data.isCredit ? 'Payment due — thank you!' : 'Thank you for your business!', 40, y, { align: 'center' });
+    doc.text(data.isCredit ? 'Payment due — thank you!' : 'Thank you for your business!', (marginX + pageWidth) / 2, y, { align: 'center' });
 
     return doc;
 }
@@ -148,10 +165,11 @@ async function buildDocument(data, settings, typeLabel) {
 // to visually read as a distinct document ("DEBT PAYMENT RECEIPT"), not a
 // sales receipt with different labels bolted on.
 async function buildDebtPaymentDocument(receipt, settings) {
-    const doc = new jsPDF('p', 'mm', [80, 200]);
+    const paperWidthMm = resolvePaperWidthMm(settings);
+    const doc = new jsPDF('p', 'mm', [paperWidthMm, 200]);
     const marginX = 5;
-    const pageWidth = 75;
-    let y = await drawDocumentHeader(doc, settings, marginX, 8);
+    const pageWidth = paperWidthMm - marginX;
+    let y = await drawDocumentHeader(doc, settings, marginX, 8, paperWidthMm);
 
     y += 2;
     doc.setDrawColor(0, 0, 0);
@@ -215,7 +233,7 @@ async function buildDebtPaymentDocument(receipt, settings) {
     doc.setFontSize(8);
     doc.setFont('helvetica', 'italic');
     doc.setTextColor(100, 100, 100);
-    doc.text('Thank you for your payment!', 40, y, { align: 'center' });
+    doc.text('Thank you for your payment!', (marginX + pageWidth) / 2, y, { align: 'center' });
 
     return doc;
 }
@@ -257,8 +275,14 @@ export async function printDebtPaymentReceipt(receipt, settings) {
 // normalization and wa.me URL building used to live here directly; they
 // now live in ./whatsapp.js so every WhatsApp-sharing feature (sale
 // receipts, debt reminders, debt payment receipts) shares one
-// implementation. Callers of this function are unchanged.
-export function sendWhatsAppDocument(sale, settings, phone) {
+// implementation.
+//
+// documentUrl is the public share link from src/utils/documentSharing.js
+// — callers fetch/create it BEFORE calling this function (share-link
+// creation is an async Firestore write; this function stays synchronous
+// and focused on building the message + opening WhatsApp, same contract
+// as before).
+export function sendWhatsAppDocument(sale, settings, phone, documentUrl) {
     const message = buildReceiptMessage({
         shopName: settings.shopName || 'FlowBiz Store',
         customerName: sale.customerName,
@@ -268,6 +292,7 @@ export function sendWhatsAppDocument(sale, settings, phone) {
         isCredit: sale.isCredit,
         remainingBalance: sale.remainingBalance ?? sale.totalAmount,
         businessPhone: settings.phone,
+        documentUrl,
         formatKES,
     });
     const opened = openWhatsApp(phone, message);

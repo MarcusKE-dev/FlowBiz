@@ -89,9 +89,10 @@ const handleDel = async () => {
     setPaying(true);
     const batch = writeBatch(db);
     const expRef = doc(collection(db,'expenses'));
-    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:serverTimestamp() }, businessId));
+    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null,
+     recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:new Date() }, businessId));
     const payRef = doc(collection(db,'supplierPayments'));
-    batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:serverTimestamp(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
+    batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:new Date(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
 
     const commit = batch.commit();
     const { queuedOffline, error } = await raceWithTimeout(commit, 4000);

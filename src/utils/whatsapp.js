@@ -62,9 +62,13 @@ export function openWhatsApp(rawPhone, message) {
 // these are generated dynamically from real FlowBiz data — nothing here
 // is a hardcoded business name, amount, or date.
 
+// documentUrl is optional so this still works before a share link exists
+// (e.g. a caller that hasn't been updated) — but every real call site now
+// passes one, per the "message must contain a real FlowBiz document URL"
+// requirement.
 export function buildReceiptMessage({
   shopName, customerName, productName, quantity, totalAmount,
-  isCredit, remainingBalance, businessPhone, formatKES,
+  isCredit, remainingBalance, businessPhone, documentUrl, formatKES,
 }) {
   const label = isCredit ? 'Invoice' : 'Receipt';
   const lines = [`*${shopName}*`];
@@ -72,7 +76,9 @@ export function buildReceiptMessage({
   lines.push(`${label} — ${quantity} × ${productName}`);
   lines.push(`Total: ${formatKES(totalAmount)}`);
   if (isCredit) lines.push(`Amount due: ${formatKES(remainingBalance)}`);
-  if (businessPhone) lines.push(`Contact: ${businessPhone}`);
+  if (documentUrl) lines.push('', `View or download your ${label.toLowerCase()}:`, documentUrl);
+  const contactLink = businessPhone ? createWhatsAppLink(businessPhone, `Hello ${shopName}`) : null;
+  if (contactLink) lines.push('', `Contact ${shopName}:`, contactLink);
   lines.push('', isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!');
   return lines.join('\n');
 }
@@ -91,7 +97,7 @@ export function buildDebtReminderMessage({ shopName, customerName, outstandingAm
 }
 
 export function buildDebtPaymentReceiptMessage({
-  shopName, customerName, amountPaid, previousBalance, remainingBalance, isCleared, formatKES,
+  shopName, customerName, amountPaid, previousBalance, remainingBalance, isCleared, documentUrl, formatKES,
 }) {
   const lines = [`Hello ${customerName || 'there'},`, '', `We have received your payment of ${formatKES(amountPaid)}.`, ''];
   if (isCleared) {
@@ -102,6 +108,7 @@ export function buildDebtPaymentReceiptMessage({
     lines.push(`Payment received: ${formatKES(amountPaid)}`);
     lines.push(`Remaining balance: ${formatKES(remainingBalance)}`);
   }
+  if (documentUrl) lines.push('', 'View/download your payment receipt:', documentUrl);
   lines.push('', `— ${shopName}`, '', 'Thank you.');
   return lines.join('\n');
 }
