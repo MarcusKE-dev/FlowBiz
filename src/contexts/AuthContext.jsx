@@ -34,6 +34,9 @@ function getDeviceId() {
   }
   return id;
 }
+function getSessionDocId(uid) {
+  return `${getDeviceId()}__${uid}`;
+}
 
 // src/contexts/AuthContext.jsx — replace guessDeviceLabel()
 function guessDeviceLabel() {
@@ -90,7 +93,7 @@ export function AuthProvider({ children }) {
    const key = `${uid}:${businessId}`;
    if (sessionRegisteredRef.current === key) return;
    sessionRegisteredRef.current = key;
-    const sessionId = getDeviceId();
+    const sessionId = getSessionDocId(uid);
     const ref = doc(db, 'sessions', sessionId);
     const currentSnap = await getDoc(ref);
 
@@ -126,11 +129,11 @@ export function AuthProvider({ children }) {
   }, []);
 
   // Background heartbeat to keep the "last seen" time accurate for active devices
-  useEffect(() => {
+useEffect(() => {
     if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
-        const ref = doc(db, 'sessions', getDeviceId());
+        const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
         updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
       }
     }, 15 * 60 * 1000); // 15 mins
@@ -349,8 +352,8 @@ export function AuthProvider({ children }) {
         businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
         isActive: profile?.active !== false, emailVerified,
         login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
-        toggleMemberActive, revokeSession, listMySessions, listBusinessSessions, currentSessionId: getDeviceId(),
-        reloadProfile: async () => loadProfile(auth.currentUser),
+toggleMemberActive, revokeSession, listMySessions, listBusinessSessions,
+        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),        reloadProfile: async () => loadProfile(auth.currentUser),
       }}
     >
       {children}

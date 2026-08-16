@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
-import { applyActionCode, verifyPasswordResetCode, confirmPasswordReset, reload, checkActionCode } from 'firebase/auth';
+import { useSearchParams, useNavigate, Link } from 'react-router-dom';
+import { applyActionCode, verifyPasswordResetCode, confirmPasswordReset, reload, checkActionCode, sendEmailVerification } from 'firebase/auth';
+import toast from 'react-hot-toast';
 import { auth } from '../firebase';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 
@@ -54,8 +55,31 @@ function Shell({ children }) {
 function VerifyEmailPanel({ mode, oobCode }) {
   const [status, setStatus] = useState('working');
   const [message, setMessage] = useState('');
+  const [resending, setResending] = useState(false);
+  const navigate = useNavigate();
+
+  const handleRequestNewEmail = async () => {
+    if (!auth.currentUser) {
+      navigate('/login', { replace: true });
+      return;
+    }
+    setResending(true);
+    try {
+      await sendEmailVerification(auth.currentUser, {
+        url: `${window.location.origin}/auth/action`,
+        handleCodeInApp: true,
+      });
+      toast.success('A new verification email has been sent — check your inbox and spam/junk folder.');
+    } catch (err) {
+      console.error('[FlowBiz] AuthAction resend failed:', err.code || err.name, err.message);
+      toast.error("Couldn't send a new verification email right now. Please try again shortly.");
+    } finally {
+      setResending(false);
+    }
+  };
 
   useEffect(() => {
+
     let cancelled = false;
 
     async function run() {
@@ -100,9 +124,9 @@ function VerifyEmailPanel({ mode, oobCode }) {
         } catch { /* fall through to error below */ }
       }
 
-      if (!cancelled) {
+if (!cancelled) {
         setStatus('error');
-        setMessage('This link is missing required information. Please request a new verification email.');
+        setMessage("This verification link isn't complete or may have been altered. Please request a new one below.");
       }
     }
 
@@ -126,12 +150,17 @@ function VerifyEmailPanel({ mode, oobCode }) {
           <Link to="/" className="btn-primary w-full">Continue to FlowBiz</Link>
         </>
       )}
-      {status === 'error' && (
+{status === 'error' && (
         <>
-          <AlertCircle className="h-12 w-12 text-rust-500" strokeWidth={1.5} />
-          <h1 className="font-display text-lg font-bold text-ink-900">Something went wrong</h1>
+          
+          <h1 className="font-display text-lg font-bold text-ink-900">This verification link isn't valid</h1>
           <p className="text-sm text-ink-500">{message}</p>
-          <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
+          <div className="flex flex-col gap-2">
+            <button className="btn-primary w-full" onClick={handleRequestNewEmail} disabled={resending}>
+              {resending ? 'Sending…' : 'Request a new verification email'}
+            </button>
+            <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
+          </div>
         </>
       )}
     </Shell>

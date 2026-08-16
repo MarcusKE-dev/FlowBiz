@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../contexts/AuthContext';
@@ -29,17 +29,6 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     window.addEventListener('focus', handleFocus);
     document.addEventListener('visibilitychange', handleVisibility);
 
-    // FIX: was polling every 5s unconditionally. Each poll calls
-    // Firebase's reload(), which internally notifies auth listeners and
-    // causes Firestore to tear down and re-open its entire realtime
-    // connection every time — even while the tab is in the background
-    // and nothing changed. That churn shows up as repeated
-    // ERR_BLOCKED_BY_CLIENT noise on connections some ad blockers/proxies
-    // flag, and increases the odds of a listener briefly missing an
-    // update. focus/visibilitychange above already cover the main case
-    // (returning to the tab after clicking the email link); this
-    // interval is only a slow fallback for browsers where those events
-    // don't fire reliably, so it's slowed down and skipped while hidden.
     const pollId = setInterval(() => {
       if (document.visibilityState === 'visible') refreshEmailVerification();
     }, 20000);
@@ -51,14 +40,23 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     };
   }, [demo, firebaseUser, emailVerified, refreshEmailVerification]);
 
-  if (loading) return <LoadingSpinner label="Checking your session…" />;
-  if (!firebaseUser) return <Navigate to="/login" replace />;
+      const [checkingVerification, setCheckingVerification] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setTimeout(() => setResendCooldown((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendCooldown]);
+  
+if (loading) return <LoadingSpinner label="Checking your session…" />;
 
   if (sessionRevoked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-sand p-6">
         <div className="card max-w-sm w-full p-6 text-center space-y-4">
-          <Lock className="h-12 w-12 text-ink-400" strokeWidth={1.5} />
+          
           <h2 className="font-display text-lg font-bold text-ink-900">This device was signed out</h2>
           <p className="text-sm text-ink-500">An owner revoked access for this device from Settings → Device Management.</p>
           <button className="btn-primary w-full" onClick={() => (window.location.href = '/login')}>Go to sign in</button>
@@ -66,6 +64,8 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
       </div>
     );
   }
+
+  if (!firebaseUser) return <Navigate to="/login" replace />;
 
   if (accountRemoved) {
     return (
@@ -111,29 +111,38 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     );
   }
 
-  if (!demo && !emailVerified) {
+if (!demo && !emailVerified) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-sand p-6">
         <div className="card max-w-sm w-full p-6 text-center space-y-4">
-          <Mail className="h-12 w-12 text-moss-500" strokeWidth={1.5} />
+          
           <h2 className="font-display text-lg font-bold text-ink-900">Verify your email</h2>
-          <p className="text-sm text-ink-500">We sent a verification link to your email address. Click it, then come back to this tab — FlowBiz will pick it up automatically.</p>
+          <p className="text-sm text-ink-500">We've sent a verification link to your email address. Please check your Inbox, and if you don't see it within a minute or two, check your Spam/Junk folder too.</p>
           <div className="flex flex-col gap-2">
             <button
               className="btn-primary w-full"
+              disabled={checkingVerification}
               onClick={async () => {
-                const verified = await refreshEmailVerification();
-                if (!verified) toast.error("Not verified yet — check your email and click the link, then try again.");
+                setCheckingVerification(true);
+                try {
+                  const verified = await refreshEmailVerification();
+                  if (!verified) toast.error("Not verified yet — check your inbox (and spam/junk folder) and click the link, then try again.");
+                } finally {
+                  setCheckingVerification(false);
+                }
               }}
             >
-              I've verified — check now
+              {checkingVerification ? 'Checking…' : "I've verified — check now"}
             </button>
             <button
               className="btn-outline w-full"
+              disabled={resending || resendCooldown > 0}
               onClick={async () => {
+                setResending(true);
                 try {
                   await resendVerificationEmail();
-                  toast.success('Verification email sent.');
+                  toast.success('Verification email sent — check your inbox and spam/junk folder.');
+                  setResendCooldown(60);
                 } catch (err) {
                   console.error('[FlowBiz] resendVerificationEmail failed:', err.code || err.name, err.message);
                   toast.error(
@@ -141,10 +150,13 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
                       ? 'Too many verification attempts. Please wait before requesting another email.'
                       : "Couldn't send the verification email. Please try again in a moment."
                   );
+                  if (err.code === 'auth/too-many-requests') setResendCooldown(60);
+                } finally {
+                  setResending(false);
                 }
               }}
             >
-              Resend verification email
+              {resending ? 'Sending…' : resendCooldown > 0 ? `Resend available in ${resendCooldown}s` : 'Resend verification email'}
             </button>
             <button className="text-xs text-ink-400 hover:underline" onClick={logout}>Sign out</button>
           </div>
