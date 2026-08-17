@@ -223,10 +223,10 @@ useEffect(() => {
   
   const resendVerificationEmail = async () => {
     if (!auth.currentUser) throw new Error('Not signed in.');
-    await sendEmailVerification(auth.currentUser, {
-      url: `${window.location.origin}/auth/action`,
-      handleCodeInApp: true,
-    });
+ await sendEmailVerification(auth.currentUser, {
+  url: `${window.location.origin}/auth/action`,
+  handleCodeInApp: false,
+});
   };
 
   const refreshEmailVerification = useCallback(async () => {

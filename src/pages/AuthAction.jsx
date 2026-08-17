@@ -15,16 +15,88 @@ export default function AuthAction() {
 
   useEffect(() => {
     if (urlMode || !oobCode) return;
+
     let cancelled = false;
+
     checkActionCode(auth, oobCode)
       .then((info) => {
         if (cancelled) return;
-        setResolvedMode(info.operation === 'PASSWORD_RESET' ? 'resetPassword' : 'verifyEmail');
+
+        if (info.operation === 'PASSWORD_RESET') {
+          setResolvedMode('resetPassword');
+        } else if (info.operation === 'VERIFY_EMAIL') {
+          setResolvedMode('verifyEmail');
+        } else {
+          setResolvedMode('unknown');
+        }
       })
-      .catch(() => { if (!cancelled) setResolvedMode('verifyEmail'); })
-      .finally(() => { if (!cancelled) setCheckingMode(false); });
-    return () => { cancelled = true; };
+      .catch((err) => {
+        console.error('[FlowBiz] Failed to determine auth action:', err.code, err.message);
+
+        if (!cancelled) {
+          setResolvedMode('unknown');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingMode(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [urlMode, oobCode]);
+
+  if (checkingMode) {
+    return (
+      <Shell>
+        <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
+        <p className="text-sm text-ink-500">Checking your link…</p>
+      </Shell>
+    );
+  }
+
+  if (!oobCode) {
+    return (
+      <Shell>
+        <AlertCircle className="h-12 w-12 mx-auto text-rust-500" strokeWidth={1.5} />
+        <h1 className="font-display text-lg font-bold text-ink-900">
+          Invalid link
+        </h1>
+        <p className="text-sm text-ink-500">
+          This authentication link is missing required information.
+          Please request a new link.
+        </p>
+        <Link to="/login" className="btn-outline w-full">
+          Go to sign in
+        </Link>
+      </Shell>
+    );
+  }
+
+  if (resolvedMode === 'resetPassword') {
+    return <ResetPasswordPanel oobCode={oobCode} />;
+  }
+
+  if (resolvedMode === 'verifyEmail') {
+    return <VerifyEmailPanel mode="verifyEmail" oobCode={oobCode} />;
+  }
+
+  return (
+    <Shell>
+      <AlertCircle className="h-12 w-12 mx-auto text-rust-500" strokeWidth={1.5} />
+      <h1 className="font-display text-lg font-bold text-ink-900">
+        Invalid authentication link
+      </h1>
+      <p className="text-sm text-ink-500">
+        We couldn't determine what this link is intended to do.
+        Please request a new link.
+      </p>
+      <Link to="/login" className="btn-outline w-full">
+        Go to sign in
+      </Link>
+    </Shell>
+  );
+}
 
   if (checkingMode) {
     return (

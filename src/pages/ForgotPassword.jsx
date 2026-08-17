@@ -14,10 +14,10 @@ export default function ForgotPassword() {
     setError(null);
     setSubmitting(true);
     try {
-      await sendPasswordResetEmail(auth, email.trim(), {
-        url: `${window.location.origin}/auth/action`,
-        handleCodeInApp: true,
-      });
+await sendPasswordResetEmail(auth, email.trim(), {
+  url: `${window.location.origin}/auth/action`,
+  handleCodeInApp: false,
+});
       setSent(true);
 } catch (err) {
       // FIX: previously every error EXCEPT invalid-email/too-many-requests
