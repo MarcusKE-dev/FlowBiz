@@ -39,7 +39,7 @@ const SECTIONS = [
           <div className="rounded-lg bg-ink-50 p-3">
             <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 5: Record Debt Repayments</h4>
             <p className="text-sm text-ink-600 mt-1">
-              When a debtor pays off what they owe, go to <strong className="text-ink-800">Debtors</strong>, click their name, and record the repayment amount (Cash or M-Pesa). Do not create a new sale; this updates their remaining balance and logs the cash received.
+              When a debtor pays off what they owe, go to <strong className="text-ink-800">Customers</strong>, click their name, and record the repayment amountWhen a debtor pays off what they owe, go to <strong className="text-ink-800">Customers</strong>, click their name, and record the repayment amount (Cash or M-Pesa). Do not create a new sale; this updates their remaining balance and logs the cash received.
             </p>
           </div>
         </div>
@@ -178,6 +178,35 @@ const SECTIONS = [
     )
   },
   {
+    id: 'suppliers-team',
+    title: '7. Suppliers & Team',
+    desc: 'Tracking what you owe suppliers, and managing owner and cashier access.',
+    content: (
+      <div className="space-y-4 text-sm text-ink-600">
+        <p>The <strong className="text-ink-800">Suppliers</strong> page tracks who you buy stock from and what you owe them. Every purchase recorded "on credit" (Purchases page) adds to that supplier's outstanding balance automatically — record a payment from the Suppliers page when you pay them, and it logs both the payment and the matching expense in one step.</p>
+        <p><strong className="text-ink-800">Team</strong> (under Settings) is where an owner invites staff. There are two roles:</p>
+        <ul className="list-disc pl-5 space-y-1.5">
+          <li><strong>Owner:</strong> full access — Products, Purchases, Suppliers, Reports, Settings, Team, and Close Day.</li>
+          <li><strong>Cashier:</strong> Counter, Customers, and Expenses (if the owner allows it) — enough to run daily sales without touching sensitive business data.</li>
+        </ul>
+        <p>An owner can deactivate a staff account at any time from Team, or sign a device out remotely from Settings → Device Management if a phone is lost or a staff member leaves.</p>
+      </div>
+    ),
+  },
+  {
+    id: 'pro-analytics',
+    title: '8. FlowBiz Pro & Analytics',
+    desc: 'What Advanced Analytics, Inventory Intelligence, and WhatsApp sharing add on top of the free plan.',
+    content: (
+      <div className="space-y-4 text-sm text-ink-600">
+        <p><strong className="text-ink-800">Advanced Analytics</strong> (Pro) goes beyond the standard Reports page: it compares the current period against the one before it, breaks down which products drive the most volume versus the most profit, and attributes revenue per staff member.</p>
+        <p><strong className="text-ink-800">Inventory Intelligence</strong> (Pro) looks at your stock from a capital point of view: how much cash is tied up in inventory right now, which products are overstocked and quietly locking up that cash, and which are close to running out.</p>
+        <p><strong className="text-ink-800">WhatsApp sharing</strong> (Pro) lets you send a receipt, invoice, or debt reminder straight to a customer's phone with one tap.</p>
+        <p className="text-xs text-ink-500">Printing and downloading receipts/invoices as PDF is available on every plan — Pro specifically unlocks Analytics, Inventory Intelligence, WhatsApp sharing, and unlimited products/staff.</p>
+      </div>
+    ),
+  },
+  {
     id: 'faq',
     title: '7. Frequently Asked Questions',
     desc: 'Troubleshooting and immediate answers to common user questions.',
@@ -209,7 +238,7 @@ const SECTIONS = [
     content: (
       <ul className="list-disc pl-5 space-y-1.5 text-sm text-ink-600">
         <li><strong>Record expenses immediately:</strong> Log your County Council fees, electricity, and lunch costs right when they occur so you do not forget at close-of-day.</li>
-        <li><strong>Record credit repayments inside Debtors:</strong> Never create a new direct sale to record a repayment, this would double-count your revenue and duplicate items sold.</li>
+        <li><strong>Record credit repayments inside Customers:</strong> Never create a new direct sale to record a repayment, this would double-count your revenue and duplicate items sold.</li>
         <li><strong>Perform Stock Take regularly:</strong> Plan a quick physical stock take every weekend or fortnight to ensure physical inventory matches your screens exactly.</li>
         <li><strong>Keep the general settings updated:</strong> Shop name edits immediately personalize your generated PDF reports for presentation to accountants.</li>
       </ul>

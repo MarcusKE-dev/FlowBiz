@@ -91,7 +91,7 @@ export default function AppRouter() {
     <Suspense fallback={<LoadingSpinner label="Loading..." />}>
       <RoutePrefetcher />
       <Routes>
-        <Route path="/setup" element={<PublicOnly><Setup /></PublicOnly>} />
+        <Route path="/setup" element={<Setup />} />
         <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
         <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
         <Route path="/join/:inviteId" element={<JoinStaff />} />

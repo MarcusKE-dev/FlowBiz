@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -36,6 +36,22 @@ export default function Settings() {
 
   const [sessions, setSessions] = useState([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
+  const deviceGroups = useMemo(() => {
+    const groups = new Map();
+    for (const s of sessions) {
+      const key = `${s.deviceLabel || 'Unknown device'}|${s.userAgent || ''}`;
+      const lastActiveMs = s.lastActiveAt?.toMillis ? s.lastActiveAt.toMillis() : (s.lastActiveAt ? new Date(s.lastActiveAt).getTime() : 0);
+      const existing = groups.get(key);
+      if (!existing) {
+        groups.set(key, { key, deviceLabel: s.deviceLabel, lastUserName: s.lastUserName, lastActiveMs, ids: [s.id], anyActive: s.revoked !== true });
+      } else {
+        existing.ids.push(s.id);
+        if (s.revoked !== true) existing.anyActive = true;
+        if (lastActiveMs > existing.lastActiveMs) { existing.lastActiveMs = lastActiveMs; existing.lastUserName = s.lastUserName; }
+      }
+    }
+    return Array.from(groups.values()).sort((a, b) => b.lastActiveMs - a.lastActiveMs);
+  }, [sessions]);
 
   const [archived, setArchived] = useState([]);
   const [archivedLoading, setArchivedLoading] = useState(false);
@@ -173,10 +189,10 @@ export default function Settings() {
     }
   };
 
-  const handleRevoke = async (sessionId) => {
+const handleRevokeGroup = async (group) => {
     try {
-      await revokeSession(sessionId);
-      setSessions(s => s.map(x => x.id === sessionId ? { ...x, revoked: true } : x));
+      await Promise.all(group.ids.map((id) => revokeSession(id)));
+      setSessions((s) => s.map((x) => (group.ids.includes(x.id) ? { ...x, revoked: true } : x)));
       toast.success('Device signed out.');
     } catch (err) { toast.error(err.message); }
   };
@@ -263,43 +279,37 @@ export default function Settings() {
             <h2 className="font-display text-base font-bold text-ink-800">Logged-in Devices</h2>
           </div>
           <p className="text-sm text-ink-500 mb-2">Devices currently or recently associated with your business.</p>
-          {sessionsLoading ? <p className="text-sm text-ink-400">Loading…</p> : sessions.length === 0 ? (
+{sessionsLoading ? <p className="text-sm text-ink-400">Loading…</p> : deviceGroups.length === 0 ? (
             <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
           ) : (
             <div className="divide-y divide-ink-100">
-              {sessions.sort((a,b) => (b.lastActiveAt?.toMillis?.() ?? 0) - (a.lastActiveAt?.toMillis?.() ?? 0)).map(s => {
-                const isCurrent = s.id === currentSessionId;
-                
-                // FIX: Explicitly parsing Timestamps to numbers to satisfy strict linters
-                const lastActiveMs = s.lastActiveAt?.toMillis 
-                  ? s.lastActiveAt.toMillis() 
-                  : (s.lastActiveAt ? new Date(s.lastActiveAt).getTime() : 0);
-                
-                const isActiveNow = isCurrent || (Date.now() - lastActiveMs < 20 * 60 * 1000);
-                
+              {deviceGroups.map((group) => {
+                const isCurrent = group.ids.includes(currentSessionId);
+                const isActiveNow = isCurrent || (Date.now() - group.lastActiveMs < 20 * 60 * 1000);
+                const isRevoked = !group.anyActive;
                 return (
-                <div key={s.id} className="flex items-center justify-between py-3 text-sm">
+                <div key={group.key} className="flex items-center justify-between py-3 text-sm">
                   <div className="min-w-0 pr-3">
                     <div className="flex flex-wrap items-center gap-2 mb-1">
-                      <p className="font-semibold text-ink-800 truncate">{s.deviceLabel}</p>
+                      <p className="font-semibold text-ink-800 truncate">{group.deviceLabel || 'Unknown device'}</p>
                       {isCurrent && <span className="badge bg-ink-900 text-white border border-ink-900 shrink-0">This device</span>}
-                      {!isCurrent && isActiveNow && !s.revoked && <span className="badge bg-moss-50 text-moss-700 border border-moss-200 shrink-0">Active</span>}
-                      {!isCurrent && !isActiveNow && !s.revoked && <span className="badge bg-ink-50 text-ink-600 border border-ink-200 shrink-0">Inactive</span>}
+                      {!isCurrent && isActiveNow && !isRevoked && <span className="badge bg-moss-50 text-moss-700 border border-moss-200 shrink-0">Active</span>}
+                      {!isCurrent && !isActiveNow && !isRevoked && <span className="badge bg-ink-50 text-ink-600 border border-ink-200 shrink-0">Inactive</span>}
                     </div>
                     <p className="text-[11px] text-ink-500 truncate">
-                      <span className="font-medium text-ink-700">{s.lastUserName || 'Unknown User'}</span> &middot; {isActiveNow ? 'Last seen: Just now' : `Last seen: ${formatDateTime(s.lastActiveAt)}`}
+                      <span className="font-medium text-ink-700">{group.lastUserName || 'Unknown User'}</span> &middot; {isActiveNow ? 'Last seen: Just now' : `Last seen: ${formatDateTime(new Date(group.lastActiveMs))}`}
                     </p>
                   </div>
-                  {s.revoked ? (
+                  {isRevoked ? (
                     <span className="badge bg-rust-50 text-rust-600 border border-rust-200 shrink-0">Signed out</span>
                   ) : (
-                    !isCurrent && <button className="btn-outline !px-3 !py-1.5 !min-h-0 text-xs shrink-0" onClick={() => handleRevoke(s.id)}>Sign out</button>
+                    !isCurrent && <button className="btn-outline !px-3 !py-1.5 !min-h-0 text-xs shrink-0" onClick={() => handleRevokeGroup(group)}>Sign out</button>
                   )}
                 </div>
               )})}
             </div>
           )}
-        </div>
+                </div>
       )}
 
       <div className="card p-5 space-y-3">

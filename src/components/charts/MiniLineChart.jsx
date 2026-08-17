@@ -9,7 +9,7 @@
 // JS-driven hover tooltips, the start/end labels and the overall change
 // are always shown as real text under the chart, so the trend is never
 // locked behind a color someone might not be able to distinguish.
-export default function MiniLineChart({ data, height = 140, colorClassName = 'text-blue-600', formatValue = (v) => String(v), ariaLabel }) {
+export default function MiniLineChart({ data, height = 140, colorClassName = 'text-blue-600', formatValue = (v) => String(v), ariaLabel, compact = false }) {
   if (!data || data.length === 0) return null;
 
   const width = 300; // viewBox units — scales to container via className="w-full"
@@ -32,7 +32,7 @@ export default function MiniLineChart({ data, height = 140, colorClassName = 'te
   const first = values[0];
   const last = values[values.length - 1];
   const change = first !== 0 ? ((last - first) / Math.abs(first)) * 100 : null;
-  const showDots = data.length <= 31;
+  const showDots = !compact && data.length <= 31;
 
   return (
     <div>
@@ -43,14 +43,18 @@ export default function MiniLineChart({ data, height = 140, colorClassName = 'te
           <circle key={i} cx={p.x} cy={p.y} r="2" className={colorClassName} fill="currentColor" />
         ))}
       </svg>
-      <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-400">
-        <span>{data[0].label}</span>
-        <span>{data[data.length - 1].label}</span>
-      </div>
-      {change !== null && (
-        <p className={`mt-1 text-xs font-semibold ${change >= 0 ? 'text-moss-700' : 'text-rust-600'}`}>
-          {change >= 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}% over this period — ending at {formatValue(last)}
-        </p>
+{!compact && (
+        <>
+          <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-400">
+            <span>{data[0].label}</span>
+            <span>{data[data.length - 1].label}</span>
+          </div>
+          {change !== null && (
+            <p className={`mt-1 text-xs font-semibold ${change >= 0 ? 'text-moss-700' : 'text-rust-600'}`}>
+              {change >= 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}% over this period — ending at {formatValue(last)}
+            </p>
+          )}
+        </>
       )}
     </div>
   );
