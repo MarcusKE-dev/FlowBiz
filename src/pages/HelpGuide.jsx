@@ -183,11 +183,11 @@ const SECTIONS = [
     desc: 'Tracking what you owe suppliers, and managing owner and cashier access.',
     content: (
       <div className="space-y-4 text-sm text-ink-600">
-        <p>The <strong className="text-ink-800">Suppliers</strong> page tracks who you buy stock from and what you owe them. Every purchase recorded "on credit" (Purchases page) adds to that supplier's outstanding balance automatically — record a payment from the Suppliers page when you pay them, and it logs both the payment and the matching expense in one step.</p>
+        <p>The <strong className="text-ink-800">Suppliers</strong> page tracks who you buy stock from and what you owe them. Every purchase recorded "on credit" (Purchases page) adds to that supplier's outstanding balance automatically record a payment from the Suppliers page when you pay them, and it logs both the payment and the matching expense in one step.</p>
         <p><strong className="text-ink-800">Team</strong> (under Settings) is where an owner invites staff. There are two roles:</p>
         <ul className="list-disc pl-5 space-y-1.5">
-          <li><strong>Owner:</strong> full access — Products, Purchases, Suppliers, Reports, Settings, Team, and Close Day.</li>
-          <li><strong>Cashier:</strong> Counter, Customers, and Expenses (if the owner allows it) — enough to run daily sales without touching sensitive business data.</li>
+          <li><strong>Owner:</strong> full access Products, Purchases, Suppliers, Reports, Settings, Team, and Close Day.</li>
+          <li><strong>Cashier:</strong> Counter, Customers, and Expenses (if the owner allows it) enough to run daily sales without touching sensitive business data.</li>
         </ul>
         <p>An owner can deactivate a staff account at any time from Team, or sign a device out remotely from Settings → Device Management if a phone is lost or a staff member leaves.</p>
       </div>
@@ -202,7 +202,7 @@ const SECTIONS = [
         <p><strong className="text-ink-800">Advanced Analytics</strong> (Pro) goes beyond the standard Reports page: it compares the current period against the one before it, breaks down which products drive the most volume versus the most profit, and attributes revenue per staff member.</p>
         <p><strong className="text-ink-800">Inventory Intelligence</strong> (Pro) looks at your stock from a capital point of view: how much cash is tied up in inventory right now, which products are overstocked and quietly locking up that cash, and which are close to running out.</p>
         <p><strong className="text-ink-800">WhatsApp sharing</strong> (Pro) lets you send a receipt, invoice, or debt reminder straight to a customer's phone with one tap.</p>
-        <p className="text-xs text-ink-500">Printing and downloading receipts/invoices as PDF is available on every plan — Pro specifically unlocks Analytics, Inventory Intelligence, WhatsApp sharing, and unlimited products/staff.</p>
+        <p className="text-xs text-ink-500">Printing and downloading receipts/invoices as PDF is available on every plan Pro specifically unlocks Analytics, Inventory Intelligence, WhatsApp sharing, and unlimited products/staff.</p>
       </div>
     ),
   },

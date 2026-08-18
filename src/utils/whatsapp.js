@@ -66,14 +66,34 @@ export function openWhatsApp(rawPhone, message) {
 // (e.g. a caller that hasn't been updated) — but every real call site now
 // passes one, per the "message must contain a real FlowBiz document URL"
 // requirement.
+//
+// FIX (multi-product cart): `items` is optional — when a sale/invoice was
+// built from the Counter cart with more than one product, pass its
+// `items` array (see Counter.jsx's buildLineItems) and every line is
+// listed individually instead of collapsing to a single product/quantity
+// line. Single-product sales (Dashboard's own quick-scan sale flow, or a
+// one-item cart checkout) keep working exactly as before by omitting
+// `items` or passing an array with a single entry.
 export function buildReceiptMessage({
   shopName, customerName, productName, quantity, totalAmount,
-  isCredit, remainingBalance, businessPhone, documentUrl, formatKES,
+  isCredit, remainingBalance, businessPhone, documentUrl, formatKES, items,
 }) {
   const label = isCredit ? 'Invoice' : 'Receipt';
   const lines = [`*${shopName}*`];
   if (customerName) lines.push(`Hello ${customerName},`);
-  lines.push(`${label} — ${quantity} × ${productName}`);
+
+  if (Array.isArray(items) && items.length > 1) {
+    lines.push(`${label}:`);
+    items.forEach((it) => {
+      const lineTotal = it.lineTotal ?? (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0);
+      lines.push(`• ${it.quantity} × ${it.productName} — ${formatKES(lineTotal)}`);
+    });
+  } else {
+    const singleName = (Array.isArray(items) && items[0]?.productName) || productName;
+    const singleQty = (Array.isArray(items) && items[0]?.quantity) || quantity;
+    lines.push(`${label} — ${singleQty} × ${singleName}`);
+  }
+
   lines.push(`Total: ${formatKES(totalAmount)}`);
   if (isCredit) lines.push(`Amount due: ${formatKES(remainingBalance)}`);
   if (documentUrl) lines.push('', `Download ${label}:`, documentUrl);

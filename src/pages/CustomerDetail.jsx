@@ -150,15 +150,26 @@ export default function CustomerDetail() {
     } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
   };
 
+  // FIX (multi-product cart): a credit sale from Counter.jsx's cart can
+  // carry several products via `items` on one creditSale doc. Cancelling
+  // it now restores stock for every line item (falling back to the
+  // single productId/quantity shape for pre-cart, legacy creditSale docs
+  // — cancelling those still works exactly as before).
   const handleCancel = async (cs) => {
     setCancelTarget(null);
     try {
+      const lineItems = Array.isArray(cs.items) && cs.items.length > 0
+        ? cs.items
+        : [{ productId: cs.productId, quantity: cs.quantity }];
+      const targets = lineItems.filter((item) => item.productId);
+      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
+
       const batch = writeBatch(db);
-      const prodRef = doc(db,'products',cs.productId);
-      const prodSnap = await getDoc(prodRef);
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
-      }
+      targets.forEach((item, idx) => {
+        if (snaps[idx].exists()) {
+          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
+        }
+      });
       batch.update(doc(db,'creditSales',cs.id), {
         status: 'cancelled', remainingBalance: 0,
         cancelledAt: serverTimestamp(), cancelledBy: profile.uid,
@@ -168,14 +179,23 @@ export default function CustomerDetail() {
     } catch (err) { toast.error(friendlyErrorMessage(err)); }
   };
 
+  // FIX (multi-product cart): same line-item restoration as handleCancel
+  // above, applied to a refund (a credit sale that had some amount
+  // already paid on it).
   const handleRefund = async (cs, { method }) => {
     try {
+      const lineItems = Array.isArray(cs.items) && cs.items.length > 0
+        ? cs.items
+        : [{ productId: cs.productId, quantity: cs.quantity }];
+      const targets = lineItems.filter((item) => item.productId);
+      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
+
       const batch = writeBatch(db);
-      const prodRef = doc(db,'products',cs.productId);
-      const prodSnap = await getDoc(prodRef);
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
-      }
+      targets.forEach((item, idx) => {
+        if (snaps[idx].exists()) {
+          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
+        }
+      });
       batch.update(doc(db,'creditSales',cs.id), {
         status: 'refunded', remainingBalance: 0,
         refundedAt: serverTimestamp(), refundedBy: profile.uid,

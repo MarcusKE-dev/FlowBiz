@@ -226,19 +226,45 @@ export default function AdvancedAnalytics() {
     });
   }, [buckets, sales, expenses, repayments, allCreditSales]);
 
+  // FIX (multi-product cart): a Counter.jsx cart sale can carry several
+  // products on one sale/creditSale doc via `items`. Crediting the whole
+  // doc's aggregate qty/revenue/profit to its (summary) productName would
+  // badly skew Volume/Margin Drivers — each line item is now credited to
+  // its own product when `items` is present; legacy single-product docs
+  // (no `items` field) are read exactly as before.
   const productPerf = useMemo(() => {
     const map = {};
+    const ensure = (name) => {
+      if (!map[name]) map[name] = { name, qty: 0, revenue: 0, profit: 0 };
+      return map[name];
+    };
     (sales || []).forEach((s) => {
       if (s.isVoided) return;
-      if (!map[s.productName]) map[s.productName] = { name: s.productName, qty: 0, revenue: 0, profit: 0 };
-      map[s.productName].qty += Number(s.quantity) || 0;
-      map[s.productName].revenue += Number(s.totalAmount) || 0;
-      map[s.productName].profit += Number(s.profit) || 0;
+      if (Array.isArray(s.items) && s.items.length > 0) {
+        s.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty += Number(it.quantity) || 0;
+          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
+          row.profit += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
+        });
+      } else {
+        const row = ensure(s.productName);
+        row.qty += Number(s.quantity) || 0;
+        row.revenue += Number(s.totalAmount) || 0;
+        row.profit += Number(s.profit) || 0;
+      }
     });
     (creditSales || []).forEach((cs) => {
       if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-      if (!map[cs.productName]) map[cs.productName] = { name: cs.productName, qty: 0, revenue: 0, profit: 0 };
-      map[cs.productName].qty += Number(cs.quantity) || 0;
+      if (Array.isArray(cs.items) && cs.items.length > 0) {
+        cs.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty += Number(it.quantity) || 0;
+        });
+      } else {
+        const row = ensure(cs.productName);
+        row.qty += Number(cs.quantity) || 0;
+      }
     });
     return Object.values(map);
   }, [sales, creditSales]);

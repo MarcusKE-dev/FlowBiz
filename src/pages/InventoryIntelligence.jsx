@@ -106,21 +106,39 @@ export default function InventoryIntelligence() {
     overstocked.sort((a, b) => b.value - a.value);
     const healthyCount = (products || []).length - outOfStock.length - overstocked.length - lowStock.length;
 
-    return { totalCost, totalRetail, unitsInStock, outOfStock, overstocked, lowStock, healthyCount };
+    return { totalCost, totalRetail, unitsInStock, overstocked, outOfStock, lowStock, healthyCount };
   }, [products]);
 
+  // FIX (multi-product cart): a Counter.jsx cart sale can carry several
+  // products on one sale/creditSale doc via `items`. Crediting the whole
+  // doc's aggregate quantity/value to a single s.productId would badly
+  // skew per-product velocity (ABC classification, reorder priority,
+  // slow-moving detection) — each line item is now credited to its own
+  // productId when `items` is present; legacy single-product docs (no
+  // `items` field) are read exactly as before.
   const velocityData = useMemo(() => {
     const units = {};
     const value = {};
+    const addLine = (productId, qty, amount) => {
+      if (!productId) return;
+      units[productId] = (units[productId] || 0) + qty;
+      value[productId] = (value[productId] || 0) + amount;
+    };
     (recentSales || []).forEach((s) => {
       if (s.isVoided) return;
-      units[s.productId] = (units[s.productId] || 0) + (Number(s.quantity) || 0);
-      value[s.productId] = (value[s.productId] || 0) + (Number(s.totalAmount) || 0);
+      if (Array.isArray(s.items) && s.items.length > 0) {
+        s.items.forEach((it) => addLine(it.productId, Number(it.quantity) || 0, Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0));
+      } else {
+        addLine(s.productId, Number(s.quantity) || 0, Number(s.totalAmount) || 0);
+      }
     });
     (recentCreditSales || []).forEach((cs) => {
       if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-      units[cs.productId] = (units[cs.productId] || 0) + (Number(cs.quantity) || 0);
-      value[cs.productId] = (value[cs.productId] || 0) + (Number(cs.totalAmount) || 0);
+      if (Array.isArray(cs.items) && cs.items.length > 0) {
+        cs.items.forEach((it) => addLine(it.productId, Number(it.quantity) || 0, Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0));
+      } else {
+        addLine(cs.productId, Number(cs.quantity) || 0, Number(cs.totalAmount) || 0);
+      }
     });
     return { units, value };
   }, [recentSales, recentCreditSales]);

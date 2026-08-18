@@ -103,6 +103,11 @@ function buildViewModel(documentType, doc) {
     };
   }
   const isCredit = documentType === 'invoice';
+  // FIX (multi-product cart): a Counter.jsx cart sale/invoice stores every
+  // product as `items` on the doc. When present, the public page renders
+  // one row per product instead of the single productName/quantity this
+  // route always assumed before. Legacy single-product docs (no `items`
+  // field) render exactly as before via the fields below.
   return {
     label: isCredit ? DOCUMENT_LABEL.invoice : DOCUMENT_LABEL.receipt,
     dateLabel: formatDate(doc.soldAt),
@@ -110,6 +115,7 @@ function buildViewModel(documentType, doc) {
     refLabel: '',
     kind: 'sale',
     isCredit,
+    items: Array.isArray(doc.items) && doc.items.length > 0 ? doc.items : null,
     productName: doc.productName || 'Item',
     quantity: Number(doc.quantity) || 0,
     soldPricePerUnit: Number(doc.soldPricePerUnit) || 0,
@@ -202,6 +208,19 @@ function renderDocumentBody(vm, settings) {
       <div class="row total"><span class="label">Remaining balance</span><span class="value">${formatKES(vm.remainingBalance)}</span></div>
       <div style="text-align:center;"><span class="badge ${vm.isCleared ? 'cleared' : 'partial'}">${vm.isCleared ? 'DEBT CLEARED' : 'PARTIALLY PAID'}</span></div>
     `;
+  } else if (vm.items) {
+    // FIX (multi-product cart): one row per product in the cart, exactly
+    // mirroring how the authenticated app's own PDF receipt lists items.
+    const itemRows = vm.items.map((it) => `
+      <div class="row"><span class="label">${it.quantity} × ${escapeHtml(it.productName)}</span><span class="value">${formatKES(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0)))}</span></div>
+    `).join('');
+    detailRows = `
+      ${itemRows}
+      <hr/>
+      ${vm.isCredit
+        ? `<div class="row total"><span class="label">Amount due</span><span class="value">${formatKES(vm.remainingBalance)}</span></div>`
+        : `<div class="row total"><span class="label">Paid (${escapeHtml(vm.paymentMethod)})</span><span class="value">${formatKES(vm.totalAmount)}</span></div>`}
+    `;
   } else {
     detailRows = `
       <div class="row"><span class="label">${escapeHtml(vm.productName)}</span><span class="value">${formatKES(vm.totalAmount)}</span></div>
@@ -266,7 +285,12 @@ function buildPdfScript() {
     if (!jsPDFCtor) { alert('Could not load the PDF engine. Please check your connection and try again.'); return; }
     var paperWidth = document.querySelector('meta[name="flowbiz-paper-width"]');
     var widthMm = paperWidth ? Number(paperWidth.content) : 80;
-    var doc = new jsPDFCtor('p', 'mm', [widthMm, 200]);
+    // FIX (multi-product cart): a fixed 200mm page clips a receipt with
+    // several line items — height now scales with how many products are
+    // on it, same approach the authenticated app's own PDF generator uses.
+    var itemCount = (vm.items && vm.items.length) || 1;
+    var estimatedHeight = Math.max(200, 90 + itemCount * 10);
+    var doc = new jsPDFCtor('p', 'mm', [widthMm, estimatedHeight]);
     var marginX = 5;
     var pageWidth = widthMm - marginX;
     var y = 8;
@@ -324,6 +348,17 @@ function buildPdfScript() {
       doc.setTextColor(vm.isCleared ? 26 : 196, vm.isCleared ? 98 : 68, vm.isCleared ? 60 : 29);
       doc.text('STATUS: ' + (vm.isCleared ? 'DEBT CLEARED' : 'PARTIALLY PAID'), marginX, y);
       doc.setTextColor(0, 0, 0);
+    } else if (vm.items && vm.items.length) {
+      vm.items.forEach(function (it) {
+        var lineTotal = (it.lineTotal != null) ? it.lineTotal : ((it.quantity || 0) * (it.unitPrice || 0));
+        row(it.quantity + ' x ' + it.productName, formatKES(lineTotal));
+      });
+      doc.line(marginX, y, pageWidth, y); y += 6;
+      if (vm.isCredit) {
+        row('AMOUNT DUE', formatKES(vm.remainingBalance), true);
+      } else {
+        row('PAID (' + vm.paymentMethod + ')', formatKES(vm.totalAmount), true);
+      }
     } else {
       row(vm.productName, formatKES(vm.totalAmount));
       doc.setTextColor(100, 100, 100);

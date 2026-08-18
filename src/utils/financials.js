@@ -2,7 +2,19 @@ function sumBy(rows, field) {
   return rows.reduce((acc, row) => acc + (Number(row[field]) || 0), 0);
 }
 
+// FIX (multi-product cart): a multi-item cart sale/creditSale doc stores
+// its aggregate cost of goods sold directly on the doc as
+// `costOfGoodsSold` (see Counter.jsx's buildLineItems/handleCartSale/
+// handleCartCredit) — a single costPricePerUnit can no longer represent a
+// transaction that mixes several products at different cost prices.
+// Older, single-product sale/creditSale docs (and any new single-item
+// cart checkout) never had that field, so this falls back to the
+// original costPricePerUnit × quantity calculation for those — nothing
+// about how existing single-product sales are read changes.
 function getCostOfSale(row) {
+  if (row && typeof row.costOfGoodsSold === 'number' && Number.isFinite(row.costOfGoodsSold)) {
+    return row.costOfGoodsSold;
+  }
   const costPerUnit = Number(row?.costPricePerUnit) || 0;
   const quantity = Number(row?.quantity) || 0;
   return costPerUnit * quantity;

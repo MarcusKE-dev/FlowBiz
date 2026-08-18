@@ -28,6 +28,12 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
   if (!sale) return null;
 
   const docLabel = sale.isCredit ? 'Invoice' : 'Receipt';
+  // FIX (multi-product cart): a sale built from Counter.jsx's cart carries
+  // an `items` array when it has more than one line. Single-product sales
+  // (Dashboard's own quick-scan sale, or a one-item cart checkout) never
+  // set this, so the original single-line summary below still renders
+  // exactly as before.
+  const cartItems = Array.isArray(sale.items) && sale.items.length > 1 ? sale.items : null;
 
   // FIX (Pro-gating correction): View, Download, and Print are FlowBiz's
   // basic document access and stay free on every plan. Only WhatsApp
@@ -78,9 +84,22 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
           <h2 className={`font-display font-bold ${sale.isCredit ? 'text-rust-700' : 'text-moss-800'}`}>
             {sale.isCredit ? 'Credit sale recorded' : 'Sale recorded successfully'}
           </h2>
-          <p className="text-sm font-semibold mt-2 text-ink-800">{sale.quantity} × {sale.productName}</p>
-          {sale.isCredit && sale.customerName && <p className="text-xs text-ink-500">{sale.customerName}</p>}
-          <p className="text-lg font-bold text-ink-900">{formatKES(sale.totalAmount)}</p>
+
+          {cartItems ? (
+            <div className="w-full px-5 mt-2 space-y-1">
+              {cartItems.map((item, idx) => (
+                <div key={item.productId || idx} className="flex items-center justify-between text-xs text-ink-700">
+                  <span>{item.quantity} × {item.productName}</span>
+                  <span className="font-semibold">{formatKES(item.lineTotal ?? (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0))}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm font-semibold mt-2 text-ink-800">{sale.quantity} × {sale.productName}</p>
+          )}
+
+          {sale.isCredit && sale.customerName && <p className="text-xs text-ink-500 mt-1">{sale.customerName}</p>}
+          <p className="text-lg font-bold text-ink-900 mt-1">{formatKES(sale.totalAmount)}</p>
           <p className={`text-xs mt-1 font-semibold ${sale.isCredit ? 'text-rust-600' : 'text-ink-500'}`}>
             {sale.isCredit ? 'Payment Status: Unpaid' : sale.paymentMethod}
           </p>

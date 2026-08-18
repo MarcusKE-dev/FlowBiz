@@ -66,10 +66,35 @@ function resolvePaperWidthMm(settings) {
     return settings?.receiptPaperWidth === 58 ? 58 : 80;
 }
 
+// FIX (multi-product cart): a sale/invoice from Counter.jsx's cart may
+// contain several distinct products (data.items — see
+// Counter.jsx's buildLineItems). When present, every line item is used;
+// when absent (a legacy single-product sale, or Dashboard's own
+// single-item quick-sale flow, which is unchanged), a single synthetic
+// line is built from the doc's existing top-level fields exactly as
+// before — so single-product receipts render identically to before this
+// change.
+function resolveDocumentItems(data) {
+    if (Array.isArray(data.items) && data.items.length > 0) return data.items;
+    return [{
+        productName: data.productName || data.description || 'Item',
+        quantity: data.quantity,
+        unitPrice: data.soldPricePerUnit,
+        lineTotal: data.totalAmount ?? data.amount ?? 0,
+    }];
+}
+
 // Replace the buildDocument function in src/utils/documentService.js
 async function buildDocument(data, settings, typeLabel) {
     const paperWidthMm = resolvePaperWidthMm(settings);
-    const doc = new jsPDF('p', 'mm', [paperWidthMm, 200]); // Thermal receipt size
+    const items = resolveDocumentItems(data);
+
+    // FIX (multi-product cart): a single fixed 200mm page height clips a
+    // cart with several line items. Height now scales with how many
+    // distinct products are on the receipt, while staying at least as
+    // tall as the original single-item receipt was.
+    const estimatedHeight = Math.max(200, 90 + items.length * 10);
+    const doc = new jsPDF('p', 'mm', [paperWidthMm, estimatedHeight]); // Thermal receipt size
     const marginX = 5;
     const pageWidth = paperWidthMm - marginX;
     let y = await drawDocumentHeader(doc, settings, marginX, 8, paperWidthMm);
@@ -110,26 +135,28 @@ async function buildDocument(data, settings, typeLabel) {
     y += 2;
     doc.line(marginX, y, pageWidth, y);
 
-    // Items
+    // Items — every product in the cart gets its own line, each with its
+    // own qty × unit price sub-line, exactly mirroring how a single item
+    // was already rendered.
     y += 5;
     doc.setFont('helvetica', 'normal');
-    const itemName = data.productName || data.description || 'Item';
-    // Proportional to page width so the item name doesn't crowd out the
-    // right-aligned amount on narrower 58mm paper — matches the original
-    // fixed 45mm exactly when paperWidthMm is 80.
-    const splitName = doc.splitTextToSize(itemName, Math.max(pageWidth - 30, 20));
-    doc.text(splitName, marginX, y);
-    
-    const amountStr = formatKES(data.totalAmount || data.amount || 0);
-    doc.text(amountStr, pageWidth, y, { align: 'right' });
-    
-    y += (splitName.length * 4);
-    if (data.quantity) {
-        doc.setTextColor(100, 100, 100);
-        doc.text(`${data.quantity} × @ ${formatKES(data.soldPricePerUnit || 0)}`, marginX, y);
-        doc.setTextColor(0, 0, 0);
-        y += 4;
-    }
+
+    items.forEach((item) => {
+        const itemName = item.productName || 'Item';
+        const splitName = doc.splitTextToSize(itemName, Math.max(pageWidth - 30, 20));
+        doc.text(splitName, marginX, y);
+
+        const lineTotal = item.lineTotal ?? ((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0));
+        doc.text(formatKES(lineTotal), pageWidth, y, { align: 'right' });
+
+        y += (splitName.length * 4);
+        if (item.quantity) {
+            doc.setTextColor(100, 100, 100);
+            doc.text(`${item.quantity} × @ ${formatKES(item.unitPrice || 0)}`, marginX, y);
+            doc.setTextColor(0, 0, 0);
+            y += 4;
+        }
+    });
 
     // 4. TOTALS SECTION
     y += 2;
@@ -143,7 +170,7 @@ async function buildDocument(data, settings, typeLabel) {
         doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth, y, { align: 'right' });
     } else {
         doc.text('PAID:', marginX, y);
-        doc.text(amountStr, pageWidth, y, { align: 'right' });
+        doc.text(formatKES(data.totalAmount || data.amount || 0), pageWidth, y, { align: 'right' });
         doc.setFontSize(8);
         doc.setFont('helvetica', 'normal');
         y += 4;
@@ -282,6 +309,9 @@ export async function printDebtPaymentReceipt(receipt, settings) {
 // creation is an async Firestore write; this function stays synchronous
 // and focused on building the message + opening WhatsApp, same contract
 // as before).
+//
+// FIX (multi-product cart): passes sale.items through so a multi-product
+// cart sale's WhatsApp message lists every product, not just one.
 export function sendWhatsAppDocument(sale, settings, phone, documentUrl) {
     const message = buildReceiptMessage({
         shopName: settings.shopName || 'FlowBiz Store',
@@ -294,6 +324,7 @@ export function sendWhatsAppDocument(sale, settings, phone, documentUrl) {
         businessPhone: settings.phone,
         documentUrl,
         formatKES,
+        items: sale.items,
     });
     const opened = openWhatsApp(phone, message);
     if (!opened) throw new Error('Enter a valid phone number.');

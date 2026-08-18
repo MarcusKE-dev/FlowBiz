@@ -10,23 +10,52 @@ import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { useDailySession } from '../hooks/useDailySession';
 import { useHardwareScanner } from '../hooks/useHardwareScanner';
 import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct } from '../utils/products';
+import { createProduct } from '../utils/products';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import Modal from '../components/common/Modal';
 import ProductGrid from '../components/pos/ProductGrid';
-import SaleModal from '../components/pos/SaleModal';
+import CartList from '../components/pos/CartList';
+import CartCheckoutModal from '../components/pos/CartCheckoutModal';
 import SaleCompleteModal from '../components/pos/SaleCompleteModal';
 import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
 import ProductFormModal from '../components/products/ProductFormModal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
 import ScannerModal from '../components/scanner/ScannerModal';
 import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
+import { formatKES, roundMoney } from '../utils/currency';
 import { formatDateTime } from '../utils/dateRanges';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+
+// Builds one line item for the cart doc from a cart row. Rounds every
+// money figure through roundMoney() so summing several lines (and their
+// quantity × price multiplication) never leaves floating-point noise in
+// what gets shown or written to Firestore.
+function toLineItem(cartRow) {
+  const quantity = Number(cartRow.quantity) || 0;
+  const unitPrice = Number(cartRow.unitPrice) || 0;
+  const costPrice = Number(cartRow.costPrice) || 0;
+  const lineTotal = roundMoney(quantity * unitPrice);
+  const lineCost = roundMoney(quantity * costPrice);
+  return {
+    productId: cartRow.productId,
+    productName: cartRow.productName,
+    quantity,
+    unitPrice,
+    costPrice,
+    lineTotal,
+    lineCost,
+    lineProfit: roundMoney(lineTotal - lineCost),
+    barcode: cartRow.barcode || null,
+  };
+}
+
+function summarizeProductName(lineItems) {
+  if (lineItems.length === 1) return lineItems[0].productName;
+  return `${lineItems[0].productName} +${lineItems.length - 1} more`;
+}
 
 export default function Counter() {
   const { profile, isAdmin, businessId } = useAuth();
@@ -47,10 +76,16 @@ export default function Counter() {
   const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
 
   const [search, setSearch]           = useState('');
-  const [activeProduct, setActive]    = useState(null);
+
+  // Cart: client-side only ("current sale") state — nothing is written to
+  // Firestore until checkout is confirmed in CartCheckoutModal. One row
+  // per distinct product; scanning/adding the same product again bumps
+  // its quantity instead of creating a duplicate row.
+  const [cart, setCart]               = useState([]);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+
   const [completedSale, setCompletedSale] = useState(null);
   const [pendingVoid, setPendingVoid] = useState(null);
-  const [editProduct, setEditProd]    = useState(null);
   const [prodModal, setProdModal]     = useState(false);
   const [supplierModal, setSupplierModal] = useState(false);
   const [newSupplierId, setNewSupplierId] = useState(null);
@@ -83,63 +118,185 @@ export default function Counter() {
     }).slice(0, 100);
   }, [sales, creditSales]);
 
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
-    return { id:ref.id, name, phone };
+  // ── Cart operations ──────────────────────────────────────────────────
+
+  const addToCart = (product, qty = 1) => {
+    if (!product) return;
+    if ((product.stock || 0) <= 0) { toast.error(`${product.name} is out of stock.`); return; }
+    setCart(prev => {
+      const idx = prev.findIndex(item => item.productId === product.id);
+      if (idx >= 0) {
+        const nextQty = (Number(prev[idx].quantity) || 0) + qty;
+        if (nextQty > product.stock) {
+          toast.error(`Only ${product.stock} of ${product.name} in stock.`);
+          return prev;
+        }
+        const next = [...prev];
+        next[idx] = { ...next[idx], quantity: nextQty };
+        return next;
+      }
+      if (qty > product.stock) {
+        toast.error(`Only ${product.stock} of ${product.name} in stock.`);
+        return prev;
+      }
+      return [...prev, {
+        productId: product.id,
+        productName: product.name,
+        quantity: qty,
+        unitPrice: product.sellingPrice,
+        costPrice: product.costPrice,
+        barcode: product.barcode || null,
+      }];
+    });
   };
 
-  // FIX: Replaced runTransaction with writeBatch(db) and increment() for perfect offline capability.
-const handleSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
-    const productRef = doc(db, 'products', product.id);
+  const updateCartQuantity = (productId, rawQty) => {
+    const product = products.find(p => p.id === productId);
+    let qty = parseInt(rawQty, 10);
+    if (!Number.isFinite(qty) || qty < 1) qty = 1;
+    if (product && qty > product.stock) {
+      toast.error(`Only ${product.stock} of ${product.name} in stock.`);
+      qty = product.stock;
+    }
+    if (qty < 1) return; // nothing in stock — leave the row as-is rather than a 0/invalid quantity
+    setCart(prev => prev.map(item => item.productId === productId ? { ...item, quantity: qty } : item));
+  };
+
+  const updateCartPrice = (productId, rawPrice) => {
+    let price = Number(rawPrice);
+    if (!Number.isFinite(price) || price < 0) price = 0;
+    setCart(prev => prev.map(item => item.productId === productId ? { ...item, unitPrice: price } : item));
+  };
+
+  const removeCartItem = (productId) => setCart(prev => prev.filter(item => item.productId !== productId));
+  const clearCart = () => setCart([]);
+
+  const cartTotal = useMemo(
+    () => roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0)),
+    [cart]
+  );
+
+  // Re-validates the cart against the LIVE product list right before
+  // building the write — stock may have moved since items were added
+  // (another cashier selling the same product, a stock take, etc).
+  function validateCartAgainstStock() {
+    for (const row of cart) {
+      const product = products.find(p => p.id === row.productId);
+      if (!product) throw new Error(`${row.productName} is no longer available.`);
+      if ((Number(row.quantity) || 0) > product.stock) {
+        throw new Error(`Only ${product.stock} of ${row.productName} left in stock.`);
+      }
+    }
+  }
+
+  // FIX: same writeBatch + increment() pattern the app already uses
+  // everywhere else for offline-first sales (see CR-8 in the README) —
+  // one sale doc now carries every product in the cart as `items`, with
+  // one stock decrement per line item in the same batch. Aggregate
+  // fields (totalAmount, quantity, productName, costOfGoodsSold, profit)
+  // are still written at the top level so every existing consumer that
+  // only reads those fields — Dashboard's activity feed, this page's own
+  // sales log, useFinancials — keeps working unchanged.
+  const handleCartSale = ({ paymentMethod, mpesaCode }) => {
+    validateCartAgainstStock();
+    const lineItems = cart.map(toLineItem);
+    const totalAmount = roundMoney(lineItems.reduce((s, i) => s + i.lineTotal, 0));
+    const costOfGoodsSold = roundMoney(lineItems.reduce((s, i) => s + i.lineCost, 0));
+    const profit = roundMoney(totalAmount - costOfGoodsSold);
+    const quantity = lineItems.reduce((s, i) => s + i.quantity, 0);
+
     const saleRef = doc(collection(db, 'sales'));
     const saleData = withBusiness({
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit,
-      totalAmount: soldPricePerUnit * quantity,
-      profit: (soldPricePerUnit - product.costPrice) * quantity,
+      items: lineItems,
+      productName: summarizeProductName(lineItems),
+      quantity,
+      totalAmount,
+      costOfGoodsSold,
+      profit,
+      // Legacy single-product compatibility: only meaningful when the
+      // cart has exactly one distinct product, mirroring exactly what
+      // the previous single-item sale flow wrote.
+      ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
       paymentMethod, mpesaCode: mpesaCode || null,
       soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: new Date(), isCredit: false, isVoided: false,    }, businessId);
+      soldAt: new Date(), isCredit: false, isVoided: false,
+    }, businessId);
 
     const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    lineItems.forEach((item) => {
+      batch.update(doc(db, 'products', item.productId), { stock: increment(-item.quantity), updatedAt: serverTimestamp() });
+    });
     batch.set(saleRef, saleData);
 
     return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
   };
 
-  const handleCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
-    const productRef = doc(db, 'products', product.id);
-    const totalAmount = soldPricePerUnit * quantity;
+  const handleCartCredit = ({ customerId, customerName, customerPhone }) => {
+    validateCartAgainstStock();
+    const lineItems = cart.map(toLineItem);
+    const totalAmount = roundMoney(lineItems.reduce((s, i) => s + i.lineTotal, 0));
+    const costOfGoodsSold = roundMoney(lineItems.reduce((s, i) => s + i.lineCost, 0));
+    const quantity = lineItems.reduce((s, i) => s + i.quantity, 0);
+
     const creditRef = doc(collection(db, 'creditSales'));
     const creditData = withBusiness({
       customerId, customerName, customerPhone: customerPhone || '',
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
+      items: lineItems,
+      productName: summarizeProductName(lineItems),
+      quantity,
+      totalAmount,
+      costOfGoodsSold,
+      ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
       soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
       status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true
+      isCredit: true,
     }, businessId);
 
     const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    lineItems.forEach((item) => {
+      batch.update(doc(db, 'products', item.productId), { stock: increment(-item.quantity), updatedAt: serverTimestamp() });
+    });
     batch.set(creditRef, creditData);
 
     return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
   };
 
-  // FIX: Voiding a Cash Sale now creates a 'refunds' document to correct CloseDay till shortages.
-const handleVoid = async () => {
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
+    return { id:ref.id, name, phone };
+  };
+
+  const handleCheckoutClose = (record) => {
+    setCheckoutOpen(false);
+    if (record && record.id) {
+      setCompletedSale(record);
+      clearCart();
+    }
+    // record === null → cashier backed out of checkout; cart is left intact.
+  };
+
+  // Voiding restores stock for every line item on the sale (falls back to
+  // the single productId/quantity shape for pre-cart, legacy sale docs).
+  const handleVoid = async () => {
     const sale = pendingVoid;
     setVoiding(true);
     try {
-      const batch = writeBatch(db);
-      const prodRef = doc(db, 'products', sale.productId);
-      const prodSnap = await getDoc(prodRef);
+      const lineItems = Array.isArray(sale.items) && sale.items.length > 0
+        ? sale.items
+        : [{ productId: sale.productId, quantity: sale.quantity }];
 
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(sale.quantity), updatedAt: serverTimestamp() });
-      }
+      const targets = lineItems.filter((item) => item.productId);
+      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
+
+      const batch = writeBatch(db);
+      let anyProductMissing = false;
+      targets.forEach((item, idx) => {
+        if (snaps[idx].exists()) {
+          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
+        } else {
+          anyProductMissing = true;
+        }
+      });
 
       batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
 
@@ -153,22 +310,22 @@ const handleVoid = async () => {
 
       const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
       if (error) throw error;
-      
-      toast.success(queuedOffline ? 'Sale voided offline.' : (prodSnap.exists() ? 'Sale voided and stock restored.' : 'Sale voided (product was deleted, no stock restored).'));
+
+      toast.success(queuedOffline ? 'Sale voided offline.' : (anyProductMissing ? 'Sale voided (some products were deleted, stock not restored for those).' : 'Sale voided and stock restored.'));
     } catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setVoiding(false); setPendingVoid(null); }
   };
 
-const handleProductSave = async (data) => {
+  const handleProductSave = async (data) => {
     try {
-      if (editProduct) {
-        const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
-      } else {
-        const { queuedOffline } = await createProduct(data, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      const { id, queuedOffline } = await createProduct(data, businessId);
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      // If this product was created to resolve a scanned/typed barcode
+      // that didn't match anything, add it straight to the cart so the
+      // scanning flow isn't interrupted any more than necessary.
+      if (prefillBarcode !== null && !queuedOffline) {
+        addToCart({ id, name: data.name, sellingPrice: data.sellingPrice, costPrice: data.costPrice, stock: data.stock ?? 0, barcode: data.barcode || null }, 1);
       }
-      setEditProd(null);
       setProdModal(false);
       setPrefillBarcode(null);
     } catch (err) {
@@ -177,7 +334,7 @@ const handleProductSave = async (data) => {
     }
   };
 
-const handleSupplierSave = async (supplierData) => {
+  const handleSupplierSave = async (supplierData) => {
     const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
     const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
     if (error) { toast.error(friendlyErrorMessage(error)); return; }
@@ -186,15 +343,22 @@ const handleSupplierSave = async (supplierData) => {
     toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
   };
 
+  // Scanning adds straight to the cart and keeps going — no confirmation
+  // step per scan, and scanning the same product again just bumps its
+  // quantity (handled inside addToCart).
   const handleScanDetected = (code) => {
     setScannerOpen(false);
     const found = findProductByCode(products, code);
-    if (found) setActive(found);
-    else setNotFoundCode(code);
+    if (found) {
+      addToCart(found, 1);
+      toast.success(`${found.name} added to cart`, { duration: 1200 });
+    } else {
+      setNotFoundCode(code);
+    }
   };
 
   useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
+    enabled: !!session && !isClosed && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale && !checkoutOpen,
   });
 
   if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
@@ -209,12 +373,24 @@ const handleSupplierSave = async (supplierData) => {
   return (
     <div className="mx-auto max-w-6xl space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Tap a product, or scan a barcode, to record a sale.</p></div>
-        {isAdmin && <button className="btn-outline text-xs" onClick={()=>{setEditProd(null);setPrefillBarcode(null);setProdModal(true);}}>+ Quick add product</button>}
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Scan, search, or tap a product to add it to the cart.</p></div>
       </div>
       <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
       {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
-        <ProductGrid products={filtered} onSelect={setActive} isAdmin={isAdmin} />}
+        <ProductGrid products={filtered} onSelect={(product) => addToCart(product, 1)} isAdmin={false} />}
+
+      {cart.length > 0 ? (
+        <CartList
+          cart={cart}
+          onUpdateQuantity={updateCartQuantity}
+          onUpdatePrice={updateCartPrice}
+          onRemove={removeCartItem}
+          onClear={clearCart}
+          onCheckout={() => setCheckoutOpen(true)}
+        />
+      ) : (
+        <div className="card p-4 text-center text-sm text-ink-400">Cart is empty — scan a barcode or tap a product above to add it.</div>
+      )}
 
       {isAdmin && (
         <div className="mt-4">
@@ -224,7 +400,12 @@ const handleSupplierSave = async (supplierData) => {
               {mergedSales.map(s=>(
                 <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided?'opacity-40 line-through':''}`}>
                   <div>
-                    <p className="font-medium text-ink-700">{s.quantity} × {s.productName} — {formatKES(s.totalAmount)}</p>
+                    <p className="font-medium text-ink-700">
+                      {s.quantity} × {s.productName} — {formatKES(s.totalAmount)}
+                      {Array.isArray(s.items) && s.items.length > 1 && (
+                        <span className="badge bg-ink-100 text-ink-500 ml-2 align-middle">{s.items.length} products</span>
+                      )}
+                    </p>
                     <p className="text-xs text-ink-400">
                       {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
                       {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
@@ -251,26 +432,22 @@ const handleSupplierSave = async (supplierData) => {
         <div className="flex justify-end gap-2">
           <button className="btn-secondary" onClick={()=>setNotFoundCode(null)}>Cancel</button>
           {isAdmin ? (
-            <button className="btn-primary" onClick={()=>{ setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
+            <button className="btn-primary" onClick={()=>{ setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
           ) : (
             <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
           )}
         </div>
       </Modal>
 
-      <SaleModal 
-        open={!!activeProduct} 
-        product={activeProduct} 
-        customers={customers} 
-        onClose={(record) => {
-          setActive(null);
-          if (record && record.id) {
-            setCompletedSale(record);
-          }
-        }} 
-        onConfirmSale={handleSale} 
-        onConfirmCredit={handleCredit} 
-        onCreateCustomer={handleCreateCustomer} 
+      <CartCheckoutModal
+        open={checkoutOpen}
+        cart={cart}
+        total={cartTotal}
+        customers={customers}
+        onClose={handleCheckoutClose}
+        onConfirmSale={handleCartSale}
+        onConfirmCredit={handleCartCredit}
+        onCreateCustomer={handleCreateCustomer}
       />
       <SaleCompleteModal
         open={!!completedSale}
@@ -278,18 +455,19 @@ const handleSupplierSave = async (supplierData) => {
         onClose={() => setCompletedSale(null)}
       />
 
-<ProductFormModal
+      <ProductFormModal
         open={prodModal}
-        onClose={()=>{setProdModal(false);setEditProd(null);setPrefillBarcode(null);}}
+        onClose={()=>{setProdModal(false);setPrefillBarcode(null);}}
         onSave={handleProductSave}
         suppliers={suppliers}
-        initialProduct={editProduct}
+        initialProduct={null}
         prefillBarcode={prefillBarcode}
         onAddSupplier={() => setSupplierModal(true)}
         newSupplierId={newSupplierId}
         productCount={products.length}
       />
       <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-<ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" (×${pendingVoid?.quantity}) will be restored.`} confirmLabel={voiding ? "Voiding..." : "Void sale"} confirmDisabled={voiding} danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />    </div>
+      <ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" will be restored${Array.isArray(pendingVoid?.items) && pendingVoid.items.length > 1 ? ` for all ${pendingVoid.items.length} products in this sale` : ` (×${pendingVoid?.quantity})`}.`} confirmLabel={voiding ? "Voiding..." : "Void sale"} confirmDisabled={voiding} danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />
+    </div>
   );
 }

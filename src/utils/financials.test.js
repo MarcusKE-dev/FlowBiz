@@ -124,3 +124,47 @@ test('purchase and supplier payments only affect outflows, not profit', () => {
   assert.equal(summary.netProfit, 0);
   assert.equal(summary.totalCashOutflows, 100000);
 });
+
+// ── Multi-product cart (Counter.jsx) ───────────────────────────────────
+// A multi-item cart sale stores its aggregate cost of goods sold directly
+// on the doc (`costOfGoodsSold`), since a single costPricePerUnit can't
+// represent several products at different cost prices in one line.
+
+test('a multi-item cart sale uses its stored costOfGoodsSold instead of costPricePerUnit × quantity', () => {
+  // Book ×3 @500 (cost 300) + Storybook ×2 @350 (cost 200) + Pen ×1 @50 (cost 20)
+  // revenue = 1500 + 700 + 50 = 2250; cost = 900 + 400 + 20 = 1320
+  const cartSale = {
+    id: 's1', paymentMethod: 'Cash', quantity: 6, totalAmount: 2250, costOfGoodsSold: 1320,
+    profit: 930, isVoided: false,
+  };
+  const summary = computeFinancials({ sales: [cartSale], creditSales: [], expenses: [], debtRepayments: [] });
+
+  assert.equal(summary.totalCashSales, 2250);
+  assert.equal(summary.costOfGoodsSold, 1320);
+  assert.equal(summary.grossProfit, 930);
+  assert.equal(summary.netProfit, 930);
+});
+
+test('a legacy single-product sale without costOfGoodsSold still falls back correctly', () => {
+  const legacySale = { id: 's1', paymentMethod: 'Cash', quantity: 2, totalAmount: 1000, costPricePerUnit: 300, isVoided: false };
+  const summary = computeFinancials({ sales: [legacySale], creditSales: [], expenses: [], debtRepayments: [] });
+
+  assert.equal(summary.costOfGoodsSold, 600);
+  assert.equal(summary.grossProfit, 400);
+});
+
+test('a partial repayment on a multi-item credit sale recognizes COGS from the stored aggregate', () => {
+  const creditSale = { id: 'c1', quantity: 4, totalAmount: 2000, costOfGoodsSold: 1200, status: 'partial', amountPaid: 1000 };
+  const summary = computeFinancials({
+    sales: [],
+    creditSales: [],
+    allCreditSales: [creditSale],
+    expenses: [],
+    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 1000, method: 'Cash' }],
+  });
+
+  // Half the sale collected → half its aggregate cost basis recognized
+  assert.equal(summary.revenue, 1000);
+  assert.equal(summary.costOfGoodsSold, 600);
+  assert.equal(summary.netProfit, 400);
+});

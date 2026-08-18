@@ -65,6 +65,14 @@ export default function Reports() {
   );
 
   // FIX: Added Credit Sales to product performance mapping
+  //
+  // FIX (multi-product cart): a Counter.jsx cart sale carries several
+  // products on ONE sale/creditSale doc via `items` — attributing the
+  // whole doc's aggregate quantity/revenue/profit to its (misleading)
+  // summary productName would badly skew best-seller/most-profitable
+  // rankings. When `items` is present, each line item is credited to its
+  // own product individually instead; legacy single-product docs (no
+  // `items` field) are read exactly as before.
   const productPerf = useMemo(() => {
     const m = {};
     const ensure = (name) => {
@@ -73,16 +81,33 @@ export default function Reports() {
     };
     sales.forEach((s) => {
       if (s.isVoided) return;
-      const row = ensure(s.productName);
-      row.qty     += Number(s.quantity) || 0;
-      row.revenue += Number(s.totalAmount) || 0;
-      row.profit  += Number(s.profit) || 0;
+      if (Array.isArray(s.items) && s.items.length > 0) {
+        s.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty     += Number(it.quantity) || 0;
+          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
+          row.profit  += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
+        });
+      } else {
+        const row = ensure(s.productName);
+        row.qty     += Number(s.quantity) || 0;
+        row.revenue += Number(s.totalAmount) || 0;
+        row.profit  += Number(s.profit) || 0;
+      }
     });
     creditSales.forEach((cs) => {
       if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-      const row = ensure(cs.productName);
-      row.qty += Number(cs.quantity) || 0;
-      // Revenue and Profit are zero until repaid via repayments collection
+      if (Array.isArray(cs.items) && cs.items.length > 0) {
+        cs.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty += Number(it.quantity) || 0;
+          // Revenue and Profit are zero until repaid via repayments collection
+        });
+      } else {
+        const row = ensure(cs.productName);
+        row.qty += Number(cs.quantity) || 0;
+        // Revenue and Profit are zero until repaid via repayments collection
+      }
     });
     return Object.values(m);
   }, [sales, creditSales]);

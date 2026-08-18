@@ -167,7 +167,7 @@ function VerifyEmailPanel({ mode, oobCode }) {
     try {
       await sendEmailVerification(auth.currentUser, {
         url: `${window.location.origin}/auth/action`,
-        handleCodeInApp: true,
+        handleCodeInApp: false,
       });
 
       toast.success(
