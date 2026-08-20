@@ -215,10 +215,7 @@ const handleProductSave = async (data) => {
         <div>
           <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
           <div className="flex items-center gap-2 mt-1">
-            {isAdmin && (
-<Link to="/pro" className={`badge text-[11px] font-bold transition-colors ${isPro ? 'bg-amber-100 text-amber-800' : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'}`}>                {isPro ? 'FlowBiz Pro ✓' : 'Explore FlowBiz Pro'}
-              </Link>
-            )}
+
             <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
           </div>
         </div>
