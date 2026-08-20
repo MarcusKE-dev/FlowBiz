@@ -99,6 +99,8 @@ src/
       Sidebar.jsx
       TopHeader.jsx
     pos/
+      CartCheckoutModal.jsx
+      CartList.jsx
       OpenSessionPrompt.jsx
       ProductGrid.jsx
       SaleCompleteModal.jsx
@@ -182,6 +184,7 @@ src/
 .gitignore
 .nvmrc
 .pagesignore
+CHANGES.md
 eslint.config.js
 firebase.json
 firestore.indexes.json
@@ -305,6 +308,11 @@ function buildViewModel(documentType, doc) {
     };
   }
   const isCredit = documentType === 'invoice';
+  // FIX (multi-product cart): a Counter.jsx cart sale/invoice stores every
+  // product as `items` on the doc. When present, the public page renders
+  // one row per product instead of the single productName/quantity this
+  // route always assumed before. Legacy single-product docs (no `items`
+  // field) render exactly as before via the fields below.
   return {
     label: isCredit ? DOCUMENT_LABEL.invoice : DOCUMENT_LABEL.receipt,
     dateLabel: formatDate(doc.soldAt),
@@ -312,6 +320,7 @@ function buildViewModel(documentType, doc) {
     refLabel: '',
     kind: 'sale',
     isCredit,
+    items: Array.isArray(doc.items) && doc.items.length > 0 ? doc.items : null,
     productName: doc.productName || 'Item',
     quantity: Number(doc.quantity) || 0,
     soldPricePerUnit: Number(doc.soldPricePerUnit) || 0,
@@ -404,6 +413,19 @@ function renderDocumentBody(vm, settings) {
       <div class="row total"><span class="label">Remaining balance</span><span class="value">${formatKES(vm.remainingBalance)}</span></div>
       <div style="text-align:center;"><span class="badge ${vm.isCleared ? 'cleared' : 'partial'}">${vm.isCleared ? 'DEBT CLEARED' : 'PARTIALLY PAID'}</span></div>
     `;
+  } else if (vm.items) {
+    // FIX (multi-product cart): one row per product in the cart, exactly
+    // mirroring how the authenticated app's own PDF receipt lists items.
+    const itemRows = vm.items.map((it) => `
+      <div class="row"><span class="label">${it.quantity} × ${escapeHtml(it.productName)}</span><span class="value">${formatKES(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0)))}</span></div>
+    `).join('');
+    detailRows = `
+      ${itemRows}
+      <hr/>
+      ${vm.isCredit
+        ? `<div class="row total"><span class="label">Amount due</span><span class="value">${formatKES(vm.remainingBalance)}</span></div>`
+        : `<div class="row total"><span class="label">Paid (${escapeHtml(vm.paymentMethod)})</span><span class="value">${formatKES(vm.totalAmount)}</span></div>`}
+    `;
   } else {
     detailRows = `
       <div class="row"><span class="label">${escapeHtml(vm.productName)}</span><span class="value">${formatKES(vm.totalAmount)}</span></div>
@@ -468,7 +490,12 @@ function buildPdfScript() {
     if (!jsPDFCtor) { alert('Could not load the PDF engine. Please check your connection and try again.'); return; }
     var paperWidth = document.querySelector('meta[name="flowbiz-paper-width"]');
     var widthMm = paperWidth ? Number(paperWidth.content) : 80;
-    var doc = new jsPDFCtor('p', 'mm', [widthMm, 200]);
+    // FIX (multi-product cart): a fixed 200mm page clips a receipt with
+    // several line items — height now scales with how many products are
+    // on it, same approach the authenticated app's own PDF generator uses.
+    var itemCount = (vm.items && vm.items.length) || 1;
+    var estimatedHeight = Math.max(200, 90 + itemCount * 10);
+    var doc = new jsPDFCtor('p', 'mm', [widthMm, estimatedHeight]);
     var marginX = 5;
     var pageWidth = widthMm - marginX;
     var y = 8;
@@ -526,6 +553,17 @@ function buildPdfScript() {
       doc.setTextColor(vm.isCleared ? 26 : 196, vm.isCleared ? 98 : 68, vm.isCleared ? 60 : 29);
       doc.text('STATUS: ' + (vm.isCleared ? 'DEBT CLEARED' : 'PARTIALLY PAID'), marginX, y);
       doc.setTextColor(0, 0, 0);
+    } else if (vm.items && vm.items.length) {
+      vm.items.forEach(function (it) {
+        var lineTotal = (it.lineTotal != null) ? it.lineTotal : ((it.quantity || 0) * (it.unitPrice || 0));
+        row(it.quantity + ' x ' + it.productName, formatKES(lineTotal));
+      });
+      doc.line(marginX, y, pageWidth, y); y += 6;
+      if (vm.isCredit) {
+        row('AMOUNT DUE', formatKES(vm.remainingBalance), true);
+      } else {
+        row('PAID (' + vm.paymentMethod + ')', formatKES(vm.totalAmount), true);
+      }
     } else {
       row(vm.productName, formatKES(vm.totalAmount));
       doc.setTextColor(100, 100, 100);
@@ -1264,67 +1302,6 @@ export default function MiniBarChart({ data, orientation = 'vertical', height = 
 }
 ````
 
-## File: src/components/charts/MiniLineChart.jsx
-````javascript
-// src/components/charts/MiniLineChart.jsx
-//
-// A small, dependency-free SVG line chart. No new npm package needed —
-// this project has no chart library installed, and a handful of plain
-// SVG components is simpler to install (nothing to install) and audit
-// than adding one for three small charts.
-//
-// Accessible by design rather than by adding interactivity: instead of
-// JS-driven hover tooltips, the start/end labels and the overall change
-// are always shown as real text under the chart, so the trend is never
-// locked behind a color someone might not be able to distinguish.
-export default function MiniLineChart({ data, height = 140, colorClassName = 'text-blue-600', formatValue = (v) => String(v), ariaLabel }) {
-  if (!data || data.length === 0) return null;
-
-  const width = 300; // viewBox units — scales to container via className="w-full"
-  const values = data.map((d) => Number(d.value) || 0);
-  const max = Math.max(...values, 0);
-  const min = Math.min(...values, 0);
-  const range = max - min || 1;
-  const padY = 10;
-  const stepX = data.length > 1 ? width / (data.length - 1) : 0;
-
-  const points = data.map((d, i) => {
-    const x = data.length > 1 ? i * stepX : width / 2;
-    const y = height - padY - ((Number(d.value) || 0) - min) / range * (height - padY * 2);
-    return { x, y };
-  });
-
-  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
-  const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${height} L ${points[0].x.toFixed(1)} ${height} Z`;
-
-  const first = values[0];
-  const last = values[values.length - 1];
-  const change = first !== 0 ? ((last - first) / Math.abs(first)) * 100 : null;
-  const showDots = data.length <= 31;
-
-  return (
-    <div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" preserveAspectRatio="none" role="img" aria-label={ariaLabel || 'Trend chart'}>
-        <path d={areaPath} className={colorClassName} fill="currentColor" opacity="0.08" />
-        <path d={linePath} className={colorClassName} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" />
-        {showDots && points.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r="2" className={colorClassName} fill="currentColor" />
-        ))}
-      </svg>
-      <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-400">
-        <span>{data[0].label}</span>
-        <span>{data[data.length - 1].label}</span>
-      </div>
-      {change !== null && (
-        <p className={`mt-1 text-xs font-semibold ${change >= 0 ? 'text-moss-700' : 'text-rust-600'}`}>
-          {change >= 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}% over this period — ending at {formatValue(last)}
-        </p>
-      )}
-    </div>
-  );
-}
-````
-
 ## File: src/components/common/ConnectivityIndicator.jsx
 ````javascript
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
@@ -1566,6 +1543,250 @@ export const MOBILE_PRIMARY = {
   admin:   ['/', '/counter', '/customers', '/reports', '/settings'],
   cashier: ['/counter', '/customers', '/expenses'],
 };
+````
+
+## File: src/components/pos/CartCheckoutModal.jsx
+````javascript
+// src/components/pos/CartCheckoutModal.jsx
+//
+// The payment step for a multi-product cart checkout — conceptually the
+// same payment portion SaleModal already had, just applied once to the
+// whole cart total instead of one product. Cash/M-Pesa/Credit logic is
+// untouched; onConfirmSale/onConfirmCredit are provided by Counter.jsx
+// and build the actual Firestore batch (one sale/creditSale doc with all
+// cart lines as `items`, one stock decrement per line item).
+
+import { useEffect, useState } from 'react';
+import toast from 'react-hot-toast';
+import Modal from '../common/Modal';
+import { formatKES } from '../../utils/currency';
+import { Banknote, Smartphone, BookOpen } from 'lucide-react';
+import { raceWithTimeout } from '../../utils/offlineWrite';
+import { friendlyErrorMessage } from '../../utils/errorMessages';
+
+const METHODS = [
+  { id: 'Cash',   label: 'Cash',   Icon: Banknote   },
+  { id: 'M-Pesa', label: 'M-Pesa', Icon: Smartphone },
+  { id: 'Credit', label: 'Credit', Icon: BookOpen   },
+];
+
+export default function CartCheckoutModal({ open, cart, total, customers, onClose, onConfirmSale, onConfirmCredit, onCreateCustomer }) {
+  const [method, setMethod]         = useState('Cash');
+  const [mpesaCode, setMpesaCode]   = useState('');
+  const [customerId, setCustomerId] = useState('');
+  const [newMode, setNewMode]       = useState(false);
+  const [newName, setNewName]       = useState('');
+  const [newPhone, setNewPhone]     = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setMethod('Cash'); setMpesaCode(''); setCustomerId('');
+      setNewMode(false); setNewName(''); setNewPhone('');
+    }
+  }, [open]);
+
+  if (!open || !cart || cart.length === 0) return null;
+
+  const needsMpesaCode = method === 'M-Pesa' && !mpesaCode.trim();
+  const needsCustomer  = method === 'Credit' && !customerId && !(newMode && newName.trim());
+  const canSubmit = !needsMpesaCode && !needsCustomer && !submitting;
+
+  const handleConfirm = async () => {
+    setSubmitting(true);
+    try {
+      let cId = customerId, cName = customers.find(c => c.id === customerId)?.name, cPhone = customers.find(c => c.id === customerId)?.phone;
+      if (method === 'Credit' && newMode) {
+        const cr = await onCreateCustomer({ name: newName.trim(), phone: newPhone.trim() });
+        cId = cr.id; cName = cr.name; cPhone = cr.phone;
+      }
+
+      const { record, commit } = method === 'Credit'
+        ? onConfirmCredit({ customerId: cId, customerName: cName, customerPhone: cPhone })
+        : onConfirmSale({ paymentMethod: method, mpesaCode: method === 'M-Pesa' ? mpesaCode.trim() : null });
+
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+      if (queuedOffline) {
+        toast.success("Sale saved — it'll sync once you're back online.");
+        commit.catch((err) => toast.error(`A sale from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+      }
+      onClose(record);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, {
+        overrides: { 'permission-denied': "That didn't go through — stock may have just changed, or today's session may have been closed. Please refresh and try again." },
+      }));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={() => onClose(null)} title="Complete Sale">
+      <div className="space-y-4">
+        <div className="rounded-lg bg-ink-50 px-3 py-2.5">
+          <p className="text-xs text-ink-400 mb-1">{cart.length} product{cart.length !== 1 ? 's' : ''} in cart</p>
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold text-ink-700">Total</span>
+            <span className="font-display text-lg font-bold text-ink-900">{formatKES(total)}</span>
+          </div>
+        </div>
+
+        <div>
+          <label className="label">Payment method</label>
+          <div className="grid grid-cols-3 gap-2">
+            {METHODS.map(({ id, label, Icon }) => (
+              <button key={id} type="button" onClick={() => setMethod(id)} className={`flex flex-col items-center gap-1 rounded-lg border px-2 py-2.5 text-xs font-semibold ${method === id ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}>
+                <Icon className="h-4 w-4" strokeWidth={1.75} />{label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {method === 'M-Pesa' && (
+          <div>
+            <label className="label">M-Pesa transaction code <span className="text-rust-500">*</span></label>
+            <input className="input uppercase" placeholder="e.g. QWE1234567" value={mpesaCode} onChange={e => setMpesaCode(e.target.value.toUpperCase())} />
+            {needsMpesaCode && <p className="mt-1 text-xs text-rust-600">Transaction code required for M-Pesa sales.</p>}
+          </div>
+        )}
+
+        {method === 'Credit' && (
+          <div className="space-y-2 rounded-lg border border-ink-100 p-3">
+            {!newMode ? (
+              <>
+                <label className="label">Customer (Deni)</label>
+                <select className="input" value={customerId} onChange={e => setCustomerId(e.target.value)}>
+                  <option value="">— Select customer —</option>
+                  {customers.map(c => <option key={c.id} value={c.id}>{c.name}{c.phone ? ` · ${c.phone}` : ''}</option>)}
+                </select>
+                <button type="button" className="text-xs font-semibold text-moss-700 hover:underline" onClick={() => setNewMode(true)}>+ New customer</button>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between"><label className="label">New customer</label><button type="button" className="text-xs text-ink-400 hover:underline" onClick={() => setNewMode(false)}>Use existing</button></div>
+                <input className="input" placeholder="Customer name" value={newName} onChange={e => setNewName(e.target.value)} />
+                <input className="input" placeholder="Phone (07xx...)" value={newPhone} onChange={e => setNewPhone(e.target.value)} />
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={() => onClose(null)} disabled={submitting}>Back to cart</button>
+          <button type="button" className="btn-primary" disabled={!canSubmit} onClick={handleConfirm}>
+            {submitting ? 'Recording…' : method === 'Credit' ? 'Record credit' : 'Complete sale'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+````
+
+## File: src/components/pos/CartList.jsx
+````javascript
+// src/components/pos/CartList.jsx
+//
+// Renders the Counter page's current (client-side only, nothing written
+// to Firestore until checkout) multi-product cart: one line per distinct
+// product, with quantity +/- controls, an editable unit price (bargaining
+// support — never changes the product's stored default price), a remove
+// button per line, and the running total.
+
+import { Minus, Plus, X } from 'lucide-react';
+import { formatKES, roundMoney } from '../../utils/currency';
+
+export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemove, onClear, onCheckout }) {
+  if (!cart || cart.length === 0) return null;
+
+  const total = roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0));
+
+  return (
+    <div className="card p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="font-display text-sm font-bold text-ink-800">
+          Cart ({cart.length} product{cart.length !== 1 ? 's' : ''})
+        </h2>
+        <button type="button" onClick={onClear} className="text-xs font-semibold text-rust-500 hover:underline">
+          Clear cart
+        </button>
+      </div>
+
+      <div className="divide-y divide-ink-100">
+        {cart.map((item) => {
+          const lineTotal = roundMoney((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0));
+          return (
+            <div key={item.productId} className="py-3 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-medium text-ink-800 text-sm leading-snug">{item.productName}</p>
+                <button
+                  type="button"
+                  onClick={() => onRemove(item.productId)}
+                  className="shrink-0 rounded-lg p-1.5 text-ink-300 hover:bg-rust-50 hover:text-rust-500 min-h-[36px] min-w-[36px] flex items-center justify-center"
+                  aria-label={`Remove ${item.productName}`}
+                >
+                  <X className="h-4 w-4" strokeWidth={1.75} />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => onUpdateQuantity(item.productId, (Number(item.quantity) || 1) - 1)}
+                    className="flex h-9 w-9 items-center justify-center rounded-lg border border-ink-200 text-ink-600 hover:bg-ink-50"
+                    aria-label="Decrease quantity"
+                  >
+                    <Minus className="h-3.5 w-3.5" strokeWidth={2} />
+                  </button>
+                  <input
+                    type="number"
+                    min="1"
+                    className="input !w-16 !py-2 !min-h-0 text-center"
+                    value={item.quantity}
+                    onChange={(e) => onUpdateQuantity(item.productId, e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onUpdateQuantity(item.productId, (Number(item.quantity) || 0) + 1)}
+                    className="flex h-9 w-9 items-center justify-center rounded-lg border border-ink-200 text-ink-600 hover:bg-ink-50"
+                    aria-label="Increase quantity"
+                  >
+                    <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-ink-400">@ KES</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="input !w-24 !py-2 !min-h-0 text-right"
+                    value={item.unitPrice}
+                    onChange={(e) => onUpdatePrice(item.productId, e.target.value)}
+                  />
+                </div>
+
+                <span className="ml-auto font-display text-sm font-bold text-ink-800">{formatKES(lineTotal)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center justify-between border-t border-ink-100 pt-3">
+        <span className="font-display text-sm font-bold text-ink-700">Total</span>
+        <span className="font-display text-lg font-bold text-moss-700">{formatKES(total)}</span>
+      </div>
+
+      <button type="button" className="btn-primary w-full" onClick={onCheckout}>
+        Sell
+      </button>
+    </div>
+  );
+}
 ````
 
 ## File: src/components/pos/ProductGrid.jsx
@@ -2302,576 +2523,9 @@ export function withBusiness(data, businessId) {
 }
 ````
 
-## File: src/pages/HelpGuide.jsx
-````javascript
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-
-const SECTIONS = [
-  {
-    id: 'getting-started',
-    title: '1. Getting Started',
-    desc: 'The essential daily workflows: adding inventory, recording purchases, making sales, and logging daily expenses.',
-    content: (
-      <div className="space-y-4">
-        <p className="text-sm text-ink-600">
-          Welcome to FlowBiz! To run your shop efficiently every day, follow these five essential steps:
-        </p>
-        <div className="space-y-3">
-          <div className="rounded-lg bg-ink-50 p-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 1: Add Your Products</h4>
-            <p className="text-sm text-ink-600 mt-1">
-              Go to <strong className="text-ink-800">Products</strong> and tap <strong className="text-ink-800">+ Add product</strong>. Enter the product name, its buying price (cost), and selling price. If the item has a barcode, scan it using your device's camera or standard USB scanner.
-            </p>
-          </div>
-          <div className="rounded-lg bg-ink-50 p-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 2: Record Purchases (Restocking)</h4>
-            <p className="text-sm text-ink-600 mt-1">
-              When a supplier delivers new stock, record it on the <strong className="text-ink-800">Purchases</strong> page. Select the supplier, pick the product, enter the quantity received, and specify if you paid them now or took the stock on credit. FlowBiz will automatically increase your stock levels.
-            </p>
-          </div>
-          <div className="rounded-lg bg-ink-50 p-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 3: Record Sales (Counter)</h4>
-            <p className="text-sm text-ink-600 mt-1">
-              On the <strong className="text-ink-800">Counter</strong> page, tap any product card or scan its barcode to sell. Select whether the customer paid in Cash, via M-Pesa, or took it on credit (Deni). Tap confirm, and inventory levels will update in real-time.
-            </p>
-          </div>
-          <div className="rounded-lg bg-ink-50 p-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 4: Record Expenses</h4>
-            <p className="text-sm text-ink-600 mt-1">
-              Keep a record of rent, electricity, transport, wages, or airtime float under <strong className="text-ink-800">Expenses</strong>. Logging every small expense ensures your end-of-day net profit calculations remain accurate.
-            </p>
-          </div>
-          <div className="rounded-lg bg-ink-50 p-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 5: Record Debt Repayments</h4>
-            <p className="text-sm text-ink-600 mt-1">
-              When a debtor pays off what they owe, go to <strong className="text-ink-800">Debtors</strong>, click their name, and record the repayment amount (Cash or M-Pesa). Do not create a new sale; this updates their remaining balance and logs the cash received.
-            </p>
-          </div>
-        </div>
-      </div>
-    )
-  },
-  {
-    id: 'understanding-dashboard',
-    title: "2. Understanding the Dashboard",
-    desc: "A brief guide to today's summary cards, tracking balances, and checking inventory health.",
-    content: (
-      <div className="space-y-4">
-        <p className="text-sm text-ink-600">
-          The dashboard is your shop's cockpit, offering a real-time summary of today's events:
-        </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="border border-ink-100 rounded-lg p-3">
-            <span className="font-semibold text-xs text-ink-800 block">Cash Received Today</span>
-            <p className="text-xs text-ink-600 mt-1">All the physical cash collected today from direct cash sales and debtor repayments combined.</p>
-          </div>
-          <div className="border border-ink-100 rounded-lg p-3">
-            <span className="font-semibold text-xs text-ink-800 block">M-Pesa Received Today</span>
-            <p className="text-xs text-ink-600 mt-1">All digital payments transferred to your till today from direct M-Pesa sales and debtor repayments.</p>
-          </div>
-          <div className="border border-ink-100 rounded-lg p-3">
-            <span className="font-semibold text-xs text-ink-800 block">Today's Net Profit</span>
-            <p className="text-xs text-ink-600 mt-1">Today's realized gross profit minus today's recorded shop expenses. Shows exactly what you made in hand.</p>
-          </div>
-          <div className="border border-ink-100 rounded-lg p-3">
-            <span className="font-semibold text-xs text-ink-800 block">Today's Expenses</span>
-            <p className="text-xs text-ink-600 mt-1">The sum of all shop operational expenses recorded today (excluding purchases made on credit).</p>
-          </div>
-          <div className="border border-ink-100 rounded-lg p-3">
-            <span className="font-semibold text-xs text-ink-800 block">Inventory Value (Cost)</span>
-            <p className="text-xs text-ink-600 mt-1">The total buying price of all items currently on your shelves. Helps you see exactly how much capital is tied up in stock.</p>
-          </div>
-          <div className="border border-ink-100 rounded-lg p-3">
-            <span className="font-semibold text-xs text-ink-800 block">Outstanding Debt (Deni)</span>
-            <p className="text-xs text-ink-600 mt-1">The total amount of money your credit customers still owe you. Keep this number as close to zero as possible!</p>
-          </div>
-        </div>
-      </div>
-    )
-  },
-  {
-    id: 'understanding-reports',
-    title: '3. Understanding Reports',
-    desc: 'How the reports compile and measure credit sales, margins, expenses, and profits over time.',
-    content: (
-      <div className="space-y-3 text-sm text-ink-600">
-        <p>Reports allow you to view the shop's financial performance over preset periods (Today, This Week, This Month, or Custom dates):</p>
-        <ul className="list-disc pl-5 space-y-1.5 mt-2">
-          <li><strong>Gross Revenue:</strong> Represents actual money in your hand, direct cash/M-Pesa sales plus whatever portion of debtor repayments was collected in this period.</li>
-          <li><strong>Cost of Goods Sold (COGS):</strong> The total wholesale cost of the items you sold during this period. For credit repayments, COGS is recognized proportionally.</li>
-          <li><strong>Gross Profit:</strong> Gross Revenue minus Cost of Goods Sold. Tells you how much markup you earned on items sold.</li>
-          <li><strong>Expenses:</strong> Rent, bills, wages, etc., logged during this period.</li>
-          <li><strong>Net Profit:</strong> Gross Profit minus Expenses. The ultimate bottom-line earnings of your business during this reporting window.</li>
-        </ul>
-      </div>
-    )
-  },
-  {
-    id: 'credit-sales',
-    title: '4. How Credit Sales (Deni) Work',
-    desc: 'The cash-flow-first model: why profit stays at zero until money is collected.',
-    content: (
-      <div className="space-y-4 text-sm text-ink-600">
-        <p>
-          Most standard software registers revenue the moment you sell an item, even if the customer leaves without empty pockets. This is called *accrual accounting*, but it can be confusing for everyday Kenyan businesses where cash flow is king.
-        </p>
-        <p>
-          <strong>FlowBiz uses a cash-flow-first hybrid model</strong> designed specifically for Kenyan SMEs:
-        </p>
-        <div className="border-l-2 border-moss-600 pl-4 space-y-2 py-1 font-mono text-xs bg-moss-50/50 rounded-r">
-          <div>Customer buys on credit (e.g., KES 15,000)</div>
-          <div className="text-ink-400">↓</div>
-          <div>Inventory decreases immediately (real-time stock health)</div>
-          <div className="text-ink-400">↓</div>
-          <div>Outstanding Debt (Deni) increases by KES 15,000</div>
-          <div className="text-ink-400">↓</div>
-          <div className="text-rust-600 font-semibold">Revenue and Profit remain at KES 0.00 (not collected yet)</div>
-          <div className="text-ink-400">↓</div>
-          <div>Customer pays KES 5,000 partial payment later</div>
-          <div className="text-ink-400">↓</div>
-          <div className="text-moss-700 font-semibold">KES 5,000 is recognized as Revenue</div>
-          <div className="text-moss-700 font-semibold font-bold">COGS &amp; proportional profit are recognized at last!</div>
-          <div className="text-ink-400">↓</div>
-          <div>Outstanding Debt reduces to KES 10,000</div>
-        </div>
-        <p className="mt-2 text-xs text-ink-500">
-          This system ensures you only see, report, and spend profits that have actually entered your cash drawer or M-Pesa till.
-        </p>
-      </div>
-    )
-  },
-  {
-    id: 'cash-mpesa',
-    title: '5. Cash, M-Pesa, & Close Day',
-    desc: 'Reconciling floats, recording withdrawals, and closing today’s session correctly.',
-    content: (
-      <div className="space-y-3 text-sm text-ink-600">
-        <p>
-          Every morning, open the Counter by entering your starting balances (the <strong>Opening Float</strong>). This is the cash in your drawer and the float on your phone.
-        </p>
-        <p>
-          During the day, every sale, expense, debtor repayment, and refund adjusts the "Expected" balances inside the system. 
-        </p>
-        <p>
-          At closing time, visit the <strong>Close Day</strong> page:
-        </p>
-        <ol className="list-decimal pl-5 space-y-1.5 mt-2">
-          <li>Count the physical cash in your drawer and type the amount into the input.</li>
-          <li>Check your M-Pesa statement balance and type it.</li>
-          <li>FlowBiz will instantly compare these to the "Expected" amounts and display a <strong>Shortage</strong> (rust) or <strong>Surplus</strong> (amber) if there's any variance.</li>
-          <li>Press <strong>Confirm and Close Day</strong>. This locks the sales log and stores today's records.</li>
-        </ol>
-      </div>
-    )
-  },
-  {
-    id: 'inventory-management',
-    title: '6. Inventory & Stock Take',
-    desc: 'Understanding stock movements, low stock limits, and discrepancy audits.',
-    content: (
-      <div className="space-y-3 text-sm text-ink-600">
-        <p>Inventory level is updated automatically through three daily events:</p>
-        <ul className="list-disc pl-5 space-y-1.5">
-          <li><strong>Purchases (+):</strong> Increases your stock when you record incoming stock from a supplier.</li>
-          <li><strong>Sales &amp; Credit Sales (-):</strong> Decreases your stock the second an item leaves your counter.</li>
-          <li><strong>Stock Take (+/-):</strong> Used to override the system count with a physical hand-count (e.g. to adjust for damage, expiration, or theft).</li>
-        </ul>
-        <div className="rounded bg-rust-50 p-3 text-xs text-rust-700">
-          <strong>Discrepancy Note:</strong> Stock Take is purely an auditing tool. Correcting a stock discrepancy does not create cash transactions or expenses automatically. It logs the audit discrepancy under <strong>stockAdjustments</strong> for tracking.
-        </div>
-      </div>
-    )
-  },
-  {
-    id: 'faq',
-    title: '7. Frequently Asked Questions',
-    desc: 'Troubleshooting and immediate answers to common user questions.',
-    content: (
-      <div className="space-y-4">
-        <div className="space-y-2">
-          <strong className="text-sm text-ink-800 block">Q: Why is my profit still zero after a credit sale?</strong>
-          <p className="text-xs text-ink-600 pl-4">A: Since no cash or M-Pesa has been collected yet, no revenue is earned. Once the customer repays, profit is recognized proportionally based on the amount paid.</p>
-        </div>
-        <div className="space-y-2">
-          <strong className="text-sm text-ink-800 block">Q: Why did my inventory reduce before I received any money?</strong>
-          <p className="text-xs text-ink-600 pl-4">A: Real-time inventory tracking is crucial. Even on credit, physical stock leaves the shelves, so the system must deduct it immediately to prevent double-selling.</p>
-        </div>
-        <div className="space-y-2">
-          <strong className="text-sm text-ink-800 block">Q: Can I edit or void a closed session?</strong>
-          <p className="text-xs text-ink-600 pl-4">A: No. Once a daily session is closed, it is securely saved. If you made an error, an administrator can click "Reopen session" on the Close Day page to make adjustments.</p>
-        </div>
-        <div className="space-y-2">
-          <strong className="text-sm text-ink-800 block">Q: Where do I edit or delete products?</strong>
-          <p className="text-xs text-ink-600 pl-4">A: Editing and deleting products is restricted to administrators and must be done on the dedicated <strong>Products</strong> page, keeping the Counter screen clean and secure.</p>
-        </div>
-      </div>
-    )
-  },
-  {
-    id: 'best-practices',
-    title: '8. FlowBiz Best Practices',
-    desc: 'Golden rules for keeping your shop books accurate and reliable.',
-    content: (
-      <ul className="list-disc pl-5 space-y-1.5 text-sm text-ink-600">
-        <li><strong>Record expenses immediately:</strong> Log your County Council fees, electricity, and lunch costs right when they occur so you do not forget at close-of-day.</li>
-        <li><strong>Record credit repayments inside Debtors:</strong> Never create a new direct sale to record a repayment, this would double-count your revenue and duplicate items sold.</li>
-        <li><strong>Perform Stock Take regularly:</strong> Plan a quick physical stock take every weekend or fortnight to ensure physical inventory matches your screens exactly.</li>
-        <li><strong>Keep the general settings updated:</strong> Shop name edits immediately personalize your generated PDF reports for presentation to accountants.</li>
-      </ul>
-    )
-  },
-  {
-    id: 'about-flowbiz',
-    title: '9. About FlowBiz',
-    desc: 'Who we are and our vision for empowering Kenyan small businesses.',
-    content: (
-      <p className="text-sm text-ink-600">
-        FlowBiz is a localized, production-ready Business Manager custom-built to meet the unique operational challenges of Kenyan SMBs. By prioritizing cash-flow visibility, offering native barcode scanning, and supporting local transaction models like Deni and M-Pesa, we aim to make day-to-day recordkeeping effortless and stress-free.
-      </p>
-    )
-  }
-];
-
-export default function HelpGuide() {
-  const [activeTab, setActiveTab] = useState('getting-started');
-
-  return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900"> Help &amp; Guide</h1>
-          <p className="text-sm text-ink-400">FlowBiz user guide and best-practice operating manual.</p>
-        </div>
-        <Link to="/settings" className="btn-outline text-xs !px-3 !py-1.5 !min-h-0">
-          ← Back to Settings
-        </Link>
-      </div>
-
-      <div className="flex flex-col gap-4 lg:flex-row">
-        {/* Navigation panel */}
-        <div className="w-full lg:w-1/3 space-y-2">
-          {SECTIONS.map((sec) => (
-            <button
-              key={sec.id}
-              onClick={() => setActiveTab(sec.id)}
-              className={`w-full text-left p-3 rounded-lg border transition-all flex flex-col gap-1 min-h-[50px] ${
-                activeTab === sec.id
-                  ? 'border-moss-600 bg-moss-50 text-moss-800 shadow-sm'
-                  : 'border-ink-100 bg-white text-ink-600 hover:bg-ink-50'
-              }`}
-            >
-              <span className="font-semibold text-sm block">{sec.title}</span>
-              <span className="text-xs text-ink-400 line-clamp-1">{sec.desc}</span>
-            </button>
-          ))}
-          
-          <div className="rounded-lg bg-moss-50/50 border border-dashed border-moss-200 p-4 text-center mt-4">
-            <span className="text-xs font-semibold uppercase tracking-wider text-moss-800 block">Need more topics?</span>
-            <p className="text-[11px] text-ink-500 mt-1">We periodically update this manual. Future sections including Cashiers, eTIMS, VAT, Backup &amp; Restore, and loyalty schemes will appear here automatically.</p>
-          </div>
-        </div>
-
-        {/* Content Display Panel */}
-        <div className="flex-1 card bg-white p-5 sm:p-6 min-h-[300px]">
-          {SECTIONS.map((sec) => {
-            if (activeTab !== sec.id) return null;
-            return (
-              <div key={sec.id} className="space-y-4 animate-fade-in">
-                <div className="border-b border-ink-100 pb-3">
-                  <h2 className="font-display text-lg font-bold text-ink-900">{sec.title}</h2>
-                  <p className="text-xs text-ink-400 mt-1">{sec.desc}</p>
-                </div>
-                <div className="pt-2">{sec.content}</div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-````
-
 ## File: src/pages/Privacy.jsx
 ````javascript
 
-````
-
-## File: src/pages/Reports.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { where, orderBy } from 'firebase/firestore';
-import { Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useFinancialsForRange } from '../hooks/useFinancials';
-import { useDailySession } from '../hooks/useDailySession';
-import { useSettings } from '../hooks/useSettings';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import ErrorBanner from '../components/common/ErrorBanner';
-import Modal from '../components/common/Modal';
-import { formatKES } from '../utils/currency';
-import { formatDate, formatDateTime, getRangeForPreset, startOfDay, endOfDay, todayKey } from '../utils/dateRanges';
-import { computeSupplierBalances, computeExpectedTillBalances } from '../utils/financials';
-import { Printer, TrendingUp } from 'lucide-react';
-import toast from 'react-hot-toast';
-
-const PRESETS = [{id:'today',label:'Today'},{id:'week',label:'This Week'},{id:'month',label:'This Month'},{id:'custom',label:'Custom'}];
-
-function Card({ label, value, tone='text-ink-900' }) {
-  return <div className="card p-4"><p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p><p className={`mt-1 font-display text-lg font-bold ${tone}`}>{value}</p></div>;
-}
-
-export default function Reports() {
-  const { businessId, isPro } = useAuth();
-  const [preset, setPreset]         = useState('today');
-  const [cStart, setCStart]         = useState('');
-  const [cEnd,   setCEnd]           = useState('');
-  const [pdfModalOpen, setPdfModalOpen] = useState(false);
-
-  const { start, end } = useMemo(() => {
-    if (preset==='custom'&&cStart&&cEnd) return { start:startOfDay(new Date(cStart)), end:endOfDay(new Date(cEnd)) };
-    return getRangeForPreset(preset==='custom'?'today':preset);
-  }, [preset,cStart,cEnd]);
-
-  const { loading, error, sales, creditSales, summary } = useFinancialsForRange(start, end);
-  const { session } = useDailySession();
-  const { settings } = useSettings();
-
-  // FIX: Matches Dashboard and Products exactly to utilize correct offline index
-  const productsQ = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
-  const outstandingCreditQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, where('status', 'in', ['pending', 'partial'])) : null, [businessId]);
-  const supplierPaymentsQ = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId) : null, [businessId]);
-
-  const { data: products } = useFirestoreCollection(productsQ);
-  const { data: purchasesData } = useFirestoreCollection(purchasesQ);
-  const { data: outstandingCreditSales } = useFirestoreCollection(outstandingCreditQ);
-  const { data: supplierPaymentsData } = useFirestoreCollection(supplierPaymentsQ);
-  const { data: suppliersData } = useFirestoreCollection(suppliersQ);
-
-  const totalInventoryValue = useMemo(() => {
-    return products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
-  }, [products]);
-
-  const lowStock = useMemo(() => {
-    return products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
-  }, [products]);
-
-  const supplierBalances = useMemo(
-    () => computeSupplierBalances(purchasesData, supplierPaymentsData, suppliersData),
-    [purchasesData, supplierPaymentsData, suppliersData]
-  );
-
-  // FIX: Added Credit Sales to product performance mapping
-  const productPerf = useMemo(() => {
-    const m = {};
-    const ensure = (name) => {
-      if (!m[name]) m[name] = { name, qty: 0, revenue: 0, profit: 0 };
-      return m[name];
-    };
-    sales.forEach((s) => {
-      if (s.isVoided) return;
-      const row = ensure(s.productName);
-      row.qty     += Number(s.quantity) || 0;
-      row.revenue += Number(s.totalAmount) || 0;
-      row.profit  += Number(s.profit) || 0;
-    });
-    creditSales.forEach((cs) => {
-      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-      const row = ensure(cs.productName);
-      row.qty += Number(cs.quantity) || 0;
-      // Revenue and Profit are zero until repaid via repayments collection
-    });
-    return Object.values(m);
-  }, [sales, creditSales]);
-
-  const bestSelling    = [...productPerf].sort((a,b)=>b.qty-a.qty).slice(0,5);
-  const mostProfitable = [...productPerf].sort((a,b)=>b.profit-a.profit).slice(0,5);
-
-  const { expectedCashAtClose, expectedMpesaAtClose } = computeExpectedTillBalances({
-    openingCashFloat:         preset === 'today' ? (session?.openingCashFloat || 0) : 0,
-    openingMpesaFloat:        preset === 'today' ? (session?.openingMpesaFloat || 0) : 0,
-    totalCashSales:           summary.totalCashSales,
-    totalMpesaSales:          summary.totalMpesaSales,
-    totalDebtRepaymentsCash:  summary.totalDebtRepaymentsCash,
-    totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
-    totalExpensesCash:        summary.totalExpensesCash,
-    totalExpensesMpesa:       summary.totalExpensesMpesa,
-    totalCashOutflows:        summary.totalCashOutflows,
-    totalMpesaOutflows:       summary.totalMpesaOutflows,
-  });
-
-  const businessName = settings?.shopName || 'FlowBiz Store';
-
-  const doExport = async (action) => {
-    if (!isPro) { toast.error("Professional reports require FlowBiz Pro."); return; }
-    try {
-      const { jsPDF } = await import('jspdf');
-      const { loadImageAsDataUrl } = await import('../utils/documentService');
-      const doc = new jsPDF('p', 'mm', 'a4');
-      const pageWidth = doc.internal.pageSize.getWidth();
-      const marginX = 15;
-      let y = 15;
-
-      const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
-      if (logoDataUrl) {
-        const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
-        try { doc.addImage(logoDataUrl, format, marginX, y, 18, 18); } catch (err) { console.error('Logo embed failed:', err); }
-      }
-
-      const textX = logoDataUrl ? marginX + 24 : marginX;
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(16);
-      doc.text(businessName, textX, y + 7);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
-      doc.setTextColor(110, 110, 110);
-      doc.text(`FlowBiz Financial Report · ${formatDate(start)} — ${formatDate(end)}`, textX, y + 13);
-      doc.setTextColor(0, 0, 0);
-      y += 26;
-
-      doc.setDrawColor(210, 210, 210);
-      doc.line(marginX, y, pageWidth - marginX, y);
-      y += 8;
-
-      const sectionTitle = (title) => {
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(11);
-        doc.text(title, marginX, y);
-        y += 6;
-        doc.setDrawColor(230, 230, 230);
-        doc.line(marginX, y - 3.5, pageWidth - marginX, y - 3.5);
-      };
-
-      const row = (label, value, opts = {}) => {
-        doc.setFont('helvetica', opts.bold ? 'bold' : 'normal');
-        doc.setFontSize(10);
-        doc.text(label, marginX, y);
-        doc.text(value, pageWidth - marginX, y, { align: 'right' });
-        y += 6.5;
-      };
-
-      sectionTitle('Financial Summary');
-      row('Cash balance', formatKES(expectedCashAtClose));
-      row('M-Pesa balance', formatKES(expectedMpesaAtClose));
-      row('Credit sales (this period)', formatKES(summary.totalCreditSales));
-      row('Debt repayments collected', formatKES(summary.totalDebtRepayments));
-      y += 4;
-
-      sectionTitle('Profit Calculation');
-      row('Revenue', formatKES(summary.revenue));
-      row('Cost of goods sold', `- ${formatKES(summary.costOfGoodsSold)}`);
-      row('Gross profit', formatKES(summary.grossProfit), { bold: true });
-      row('Total expenses', `- ${formatKES(summary.totalExpenses)}`);
-      row('Net profit', formatKES(summary.netProfit), { bold: true });
-      y += 4;
-
-      if (bestSelling.length > 0) {
-        sectionTitle('Top Selling Products');
-        bestSelling.forEach((p) => row(p.name, `${p.qty} sold · ${formatKES(p.revenue)}`));
-        y += 4;
-      }
-
-      if (lowStock.length > 0) {
-        sectionTitle('Low Stock Alerts');
-        lowStock.slice(0, 10).forEach((p) => row(p.name, `${p.stock} left`));
-        y += 4;
-      }
-
-      doc.setFontSize(8);
-      doc.setTextColor(150, 150, 150);
-      doc.text(`Generated ${formatDateTime(new Date())} · FlowBiz`, marginX, 287);
-
-      if (action === 'download') {
-        doc.save(`flowbiz-report-${preset}-${todayKey()}.pdf`);
-      } else {
-        doc.autoPrint();
-        window.open(doc.output('bloburl'), '_blank');
-      }
-      toast.success('Report generated successfully.');
-      setPdfModalOpen(false);
-    } catch (err) {
-      toast.error('Failed to generate PDF. Check console.');
-      console.error(err);
-    }
-  };
-
-  return (
-    <div className="mx-auto max-w-5xl space-y-5">
-      <div className="flex justify-between items-center">
-        <h1 className="font-display text-xl font-bold text-ink-900">Reports</h1>
-        <Link to="/advanced-analytics" className="btn-outline">
-          <TrendingUp className="h-4 w-4" /> Advanced Analytics
-        </Link>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        {PRESETS.map(p=>(
-          <button key={p.id} onClick={()=>setPreset(p.id)} className={`rounded-full px-3.5 py-1.5 text-sm font-semibold ${preset===p.id?'bg-ink-900 text-white':'bg-ink-100 text-ink-600 hover:bg-ink-200'}`}>{p.label}</button>
-        ))}
-        {preset==='custom'&&(
-          <div className="flex items-center gap-2">
-            <input type="date" className="input !w-auto" value={cStart} onChange={e=>setCStart(e.target.value)} />
-            <span className="text-ink-400">to</span>
-            <input type="date" className="input !w-auto" value={cEnd} onChange={e=>setCEnd(e.target.value)} />
-          </div>
-        )}
-      </div>
-
-      <ErrorBanner message={error ? `${error}` : null} />
-      
-      {loading ? <LoadingSpinner /> : (
-        <>
-          <div>
-            <h2 className="mb-2 font-display text-sm font-bold text-ink-800">Financial Summary</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Card label="Cash Balance" value={formatKES(expectedCashAtClose)} />
-              <Card label="M-Pesa Balance" value={formatKES(expectedMpesaAtClose)} />
-              <Card label="Credit Sales" value={formatKES(summary.totalCreditSales)} tone="text-rust-600" />
-              <Card label="Repayments Collected" value={formatKES(summary.totalDebtRepayments)} tone="text-moss-700" />
-            </div>
-          </div>
-          <div>
-            <h2 className="mb-2 font-display text-sm font-bold text-ink-800">Profit Calculation</h2>
-            <div className="card divide-y divide-ink-100">
-              {[
-                ['Revenue',               summary.revenue,             false],
-                ['− Cost of goods sold',  -summary.costOfGoodsSold,    false],
-                ['= Gross profit',        summary.grossProfit,          true ],
-                ['− Total expenses',      -summary.totalExpenses,       false],
-                ['= Net profit',          summary.netProfit,            true ],
-              ].map(([label,value,bold],i)=>(
-                <div key={label} className={`flex items-center justify-between px-4 py-3 ${bold?'bg-ink-50/60':''}`}>
-                  <span className={`text-sm ${bold?'font-bold text-ink-900':'text-ink-600'}`}>{label}</span>
-                  <span className={`font-semibold ${value<0?'text-rust-600':i===4?'text-moss-700':'text-ink-800'}`}>{formatKES(value)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <button className="btn-primary" onClick={() => setPdfModalOpen(true)}>
-              <Printer className="h-4 w-4" strokeWidth={1.75} /> Get PDF Report
-            </button>
-          </div>
-        </>
-      )}
-
-      <Modal open={pdfModalOpen} onClose={() => setPdfModalOpen(false)} title="Get PDF Report">
-        <div className="space-y-3">
-          <p className="text-sm text-ink-500 mb-4">Choose how you want to export your professional financial report.</p>
-          <button className="btn-primary w-full" onClick={() => doExport('download')}>Download PDF</button>
-          <button className="btn-outline w-full" onClick={() => doExport('print')}>Print Report</button>
-          <button className="btn-secondary w-full mt-2" onClick={() => setPdfModalOpen(false)}>Cancel</button>
-        </div>
-      </Modal>
-    </div>
-  );
-}
 ````
 
 ## File: src/router/routePrefetch.js
@@ -2959,17 +2613,6 @@ export function exportToCSV(filename, rows) {
   link.href = url; link.setAttribute('download', filename);
   document.body.appendChild(link); link.click();
   document.body.removeChild(link); URL.revokeObjectURL(url);
-}
-````
-
-## File: src/utils/currency.js
-````javascript
-export function formatKES(amount) {
-  const v = Number(amount) || 0;
-  return `KES ${v.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-export function formatKESCompact(amount) {
-  return `KES ${Math.round(Number(amount) || 0).toLocaleString('en-KE')}`;
 }
 ````
 
@@ -3192,335 +2835,6 @@ export function friendlyErrorMessage(err, options = {}) {
 }
 ````
 
-## File: src/utils/financials.js
-````javascript
-function sumBy(rows, field) {
-  return rows.reduce((acc, row) => acc + (Number(row[field]) || 0), 0);
-}
-
-function getCostOfSale(row) {
-  const costPerUnit = Number(row?.costPricePerUnit) || 0;
-  const quantity = Number(row?.quantity) || 0;
-  return costPerUnit * quantity;
-}
-
-export function isExpenseExcluded(expense) {
-  const category = String(expense?.category || '').toLowerCase();
-  const description = String(expense?.description || '').toLowerCase();
-  return category === 'stock purchase' || category === 'supplier payment' || description.includes('stock purchase') || description.includes('supplier payment');
-}
-
-// A credit sale that was cancelled (nothing was ever paid on it) or
-// refunded (goods returned, whatever was paid handed back) no longer
-// represents real business — it must not contribute to Outstanding Debt
-// or the Credit Sales metric. Same precedent as `isVoided` on cash sales.
-function isCreditSaleReversed(creditSale) {
-  return creditSale?.status === 'cancelled' || creditSale?.status === 'refunded';
-}
-
-// HYBRID MODEL (FINAL business decision): a credit sale is NOT realized
-// revenue until the customer actually pays. The moment a credit sale is
-// recorded, Inventory Value drops and Outstanding Debt / Credit Sales
-// rise — but Revenue, COGS, and Profit all stay at ZERO for that sale.
-// Only a Debt Repayment converts a portion of it into Revenue, COGS, and
-// Profit — proportional to how much of THAT specific credit sale has
-// just been collected. `creditSaleById` must be built from the FULL,
-// all-time credit sales list (not just the reporting period's), because
-// a repayment can land in a different period than the original sale.
-function recognizeRepayment(repayment, creditSaleById) {
-  const amount = Number(repayment?.amount) || 0;
-  const creditSale = creditSaleById.get(repayment?.creditSaleId);
-  if (!creditSale) {
-    // Originating credit sale not found (shouldn't normally happen) —
-    // recognize the cash as revenue with no cost basis rather than
-    // silently dropping it from the books.
-    return { revenue: amount, cogs: 0 };
-  }
-  const totalAmount = Number(creditSale.totalAmount) || 0;
-  const totalCost = getCostOfSale(creditSale);
-  const ratio = totalAmount > 0 ? amount / totalAmount : 0;
-  const cogs = totalCost * ratio;
-  return { revenue: amount, cogs };
-}
-
-export function computeFinancials({
-  sales = [],
-  creditSales = [],
-  allCreditSales = null,
-  expenses = [],
-  debtRepayments = [],
-  purchases = [],
-  supplierPayments = [],
-  refunds = [],
-} = {}) {
-  const activeSales = (sales || []).filter((sale) => !sale?.isVoided);
-  const activeCreditSales = (creditSales || []).filter((cs) => !isCreditSaleReversed(cs));
-
-  const cashSales  = activeSales.filter(s => s.paymentMethod === 'Cash');
-  const mpesaSales = activeSales.filter(s => s.paymentMethod === 'M-Pesa');
-  const totalCashSales  = sumBy(cashSales,  'totalAmount');
-  const totalMpesaSales = sumBy(mpesaSales, 'totalAmount');
-
-  // "Credit Sales" is a business-activity metric — total value of goods
-  // sold on credit this period. It intentionally does NOT feed into
-  // Revenue / COGS / Profit below (see recognizeRepayment()). This is the
-  // core of the FINAL decision: the owner should never see profit that
-  // has not yet been collected.
-  const totalCreditSales = sumBy(activeCreditSales, 'totalAmount');
-
-  const cashRepayments  = debtRepayments.filter(r => r.method === 'Cash');
-  const mpesaRepayments = debtRepayments.filter(r => r.method === 'M-Pesa');
-  const totalDebtRepaymentsCash  = sumBy(cashRepayments,  'amount');
-  const totalDebtRepaymentsMpesa = sumBy(mpesaRepayments, 'amount');
-  const totalDebtRepayments = totalDebtRepaymentsCash + totalDebtRepaymentsMpesa;
-
-  // Lookup of EVERY credit sale (not just this period's) so a repayment
-  // can find its cost basis even when the sale happened earlier. Falls
-  // back to the period-scoped `creditSales` if the caller didn't supply
-  // the full list.
-  const creditSaleSource = allCreditSales || creditSales || [];
-  const creditSaleById = new Map(creditSaleSource.map((cs) => [cs.id, cs]));
-
-  let repaymentRevenue = 0;
-  let repaymentCogs = 0;
-  (debtRepayments || []).forEach((r) => {
-    const { revenue, cogs } = recognizeRepayment(r, creditSaleById);
-    repaymentRevenue += revenue;
-    repaymentCogs += cogs;
-  });
-
-  // Direct (cash/M-Pesa) sales realize revenue and COGS the instant they
-  // happen. Credit sales contribute ZERO here directly — only the
-  // repaymentRevenue / repaymentCogs recognized above, at the moment the
-  // customer actually pays.
-  const directSalesCostOfGoodsSold = activeSales.reduce((acc, s) => acc + getCostOfSale(s), 0);
-  const costOfGoodsSold = directSalesCostOfGoodsSold + repaymentCogs;
-
-  // "Gross sales revenue" — total value of everything SOLD this period
-  // regardless of payment method. Informational only (Sales Summary) —
-  // it is NOT used for profit. See `revenue` below.
-  const grossSalesRevenue = totalCashSales + totalMpesaSales + totalCreditSales;
-
-  // Realized revenue — what actually counts toward profit, per the FINAL
-  // business decision: cash + M-Pesa sales, plus whatever portion of
-  // credit sales (from any period) was actually collected this period.
-  const revenue = totalCashSales + totalMpesaSales + repaymentRevenue;
-  const grossProfit = revenue - costOfGoodsSold;
-
-  const filteredExpenses = (expenses || []).filter((expense) => !isExpenseExcluded(expense));
-  const cashExpenses  = filteredExpenses.filter(e => e.paymentMethod === 'Cash');
-  const mpesaExpenses = filteredExpenses.filter(e => e.paymentMethod === 'M-Pesa');
-  const totalExpensesCash  = sumBy(cashExpenses,  'amount');
-  const totalExpensesMpesa = sumBy(mpesaExpenses, 'amount');
-  const totalExpenses = totalExpensesCash + totalExpensesMpesa;
-  const netProfit     = grossProfit - totalExpenses;
-
-  // CASH POSITION: strictly real money movement, independent of the
-  // revenue-recognition timing above. This is what Cash Received Today /
-  // M-Pesa Received Today and the Close Day till reconciliation rely on.
-  const totalCashReceipts  = totalCashSales  + totalDebtRepaymentsCash;
-  const totalMpesaReceipts = totalMpesaSales + totalDebtRepaymentsMpesa;
-
-  const cashRefunds  = (refunds || []).filter(r => r.method === 'Cash');
-  const mpesaRefunds = (refunds || []).filter(r => r.method === 'M-Pesa');
-  const totalRefundsCash  = sumBy(cashRefunds,  'amount');
-  const totalRefundsMpesa = sumBy(mpesaRefunds, 'amount');
-  const totalRefunds = totalRefundsCash + totalRefundsMpesa;
-
-  const purchasePaymentsCash  = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash');
-  const purchasePaymentsMpesa = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa');
-  const supplierPaymentsCash  = (supplierPayments || []).filter((p) => p.method === 'Cash');
-  const supplierPaymentsMpesa = (supplierPayments || []).filter((p) => p.method === 'M-Pesa');
-  // Refunds are cash/M-Pesa leaving the till, just like an expense or a
-  // supplier payment — folded into the same outflow totals so Close Day's
-  // till reconciliation stays correct without any formula change there.
-  const totalCashOutflows  = sumBy(purchasePaymentsCash,  'totalCost') + sumBy(supplierPaymentsCash,  'amount') + totalRefundsCash;
-  const totalMpesaOutflows = sumBy(purchasePaymentsMpesa, 'totalCost') + sumBy(supplierPaymentsMpesa, 'amount') + totalRefundsMpesa;
-
-  return {
-    grossSalesRevenue, totalCashSales, totalMpesaSales, totalCreditSales,
-    revenue, costOfGoodsSold, grossProfit,
-    totalCashReceipts, totalMpesaReceipts,
-    totalDebtRepaymentsCash, totalDebtRepaymentsMpesa, totalDebtRepayments,
-    totalExpensesCash, totalExpensesMpesa, totalExpenses, netProfit,
-    totalRefundsCash, totalRefundsMpesa, totalRefunds,
-    totalCashOutflows, totalMpesaOutflows,
-  };
-}
-
-export function computeExpectedTillBalances({
-  openingCashFloat = 0, openingMpesaFloat = 0,
-  totalCashSales = 0, totalMpesaSales = 0,
-  totalDebtRepaymentsCash = 0, totalDebtRepaymentsMpesa = 0,
-  totalExpensesCash = 0, totalExpensesMpesa = 0,
-  totalCashOutflows = 0, totalMpesaOutflows = 0,
-}) {
-  return {
-    expectedCashAtClose:  Number(openingCashFloat)  + totalCashSales  + totalDebtRepaymentsCash  - totalExpensesCash - totalCashOutflows,
-    expectedMpesaAtClose: Number(openingMpesaFloat) + totalMpesaSales + totalDebtRepaymentsMpesa - totalExpensesMpesa - totalMpesaOutflows,
-  };
-}
-
-export function computeSupplierBalances(purchases = [], supplierPayments = [], suppliers = []) {
-  const balanceById = {};
-
-  (purchases || []).forEach((p) => {
-    if (p?.paymentStatus !== 'pending_supplier_credit' || !p?.supplierId) return;
-    balanceById[p.supplierId] = (balanceById[p.supplierId] || 0) + (Number(p.totalCost) || 0);
-  });
-
-  (supplierPayments || []).forEach((sp) => {
-    if (!sp?.supplierId || balanceById[sp.supplierId] === undefined) return;
-    balanceById[sp.supplierId] -= Number(sp.amount) || 0;
-  });
-
-  const nameById = {};
-  (suppliers || []).forEach((s) => { nameById[s.id] = s.name; });
-
-  return Object.entries(balanceById)
-    .filter(([, balance]) => (Number(balance) || 0) > 0.005)
-    .map(([supplierId, balance]) => ({
-      supplierId,
-      supplierName:
-        nameById[supplierId] ||
-        (purchases || []).find((p) => p.supplierId === supplierId)?.supplierName ||
-        'Unknown supplier',
-      balance,
-    }))
-    .sort((a, b) => b.balance - a.balance);
-}
-````
-
-## File: src/utils/financials.test.js
-````javascript
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { computeFinancials } from './financials.js';
-
-test('a credit sale alone contributes zero revenue, COGS, and profit until repaid', () => {
-  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'pending', amountPaid: 0 };
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [creditSale],
-    allCreditSales: [creditSale],
-    expenses: [],
-    debtRepayments: [],
-  });
-
-  assert.equal(summary.totalCreditSales, 15000); // still tracked as business activity
-  assert.equal(summary.revenue, 0);
-  assert.equal(summary.costOfGoodsSold, 0);
-  assert.equal(summary.grossProfit, 0);
-  assert.equal(summary.netProfit, 0);
-  assert.equal(summary.totalCashReceipts, 0);
-  assert.equal(summary.totalMpesaReceipts, 0);
-});
-
-test('a full debt repayment recognizes the full sale as revenue, COGS, and profit', () => {
-  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'paid', amountPaid: 15000 };
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [],
-    allCreditSales: [creditSale],
-    expenses: [],
-    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 15000, method: 'Cash' }],
-  });
-
-  assert.equal(summary.revenue, 15000);
-  assert.equal(summary.costOfGoodsSold, 10000);
-  assert.equal(summary.grossProfit, 5000);
-  assert.equal(summary.netProfit, 5000);
-  assert.equal(summary.totalCashReceipts, 15000);
-});
-
-test('a partial debt repayment recognizes revenue, COGS, and profit proportionally', () => {
-  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'partial', amountPaid: 5000 };
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [],
-    allCreditSales: [creditSale],
-    expenses: [],
-    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 5000, method: 'Cash' }],
-  });
-
-  // 5000 / 15000 of the sale collected so far → 1/3 of its cost basis
-  assert.equal(summary.revenue, 5000);
-  assert.ok(Math.abs(summary.costOfGoodsSold - 10000 / 3) < 0.01);
-  assert.ok(Math.abs(summary.netProfit - (5000 - 10000 / 3)) < 0.01);
-});
-
-test('a repayment on a credit sale from an earlier period still finds its cost basis', () => {
-  // Simulates: sale happened last month (not in `creditSales`, which is
-  // period-scoped), repayment happens today. `allCreditSales` is what
-  // makes the lookup work regardless of period.
-  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'paid', amountPaid: 15000 };
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [], // not sold this period
-    allCreditSales: [creditSale],
-    expenses: [],
-    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 15000, method: 'M-Pesa' }],
-  });
-
-  assert.equal(summary.revenue, 15000);
-  assert.equal(summary.costOfGoodsSold, 10000);
-  assert.equal(summary.netProfit, 5000);
-});
-
-test('cancelled and refunded credit sales are excluded from the Credit Sales metric', () => {
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [
-      { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'cancelled' },
-      { id: 'c2', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'refunded' },
-    ],
-    expenses: [],
-    debtRepayments: [],
-  });
-
-  assert.equal(summary.totalCreditSales, 0);
-  assert.equal(summary.revenue, 0);
-  assert.equal(summary.netProfit, 0);
-});
-
-test('refunds reduce expected cash/M-Pesa till balance, same as any other outflow', () => {
-  const summary = computeFinancials({
-    sales: [], creditSales: [], expenses: [], debtRepayments: [],
-    refunds: [{ amount: 2000, method: 'Cash' }],
-  });
-
-  assert.equal(summary.totalRefundsCash, 2000);
-  assert.equal(summary.totalCashOutflows, 2000);
-});
-
-test('voided sales do not affect cash sales or profit', () => {
-  const summary = computeFinancials({
-    sales: [{ id: 's1', paymentMethod: 'Cash', totalAmount: 15000, costPricePerUnit: 10000, quantity: 1, isVoided: true }],
-    creditSales: [],
-    expenses: [],
-    debtRepayments: [],
-  });
-
-  assert.equal(summary.totalCashSales, 0);
-  assert.equal(summary.netProfit, 0);
-});
-
-test('purchase and supplier payments only affect outflows, not profit', () => {
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [],
-    expenses: [{ amount: 50000, paymentMethod: 'Cash', category: 'Stock Purchase' }],
-    debtRepayments: [],
-    purchases: [{ paymentStatus: 'paid', paymentMethod: 'Cash', totalCost: 50000 }],
-    supplierPayments: [{ method: 'Cash', amount: 50000 }],
-  });
-
-  assert.equal(summary.totalExpenses, 0);
-  assert.equal(summary.netProfit, 0);
-  assert.equal(summary.totalCashOutflows, 100000);
-});
-````
-
 ## File: src/utils/scannerService.js
 ````javascript
 // src/utils/scannerService.js
@@ -3640,52 +2954,6 @@ if (import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true') {
 export default app;
 ````
 
-## File: src/main.jsx
-````javascript
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
-import './index.css';
-import App from './App.jsx';
-import { enterDemoMode, exitDemoMode } from './demo/demoMode';
-import { seedDemoDataIfNeeded } from './demo/seedData';
-
-// `import.meta.env.MODE` is 'demo' only when started via `npm run dev:demo`
-// (vite --mode demo). The actual Firebase-vs-local-storage routing is
-// decided at build time by vite.config.js's module aliasing — this block
-// just does the two things that still need to happen at runtime once we
-// know we're in Demo Mode:
-//
-//  1. Seed realistic sample data on first load (no-ops on later loads —
-//     see seedDemoDataIfNeeded's own localStorage check).
-//  2. Flip the flag in src/demo/demoMode.js, so the parts of the UI that
-//     need to know "are we in Demo Mode?" for display purposes only (the
-//     Demo badge in TopHeader, choosing which Business Reset to run in
-//     Settings) read it correctly. This flag has NO bearing on whether
-//     Firebase is actually used — that's the aliasing above — it's purely
-//     cosmetic/UI state.
-//
-// The `else` branch matters too: without it, a browser that previously ran
-// `npm run dev:demo` would keep the demo flag set to true even after
-// switching back to `npm run dev`, incorrectly showing the Demo badge (and
-// routing Settings' Business Reset to the wrong implementation) in
-// Production Mode.
-if (import.meta.env.MODE === 'demo') {
-  enterDemoMode();
-  seedDemoDataIfNeeded();
-} else {
-  exitDemoMode();
-}
-
-createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
-  </StrictMode>
-);
-````
-
 ## File: .env.example
 ````
 VITE_FIREBASE_API_KEY=
@@ -3724,6 +2992,135 @@ dist-ssr
 ## File: .pagesignore
 ````
 cloudflare-worker/
+````
+
+## File: CHANGES.md
+````markdown
+# FlowBiz — Multi-Product Cart Implementation Report
+
+## 1. Audit summary (before changes)
+
+- Counter's "sell" flow was one-product-at-a-time: tapping a `ProductGrid` card or
+  a barcode scan opened `SaleModal` directly, and each confirm wrote ONE
+  `sales`/`creditSales` document holding a single `productId/productName/
+  quantity/costPricePerUnit/soldPricePerUnit/totalAmount/profit`.
+- `Dashboard.jsx` has its **own separate** single-product scan-to-sell flow
+  (own `SaleModal` usage, own `handleConfirmSale`/`handleConfirmCredit`).
+  This was intentionally left untouched — the spec scopes this work to the
+  Counter page, and Dashboard has no product grid or cart UI to extend.
+- Every consumer of a sale doc — `financials.js` (COGS calc), Dashboard's
+  activity feed, Counter's own sales log, Reports/AdvancedAnalytics
+  per-product rankings, InventoryIntelligence velocity, receipts (PDF +
+  WhatsApp text), the public Cloudflare Worker receipt page, and
+  refund/void logic — assumed exactly one product per sale doc.
+- Stock deduction already used `writeBatch + increment()` (no
+  `runTransaction`) — an existing, deliberate offline-first trade-off
+  (see README "CR-8"). Same trade-off is preserved here (see §5).
+
+## 2. Data model change
+
+`sales` and `creditSales` docs now optionally carry an `items[]` array:
+
+```
+items: [{ productId, productName, quantity, unitPrice, costPrice,
+           lineTotal, lineCost, lineProfit, barcode }]
+```
+
+Every doc still carries the same **aggregate** top-level fields it always
+did — `productName` (a summary, e.g. `"Book +2 more"`), `quantity` (sum of
+all line quantities), `totalAmount`, `paymentMethod`, `soldAt`, etc. — plus
+two new aggregate fields: `costOfGoodsSold` and (for cash/M-Pesa sales)
+`profit`. A single-product cart checkout also still writes legacy
+`costPricePerUnit`/`soldPricePerUnit` for maximum compatibility.
+
+This is why almost nothing else in the app needed to change: Dashboard's
+activity feed, Counter's own sales log, `useFinancials`'s date-range
+queries, and Close Day all only ever read the aggregate fields, which are
+still populated correctly for a multi-item sale. Only code that attributes
+activity **per product** (receipts, product-performance rankings, refund
+stock restoration) needed to branch on `items[]`.
+
+## 3. Files changed
+
+| File | Change |
+|---|---|
+| `src/pages/Counter.jsx` | Rewritten: client-side cart state, add/scan-to-cart, quantity/price editing, stock validation, `handleCartSale`/`handleCartCredit` (one batched write per checkout, one stock decrement per line item), void updated for multi-item stock restoration. Removed the "+ Quick add product" toolbar shortcut (Counter is now selling-only, per spec §2); the scan-not-found → create-product fallback is kept and now auto-adds the new product to the cart. |
+| `src/components/pos/CartList.jsx` | **New.** Cart UI: qty +/-, editable unit price, remove, running total, Sell button. |
+| `src/components/pos/CartCheckoutModal.jsx` | **New.** Payment method (Cash/M-Pesa/Credit) + customer selection, applied once to the whole cart — same fields `SaleModal` already had, now cart-scoped. |
+| `src/components/pos/SaleCompleteModal.jsx` | Shows an itemized breakdown when `sale.items` has more than one line; single-product sales (Dashboard's flow) render exactly as before. |
+| `src/utils/currency.js` | Added `roundMoney()` — rounds cart line/aggregate totals to avoid float drift. |
+| `src/utils/financials.js` | `getCostOfSale()` now prefers a stored `costOfGoodsSold` field (multi-item), falling back to `costPricePerUnit × quantity` for legacy docs. |
+| `src/utils/whatsapp.js` | `buildReceiptMessage()` accepts an optional `items[]` and lists every product; unchanged for single-product callers. |
+| `src/utils/documentService.js` | `buildDocument()` (PDF/print receipt+invoice) renders one row per item, with the page height now scaling with item count instead of a fixed 200mm. |
+| `src/pages/Reports.jsx`, `src/pages/AdvancedAnalytics.jsx` | `productPerf` now flattens `items[]` into per-product qty/revenue/profit so best-seller/most-profitable rankings attribute correctly instead of lumping a whole cart under one summary name. |
+| `src/pages/InventoryIntelligence.jsx` | `velocityData` (drives ABC classification, reorder priority, slow-moving detection) flattens `items[]` the same way. |
+| `src/pages/CustomerDetail.jsx` | `handleCancel`/`handleRefund` restore stock for every item in a cancelled/refunded multi-product credit sale. |
+| `cloudflare-worker/src/routes/publicDocument.js` | The public `/r/:token` receipt page (opened from a WhatsApp share link) now renders itemized rows and its "Download PDF" button uses a dynamic page height, mirroring the authenticated app's own PDF generator. |
+| `src/utils/financials.test.js` | Added 3 tests for the new `costOfGoodsSold` aggregate field (cash sale, legacy fallback, partial credit repayment). |
+
+## 4. Verified against the spec's own worked example
+
+Book ×3 @500 (cost 300) + Storybook ×2 @350 (cost 200) + Pen ×1 @50 (cost 20)
+→ cart math produces **Total: KSh 2,250.00**, matching the spec exactly
+(`totalCost=1320`, `profit=930`). Confirmed by running the actual cart
+line-item code, not by hand-calculation — see the transcript above.
+
+All 11 `financials.test.js` tests pass, including the 3 new ones.
+
+## 5. What was preserved unchanged (by design)
+
+- Payment logic (Cash/M-Pesa/Credit), the hybrid cash-flow-first credit
+  accounting model, debt repayment allocation across multiple open credit
+  sales, Close Day, offline-write pattern (`writeBatch` + `increment()`,
+  no `runTransaction`) — all untouched.
+- Dashboard's own single-product quick-scan sale flow, and `SaleModal.jsx`
+  itself (still used by Dashboard) — untouched.
+- Multi-tenant isolation: every new/changed write still goes through
+  `withBusiness()`; no Firestore rule changes were needed (`sales`/
+  `creditSales` rules only check `businessId` ownership, not document
+  shape).
+
+## 6. Known pre-existing limitation (not introduced, not fixed)
+
+Stock validation is **client-side only** — the app has no Cloud Functions
+tier (per prior notes on this project) and the existing single-product
+flow already relied on `increment()` without a transactional server-side
+check. A cart checkout re-validates against the live `products` snapshot
+immediately before submitting, which is the same level of protection the
+single-product flow had. Two cashiers finishing checkout on the same
+low-stock item within the same instant could still both succeed (stock
+can go negative) — this was true before this change and remains true
+after it. A real fix needs either Cloud Functions (not available on this
+project's plan) or `runTransaction` per product (which the app has
+deliberately avoided everywhere for offline-first reasons — see the
+CR-8 note in the README). Flagging this rather than silently leaving it.
+
+## 7. Discovered but out of scope
+
+- `src/pages/CustomerDetail.jsx`'s credit-purchase list row (`{cs.quantity}
+  × {cs.productName}`) will now show something like `"6 × Book +2 more"`
+  for a multi-item credit sale — functionally fine (uses the aggregate
+  fields) but not itemized in that list view. Didn't expand it further to
+  avoid an unrelated UI change to that page beyond the refund/cancel fix
+  that was actually required.
+- No migration is required for existing data: old single-product
+  `sales`/`creditSales` docs have no `items` field, and every piece of
+  code that now branches on `items[]` falls back to the original
+  single-product fields when it's absent.
+
+## 8. Testing performed
+
+- Syntax-verified every changed/new file with esbuild (all pass).
+- Ran the full `financials.test.js` suite (11/11 pass).
+- Manually traced the spec's own Test 3 numbers through the actual cart
+  line-item code (§4).
+- Full manual QA against a live Firebase project (Tests 1–16 in the
+  spec) was **not** run in this environment — there's no Firestore
+  connection available here. Recommend running through the spec's own
+  Test 1–16 checklist once this is merged into the real project,
+  particularly Test 15 (offline) and Test 16 (tenant isolation), since
+  those depend on real network/auth conditions this sandbox can't
+  reproduce.
 ````
 
 ## File: eslint.config.js
@@ -4236,6 +3633,71 @@ export default {
     return new Response(response.body, { status: response.status, headers });
   },
 };
+````
+
+## File: src/components/charts/MiniLineChart.jsx
+````javascript
+// src/components/charts/MiniLineChart.jsx
+//
+// A small, dependency-free SVG line chart. No new npm package needed —
+// this project has no chart library installed, and a handful of plain
+// SVG components is simpler to install (nothing to install) and audit
+// than adding one for three small charts.
+//
+// Accessible by design rather than by adding interactivity: instead of
+// JS-driven hover tooltips, the start/end labels and the overall change
+// are always shown as real text under the chart, so the trend is never
+// locked behind a color someone might not be able to distinguish.
+export default function MiniLineChart({ data, height = 140, colorClassName = 'text-blue-600', formatValue = (v) => String(v), ariaLabel, compact = false }) {
+  if (!data || data.length === 0) return null;
+
+  const width = 300; // viewBox units — scales to container via className="w-full"
+  const values = data.map((d) => Number(d.value) || 0);
+  const max = Math.max(...values, 0);
+  const min = Math.min(...values, 0);
+  const range = max - min || 1;
+  const padY = 10;
+  const stepX = data.length > 1 ? width / (data.length - 1) : 0;
+
+  const points = data.map((d, i) => {
+    const x = data.length > 1 ? i * stepX : width / 2;
+    const y = height - padY - ((Number(d.value) || 0) - min) / range * (height - padY * 2);
+    return { x, y };
+  });
+
+  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+  const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${height} L ${points[0].x.toFixed(1)} ${height} Z`;
+
+  const first = values[0];
+  const last = values[values.length - 1];
+  const change = first !== 0 ? ((last - first) / Math.abs(first)) * 100 : null;
+  const showDots = !compact && data.length <= 31;
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" preserveAspectRatio="none" role="img" aria-label={ariaLabel || 'Trend chart'}>
+        <path d={areaPath} className={colorClassName} fill="currentColor" opacity="0.08" />
+        <path d={linePath} className={colorClassName} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+        {showDots && points.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r="2" className={colorClassName} fill="currentColor" />
+        ))}
+      </svg>
+{!compact && (
+        <>
+          <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-400">
+            <span>{data[0].label}</span>
+            <span>{data[data.length - 1].label}</span>
+          </div>
+          {change !== null && (
+            <p className={`mt-1 text-xs font-semibold ${change >= 0 ? 'text-moss-700' : 'text-rust-600'}`}>
+              {change >= 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}% over this period — ending at {formatValue(last)}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 ````
 
 ## File: src/components/common/ConfirmDialog.jsx
@@ -5031,554 +4493,6 @@ export function useHardwareScanner(onScan, { enabled = true, maxIntervalMs = 80,
 }
 ````
 
-## File: src/pages/AdvancedAnalytics.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { where } from 'firebase/firestore';
-import { useAuth } from '../contexts/AuthContext';
-import { useFinancialsForRange } from '../hooks/useFinancials';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { tenantQuery } from '../lib/tenant';
-import { startOfDay, endOfDay, buildDateBuckets, toMillisValue } from '../utils/dateRanges';
-import { formatKES } from '../utils/currency';
-import { computeFinancials, isExpenseExcluded } from '../utils/financials';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import MiniLineChart from '../components/charts/MiniLineChart';
-import MiniBarChart from '../components/charts/MiniBarChart';
-import DonutChart from '../components/charts/DonutChart';
-import {
-  TrendingUp, TrendingDown, Lock, AlertCircle, CheckCircle2, Info, ArrowLeft,
-  Banknote, Package, Tag, BarChart3, Receipt, Users, UsersRound, ClipboardCheck,
-} from 'lucide-react';
-
-const PERIOD_OPTIONS = [
-  { id: '7', label: '7 Days' },
-  { id: '30', label: '30 Days' },
-  { id: '90', label: '90 Days' },
-  { id: 'custom', label: 'Custom' },
-];
-
-const CHART_PALETTE = [
-  { text: 'text-moss-600', bg: 'bg-moss-600' },
-  { text: 'text-blue-600', bg: 'bg-blue-600' },
-  { text: 'text-amber-500', bg: 'bg-amber-500' },
-  { text: 'text-rust-500', bg: 'bg-rust-500' },
-  { text: 'text-ink-800', bg: 'bg-ink-800' },
-  { text: 'text-moss-400', bg: 'bg-moss-400' },
-];
-
-const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const NAIROBI_OFFSET_MS = 3 * 60 * 60 * 1000;
-function weekdayIndexNairobi(millis) {
-  return new Date(millis + NAIROBI_OFFSET_MS).getUTCDay();
-}
-
-function KpiCard({ label, value, tone = 'text-ink-900', deltaPct, sparkline, sparklineColor = 'text-moss-600' }) {
-  const isPositive = deltaPct !== null && deltaPct !== undefined && deltaPct >= 0;
-  return (
-    <div className="card p-4 sm:p-5 flex flex-col justify-between bg-white hover:shadow-md transition-shadow">
-      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
-      <p className={`mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
-      {deltaPct !== null && deltaPct !== undefined && Number.isFinite(deltaPct) && (
-        <div className={`mt-2 flex items-center gap-1.5 text-xs font-semibold ${isPositive ? 'text-moss-700' : 'text-rust-600'}`}>
-          {isPositive ? <TrendingUp className="h-3.5 w-3.5" strokeWidth={2.5} /> : <TrendingDown className="h-3.5 w-3.5" strokeWidth={2.5} />}
-          <span>{Math.abs(deltaPct).toFixed(1)}% vs prior period</span>
-        </div>
-      )}
-      {sparkline && sparkline.length > 1 && (
-        <div className="mt-3 -mb-1">
-          <MiniLineChart data={sparkline} height={36} colorClassName={sparklineColor} compact />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Section({ title, subtitle, icon: Icon, className = '', children }) {
-  return (
-    <div className={`card p-5 sm:p-6 bg-white ${className}`}>
-      <div className="mb-5 flex items-center gap-3 border-b border-ink-100 pb-4">
-        {Icon && (
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
-            <Icon className="h-4 w-4" strokeWidth={1.75} />
-          </div>
-        )}
-        <div>
-          <h2 className="font-display text-sm font-bold text-ink-900">{title}</h2>
-          {subtitle && <p className="mt-0.5 text-xs text-ink-500">{subtitle}</p>}
-        </div>
-      </div>
-      <div>{children}</div>
-    </div>
-  );
-}
-
-function NoData({ children }) {
-  return <div className="py-8 flex flex-col items-center justify-center text-center"><Info className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5} /><p className="text-sm text-ink-500">{children}</p></div>;
-}
-
-// Custom dual-series trend chart (no chart library installed in this
-// project — built the same hand-rolled-SVG way MiniLineChart already is,
-// just extended to plot two series with a shared scale and a legend).
-function DualTrendChart({ data, series, height = 220, ariaLabel }) {
-  if (!data || data.length === 0) return null;
-  const width = 600;
-  const padY = 16;
-  const padBottom = 24;
-  const plotHeight = height - padY - padBottom;
-  const allValues = data.flatMap((d) => series.map((s) => Number(d[s.key]) || 0));
-  const max = Math.max(...allValues, 0);
-  const min = Math.min(...allValues, 0);
-  const range = (max - min) || 1;
-  const stepX = data.length > 1 ? width / (data.length - 1) : 0;
-  const zeroY = padY + plotHeight - ((0 - min) / range) * plotHeight;
-
-  const pointsFor = (key) => data.map((d, i) => {
-    const x = data.length > 1 ? i * stepX : width / 2;
-    const v = Number(d[key]) || 0;
-    const y = padY + plotHeight - ((v - min) / range) * plotHeight;
-    return { x, y };
-  });
-
-  return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-center gap-4">
-        {series.map((s) => (
-          <span key={s.key} className="flex items-center gap-1.5 text-xs font-semibold text-ink-600">
-            <span className={`h-2 w-2 rounded-full ${s.dotClassName}`} />
-            {s.label}
-          </span>
-        ))}
-      </div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" preserveAspectRatio="none" role="img" aria-label={ariaLabel || 'Trend chart'}>
-        <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke="currentColor" className="text-ink-100" strokeWidth="1" />
-        {series.map((s) => {
-          const points = pointsFor(s.key);
-          const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
-          const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${zeroY} L ${points[0].x.toFixed(1)} ${zeroY} Z`;
-          return (
-            <g key={s.key}>
-              <path d={areaPath} className={s.colorClassName} fill="currentColor" opacity="0.06" />
-              <path d={linePath} className={s.colorClassName} fill="none" stroke="currentColor" strokeWidth="2.25" vectorEffect="non-scaling-stroke" />
-              {points.length <= 31 && points.map((p, i) => (
-                <circle key={i} cx={p.x} cy={p.y} r="2.5" className={s.colorClassName} fill="currentColor" />
-              ))}
-            </g>
-          );
-        })}
-      </svg>
-      <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-400">
-        <span>{data[0].label}</span>
-        <span>{data[data.length - 1].label}</span>
-      </div>
-    </div>
-  );
-}
-
-export default function AdvancedAnalytics() {
-  const { isPro, businessId } = useAuth();
-
-  const [period, setPeriod] = useState('30');
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd, setCustomEnd] = useState('');
-
-  const { start, end } = useMemo(() => {
-    if (period === 'custom' && customStart && customEnd) {
-      return { start: startOfDay(new Date(customStart)), end: endOfDay(new Date(customEnd)) };
-    }
-    const days = Number(period) || 30;
-    return { start: startOfDay(new Date(Date.now() - (days - 1) * 86400000)), end: endOfDay() };
-  }, [period, customStart, customEnd]);
-
-  const prevRange = useMemo(() => {
-    if (period === 'custom' && customStart && customEnd) {
-      const diff = end.getTime() - start.getTime();
-      const prevEnd = new Date(start.getTime() - 1);
-      const prevStart = new Date(prevEnd.getTime() - diff);
-      return { start: startOfDay(prevStart), end: endOfDay(prevEnd) };
-    }
-    const days = Number(period) || 30;
-    const prevEnd = endOfDay(new Date(start.getTime() - 1));
-    const prevStart = startOfDay(new Date(start.getTime() - days * 86400000));
-    return { start: prevStart, end: prevEnd };
-  }, [start, end, period, customStart, customEnd]);
-
-  const { loading, sales, creditSales, expenses, repayments, summary } = useFinancialsForRange(start, end);
-  const { loading: prevLoading, summary: prevSummary } = useFinancialsForRange(prevRange.start, prevRange.end);
-
-  const allCreditSalesQ = useMemo(() => (businessId ? tenantQuery('creditSales', businessId) : null), [businessId]);
-  const { data: allCreditSales } = useFirestoreCollection(allCreditSalesQ);
-
-  const outstandingCreditQ = useMemo(
-    () => (businessId ? tenantQuery('creditSales', businessId, where('status', 'in', ['pending', 'partial'])) : null),
-    [businessId]
-  );
-  const { data: outstandingCreditSales } = useFirestoreCollection(outstandingCreditQ);
-  const totalOutstanding = useMemo(
-    () => outstandingCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0),
-    [outstandingCreditSales]
-  );
-
-  const topDebtors = useMemo(() => {
-    const map = {};
-    (outstandingCreditSales || []).forEach((cs) => {
-      const key = cs.customerId || cs.customerName || 'unknown';
-      if (!map[key]) map[key] = { name: cs.customerName || 'Unknown', balance: 0, customerId: cs.customerId };
-      map[key].balance += Number(cs.remainingBalance) || 0;
-    });
-    return Object.values(map).sort((a, b) => b.balance - a.balance).slice(0, 5);
-  }, [outstandingCreditSales]);
-
-  const granularity = (end.getTime() - start.getTime()) > (45 * 86400000) ? 'week' : 'day';
-  const buckets = useMemo(() => buildDateBuckets(start, end, granularity), [start, end, granularity]);
-
-  const trend = useMemo(() => {
-    if (!buckets.length) return [];
-    const inBucket = (record, field, bucket) => {
-      const t = toMillisValue(record[field]);
-      return t !== null && t >= bucket.start.getTime() && t <= bucket.end.getTime();
-    };
-    return buckets.map((bucket) => {
-      const bucketSales = (sales || []).filter((s) => inBucket(s, 'soldAt', bucket));
-      const bucketExpenses = (expenses || []).filter((e) => inBucket(e, 'recordedAt', bucket));
-      const bucketRepayments = (repayments || []).filter((r) => inBucket(r, 'paidAt', bucket));
-      const f = computeFinancials({
-        sales: bucketSales,
-        creditSales: [],
-        allCreditSales,
-        expenses: bucketExpenses,
-        debtRepayments: bucketRepayments,
-      });
-      return {
-        label: bucket.label,
-        revenue: f.revenue,
-        netProfit: f.netProfit,
-        grossProfit: f.grossProfit,
-        expenses: f.totalExpenses,
-        margin: f.revenue > 0 ? (f.grossProfit / f.revenue) * 100 : 0,
-      };
-    });
-  }, [buckets, sales, expenses, repayments, allCreditSales]);
-
-  const productPerf = useMemo(() => {
-    const map = {};
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      if (!map[s.productName]) map[s.productName] = { name: s.productName, qty: 0, revenue: 0, profit: 0 };
-      map[s.productName].qty += Number(s.quantity) || 0;
-      map[s.productName].revenue += Number(s.totalAmount) || 0;
-      map[s.productName].profit += Number(s.profit) || 0;
-    });
-    (creditSales || []).forEach((cs) => {
-      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-      if (!map[cs.productName]) map[cs.productName] = { name: cs.productName, qty: 0, revenue: 0, profit: 0 };
-      map[cs.productName].qty += Number(cs.quantity) || 0;
-    });
-    return Object.values(map);
-  }, [sales, creditSales]);
-
-  const bestSelling = useMemo(() => [...productPerf].sort((a, b) => b.qty - a.qty).slice(0, 5), [productPerf]);
-  const mostProfitable = useMemo(() => [...productPerf].sort((a, b) => b.profit - a.profit).slice(0, 5), [productPerf]);
-
-  const staffPerformance = useMemo(() => {
-    const m = {};
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      if (!s.soldByName) return;
-      if (!m[s.soldByName]) m[s.soldByName] = { name: s.soldByName, qty: 0, revenue: 0 };
-      m[s.soldByName].qty += Number(s.quantity) || 0;
-      m[s.soldByName].revenue += Number(s.totalAmount) || 0;
-    });
-    return Object.values(m).sort((a, b) => b.revenue - a.revenue);
-  }, [sales]);
-
-  const weekdayPerformance = useMemo(() => {
-    const totals = Array(7).fill(0);
-    const seenDates = Array.from({ length: 7 }, () => new Set());
-    const addRecord = (timestamp, amount) => {
-      const t = toMillisValue(timestamp);
-      if (t == null) return;
-      const idx = weekdayIndexNairobi(t);
-      totals[idx] += amount;
-      seenDates[idx].add(Math.floor((t + NAIROBI_OFFSET_MS) / 86400000));
-    };
-    (sales || []).forEach((s) => { if (!s.isVoided) addRecord(s.soldAt, Number(s.totalAmount) || 0); });
-    (creditSales || []).forEach((cs) => { if (cs.status !== 'cancelled' && cs.status !== 'refunded') addRecord(cs.soldAt, Number(cs.totalAmount) || 0); });
-    return WEEKDAY_LABELS.map((label, i) => ({ label, value: seenDates[i].size > 0 ? totals[i] / seenDates[i].size : 0 }));
-  }, [sales, creditSales]);
-
-  const weekdayBest = useMemo(() => {
-    const withSales = weekdayPerformance.filter((d) => d.value > 0);
-    if (!withSales.length) return null;
-    return withSales.reduce((a, b) => (b.value > a.value ? b : a));
-  }, [weekdayPerformance]);
-
-  const expenseByCategory = useMemo(() => {
-    const map = {};
-    (expenses || []).filter((e) => !isExpenseExcluded(e)).forEach((e) => {
-      const cat = e.category || 'Other';
-      map[cat] = (map[cat] || 0) + (Number(e.amount) || 0);
-    });
-    return Object.entries(map).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
-  }, [expenses]);
-
-  const revenueChangePct = !prevLoading && prevSummary.revenue > 0 ? ((summary.revenue - prevSummary.revenue) / prevSummary.revenue) * 100 : null;
-  const profitChangePct = !prevLoading && prevSummary.netProfit !== 0 ? ((summary.netProfit - prevSummary.netProfit) / Math.abs(prevSummary.netProfit)) * 100 : null;
-
-  const insights = useMemo(() => {
-    const list = [];
-    if (revenueChangePct !== null) {
-      list.push({ tone: revenueChangePct >= 0 ? 'positive' : 'negative', text: `Recognized revenue is ${revenueChangePct >= 0 ? 'up' : 'down'} ${Math.abs(revenueChangePct).toFixed(1)}% vs prior period.` });
-    }
-    if (profitChangePct !== null) {
-      list.push({ tone: profitChangePct >= 0 ? 'positive' : 'negative', text: `Net profit is ${profitChangePct >= 0 ? 'up' : 'down'} ${Math.abs(profitChangePct).toFixed(1)}% vs prior period.` });
-    }
-    if (mostProfitable[0]) {
-      list.push({ tone: 'neutral', text: `"${mostProfitable[0].name}" drove the highest gross profit margin (${formatKES(mostProfitable[0].profit)}).` });
-    }
-    if (weekdayBest) {
-      list.push({ tone: 'neutral', text: `${weekdayBest.label} is your strongest day, averaging ${formatKES(weekdayBest.value)} in sales per occurrence this period.` });
-    }
-    const salesActivity = summary.revenue + summary.totalCreditSales;
-    if (salesActivity > 0 && summary.totalCreditSales > 0) {
-      const pct = (summary.totalCreditSales / salesActivity) * 100;
-      list.push({ tone: pct > 30 ? 'negative' : 'neutral', text: `Credit exposure: ${pct.toFixed(0)}% of sales activity was issued on credit.` });
-    }
-    return list;
-  }, [revenueChangePct, profitChangePct, mostProfitable, weekdayBest, summary]);
-
-  if (!isPro) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
-        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
-          <Lock className="h-7 w-7" strokeWidth={2} />
-        </div>
-        <h2 className="font-display text-2xl font-bold text-ink-900">Enterprise Analytics Locked</h2>
-        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Advanced Analytics provides institutional-grade visibility into profit margins, capital exposure, and staff performance trends. Requires FlowBiz Pro.</p>
-        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
-      </div>
-    );
-  }
-
-  if (loading) return <div className="py-12"><LoadingSpinner /></div>;
-
-  const margin = summary.revenue > 0 ? (summary.grossProfit / summary.revenue) * 100 : 0;
-  const avgTransactionValue = sales.length > 0 ? summary.revenue / sales.length : 0;
-  const hasSalesData = sales.length > 0;
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Advanced Analytics</h1>
-          <p className="text-sm text-ink-500 mt-1">A deeper look at profit, cash flow, and performance trends.</p>
-        </div>
-        <Link to="/reports" className="btn-outline text-xs bg-white">
-          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Standard Reports
-        </Link>
-      </div>
-
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-white p-3 rounded-xl border border-ink-200">
-        <span className="text-xs font-semibold text-ink-500 uppercase tracking-wider pl-1">Date Range:</span>
-        <div className="flex flex-wrap items-center gap-2">
-          {PERIOD_OPTIONS.map((opt) => (
-            <button
-              key={opt.id}
-              onClick={() => setPeriod(opt.id)}
-              className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors ${period === opt.id ? 'bg-ink-900 text-white shadow-sm' : 'bg-ink-50 text-ink-600 hover:bg-ink-100'}`}
-            >
-              {opt.label}
-            </button>
-          ))}
-          {period === 'custom' && (
-            <div className="flex items-center gap-2 ml-1 animate-fade-in">
-              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
-              <span className="text-ink-400 text-sm font-medium">to</span>
-              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Financial performance</p>
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <KpiCard label="Recognized Revenue" value={formatKES(summary.revenue)} deltaPct={revenueChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.revenue }))} sparklineColor="text-moss-600" />
-          <KpiCard label="Gross Profit" value={formatKES(summary.grossProfit)} tone="text-moss-700" sparkline={trend.map((t) => ({ label: t.label, value: t.grossProfit }))} sparklineColor="text-moss-600" />
-          <KpiCard label="Net Profit" value={formatKES(summary.netProfit)} tone="text-moss-700" deltaPct={profitChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.netProfit }))} sparklineColor="text-blue-600" />
-          <KpiCard label="Profit Margin" value={`${margin.toFixed(1)}%`} tone={margin > 20 ? 'text-moss-700' : margin < 10 ? 'text-rust-600' : 'text-ink-900'} sparkline={trend.map((t) => ({ label: t.label, value: t.margin }))} sparklineColor={margin >= 0 ? 'text-moss-600' : 'text-rust-500'} />
-        </div>
-      </div>
-
-      <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Operational metrics</p>
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <KpiCard label="Total Expenses" value={formatKES(summary.totalExpenses)} tone="text-rust-600" />
-          <KpiCard label="Avg Transaction Size" value={hasSalesData ? formatKES(avgTransactionValue) : 'KES 0'} />
-          <KpiCard label="Credit Issued" value={formatKES(summary.totalCreditSales)} tone="text-amber-600" />
-          <KpiCard label="Total Outstanding Debt" value={formatKES(totalOutstanding)} tone="text-rust-600" />
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Section title="Revenue &amp; Profit Trend" subtitle="Recognized revenue vs. net profit over the selected period" icon={TrendingUp} className="lg:col-span-2">
-          {hasSalesData ? (
-            <DualTrendChart
-              data={trend}
-              series={[
-                { key: 'revenue', label: 'Revenue', colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
-                { key: 'netProfit', label: 'Net Profit', colorClassName: 'text-blue-600', dotClassName: 'bg-blue-600' },
-              ]}
-              ariaLabel="Revenue vs net profit trend"
-            />
-          ) : (
-            <NoData>Insufficient data to chart trends yet.</NoData>
-          )}
-        </Section>
-        <Section title="Payment Mix" subtitle="How sales value was collected this period" icon={Banknote}>
-          {(summary.totalCashSales + summary.totalMpesaSales + summary.totalCreditSales) > 0 ? (
-            <>
-              <DonutChart
-                size={150}
-                formatValue={formatKES}
-                segments={[
-                  { label: 'Cash', value: summary.totalCashSales, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
-                  { label: 'M-Pesa', value: summary.totalMpesaSales, colorClassName: 'text-blue-600', dotClassName: 'bg-blue-600' },
-                  { label: 'Credit (uncollected)', value: summary.totalCreditSales, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
-                ]}
-              />
-              <p className="mt-3 text-[11px] leading-relaxed text-ink-400">Credit isn't counted as revenue until it's repaid — see the Executive Summary below.</p>
-            </>
-          ) : (
-            <NoData>No sales recorded yet this period.</NoData>
-          )}
-        </Section>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Volume Drivers" subtitle="Highest quantity moved" icon={Package}>
-          {bestSelling.length > 0 ? (
-            <MiniBarChart orientation="horizontal" formatValue={(v) => `${v.toLocaleString()} units`} data={bestSelling.map((p) => ({ label: p.name, value: p.qty, colorClassName: 'bg-ink-800' }))} />
-          ) : (
-            <NoData>No product movement detected.</NoData>
-          )}
-        </Section>
-        <Section title="Margin Drivers" subtitle="Highest gross profit generated" icon={Tag}>
-          {mostProfitable.length > 0 ? (
-            <MiniBarChart orientation="horizontal" formatValue={formatKES} data={mostProfitable.map((p) => ({ label: p.name, value: p.profit, colorClassName: 'bg-moss-600' }))} />
-          ) : (
-            <NoData>No profit data generated.</NoData>
-          )}
-        </Section>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Sales by Day of Week" subtitle="Average sales value per occurrence of that weekday" icon={BarChart3}>
-          {weekdayBest ? (
-            <MiniBarChart orientation="vertical" formatValue={formatKES} data={weekdayPerformance} ariaLabel="Sales by day of week" />
-          ) : (
-            <NoData>No sales activity recorded yet this period.</NoData>
-          )}
-        </Section>
-        <Section title="Expense Breakdown" subtitle="Where operating costs went this period" icon={Receipt}>
-          {expenseByCategory.length > 0 ? (
-            <DonutChart
-              size={150}
-              formatValue={formatKES}
-              segments={expenseByCategory.map((e, i) => ({ label: e.label, value: e.value, colorClassName: CHART_PALETTE[i % CHART_PALETTE.length].text, dotClassName: CHART_PALETTE[i % CHART_PALETTE.length].bg }))}
-            />
-          ) : (
-            <NoData>No expenses recorded this period.</NoData>
-          )}
-        </Section>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Capital &amp; Credit Exposure" subtitle="Liquidity tied up in customer credit" icon={Users}>
-          <div className="space-y-4 pt-1">
-            <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
-              <span className="text-ink-600 font-medium">Credit Issued (This Period)</span>
-              <span className="font-semibold text-ink-900">{formatKES(summary.totalCreditSales)}</span>
-            </div>
-            <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
-              <span className="text-ink-600 font-medium">Debt Collected (This Period)</span>
-              <span className="font-semibold text-moss-700">{formatKES(summary.totalDebtRepayments)}</span>
-            </div>
-            <div className="flex items-center justify-between pt-1 text-sm bg-rust-50 p-3 rounded-lg border border-rust-100">
-              <span className="font-bold text-rust-800 uppercase tracking-wide text-xs">Total Market Exposure</span>
-              <span className="font-bold text-rust-700 text-base">{formatKES(totalOutstanding)}</span>
-            </div>
-          </div>
-        </Section>
-        <Section title="Top Debtors" subtitle="Customers with the highest outstanding balance" icon={Users}>
-          {topDebtors.length > 0 ? (
-            <div className="space-y-1">
-              {topDebtors.map((d, i) => (
-                <Link key={d.customerId || d.name} to={d.customerId ? `/customers/${d.customerId}` : '/customers'} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2.5 hover:bg-ink-50 transition-colors">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rust-50 text-xs font-bold text-rust-700">{i + 1}</span>
-                    <span className="truncate text-sm font-medium text-ink-800">{d.name}</span>
-                  </div>
-                  <span className="shrink-0 text-sm font-bold text-rust-600">{formatKES(d.balance)}</span>
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <NoData>No outstanding customer balances — nice and clean!</NoData>
-          )}
-        </Section>
-      </div>
-
-      <Section title="Staff Performance Index" subtitle="Revenue attribution by cashier" icon={UsersRound}>
-        {staffPerformance.length === 0 ? (
-          <NoData>No staff attribution data found.</NoData>
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-ink-200">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-ink-50 text-xs uppercase tracking-wider font-semibold text-ink-500">
-                <tr><th className="px-4 py-3 border-b border-ink-200">Staff Member</th><th className="px-4 py-3 border-b border-ink-200 text-right">Items Sold</th><th className="px-4 py-3 border-b border-ink-200 text-right">Revenue Generated</th></tr>
-              </thead>
-              <tbody className="divide-y divide-ink-100 bg-white">
-                {staffPerformance.map((st, i) => (
-                  <tr key={st.name} className="hover:bg-ink-50/50 transition-colors">
-                    <td className="px-4 py-3 font-semibold text-ink-900">
-                      {st.name}
-                      {i === 0 && <span className="badge ml-2 bg-amber-100 text-amber-800">Top</span>}
-                    </td>
-                    <td className="px-4 py-3 text-right text-ink-600">{st.qty.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-moss-700">{formatKES(st.revenue)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Section>
-
-      <Section title="Executive Summary" subtitle="Automated business intelligence" icon={ClipboardCheck}>
-        {insights.length > 0 ? (
-          <div className="space-y-3 pt-1">
-            {insights.map((insight, i) => (
-              <div key={i} className="flex items-start gap-3 text-sm bg-ink-50 p-3 rounded-lg border border-ink-100">
-                <div className="shrink-0 mt-0.5">
-                  {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
-                   insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
-                   <Info className="h-5 w-5 text-ink-500" strokeWidth={2} />}
-                </div>
-                <span className="text-ink-800 font-medium leading-relaxed">{insight.text}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <NoData>More transaction volume required to generate insights.</NoData>
-        )}
-      </Section>
-    </div>
-  );
-}
-````
-
 ## File: src/pages/CloseDay.jsx
 ````javascript
 // HP-7 FIX: chunk deletions to avoid 500-op batch limit; replace window.location.reload() with React state
@@ -5713,538 +4627,6 @@ function SRow({ label, value, variance }) {
 function Variance({ v }) {
   const tone = v===0?'text-moss-700':v<0?'text-rust-600':'text-amber-600';
   return <p className={`text-sm font-semibold ${tone}`}>{v===0?'✓ Matches exactly':v<0?`Shortage of ${formatKES(Math.abs(v))}`:`Surplus of ${formatKES(v)}`}</p>;
-}
-````
-
-## File: src/pages/ForgotPassword.jsx
-````javascript
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { sendPasswordResetEmail } from 'firebase/auth';
-import { auth } from '../firebase';
-
-export default function ForgotPassword() {
-  const [email, setEmail] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [error, setError] = useState(null);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
-    setSubmitting(true);
-    try {
-      await sendPasswordResetEmail(auth, email.trim(), {
-        url: `${window.location.origin}/auth/action`,
-        handleCodeInApp: true,
-      });
-      setSent(true);
-} catch (err) {
-      // FIX: previously every error EXCEPT invalid-email/too-many-requests
-      // silently showed "sent" — including real failures (unauthorized
-      // continue URL, network errors, misconfigured project), which is
-      // why resets appeared to silently vanish. Only auth/user-not-found
-      // is safe to mask as success; everything else now shows a real
-      // message, and every error is logged so DevTools shows the cause.
-      console.error('[FlowBiz] sendPasswordResetEmail failed:', err.code || err.name, err.message);
-      const message =
-        err.code === 'auth/invalid-email'             ? 'Please enter a valid email address.' :
-        err.code === 'auth/too-many-requests'         ? 'Too many requests. Please wait a bit before trying again.' :
-        err.code === 'auth/unauthorized-continue-uri' ? 'This site is not yet authorized to send reset links. Please contact support.' :
-        err.code === 'auth/user-not-found'            ? null :
-        "Couldn't send the reset email. Please try again in a moment.";
-      if (message === null) {
-        setSent(true);
-      } else {
-        setError(message);
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-white">Reset your password</h1>
-            <p className="text-sm text-ink-400">Enter your account email and we'll send you a reset link.</p>
-          </div>
-        </div>
-
-        {sent ? (
-          <div className="card p-6 text-center space-y-3">
-            <div className="text-3xl">📧</div>
-            <p className="text-sm text-ink-600">If an account exists for <span className="font-semibold">{email.trim()}</span>, a password reset link is on its way. Check your inbox (and spam folder).</p>
-            <Link to="/login" className="btn-primary w-full">Back to sign in</Link>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="card space-y-4 p-6">
-            {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-            <div>
-              <label className="label">Email</label>
-              <input type="email" required className="input" placeholder="owner@yourbusiness.co.ke" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" autoFocus />
-            </div>
-            <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Sending…' : 'Send reset link'}</button>
-          </form>
-        )}
-
-        <p className="text-center text-sm text-ink-400">
-          Remembered it? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link>
-        </p>
-      </div>
-    </div>
-  );
-}
-````
-
-## File: src/pages/InventoryIntelligence.jsx
-````javascript
-import { useMemo } from 'react';
-import { Link } from 'react-router-dom';
-import { orderBy, where } from 'firebase/firestore';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { formatKES } from '../utils/currency';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import MiniBarChart from '../components/charts/MiniBarChart';
-import DonutChart from '../components/charts/DonutChart';
-import {
-  Lock, ArrowLeft, AlertCircle, CheckCircle2, Info, PackageOpen,
-  Package, Tag, Truck, ClipboardCheck, AlertTriangle,
-} from 'lucide-react';
-
-const LOOKBACK_DAYS = 30;
-
-function KpiCard({ label, value, tone = 'text-ink-900', bg = 'bg-white' }) {
-  return (
-    <div className={`card p-4 sm:p-5 ${bg} hover:shadow-md transition-shadow`}>
-      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
-      <p className={`mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
-    </div>
-  );
-}
-
-function Section({ title, subtitle, icon: Icon, children }) {
-  return (
-    <div className="card p-5 sm:p-6 bg-white">
-      <div className="mb-5 flex items-center gap-3 border-b border-ink-100 pb-4">
-        {Icon && (
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
-            <Icon className="h-4 w-4" strokeWidth={1.75} />
-          </div>
-        )}
-        <div>
-          <h2 className="font-display text-sm font-bold text-ink-900">{title}</h2>
-          {subtitle && <p className="mt-0.5 text-xs text-ink-500">{subtitle}</p>}
-        </div>
-      </div>
-      <div>{children}</div>
-    </div>
-  );
-}
-
-function NoData({ children }) {
-  return <div className="py-8 flex flex-col items-center justify-center text-center"><PackageOpen className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5} /><p className="text-sm text-ink-500">{children}</p></div>;
-}
-
-export default function InventoryIntelligence() {
-  const { isPro, businessId } = useAuth();
-
-  const productsQ = useMemo(
-    () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
-    [businessId]
-  );
-  const { data: products, loading } = useFirestoreCollection(productsQ);
-
-  const suppliersQ = useMemo(() => (businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null), [businessId]);
-  const { data: suppliers } = useFirestoreCollection(suppliersQ);
-
-  // Same query shape (businessId + soldAt range + orderBy soldAt) already
-  // used by useFinancials.js elsewhere in the app, so it reuses the same
-  // Firestore composite index — no new index required.
-  const thirtyDaysAgo = useMemo(() => new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000), []);
-  const recentSalesQ = useMemo(
-    () => (businessId ? tenantQuery('sales', businessId, where('soldAt', '>=', thirtyDaysAgo), orderBy('soldAt', 'desc')) : null),
-    [businessId, thirtyDaysAgo]
-  );
-  const recentCreditSalesQ = useMemo(
-    () => (businessId ? tenantQuery('creditSales', businessId, where('soldAt', '>=', thirtyDaysAgo), orderBy('soldAt', 'desc')) : null),
-    [businessId, thirtyDaysAgo]
-  );
-  const { data: recentSales } = useFirestoreCollection(recentSalesQ);
-  const { data: recentCreditSales } = useFirestoreCollection(recentCreditSalesQ);
-
-  const metrics = useMemo(() => {
-    let totalCost = 0;
-    let totalRetail = 0;
-    let unitsInStock = 0;
-    const overstocked = [];
-    const outOfStock = [];
-    const lowStock = [];
-
-    (products || []).forEach((p) => {
-      const stock = Number(p.stock) || 0;
-      const cost = Number(p.costPrice) || 0;
-      const retail = Number(p.sellingPrice) || 0;
-      const threshold = Number(p.lowStockThreshold) || 5;
-
-      if (stock > 0) {
-        totalCost += stock * cost;
-        totalRetail += stock * retail;
-        unitsInStock += stock;
-      }
-
-      if (stock <= 0) {
-        outOfStock.push(p);
-      } else if (stock > threshold * 4) {
-        overstocked.push({ ...p, value: stock * cost });
-      } else if (stock <= threshold) {
-        lowStock.push(p);
-      }
-    });
-
-    overstocked.sort((a, b) => b.value - a.value);
-    const healthyCount = (products || []).length - outOfStock.length - overstocked.length - lowStock.length;
-
-    return { totalCost, totalRetail, unitsInStock, outOfStock, overstocked, lowStock, healthyCount };
-  }, [products]);
-
-  const velocityData = useMemo(() => {
-    const units = {};
-    const value = {};
-    (recentSales || []).forEach((s) => {
-      if (s.isVoided) return;
-      units[s.productId] = (units[s.productId] || 0) + (Number(s.quantity) || 0);
-      value[s.productId] = (value[s.productId] || 0) + (Number(s.totalAmount) || 0);
-    });
-    (recentCreditSales || []).forEach((cs) => {
-      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-      units[cs.productId] = (units[cs.productId] || 0) + (Number(cs.quantity) || 0);
-      value[cs.productId] = (value[cs.productId] || 0) + (Number(cs.totalAmount) || 0);
-    });
-    return { units, value };
-  }, [recentSales, recentCreditSales]);
-
-  const productInsights = useMemo(() => {
-    const supplierNameById = {};
-    (suppliers || []).forEach((s) => { supplierNameById[s.id] = s.name; });
-
-    return (products || [])
-      .filter((p) => (Number(p.stock) || 0) > 0)
-      .map((p) => {
-        const unitsSold = velocityData.units[p.id] || 0;
-        const valueMoved = velocityData.value[p.id] || 0;
-        const velocityPerDay = unitsSold / LOOKBACK_DAYS;
-        const daysOfStock = velocityPerDay > 0 ? (Number(p.stock) || 0) / velocityPerDay : null;
-        return {
-          id: p.id,
-          name: p.name,
-          stock: Number(p.stock) || 0,
-          costPrice: Number(p.costPrice) || 0,
-          threshold: Number(p.lowStockThreshold) || 5,
-          supplierName: supplierNameById[p.supplierId] || null,
-          unitsSold,
-          valueMoved,
-          velocityPerDay,
-          daysOfStock,
-        };
-      });
-  }, [products, suppliers, velocityData]);
-
-  // ABC / Pareto classification — "A" products drive roughly the first
-  // 80% of sales value, "B" the next 15%, "C" the long tail.
-  const abcClassification = useMemo(() => {
-    const moving = [...productInsights].filter((p) => p.valueMoved > 0).sort((a, b) => b.valueMoved - a.valueMoved);
-    const totalValue = moving.reduce((sum, p) => sum + p.valueMoved, 0);
-    let cumulative = 0;
-    const tiered = moving.map((p) => {
-      cumulative += p.valueMoved;
-      const cumulativePct = totalValue > 0 ? (cumulative / totalValue) * 100 : 0;
-      const tier = cumulativePct <= 80 ? 'A' : cumulativePct <= 95 ? 'B' : 'C';
-      return { ...p, tier };
-    });
-    const counts = tiered.reduce((acc, p) => { acc[p.tier] = (acc[p.tier] || 0) + 1; return acc; }, { A: 0, B: 0, C: 0 });
-    return { tiered, counts };
-  }, [productInsights]);
-
-  const slowMoving = useMemo(
-    () => productInsights.filter((p) => p.unitsSold === 0).sort((a, b) => (b.stock * b.costPrice) - (a.stock * a.costPrice)).slice(0, 8),
-    [productInsights]
-  );
-
-  const reorderPriority = useMemo(
-    () => productInsights
-      .filter((p) => p.velocityPerDay > 0 && p.stock <= p.threshold * 2)
-      .sort((a, b) => (a.daysOfStock ?? Infinity) - (b.daysOfStock ?? Infinity))
-      .slice(0, 6)
-      .map((p) => ({ ...p, suggestedQty: Math.max(1, Math.ceil(p.velocityPerDay * 14)) })),
-    [productInsights]
-  );
-
-  const capitalBySupplier = useMemo(() => {
-    const map = {};
-    (products || []).forEach((p) => {
-      if ((Number(p.stock) || 0) <= 0) return;
-      const key = p.supplierId || 'unassigned';
-      const name = key === 'unassigned' ? 'No supplier assigned' : (suppliers.find((s) => s.id === key)?.name || 'Unknown supplier');
-      if (!map[key]) map[key] = { name, value: 0 };
-      map[key].value += (Number(p.stock) || 0) * (Number(p.costPrice) || 0);
-    });
-    return Object.values(map).sort((a, b) => b.value - a.value).slice(0, 8);
-  }, [products, suppliers]);
-
-  const avgDaysOfStock = useMemo(() => {
-    const withVelocity = productInsights.filter((p) => p.daysOfStock !== null && Number.isFinite(p.daysOfStock));
-    if (!withVelocity.length) return null;
-    return withVelocity.reduce((sum, p) => sum + p.daysOfStock, 0) / withVelocity.length;
-  }, [productInsights]);
-
-  // Deduped by product ID so a product that's both overstocked AND
-  // slow-moving is only counted once — otherwise "at risk" capital would
-  // be double-counted and the health % would understate itself.
-  const capitalHealth = useMemo(() => {
-    const seen = new Set();
-    let atRiskValue = 0;
-    const addRisk = (id, value) => {
-      if (seen.has(id)) return;
-      seen.add(id);
-      atRiskValue += value;
-    };
-    metrics.overstocked.forEach((p) => addRisk(p.id, p.value));
-    slowMoving.forEach((p) => addRisk(p.id, p.stock * p.costPrice));
-    const healthyValue = Math.max(0, metrics.totalCost - atRiskValue);
-    const pct = metrics.totalCost > 0 ? (healthyValue / metrics.totalCost) * 100 : 100;
-    return { healthyValue, atRiskValue, pct: Math.max(0, Math.min(100, pct)) };
-  }, [metrics, slowMoving]);
-
-  if (!isPro) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
-        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
-          <Lock className="h-7 w-7" strokeWidth={2} />
-        </div>
-        <h2 className="font-display text-2xl font-bold text-ink-900">Inventory Intelligence Locked</h2>
-        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Instantly uncover dead stock holding up capital and detect urgent re-order limits before stockouts hit. Requires FlowBiz Pro.</p>
-        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
-      </div>
-    );
-  }
-
-  if (loading) return <div className="py-12"><LoadingSpinner /></div>;
-
-  const potentialProfit = metrics.totalRetail - metrics.totalCost;
-  const activeProductsCount = (products || []).length;
-  const totalOverstockValue = metrics.overstocked.reduce((sum, p) => sum + p.value, 0);
-
-  const insights = [];
-  if (metrics.lowStock.length > 0) {
-    insights.push({ tone: 'negative', text: `CRITICAL: ${metrics.lowStock.length} product(s) operating below safe threshold. Restock immediately.` });
-  }
-  if (metrics.outOfStock.length > 0) {
-    insights.push({ tone: 'negative', text: `REVENUE LOSS: ${metrics.outOfStock.length} product(s) completely depleted. You are actively losing sales.` });
-  }
-  if (metrics.overstocked[0]) {
-    insights.push({ tone: 'neutral', text: `CAPITAL TRAP: "${metrics.overstocked[0].name}" alone locks up ${formatKES(metrics.overstocked[0].value)} in inventory.` });
-  }
-  if (slowMoving.length > 0) {
-    const slowValue = slowMoving.reduce((sum, p) => sum + p.stock * p.costPrice, 0);
-    insights.push({ tone: 'neutral', text: `SLOW-MOVING: ${slowMoving.length} product(s) with no sales in ${LOOKBACK_DAYS} days are holding ${formatKES(slowValue)} in capital.` });
-  }
-  if (reorderPriority.length > 0) {
-    insights.push({ tone: 'negative', text: `REORDER NEEDED: ${reorderPriority.length} fast-moving product(s) are running low and should be restocked soon.` });
-  }
-  if (insights.length === 0 && activeProductsCount > 0) {
-    insights.push({ tone: 'positive', text: 'OPTIMAL: Supply distribution perfectly matches current threshold configurations.' });
-  }
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Inventory Intelligence</h1>
-          <p className="text-sm text-ink-500 mt-1">Capital deployment and supply chain health.</p>
-        </div>
-        <Link to="/products" className="btn-outline text-xs bg-white">
-          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Back to Products
-        </Link>
-      </div>
-
-      <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Capital &amp; stock</p>
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <KpiCard label="Capital Deployed" value={formatKES(metrics.totalCost)} />
-          <KpiCard label="Projected Gross Profit" value={formatKES(potentialProfit)} tone="text-moss-700" />
-          <KpiCard label="Physical Units" value={metrics.unitsInStock.toLocaleString()} />
-          <KpiCard label="Active SKUs" value={activeProductsCount.toLocaleString()} />
-        </div>
-      </div>
-
-      <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Risk &amp; velocity</p>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          <KpiCard label="Low Stock Risk" value={metrics.lowStock.length} tone={metrics.lowStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.lowStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
-          <KpiCard label="Stockout Status" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.outOfStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
-          <KpiCard label="Overstocked SKUs" value={metrics.overstocked.length} tone="text-amber-600" />
-          <KpiCard label="Capital Trapped" value={formatKES(totalOverstockValue)} tone="text-amber-600" />
-          <KpiCard label="Avg Days of Stock" value={avgDaysOfStock != null ? `${avgDaysOfStock.toFixed(0)} days` : '—'} />
-        </div>
-      </div>
-
-      <div className="card p-5 sm:p-6 bg-white">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h2 className="font-display text-sm font-bold text-ink-900">Capital Health</h2>
-            <p className="mt-0.5 text-xs text-ink-500">Share of inventory capital that's healthy vs. tied up in overstock or slow movers</p>
-          </div>
-          <span className={`font-display text-2xl font-bold ${capitalHealth.pct >= 80 ? 'text-moss-700' : capitalHealth.pct >= 60 ? 'text-amber-600' : 'text-rust-600'}`}>{capitalHealth.pct.toFixed(0)}%</span>
-        </div>
-        <div className="h-3 w-full overflow-hidden rounded-full bg-rust-100">
-          <div className="h-full rounded-full bg-moss-600 transition-all" style={{ width: `${capitalHealth.pct}%` }} />
-        </div>
-        <div className="mt-2 flex justify-between text-[11px] text-ink-400">
-          <span>Healthy: {formatKES(capitalHealth.healthyValue)}</span>
-          <span>At risk: {formatKES(capitalHealth.atRiskValue)}</span>
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Global Supply Distribution" subtitle="System-wide inventory health check" icon={Package}>
-          {activeProductsCount > 0 ? (
-            <div className="pt-2">
-              <DonutChart
-                size={180}
-                formatValue={(v) => `${v} SKU${v === 1 ? '' : 's'}`}
-                segments={[
-                  { label: 'Optimal Inventory', value: metrics.healthyCount, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
-                  { label: 'Low Stock Risk', value: metrics.lowStock.length, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
-                  { label: 'Critical Stockout', value: metrics.outOfStock.length, colorClassName: 'text-rust-600', dotClassName: 'bg-rust-600' },
-                  { label: 'Capital Surplus (Overstock)', value: metrics.overstocked.length, colorClassName: 'text-ink-800', dotClassName: 'bg-ink-800' },
-                ]}
-              />
-            </div>
-          ) : (
-            <NoData>System requires active inventory definitions.</NoData>
-          )}
-        </Section>
-
-        <Section title="Overstock Concentration" subtitle="Items holding maximum illiquid capital" icon={AlertTriangle}>
-          {metrics.overstocked.length > 0 ? (
-            <div className="pt-2">
-              <MiniBarChart
-                orientation="horizontal"
-                formatValue={formatKES}
-                data={metrics.overstocked.slice(0, 6).map((p) => ({ label: p.name, value: p.value, colorClassName: 'bg-ink-800' }))}
-              />
-            </div>
-          ) : (
-            <NoData>No significant capital concentration found.</NoData>
-          )}
-        </Section>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Value Analysis (ABC)" subtitle="Which products drive most of your sales value" icon={Tag}>
-          {abcClassification.tiered.length > 0 ? (
-            <>
-              <div className="mb-4 grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-lg bg-moss-50 p-3">
-                  <p className="font-display text-lg font-bold text-moss-700">{abcClassification.counts.A}</p>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-moss-600">A — Top value</p>
-                </div>
-                <div className="rounded-lg bg-amber-50 p-3">
-                  <p className="font-display text-lg font-bold text-amber-700">{abcClassification.counts.B}</p>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600">B — Moderate</p>
-                </div>
-                <div className="rounded-lg bg-ink-50 p-3">
-                  <p className="font-display text-lg font-bold text-ink-700">{abcClassification.counts.C}</p>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">C — Long tail</p>
-                </div>
-              </div>
-              <div className="divide-y divide-ink-100">
-                {abcClassification.tiered.slice(0, 8).map((p) => (
-                  <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span className={`badge shrink-0 ${p.tier === 'A' ? 'bg-moss-100 text-moss-700' : p.tier === 'B' ? 'bg-amber-100 text-amber-700' : 'bg-ink-100 text-ink-500'}`}>{p.tier}</span>
-                      <span className="truncate font-medium text-ink-800">{p.name}</span>
-                    </div>
-                    <span className="shrink-0 font-semibold text-ink-700">{formatKES(p.valueMoved)}</span>
-                  </div>
-                ))}
-              </div>
-              <p className="mt-3 text-[11px] leading-relaxed text-ink-400">Based on sales value over the last {LOOKBACK_DAYS} days. "A" products drive roughly 80% of your sales value — protect their stock levels first.</p>
-            </>
-          ) : (
-            <NoData>Not enough recent sales to classify products yet.</NoData>
-          )}
-        </Section>
-
-        <Section title="Capital by Supplier" subtitle="Current inventory value tied to each supplier" icon={Truck}>
-          {capitalBySupplier.length > 0 ? (
-            <MiniBarChart orientation="horizontal" formatValue={formatKES} data={capitalBySupplier.map((s) => ({ label: s.name, value: s.value, colorClassName: 'bg-blue-600' }))} />
-          ) : (
-            <NoData>No supplier-linked stock found.</NoData>
-          )}
-        </Section>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Reorder Priority" subtitle="Fast-moving items running low — suggested 2-week restock quantity" icon={ClipboardCheck}>
-          {reorderPriority.length > 0 ? (
-            <div className="divide-y divide-ink-100">
-              {reorderPriority.map((p) => (
-                <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
-                  <div className="min-w-0">
-                    <p className="truncate font-medium text-ink-800">{p.name}</p>
-                    <p className="text-[11px] text-ink-400">{p.supplierName || 'No supplier assigned'} &middot; {p.daysOfStock != null ? `${p.daysOfStock.toFixed(0)} days of stock left` : 'Stock estimate unavailable'}</p>
-                  </div>
-                  <span className="shrink-0 rounded-lg bg-rust-50 px-2.5 py-1 text-xs font-bold text-rust-700">+{p.suggestedQty} units</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <NoData>Nothing urgently needs restocking right now.</NoData>
-          )}
-        </Section>
-
-        <Section title="Slow-Moving Stock" subtitle={`In stock, but no sales in the last ${LOOKBACK_DAYS} days`} icon={PackageOpen}>
-          {slowMoving.length > 0 ? (
-            <div className="divide-y divide-ink-100">
-              {slowMoving.map((p) => (
-                <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
-                  <div className="min-w-0">
-                    <p className="truncate font-medium text-ink-800">{p.name}</p>
-                    <p className="text-[11px] text-ink-400">{p.stock} units on the shelf</p>
-                  </div>
-                  <span className="shrink-0 font-semibold text-amber-700">{formatKES(p.stock * p.costPrice)}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <NoData>Everything in stock has moved in the last {LOOKBACK_DAYS} days.</NoData>
-          )}
-        </Section>
-      </div>
-
-      <Section title="Automated Intelligence Briefing" subtitle="System-generated supply chain alerts" icon={Info}>
-        <div className="space-y-4 pt-1">
-          {insights.map((insight, i) => (
-            <div key={i} className={`flex items-start gap-3 text-sm p-4 rounded-lg border ${insight.tone === 'positive' ? 'bg-moss-50 border-moss-200' : insight.tone === 'negative' ? 'bg-rust-50 border-rust-200' : 'bg-ink-50 border-ink-200'}`}>
-              <div className="shrink-0 mt-0.5">
-                {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
-                 insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
-                 <Info className="h-5 w-5 text-ink-600" strokeWidth={2} />}
-              </div>
-              <span className={`font-medium leading-relaxed ${insight.tone === 'positive' ? 'text-moss-800' : insight.tone === 'negative' ? 'text-rust-800' : 'text-ink-800'}`}>{insight.text}</span>
-            </div>
-          ))}
-        </div>
-      </Section>
-    </div>
-  );
 }
 ````
 
@@ -6517,6 +4899,307 @@ finally {
 }
 ````
 
+## File: src/pages/Reports.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { where, orderBy } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useFinancialsForRange } from '../hooks/useFinancials';
+import { useDailySession } from '../hooks/useDailySession';
+import { useSettings } from '../hooks/useSettings';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import ErrorBanner from '../components/common/ErrorBanner';
+import Modal from '../components/common/Modal';
+import { formatKES } from '../utils/currency';
+import { formatDate, formatDateTime, getRangeForPreset, startOfDay, endOfDay, todayKey } from '../utils/dateRanges';
+import { computeSupplierBalances, computeExpectedTillBalances } from '../utils/financials';
+import { Printer, TrendingUp } from 'lucide-react';
+import toast from 'react-hot-toast';
+
+const PRESETS = [{id:'today',label:'Today'},{id:'week',label:'This Week'},{id:'month',label:'This Month'},{id:'custom',label:'Custom'}];
+
+function Card({ label, value, tone='text-ink-900' }) {
+  return <div className="card p-4"><p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p><p className={`mt-1 font-display text-lg font-bold ${tone}`}>{value}</p></div>;
+}
+
+export default function Reports() {
+  const { businessId, isPro } = useAuth();
+  const [preset, setPreset]         = useState('today');
+  const [cStart, setCStart]         = useState('');
+  const [cEnd,   setCEnd]           = useState('');
+  const [pdfModalOpen, setPdfModalOpen] = useState(false);
+
+  const { start, end } = useMemo(() => {
+    if (preset==='custom'&&cStart&&cEnd) return { start:startOfDay(new Date(cStart)), end:endOfDay(new Date(cEnd)) };
+    return getRangeForPreset(preset==='custom'?'today':preset);
+  }, [preset,cStart,cEnd]);
+
+  const { loading, error, sales, creditSales, summary } = useFinancialsForRange(start, end);
+  const { session } = useDailySession();
+  const { settings } = useSettings();
+
+  // FIX: Matches Dashboard and Products exactly to utilize correct offline index
+  const productsQ = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
+  const outstandingCreditQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, where('status', 'in', ['pending', 'partial'])) : null, [businessId]);
+  const supplierPaymentsQ = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId) : null, [businessId]);
+
+  const { data: products } = useFirestoreCollection(productsQ);
+  const { data: purchasesData } = useFirestoreCollection(purchasesQ);
+  const { data: outstandingCreditSales } = useFirestoreCollection(outstandingCreditQ);
+  const { data: supplierPaymentsData } = useFirestoreCollection(supplierPaymentsQ);
+  const { data: suppliersData } = useFirestoreCollection(suppliersQ);
+
+  const totalInventoryValue = useMemo(() => {
+    return products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
+  }, [products]);
+
+  const lowStock = useMemo(() => {
+    return products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
+  }, [products]);
+
+  const supplierBalances = useMemo(
+    () => computeSupplierBalances(purchasesData, supplierPaymentsData, suppliersData),
+    [purchasesData, supplierPaymentsData, suppliersData]
+  );
+
+  // FIX: Added Credit Sales to product performance mapping
+  //
+  // FIX (multi-product cart): a Counter.jsx cart sale carries several
+  // products on ONE sale/creditSale doc via `items` — attributing the
+  // whole doc's aggregate quantity/revenue/profit to its (misleading)
+  // summary productName would badly skew best-seller/most-profitable
+  // rankings. When `items` is present, each line item is credited to its
+  // own product individually instead; legacy single-product docs (no
+  // `items` field) are read exactly as before.
+  const productPerf = useMemo(() => {
+    const m = {};
+    const ensure = (name) => {
+      if (!m[name]) m[name] = { name, qty: 0, revenue: 0, profit: 0 };
+      return m[name];
+    };
+    sales.forEach((s) => {
+      if (s.isVoided) return;
+      if (Array.isArray(s.items) && s.items.length > 0) {
+        s.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty     += Number(it.quantity) || 0;
+          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
+          row.profit  += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
+        });
+      } else {
+        const row = ensure(s.productName);
+        row.qty     += Number(s.quantity) || 0;
+        row.revenue += Number(s.totalAmount) || 0;
+        row.profit  += Number(s.profit) || 0;
+      }
+    });
+    creditSales.forEach((cs) => {
+      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+      if (Array.isArray(cs.items) && cs.items.length > 0) {
+        cs.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty += Number(it.quantity) || 0;
+          // Revenue and Profit are zero until repaid via repayments collection
+        });
+      } else {
+        const row = ensure(cs.productName);
+        row.qty += Number(cs.quantity) || 0;
+        // Revenue and Profit are zero until repaid via repayments collection
+      }
+    });
+    return Object.values(m);
+  }, [sales, creditSales]);
+
+  const bestSelling    = [...productPerf].sort((a,b)=>b.qty-a.qty).slice(0,5);
+  const mostProfitable = [...productPerf].sort((a,b)=>b.profit-a.profit).slice(0,5);
+
+  const { expectedCashAtClose, expectedMpesaAtClose } = computeExpectedTillBalances({
+    openingCashFloat:         preset === 'today' ? (session?.openingCashFloat || 0) : 0,
+    openingMpesaFloat:        preset === 'today' ? (session?.openingMpesaFloat || 0) : 0,
+    totalCashSales:           summary.totalCashSales,
+    totalMpesaSales:          summary.totalMpesaSales,
+    totalDebtRepaymentsCash:  summary.totalDebtRepaymentsCash,
+    totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
+    totalExpensesCash:        summary.totalExpensesCash,
+    totalExpensesMpesa:       summary.totalExpensesMpesa,
+    totalCashOutflows:        summary.totalCashOutflows,
+    totalMpesaOutflows:       summary.totalMpesaOutflows,
+  });
+
+  const businessName = settings?.shopName || 'FlowBiz Store';
+
+  const doExport = async (action) => {
+    if (!isPro) { toast.error("Professional reports require FlowBiz Pro."); return; }
+    try {
+      const { jsPDF } = await import('jspdf');
+      const { loadImageAsDataUrl } = await import('../utils/documentService');
+      const doc = new jsPDF('p', 'mm', 'a4');
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const marginX = 15;
+      let y = 15;
+
+      const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
+      if (logoDataUrl) {
+        const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
+        try { doc.addImage(logoDataUrl, format, marginX, y, 18, 18); } catch (err) { console.error('Logo embed failed:', err); }
+      }
+
+      const textX = logoDataUrl ? marginX + 24 : marginX;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.text(businessName, textX, y + 7);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(110, 110, 110);
+      doc.text(`FlowBiz Financial Report · ${formatDate(start)} — ${formatDate(end)}`, textX, y + 13);
+      doc.setTextColor(0, 0, 0);
+      y += 26;
+
+      doc.setDrawColor(210, 210, 210);
+      doc.line(marginX, y, pageWidth - marginX, y);
+      y += 8;
+
+      const sectionTitle = (title) => {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(11);
+        doc.text(title, marginX, y);
+        y += 6;
+        doc.setDrawColor(230, 230, 230);
+        doc.line(marginX, y - 3.5, pageWidth - marginX, y - 3.5);
+      };
+
+      const row = (label, value, opts = {}) => {
+        doc.setFont('helvetica', opts.bold ? 'bold' : 'normal');
+        doc.setFontSize(10);
+        doc.text(label, marginX, y);
+        doc.text(value, pageWidth - marginX, y, { align: 'right' });
+        y += 6.5;
+      };
+
+      sectionTitle('Financial Summary');
+      row('Cash balance', formatKES(expectedCashAtClose));
+      row('M-Pesa balance', formatKES(expectedMpesaAtClose));
+      row('Credit sales (this period)', formatKES(summary.totalCreditSales));
+      row('Debt repayments collected', formatKES(summary.totalDebtRepayments));
+      y += 4;
+
+      sectionTitle('Profit Calculation');
+      row('Revenue', formatKES(summary.revenue));
+      row('Cost of goods sold', `- ${formatKES(summary.costOfGoodsSold)}`);
+      row('Gross profit', formatKES(summary.grossProfit), { bold: true });
+      row('Total expenses', `- ${formatKES(summary.totalExpenses)}`);
+      row('Net profit', formatKES(summary.netProfit), { bold: true });
+      y += 4;
+
+      if (bestSelling.length > 0) {
+        sectionTitle('Top Selling Products');
+        bestSelling.forEach((p) => row(p.name, `${p.qty} sold · ${formatKES(p.revenue)}`));
+        y += 4;
+      }
+
+      if (lowStock.length > 0) {
+        sectionTitle('Low Stock Alerts');
+        lowStock.slice(0, 10).forEach((p) => row(p.name, `${p.stock} left`));
+        y += 4;
+      }
+
+      doc.setFontSize(8);
+      doc.setTextColor(150, 150, 150);
+      doc.text(`Generated ${formatDateTime(new Date())} · FlowBiz`, marginX, 287);
+
+      if (action === 'download') {
+        doc.save(`flowbiz-report-${preset}-${todayKey()}.pdf`);
+      } else {
+        doc.autoPrint();
+        window.open(doc.output('bloburl'), '_blank');
+      }
+      toast.success('Report generated successfully.');
+      setPdfModalOpen(false);
+    } catch (err) {
+      toast.error('Failed to generate PDF. Check console.');
+      console.error(err);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-5">
+      <div className="flex justify-between items-center">
+        <h1 className="font-display text-xl font-bold text-ink-900">Reports</h1>
+        <Link to="/advanced-analytics" className="btn-outline">
+          <TrendingUp className="h-4 w-4" /> Advanced Analytics
+        </Link>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {PRESETS.map(p=>(
+          <button key={p.id} onClick={()=>setPreset(p.id)} className={`rounded-full px-3.5 py-1.5 text-sm font-semibold ${preset===p.id?'bg-ink-900 text-white':'bg-ink-100 text-ink-600 hover:bg-ink-200'}`}>{p.label}</button>
+        ))}
+        {preset==='custom'&&(
+          <div className="flex items-center gap-2">
+            <input type="date" className="input !w-auto" value={cStart} onChange={e=>setCStart(e.target.value)} />
+            <span className="text-ink-400">to</span>
+            <input type="date" className="input !w-auto" value={cEnd} onChange={e=>setCEnd(e.target.value)} />
+          </div>
+        )}
+      </div>
+
+      <ErrorBanner message={error ? `${error}` : null} />
+      
+      {loading ? <LoadingSpinner /> : (
+        <>
+          <div>
+            <h2 className="mb-2 font-display text-sm font-bold text-ink-800">Financial Summary</h2>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Card label="Cash Balance" value={formatKES(expectedCashAtClose)} />
+              <Card label="M-Pesa Balance" value={formatKES(expectedMpesaAtClose)} />
+              <Card label="Credit Sales" value={formatKES(summary.totalCreditSales)} tone="text-rust-600" />
+              <Card label="Repayments Collected" value={formatKES(summary.totalDebtRepayments)} tone="text-moss-700" />
+            </div>
+          </div>
+          <div>
+            <h2 className="mb-2 font-display text-sm font-bold text-ink-800">Profit Calculation</h2>
+            <div className="card divide-y divide-ink-100">
+              {[
+                ['Revenue',               summary.revenue,             false],
+                ['− Cost of goods sold',  -summary.costOfGoodsSold,    false],
+                ['= Gross profit',        summary.grossProfit,          true ],
+                ['− Total expenses',      -summary.totalExpenses,       false],
+                ['= Net profit',          summary.netProfit,            true ],
+              ].map(([label,value,bold],i)=>(
+                <div key={label} className={`flex items-center justify-between px-4 py-3 ${bold?'bg-ink-50/60':''}`}>
+                  <span className={`text-sm ${bold?'font-bold text-ink-900':'text-ink-600'}`}>{label}</span>
+                  <span className={`font-semibold ${value<0?'text-rust-600':i===4?'text-moss-700':'text-ink-800'}`}>{formatKES(value)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-primary" onClick={() => setPdfModalOpen(true)}>
+              <Printer className="h-4 w-4" strokeWidth={1.75} /> Get PDF Report
+            </button>
+          </div>
+        </>
+      )}
+
+      <Modal open={pdfModalOpen} onClose={() => setPdfModalOpen(false)} title="Get PDF Report">
+        <div className="space-y-3">
+          <p className="text-sm text-ink-500 mb-4">Choose how you want to export your professional financial report.</p>
+          <button className="btn-primary w-full" onClick={() => doExport('download')}>Download PDF</button>
+          <button className="btn-outline w-full" onClick={() => doExport('print')}>Print Report</button>
+          <button className="btn-secondary w-full mt-2" onClick={() => setPdfModalOpen(false)}>Cancel</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+````
+
 ## File: src/pages/Terms.jsx
 ````javascript
 import { Link } from 'react-router-dom';
@@ -6616,6 +5299,28 @@ export default function Terms() {
 }
 ````
 
+## File: src/utils/currency.js
+````javascript
+export function formatKES(amount) {
+  const v = Number(amount) || 0;
+  return `KES ${v.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+export function formatKESCompact(amount) {
+  return `KES ${Math.round(Number(amount) || 0).toLocaleString('en-KE')}`;
+}
+
+// FIX (multi-product cart): quantity × unit price, summed across several
+// cart lines, can accumulate binary floating-point noise (e.g.
+// 0.1 + 0.2 = 0.30000000000000004). Every money total the cart computes —
+// a line total, the cart grand total, aggregated COGS/profit written to
+// Firestore — is rounded through this before being displayed or saved.
+export function roundMoney(amount) {
+  const v = Number(amount);
+  if (!Number.isFinite(v)) return 0;
+  return Math.round((v + Number.EPSILON) * 100) / 100;
+}
+````
+
 ## File: src/utils/customers.js
 ````javascript
 // src/utils/customers.js
@@ -6678,6 +5383,391 @@ export async function updateCustomer(customerId, data, businessId) {
 
   return { queuedOffline };
 }
+````
+
+## File: src/utils/financials.js
+````javascript
+function sumBy(rows, field) {
+  return rows.reduce((acc, row) => acc + (Number(row[field]) || 0), 0);
+}
+
+// FIX (multi-product cart): a multi-item cart sale/creditSale doc stores
+// its aggregate cost of goods sold directly on the doc as
+// `costOfGoodsSold` (see Counter.jsx's buildLineItems/handleCartSale/
+// handleCartCredit) — a single costPricePerUnit can no longer represent a
+// transaction that mixes several products at different cost prices.
+// Older, single-product sale/creditSale docs (and any new single-item
+// cart checkout) never had that field, so this falls back to the
+// original costPricePerUnit × quantity calculation for those — nothing
+// about how existing single-product sales are read changes.
+function getCostOfSale(row) {
+  if (row && typeof row.costOfGoodsSold === 'number' && Number.isFinite(row.costOfGoodsSold)) {
+    return row.costOfGoodsSold;
+  }
+  const costPerUnit = Number(row?.costPricePerUnit) || 0;
+  const quantity = Number(row?.quantity) || 0;
+  return costPerUnit * quantity;
+}
+
+export function isExpenseExcluded(expense) {
+  const category = String(expense?.category || '').toLowerCase();
+  const description = String(expense?.description || '').toLowerCase();
+  return category === 'stock purchase' || category === 'supplier payment' || description.includes('stock purchase') || description.includes('supplier payment');
+}
+
+// A credit sale that was cancelled (nothing was ever paid on it) or
+// refunded (goods returned, whatever was paid handed back) no longer
+// represents real business — it must not contribute to Outstanding Debt
+// or the Credit Sales metric. Same precedent as `isVoided` on cash sales.
+function isCreditSaleReversed(creditSale) {
+  return creditSale?.status === 'cancelled' || creditSale?.status === 'refunded';
+}
+
+// HYBRID MODEL (FINAL business decision): a credit sale is NOT realized
+// revenue until the customer actually pays. The moment a credit sale is
+// recorded, Inventory Value drops and Outstanding Debt / Credit Sales
+// rise — but Revenue, COGS, and Profit all stay at ZERO for that sale.
+// Only a Debt Repayment converts a portion of it into Revenue, COGS, and
+// Profit — proportional to how much of THAT specific credit sale has
+// just been collected. `creditSaleById` must be built from the FULL,
+// all-time credit sales list (not just the reporting period's), because
+// a repayment can land in a different period than the original sale.
+function recognizeRepayment(repayment, creditSaleById) {
+  const amount = Number(repayment?.amount) || 0;
+  const creditSale = creditSaleById.get(repayment?.creditSaleId);
+  if (!creditSale) {
+    // Originating credit sale not found (shouldn't normally happen) —
+    // recognize the cash as revenue with no cost basis rather than
+    // silently dropping it from the books.
+    return { revenue: amount, cogs: 0 };
+  }
+  const totalAmount = Number(creditSale.totalAmount) || 0;
+  const totalCost = getCostOfSale(creditSale);
+  const ratio = totalAmount > 0 ? amount / totalAmount : 0;
+  const cogs = totalCost * ratio;
+  return { revenue: amount, cogs };
+}
+
+export function computeFinancials({
+  sales = [],
+  creditSales = [],
+  allCreditSales = null,
+  expenses = [],
+  debtRepayments = [],
+  purchases = [],
+  supplierPayments = [],
+  refunds = [],
+} = {}) {
+  const activeSales = (sales || []).filter((sale) => !sale?.isVoided);
+  const activeCreditSales = (creditSales || []).filter((cs) => !isCreditSaleReversed(cs));
+
+  const cashSales  = activeSales.filter(s => s.paymentMethod === 'Cash');
+  const mpesaSales = activeSales.filter(s => s.paymentMethod === 'M-Pesa');
+  const totalCashSales  = sumBy(cashSales,  'totalAmount');
+  const totalMpesaSales = sumBy(mpesaSales, 'totalAmount');
+
+  // "Credit Sales" is a business-activity metric — total value of goods
+  // sold on credit this period. It intentionally does NOT feed into
+  // Revenue / COGS / Profit below (see recognizeRepayment()). This is the
+  // core of the FINAL decision: the owner should never see profit that
+  // has not yet been collected.
+  const totalCreditSales = sumBy(activeCreditSales, 'totalAmount');
+
+  const cashRepayments  = debtRepayments.filter(r => r.method === 'Cash');
+  const mpesaRepayments = debtRepayments.filter(r => r.method === 'M-Pesa');
+  const totalDebtRepaymentsCash  = sumBy(cashRepayments,  'amount');
+  const totalDebtRepaymentsMpesa = sumBy(mpesaRepayments, 'amount');
+  const totalDebtRepayments = totalDebtRepaymentsCash + totalDebtRepaymentsMpesa;
+
+  // Lookup of EVERY credit sale (not just this period's) so a repayment
+  // can find its cost basis even when the sale happened earlier. Falls
+  // back to the period-scoped `creditSales` if the caller didn't supply
+  // the full list.
+  const creditSaleSource = allCreditSales || creditSales || [];
+  const creditSaleById = new Map(creditSaleSource.map((cs) => [cs.id, cs]));
+
+  let repaymentRevenue = 0;
+  let repaymentCogs = 0;
+  (debtRepayments || []).forEach((r) => {
+    const { revenue, cogs } = recognizeRepayment(r, creditSaleById);
+    repaymentRevenue += revenue;
+    repaymentCogs += cogs;
+  });
+
+  // Direct (cash/M-Pesa) sales realize revenue and COGS the instant they
+  // happen. Credit sales contribute ZERO here directly — only the
+  // repaymentRevenue / repaymentCogs recognized above, at the moment the
+  // customer actually pays.
+  const directSalesCostOfGoodsSold = activeSales.reduce((acc, s) => acc + getCostOfSale(s), 0);
+  const costOfGoodsSold = directSalesCostOfGoodsSold + repaymentCogs;
+
+  // "Gross sales revenue" — total value of everything SOLD this period
+  // regardless of payment method. Informational only (Sales Summary) —
+  // it is NOT used for profit. See `revenue` below.
+  const grossSalesRevenue = totalCashSales + totalMpesaSales + totalCreditSales;
+
+  // Realized revenue — what actually counts toward profit, per the FINAL
+  // business decision: cash + M-Pesa sales, plus whatever portion of
+  // credit sales (from any period) was actually collected this period.
+  const revenue = totalCashSales + totalMpesaSales + repaymentRevenue;
+  const grossProfit = revenue - costOfGoodsSold;
+
+  const filteredExpenses = (expenses || []).filter((expense) => !isExpenseExcluded(expense));
+  const cashExpenses  = filteredExpenses.filter(e => e.paymentMethod === 'Cash');
+  const mpesaExpenses = filteredExpenses.filter(e => e.paymentMethod === 'M-Pesa');
+  const totalExpensesCash  = sumBy(cashExpenses,  'amount');
+  const totalExpensesMpesa = sumBy(mpesaExpenses, 'amount');
+  const totalExpenses = totalExpensesCash + totalExpensesMpesa;
+  const netProfit     = grossProfit - totalExpenses;
+
+  // CASH POSITION: strictly real money movement, independent of the
+  // revenue-recognition timing above. This is what Cash Received Today /
+  // M-Pesa Received Today and the Close Day till reconciliation rely on.
+  const totalCashReceipts  = totalCashSales  + totalDebtRepaymentsCash;
+  const totalMpesaReceipts = totalMpesaSales + totalDebtRepaymentsMpesa;
+
+  const cashRefunds  = (refunds || []).filter(r => r.method === 'Cash');
+  const mpesaRefunds = (refunds || []).filter(r => r.method === 'M-Pesa');
+  const totalRefundsCash  = sumBy(cashRefunds,  'amount');
+  const totalRefundsMpesa = sumBy(mpesaRefunds, 'amount');
+  const totalRefunds = totalRefundsCash + totalRefundsMpesa;
+
+  const purchasePaymentsCash  = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash');
+  const purchasePaymentsMpesa = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa');
+  const supplierPaymentsCash  = (supplierPayments || []).filter((p) => p.method === 'Cash');
+  const supplierPaymentsMpesa = (supplierPayments || []).filter((p) => p.method === 'M-Pesa');
+  // Refunds are cash/M-Pesa leaving the till, just like an expense or a
+  // supplier payment — folded into the same outflow totals so Close Day's
+  // till reconciliation stays correct without any formula change there.
+  const totalCashOutflows  = sumBy(purchasePaymentsCash,  'totalCost') + sumBy(supplierPaymentsCash,  'amount') + totalRefundsCash;
+  const totalMpesaOutflows = sumBy(purchasePaymentsMpesa, 'totalCost') + sumBy(supplierPaymentsMpesa, 'amount') + totalRefundsMpesa;
+
+  return {
+    grossSalesRevenue, totalCashSales, totalMpesaSales, totalCreditSales,
+    revenue, costOfGoodsSold, grossProfit,
+    totalCashReceipts, totalMpesaReceipts,
+    totalDebtRepaymentsCash, totalDebtRepaymentsMpesa, totalDebtRepayments,
+    totalExpensesCash, totalExpensesMpesa, totalExpenses, netProfit,
+    totalRefundsCash, totalRefundsMpesa, totalRefunds,
+    totalCashOutflows, totalMpesaOutflows,
+  };
+}
+
+export function computeExpectedTillBalances({
+  openingCashFloat = 0, openingMpesaFloat = 0,
+  totalCashSales = 0, totalMpesaSales = 0,
+  totalDebtRepaymentsCash = 0, totalDebtRepaymentsMpesa = 0,
+  totalExpensesCash = 0, totalExpensesMpesa = 0,
+  totalCashOutflows = 0, totalMpesaOutflows = 0,
+}) {
+  return {
+    expectedCashAtClose:  Number(openingCashFloat)  + totalCashSales  + totalDebtRepaymentsCash  - totalExpensesCash - totalCashOutflows,
+    expectedMpesaAtClose: Number(openingMpesaFloat) + totalMpesaSales + totalDebtRepaymentsMpesa - totalExpensesMpesa - totalMpesaOutflows,
+  };
+}
+
+export function computeSupplierBalances(purchases = [], supplierPayments = [], suppliers = []) {
+  const balanceById = {};
+
+  (purchases || []).forEach((p) => {
+    if (p?.paymentStatus !== 'pending_supplier_credit' || !p?.supplierId) return;
+    balanceById[p.supplierId] = (balanceById[p.supplierId] || 0) + (Number(p.totalCost) || 0);
+  });
+
+  (supplierPayments || []).forEach((sp) => {
+    if (!sp?.supplierId || balanceById[sp.supplierId] === undefined) return;
+    balanceById[sp.supplierId] -= Number(sp.amount) || 0;
+  });
+
+  const nameById = {};
+  (suppliers || []).forEach((s) => { nameById[s.id] = s.name; });
+
+  return Object.entries(balanceById)
+    .filter(([, balance]) => (Number(balance) || 0) > 0.005)
+    .map(([supplierId, balance]) => ({
+      supplierId,
+      supplierName:
+        nameById[supplierId] ||
+        (purchases || []).find((p) => p.supplierId === supplierId)?.supplierName ||
+        'Unknown supplier',
+      balance,
+    }))
+    .sort((a, b) => b.balance - a.balance);
+}
+````
+
+## File: src/utils/financials.test.js
+````javascript
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { computeFinancials } from './financials.js';
+
+test('a credit sale alone contributes zero revenue, COGS, and profit until repaid', () => {
+  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'pending', amountPaid: 0 };
+  const summary = computeFinancials({
+    sales: [],
+    creditSales: [creditSale],
+    allCreditSales: [creditSale],
+    expenses: [],
+    debtRepayments: [],
+  });
+
+  assert.equal(summary.totalCreditSales, 15000); // still tracked as business activity
+  assert.equal(summary.revenue, 0);
+  assert.equal(summary.costOfGoodsSold, 0);
+  assert.equal(summary.grossProfit, 0);
+  assert.equal(summary.netProfit, 0);
+  assert.equal(summary.totalCashReceipts, 0);
+  assert.equal(summary.totalMpesaReceipts, 0);
+});
+
+test('a full debt repayment recognizes the full sale as revenue, COGS, and profit', () => {
+  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'paid', amountPaid: 15000 };
+  const summary = computeFinancials({
+    sales: [],
+    creditSales: [],
+    allCreditSales: [creditSale],
+    expenses: [],
+    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 15000, method: 'Cash' }],
+  });
+
+  assert.equal(summary.revenue, 15000);
+  assert.equal(summary.costOfGoodsSold, 10000);
+  assert.equal(summary.grossProfit, 5000);
+  assert.equal(summary.netProfit, 5000);
+  assert.equal(summary.totalCashReceipts, 15000);
+});
+
+test('a partial debt repayment recognizes revenue, COGS, and profit proportionally', () => {
+  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'partial', amountPaid: 5000 };
+  const summary = computeFinancials({
+    sales: [],
+    creditSales: [],
+    allCreditSales: [creditSale],
+    expenses: [],
+    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 5000, method: 'Cash' }],
+  });
+
+  // 5000 / 15000 of the sale collected so far → 1/3 of its cost basis
+  assert.equal(summary.revenue, 5000);
+  assert.ok(Math.abs(summary.costOfGoodsSold - 10000 / 3) < 0.01);
+  assert.ok(Math.abs(summary.netProfit - (5000 - 10000 / 3)) < 0.01);
+});
+
+test('a repayment on a credit sale from an earlier period still finds its cost basis', () => {
+  // Simulates: sale happened last month (not in `creditSales`, which is
+  // period-scoped), repayment happens today. `allCreditSales` is what
+  // makes the lookup work regardless of period.
+  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'paid', amountPaid: 15000 };
+  const summary = computeFinancials({
+    sales: [],
+    creditSales: [], // not sold this period
+    allCreditSales: [creditSale],
+    expenses: [],
+    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 15000, method: 'M-Pesa' }],
+  });
+
+  assert.equal(summary.revenue, 15000);
+  assert.equal(summary.costOfGoodsSold, 10000);
+  assert.equal(summary.netProfit, 5000);
+});
+
+test('cancelled and refunded credit sales are excluded from the Credit Sales metric', () => {
+  const summary = computeFinancials({
+    sales: [],
+    creditSales: [
+      { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'cancelled' },
+      { id: 'c2', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'refunded' },
+    ],
+    expenses: [],
+    debtRepayments: [],
+  });
+
+  assert.equal(summary.totalCreditSales, 0);
+  assert.equal(summary.revenue, 0);
+  assert.equal(summary.netProfit, 0);
+});
+
+test('refunds reduce expected cash/M-Pesa till balance, same as any other outflow', () => {
+  const summary = computeFinancials({
+    sales: [], creditSales: [], expenses: [], debtRepayments: [],
+    refunds: [{ amount: 2000, method: 'Cash' }],
+  });
+
+  assert.equal(summary.totalRefundsCash, 2000);
+  assert.equal(summary.totalCashOutflows, 2000);
+});
+
+test('voided sales do not affect cash sales or profit', () => {
+  const summary = computeFinancials({
+    sales: [{ id: 's1', paymentMethod: 'Cash', totalAmount: 15000, costPricePerUnit: 10000, quantity: 1, isVoided: true }],
+    creditSales: [],
+    expenses: [],
+    debtRepayments: [],
+  });
+
+  assert.equal(summary.totalCashSales, 0);
+  assert.equal(summary.netProfit, 0);
+});
+
+test('purchase and supplier payments only affect outflows, not profit', () => {
+  const summary = computeFinancials({
+    sales: [],
+    creditSales: [],
+    expenses: [{ amount: 50000, paymentMethod: 'Cash', category: 'Stock Purchase' }],
+    debtRepayments: [],
+    purchases: [{ paymentStatus: 'paid', paymentMethod: 'Cash', totalCost: 50000 }],
+    supplierPayments: [{ method: 'Cash', amount: 50000 }],
+  });
+
+  assert.equal(summary.totalExpenses, 0);
+  assert.equal(summary.netProfit, 0);
+  assert.equal(summary.totalCashOutflows, 100000);
+});
+
+// ── Multi-product cart (Counter.jsx) ───────────────────────────────────
+// A multi-item cart sale stores its aggregate cost of goods sold directly
+// on the doc (`costOfGoodsSold`), since a single costPricePerUnit can't
+// represent several products at different cost prices in one line.
+
+test('a multi-item cart sale uses its stored costOfGoodsSold instead of costPricePerUnit × quantity', () => {
+  // Book ×3 @500 (cost 300) + Storybook ×2 @350 (cost 200) + Pen ×1 @50 (cost 20)
+  // revenue = 1500 + 700 + 50 = 2250; cost = 900 + 400 + 20 = 1320
+  const cartSale = {
+    id: 's1', paymentMethod: 'Cash', quantity: 6, totalAmount: 2250, costOfGoodsSold: 1320,
+    profit: 930, isVoided: false,
+  };
+  const summary = computeFinancials({ sales: [cartSale], creditSales: [], expenses: [], debtRepayments: [] });
+
+  assert.equal(summary.totalCashSales, 2250);
+  assert.equal(summary.costOfGoodsSold, 1320);
+  assert.equal(summary.grossProfit, 930);
+  assert.equal(summary.netProfit, 930);
+});
+
+test('a legacy single-product sale without costOfGoodsSold still falls back correctly', () => {
+  const legacySale = { id: 's1', paymentMethod: 'Cash', quantity: 2, totalAmount: 1000, costPricePerUnit: 300, isVoided: false };
+  const summary = computeFinancials({ sales: [legacySale], creditSales: [], expenses: [], debtRepayments: [] });
+
+  assert.equal(summary.costOfGoodsSold, 600);
+  assert.equal(summary.grossProfit, 400);
+});
+
+test('a partial repayment on a multi-item credit sale recognizes COGS from the stored aggregate', () => {
+  const creditSale = { id: 'c1', quantity: 4, totalAmount: 2000, costOfGoodsSold: 1200, status: 'partial', amountPaid: 1000 };
+  const summary = computeFinancials({
+    sales: [],
+    creditSales: [],
+    allCreditSales: [creditSale],
+    expenses: [],
+    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 1000, method: 'Cash' }],
+  });
+
+  // Half the sale collected → half its aggregate cost basis recognized
+  assert.equal(summary.revenue, 1000);
+  assert.equal(summary.costOfGoodsSold, 600);
+  assert.equal(summary.netProfit, 400);
+});
 ````
 
 ## File: src/utils/offlineWrite.js
@@ -6793,6 +5883,85 @@ export function raceWithTimeout(promise, timeoutMs = 4000) {
     padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
   }
 }
+````
+
+## File: src/main.jsx
+````javascript
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import './index.css';
+import App from './App.jsx';
+import toast from 'react-hot-toast';
+import { registerSW } from 'virtual:pwa-register';
+import { enterDemoMode, exitDemoMode } from './demo/demoMode';
+import { seedDemoDataIfNeeded } from './demo/seedData';
+
+// `import.meta.env.MODE` is 'demo' only when started via `npm run dev:demo`
+// (vite --mode demo). The actual Firebase-vs-local-storage routing is
+// decided at build time by vite.config.js's module aliasing — this block
+// just does the two things that still need to happen at runtime once we
+// know we're in Demo Mode:
+//
+//  1. Seed realistic sample data on first load (no-ops on later loads —
+//     see seedDemoDataIfNeeded's own localStorage check).
+//  2. Flip the flag in src/demo/demoMode.js, so the parts of the UI that
+//     need to know "are we in Demo Mode?" for display purposes only (the
+//     Demo badge in TopHeader, choosing which Business Reset to run in
+//     Settings) read it correctly. This flag has NO bearing on whether
+//     Firebase is actually used — that's the aliasing above — it's purely
+//     cosmetic/UI state.
+//
+// The `else` branch matters too: without it, a browser that previously ran
+// `npm run dev:demo` would keep the demo flag set to true even after
+// switching back to `npm run dev`, incorrectly showing the Demo badge (and
+// routing Settings' Business Reset to the wrong implementation) in
+// Production Mode.
+if (import.meta.env.MODE === 'demo') {
+  enterDemoMode();
+  seedDemoDataIfNeeded();
+} else {
+  exitDemoMode();
+}
+// Checks for a new deployed version every 60s while the tab is visible,
+// and prompts a one-tap refresh the moment one's found — far faster than
+// only picking it up the next time someone happens to reopen the app.
+// Deliberately a prompt, not a silent forced reload: a hard refresh
+// mid-sale-entry would wipe whatever a cashier is currently typing.
+if (import.meta.env.MODE !== 'demo') {
+  const updateSW = registerSW({
+    onRegisteredSW(swUrl, registration) {
+      if (!registration) return;
+      setInterval(() => {
+        if (document.visibilityState === 'visible') registration.update().catch(() => {});
+      }, 60 * 1000);
+    },
+    onNeedRefresh() {
+      toast(
+        (t) => (
+          <span className="flex items-center gap-3">
+            A new version of FlowBiz is available.
+            <button
+              className="btn-primary !min-h-0 !px-3 !py-1.5 text-xs"
+              onClick={() => { toast.dismiss(t.id); updateSW(true); }}
+            >
+              Refresh
+            </button>
+          </span>
+        ),
+        { duration: Infinity }
+      );
+    },
+    onOfflineReady() {},
+  });
+}
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
+  </StrictMode>
+);
 ````
 
 ## File: index.html
@@ -7006,56 +6175,6 @@ if (!demo && !emailVerified) {
 
   if (adminOnly && !isAdmin) return <Navigate to="/counter" replace />;
   return children;
-}
-````
-
-## File: src/components/layout/TopHeader.jsx
-````javascript
-import { useAuth } from '../../contexts/AuthContext';
-import ConnectivityIndicator from '../common/ConnectivityIndicator';
-import { isDemoMode } from '../../demo/demoMode';
-import { Link } from 'react-router-dom';
-
-export default function TopHeader() {
-  const { profile, logout, isAdmin, isPro } = useAuth();
-  const demo = isDemoMode();
-
-  return (
-    <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-ink-100 bg-sand/95 px-4 py-2 backdrop-blur sm:px-6 safe-top">
-
-      <div className="flex min-w-0 items-center gap-3">
-        {isAdmin && !demo && (
-          <Link
-            to="/pro"
-            className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${isPro ? 'bg-amber-100 text-amber-800' : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'}`}
-          >
-            {isPro ? 'FlowBiz Pro ✓' : 'Explore FlowBiz Pro'}
-          </Link>
-        )}
-        <div className="hidden truncate text-sm text-ink-500 lg:block">
-          Welcome, <span className="font-semibold text-ink-800">{profile?.displayName}</span>
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        {demo && (
-          <span className="badge bg-amber-100 text-amber-800" title="Sample data only — nothing here touches Firebase">
-            Demo
-          </span>
-        )}
-        <ConnectivityIndicator />
-        {/* FIX: was checking profile?.role === 'admin', a role value that
-            no longer exists anywhere in this app — every owner was
-            showing as "Cashier" here. This app's actual roles are
-            'owner' and 'cashier'. */}
-        <span className={`badge hidden sm:inline-flex ${profile?.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>
-          {profile?.role === 'owner' ? 'Owner' : 'Cashier'}
-        </span>
-        {!demo && (
-          <button onClick={logout} className="btn-outline !px-3 !py-1.5 text-xs !min-h-0">Sign out</button>
-        )}
-      </div>
-    </header>
-  );
 }
 ````
 
@@ -7709,6 +6828,410 @@ const handle = async e => {
 }
 ````
 
+## File: src/pages/ForgotPassword.jsx
+````javascript
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '../firebase';
+
+export default function ForgotPassword() {
+  const [email, setEmail] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+await sendPasswordResetEmail(auth, email.trim(), {
+  url: `${window.location.origin}/auth/action`,
+  handleCodeInApp: false,
+});
+      setSent(true);
+} catch (err) {
+      // FIX: previously every error EXCEPT invalid-email/too-many-requests
+      // silently showed "sent" — including real failures (unauthorized
+      // continue URL, network errors, misconfigured project), which is
+      // why resets appeared to silently vanish. Only auth/user-not-found
+      // is safe to mask as success; everything else now shows a real
+      // message, and every error is logged so DevTools shows the cause.
+      console.error('[FlowBiz] sendPasswordResetEmail failed:', err.code || err.name, err.message);
+      const message =
+        err.code === 'auth/invalid-email'             ? 'Please enter a valid email address.' :
+        err.code === 'auth/too-many-requests'         ? 'Too many requests. Please wait a bit before trying again.' :
+        err.code === 'auth/unauthorized-continue-uri' ? 'This site is not yet authorized to send reset links. Please contact support.' :
+        err.code === 'auth/user-not-found'            ? null :
+        "Couldn't send the reset email. Please try again in a moment.";
+      if (message === null) {
+        setSent(true);
+      } else {
+        setError(message);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="flex flex-col items-center text-center gap-3">
+          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
+          <div>
+            <h1 className="font-display text-2xl font-bold text-white">Reset your password</h1>
+            <p className="text-sm text-ink-400">Enter your account email and we'll send you a reset link.</p>
+          </div>
+        </div>
+
+        {sent ? (
+          <div className="card p-6 text-center space-y-3">
+            <div className="text-3xl">📧</div>
+            <p className="text-sm text-ink-600">If an account exists for <span className="font-semibold">{email.trim()}</span>, a password reset link is on its way. Check your inbox (and spam folder).</p>
+            <Link to="/login" className="btn-primary w-full">Back to sign in</Link>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="card space-y-4 p-6">
+            {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
+            <div>
+              <label className="label">Email</label>
+              <input type="email" required className="input" placeholder="owner@yourbusiness.co.ke" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" autoFocus />
+            </div>
+            <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Sending…' : 'Send reset link'}</button>
+          </form>
+        )}
+
+        <p className="text-center text-sm text-ink-400">
+          Remembered it? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link>
+        </p>
+      </div>
+    </div>
+  );
+}
+````
+
+## File: src/pages/HelpGuide.jsx
+````javascript
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+
+const SECTIONS = [
+  {
+    id: 'getting-started',
+    title: '1. Getting Started',
+    desc: 'The essential daily workflows: adding inventory, recording purchases, making sales, and logging daily expenses.',
+    content: (
+      <div className="space-y-4">
+        <p className="text-sm text-ink-600">
+          Welcome to FlowBiz! To run your shop efficiently every day, follow these five essential steps:
+        </p>
+        <div className="space-y-3">
+          <div className="rounded-lg bg-ink-50 p-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 1: Add Your Products</h4>
+            <p className="text-sm text-ink-600 mt-1">
+              Go to <strong className="text-ink-800">Products</strong> and tap <strong className="text-ink-800">+ Add product</strong>. Enter the product name, its buying price (cost), and selling price. If the item has a barcode, scan it using your device's camera or standard USB scanner.
+            </p>
+          </div>
+          <div className="rounded-lg bg-ink-50 p-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 2: Record Purchases (Restocking)</h4>
+            <p className="text-sm text-ink-600 mt-1">
+              When a supplier delivers new stock, record it on the <strong className="text-ink-800">Purchases</strong> page. Select the supplier, pick the product, enter the quantity received, and specify if you paid them now or took the stock on credit. FlowBiz will automatically increase your stock levels.
+            </p>
+          </div>
+          <div className="rounded-lg bg-ink-50 p-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 3: Record Sales (Counter)</h4>
+            <p className="text-sm text-ink-600 mt-1">
+              On the <strong className="text-ink-800">Counter</strong> page, tap any product card or scan its barcode to sell. Select whether the customer paid in Cash, via M-Pesa, or took it on credit (Deni). Tap confirm, and inventory levels will update in real-time.
+            </p>
+          </div>
+          <div className="rounded-lg bg-ink-50 p-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 4: Record Expenses</h4>
+            <p className="text-sm text-ink-600 mt-1">
+              Keep a record of rent, electricity, transport, wages, or airtime float under <strong className="text-ink-800">Expenses</strong>. Logging every small expense ensures your end-of-day net profit calculations remain accurate.
+            </p>
+          </div>
+          <div className="rounded-lg bg-ink-50 p-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 5: Record Debt Repayments</h4>
+            <p className="text-sm text-ink-600 mt-1">
+              When a debtor pays off what they owe, go to <strong className="text-ink-800">Customers</strong>, click their name, and record the repayment amountWhen a debtor pays off what they owe, go to <strong className="text-ink-800">Customers</strong>, click their name, and record the repayment amount (Cash or M-Pesa). Do not create a new sale; this updates their remaining balance and logs the cash received.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  },
+  {
+    id: 'understanding-dashboard',
+    title: "2. Understanding the Dashboard",
+    desc: "A brief guide to today's summary cards, tracking balances, and checking inventory health.",
+    content: (
+      <div className="space-y-4">
+        <p className="text-sm text-ink-600">
+          The dashboard is your shop's cockpit, offering a real-time summary of today's events:
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="border border-ink-100 rounded-lg p-3">
+            <span className="font-semibold text-xs text-ink-800 block">Cash Received Today</span>
+            <p className="text-xs text-ink-600 mt-1">All the physical cash collected today from direct cash sales and debtor repayments combined.</p>
+          </div>
+          <div className="border border-ink-100 rounded-lg p-3">
+            <span className="font-semibold text-xs text-ink-800 block">M-Pesa Received Today</span>
+            <p className="text-xs text-ink-600 mt-1">All digital payments transferred to your till today from direct M-Pesa sales and debtor repayments.</p>
+          </div>
+          <div className="border border-ink-100 rounded-lg p-3">
+            <span className="font-semibold text-xs text-ink-800 block">Today's Net Profit</span>
+            <p className="text-xs text-ink-600 mt-1">Today's realized gross profit minus today's recorded shop expenses. Shows exactly what you made in hand.</p>
+          </div>
+          <div className="border border-ink-100 rounded-lg p-3">
+            <span className="font-semibold text-xs text-ink-800 block">Today's Expenses</span>
+            <p className="text-xs text-ink-600 mt-1">The sum of all shop operational expenses recorded today (excluding purchases made on credit).</p>
+          </div>
+          <div className="border border-ink-100 rounded-lg p-3">
+            <span className="font-semibold text-xs text-ink-800 block">Inventory Value (Cost)</span>
+            <p className="text-xs text-ink-600 mt-1">The total buying price of all items currently on your shelves. Helps you see exactly how much capital is tied up in stock.</p>
+          </div>
+          <div className="border border-ink-100 rounded-lg p-3">
+            <span className="font-semibold text-xs text-ink-800 block">Outstanding Debt (Deni)</span>
+            <p className="text-xs text-ink-600 mt-1">The total amount of money your credit customers still owe you. Keep this number as close to zero as possible!</p>
+          </div>
+        </div>
+      </div>
+    )
+  },
+  {
+    id: 'understanding-reports',
+    title: '3. Understanding Reports',
+    desc: 'How the reports compile and measure credit sales, margins, expenses, and profits over time.',
+    content: (
+      <div className="space-y-3 text-sm text-ink-600">
+        <p>Reports allow you to view the shop's financial performance over preset periods (Today, This Week, This Month, or Custom dates):</p>
+        <ul className="list-disc pl-5 space-y-1.5 mt-2">
+          <li><strong>Gross Revenue:</strong> Represents actual money in your hand, direct cash/M-Pesa sales plus whatever portion of debtor repayments was collected in this period.</li>
+          <li><strong>Cost of Goods Sold (COGS):</strong> The total wholesale cost of the items you sold during this period. For credit repayments, COGS is recognized proportionally.</li>
+          <li><strong>Gross Profit:</strong> Gross Revenue minus Cost of Goods Sold. Tells you how much markup you earned on items sold.</li>
+          <li><strong>Expenses:</strong> Rent, bills, wages, etc., logged during this period.</li>
+          <li><strong>Net Profit:</strong> Gross Profit minus Expenses. The ultimate bottom-line earnings of your business during this reporting window.</li>
+        </ul>
+      </div>
+    )
+  },
+  {
+    id: 'credit-sales',
+    title: '4. How Credit Sales (Deni) Work',
+    desc: 'The cash-flow-first model: why profit stays at zero until money is collected.',
+    content: (
+      <div className="space-y-4 text-sm text-ink-600">
+        <p>
+          Most standard software registers revenue the moment you sell an item, even if the customer leaves without empty pockets. This is called *accrual accounting*, but it can be confusing for everyday Kenyan businesses where cash flow is king.
+        </p>
+        <p>
+          <strong>FlowBiz uses a cash-flow-first hybrid model</strong> designed specifically for Kenyan SMEs:
+        </p>
+        <div className="border-l-2 border-moss-600 pl-4 space-y-2 py-1 font-mono text-xs bg-moss-50/50 rounded-r">
+          <div>Customer buys on credit (e.g., KES 15,000)</div>
+          <div className="text-ink-400">↓</div>
+          <div>Inventory decreases immediately (real-time stock health)</div>
+          <div className="text-ink-400">↓</div>
+          <div>Outstanding Debt (Deni) increases by KES 15,000</div>
+          <div className="text-ink-400">↓</div>
+          <div className="text-rust-600 font-semibold">Revenue and Profit remain at KES 0.00 (not collected yet)</div>
+          <div className="text-ink-400">↓</div>
+          <div>Customer pays KES 5,000 partial payment later</div>
+          <div className="text-ink-400">↓</div>
+          <div className="text-moss-700 font-semibold">KES 5,000 is recognized as Revenue</div>
+          <div className="text-moss-700 font-semibold font-bold">COGS &amp; proportional profit are recognized at last!</div>
+          <div className="text-ink-400">↓</div>
+          <div>Outstanding Debt reduces to KES 10,000</div>
+        </div>
+        <p className="mt-2 text-xs text-ink-500">
+          This system ensures you only see, report, and spend profits that have actually entered your cash drawer or M-Pesa till.
+        </p>
+      </div>
+    )
+  },
+  {
+    id: 'cash-mpesa',
+    title: '5. Cash, M-Pesa, & Close Day',
+    desc: 'Reconciling floats, recording withdrawals, and closing today’s session correctly.',
+    content: (
+      <div className="space-y-3 text-sm text-ink-600">
+        <p>
+          Every morning, open the Counter by entering your starting balances (the <strong>Opening Float</strong>). This is the cash in your drawer and the float on your phone.
+        </p>
+        <p>
+          During the day, every sale, expense, debtor repayment, and refund adjusts the "Expected" balances inside the system. 
+        </p>
+        <p>
+          At closing time, visit the <strong>Close Day</strong> page:
+        </p>
+        <ol className="list-decimal pl-5 space-y-1.5 mt-2">
+          <li>Count the physical cash in your drawer and type the amount into the input.</li>
+          <li>Check your M-Pesa statement balance and type it.</li>
+          <li>FlowBiz will instantly compare these to the "Expected" amounts and display a <strong>Shortage</strong> (rust) or <strong>Surplus</strong> (amber) if there's any variance.</li>
+          <li>Press <strong>Confirm and Close Day</strong>. This locks the sales log and stores today's records.</li>
+        </ol>
+      </div>
+    )
+  },
+  {
+    id: 'inventory-management',
+    title: '6. Inventory & Stock Take',
+    desc: 'Understanding stock movements, low stock limits, and discrepancy audits.',
+    content: (
+      <div className="space-y-3 text-sm text-ink-600">
+        <p>Inventory level is updated automatically through three daily events:</p>
+        <ul className="list-disc pl-5 space-y-1.5">
+          <li><strong>Purchases (+):</strong> Increases your stock when you record incoming stock from a supplier.</li>
+          <li><strong>Sales &amp; Credit Sales (-):</strong> Decreases your stock the second an item leaves your counter.</li>
+          <li><strong>Stock Take (+/-):</strong> Used to override the system count with a physical hand-count (e.g. to adjust for damage, expiration, or theft).</li>
+        </ul>
+        <div className="rounded bg-rust-50 p-3 text-xs text-rust-700">
+          <strong>Discrepancy Note:</strong> Stock Take is purely an auditing tool. Correcting a stock discrepancy does not create cash transactions or expenses automatically. It logs the audit discrepancy under <strong>stockAdjustments</strong> for tracking.
+        </div>
+      </div>
+    )
+  },
+  {
+    id: 'suppliers-team',
+    title: '7. Suppliers & Team',
+    desc: 'Tracking what you owe suppliers, and managing owner and cashier access.',
+    content: (
+      <div className="space-y-4 text-sm text-ink-600">
+        <p>The <strong className="text-ink-800">Suppliers</strong> page tracks who you buy stock from and what you owe them. Every purchase recorded "on credit" (Purchases page) adds to that supplier's outstanding balance automatically record a payment from the Suppliers page when you pay them, and it logs both the payment and the matching expense in one step.</p>
+        <p><strong className="text-ink-800">Team</strong> (under Settings) is where an owner invites staff. There are two roles:</p>
+        <ul className="list-disc pl-5 space-y-1.5">
+          <li><strong>Owner:</strong> full access Products, Purchases, Suppliers, Reports, Settings, Team, and Close Day.</li>
+          <li><strong>Cashier:</strong> Counter, Customers, and Expenses (if the owner allows it) enough to run daily sales without touching sensitive business data.</li>
+        </ul>
+        <p>An owner can deactivate a staff account at any time from Team, or sign a device out remotely from Settings → Device Management if a phone is lost or a staff member leaves.</p>
+      </div>
+    ),
+  },
+  {
+    id: 'pro-analytics',
+    title: '8. FlowBiz Pro & Analytics',
+    desc: 'What Advanced Analytics, Inventory Intelligence, and WhatsApp sharing add on top of the free plan.',
+    content: (
+      <div className="space-y-4 text-sm text-ink-600">
+        <p><strong className="text-ink-800">Advanced Analytics</strong> (Pro) goes beyond the standard Reports page: it compares the current period against the one before it, breaks down which products drive the most volume versus the most profit, and attributes revenue per staff member.</p>
+        <p><strong className="text-ink-800">Inventory Intelligence</strong> (Pro) looks at your stock from a capital point of view: how much cash is tied up in inventory right now, which products are overstocked and quietly locking up that cash, and which are close to running out.</p>
+        <p><strong className="text-ink-800">WhatsApp sharing</strong> (Pro) lets you send a receipt, invoice, or debt reminder straight to a customer's phone with one tap.</p>
+        <p className="text-xs text-ink-500">Printing and downloading receipts/invoices as PDF is available on every plan Pro specifically unlocks Analytics, Inventory Intelligence, WhatsApp sharing, and unlimited products/staff.</p>
+      </div>
+    ),
+  },
+  {
+    id: 'faq',
+    title: '7. Frequently Asked Questions',
+    desc: 'Troubleshooting and immediate answers to common user questions.',
+    content: (
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <strong className="text-sm text-ink-800 block">Q: Why is my profit still zero after a credit sale?</strong>
+          <p className="text-xs text-ink-600 pl-4">A: Since no cash or M-Pesa has been collected yet, no revenue is earned. Once the customer repays, profit is recognized proportionally based on the amount paid.</p>
+        </div>
+        <div className="space-y-2">
+          <strong className="text-sm text-ink-800 block">Q: Why did my inventory reduce before I received any money?</strong>
+          <p className="text-xs text-ink-600 pl-4">A: Real-time inventory tracking is crucial. Even on credit, physical stock leaves the shelves, so the system must deduct it immediately to prevent double-selling.</p>
+        </div>
+        <div className="space-y-2">
+          <strong className="text-sm text-ink-800 block">Q: Can I edit or void a closed session?</strong>
+          <p className="text-xs text-ink-600 pl-4">A: No. Once a daily session is closed, it is securely saved. If you made an error, an administrator can click "Reopen session" on the Close Day page to make adjustments.</p>
+        </div>
+        <div className="space-y-2">
+          <strong className="text-sm text-ink-800 block">Q: Where do I edit or delete products?</strong>
+          <p className="text-xs text-ink-600 pl-4">A: Editing and deleting products is restricted to administrators and must be done on the dedicated <strong>Products</strong> page, keeping the Counter screen clean and secure.</p>
+        </div>
+      </div>
+    )
+  },
+  {
+    id: 'best-practices',
+    title: '8. FlowBiz Best Practices',
+    desc: 'Golden rules for keeping your shop books accurate and reliable.',
+    content: (
+      <ul className="list-disc pl-5 space-y-1.5 text-sm text-ink-600">
+        <li><strong>Record expenses immediately:</strong> Log your County Council fees, electricity, and lunch costs right when they occur so you do not forget at close-of-day.</li>
+        <li><strong>Record credit repayments inside Customers:</strong> Never create a new direct sale to record a repayment, this would double-count your revenue and duplicate items sold.</li>
+        <li><strong>Perform Stock Take regularly:</strong> Plan a quick physical stock take every weekend or fortnight to ensure physical inventory matches your screens exactly.</li>
+        <li><strong>Keep the general settings updated:</strong> Shop name edits immediately personalize your generated PDF reports for presentation to accountants.</li>
+      </ul>
+    )
+  },
+  {
+    id: 'about-flowbiz',
+    title: '9. About FlowBiz',
+    desc: 'Who we are and our vision for empowering Kenyan small businesses.',
+    content: (
+      <p className="text-sm text-ink-600">
+        FlowBiz is a localized, production-ready Business Manager custom-built to meet the unique operational challenges of Kenyan SMBs. By prioritizing cash-flow visibility, offering native barcode scanning, and supporting local transaction models like Deni and M-Pesa, we aim to make day-to-day recordkeeping effortless and stress-free.
+      </p>
+    )
+  }
+];
+
+export default function HelpGuide() {
+  const [activeTab, setActiveTab] = useState('getting-started');
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900"> Help &amp; Guide</h1>
+          <p className="text-sm text-ink-400">FlowBiz user guide and best-practice operating manual.</p>
+        </div>
+        <Link to="/settings" className="btn-outline text-xs !px-3 !py-1.5 !min-h-0">
+          ← Back to Settings
+        </Link>
+      </div>
+
+      <div className="flex flex-col gap-4 lg:flex-row">
+        {/* Navigation panel */}
+        <div className="w-full lg:w-1/3 space-y-2">
+          {SECTIONS.map((sec) => (
+            <button
+              key={sec.id}
+              onClick={() => setActiveTab(sec.id)}
+              className={`w-full text-left p-3 rounded-lg border transition-all flex flex-col gap-1 min-h-[50px] ${
+                activeTab === sec.id
+                  ? 'border-moss-600 bg-moss-50 text-moss-800 shadow-sm'
+                  : 'border-ink-100 bg-white text-ink-600 hover:bg-ink-50'
+              }`}
+            >
+              <span className="font-semibold text-sm block">{sec.title}</span>
+              <span className="text-xs text-ink-400 line-clamp-1">{sec.desc}</span>
+            </button>
+          ))}
+          
+          <div className="rounded-lg bg-moss-50/50 border border-dashed border-moss-200 p-4 text-center mt-4">
+            <span className="text-xs font-semibold uppercase tracking-wider text-moss-800 block">Need more topics?</span>
+            <p className="text-[11px] text-ink-500 mt-1">We periodically update this manual. Future sections including Cashiers, eTIMS, VAT, Backup &amp; Restore, and loyalty schemes will appear here automatically.</p>
+          </div>
+        </div>
+
+        {/* Content Display Panel */}
+        <div className="flex-1 card bg-white p-5 sm:p-6 min-h-[300px]">
+          {SECTIONS.map((sec) => {
+            if (activeTab !== sec.id) return null;
+            return (
+              <div key={sec.id} className="space-y-4 animate-fade-in">
+                <div className="border-b border-ink-100 pb-3">
+                  <h2 className="font-display text-lg font-bold text-ink-900">{sec.title}</h2>
+                  <p className="text-xs text-ink-400 mt-1">{sec.desc}</p>
+                </div>
+                <div className="pt-2">{sec.content}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+````
+
 ## File: src/utils/products.js
 ````javascript
 import { collection, doc, writeBatch, updateDoc, deleteField, serverTimestamp, getDoc, setDoc } from 'firebase/firestore';
@@ -7834,123 +7357,6 @@ export async function restoreProduct(productId, barcode, businessId) {
 }
 ````
 
-## File: src/utils/whatsapp.js
-````javascript
-// src/utils/whatsapp.js
-//
-// Centralized WhatsApp deep-link utilities — the ONLY place in FlowBiz that
-// builds a wa.me URL or normalizes a phone number for WhatsApp purposes.
-// Every component that needs to "send via WhatsApp" imports from here
-// instead of re-implementing phone normalization / URL construction
-// (previously duplicated between documentService.js and nowhere else —
-// this file is now the single source so future WhatsApp features don't
-// grow a third copy).
-//
-// STRICTLY a wa.me deep link mechanism: FlowBiz opens WhatsApp with a
-// pre-filled message and the person using FlowBiz presses Send themselves.
-// There is no WhatsApp Business API call, no webhook, no automated
-// sending anywhere in this file.
-
-// Turns a locally-typed Kenyan number (07xx…, 01xx…, or a bare 7xx…/1xx…)
-// into the international-format digits WhatsApp's wa.me links expect.
-// Numbers that already look international (start with a country code) are
-// left alone — FlowBiz doesn't assume every customer is Kenyan.
-export function normalizePhone(rawPhone) {
-  const digits = String(rawPhone || '').replace(/[^\d]/g, '');
-  if (!digits) return '';
-
-  if (digits.startsWith('0') && digits.length === 10) {
-    return '254' + digits.slice(1);
-  }
-  if (digits.length === 9 && (digits.startsWith('7') || digits.startsWith('1'))) {
-    return '254' + digits;
-  }
-  return digits;
-}
-
-// A WhatsApp/E.164-style number is roughly 8–15 digits once normalized.
-// This is a sanity check, not full validation — it's what stands between
-// a typo and a broken WhatsApp link.
-export function isValidWhatsAppPhone(rawPhone) {
-  const digits = normalizePhone(rawPhone);
-  return digits.length >= 8 && digits.length <= 15;
-}
-
-// Returns null (never a broken URL) if the phone number doesn't pass
-// isValidWhatsAppPhone.
-export function createWhatsAppLink(rawPhone, message) {
-  if (!isValidWhatsAppPhone(rawPhone)) return null;
-  const digits = normalizePhone(rawPhone);
-  return `https://wa.me/${digits}?text=${encodeURIComponent(message || '')}`;
-}
-
-// Opens the link in a new tab/window and returns whether it actually did.
-// Callers use the return value to show the correct toast — FlowBiz never
-// claims a message was "sent"; only that WhatsApp was opened.
-export function openWhatsApp(rawPhone, message) {
-  const url = createWhatsAppLink(rawPhone, message);
-  if (!url) return false;
-  window.open(url, '_blank', 'noopener,noreferrer');
-  return true;
-}
-
-// ── Message templates ──────────────────────────────────────────────────
-// Kept here rather than in documentService.js so every message FlowBiz
-// ever pre-fills into WhatsApp is defined in exactly one place. All of
-// these are generated dynamically from real FlowBiz data — nothing here
-// is a hardcoded business name, amount, or date.
-
-// documentUrl is optional so this still works before a share link exists
-// (e.g. a caller that hasn't been updated) — but every real call site now
-// passes one, per the "message must contain a real FlowBiz document URL"
-// requirement.
-export function buildReceiptMessage({
-  shopName, customerName, productName, quantity, totalAmount,
-  isCredit, remainingBalance, businessPhone, documentUrl, formatKES,
-}) {
-  const label = isCredit ? 'Invoice' : 'Receipt';
-  const lines = [`*${shopName}*`];
-  if (customerName) lines.push(`Hello ${customerName},`);
-  lines.push(`${label} — ${quantity} × ${productName}`);
-  lines.push(`Total: ${formatKES(totalAmount)}`);
-  if (isCredit) lines.push(`Amount due: ${formatKES(remainingBalance)}`);
-  if (documentUrl) lines.push('', `Download ${label}:`, documentUrl);
-  const contactDigits = businessPhone ? normalizePhone(businessPhone) : '';
-  if (contactDigits) lines.push('', `Contact ${shopName}: +${contactDigits}`);
-  lines.push('', isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!');
-  return lines.join('\n');
-}
-
-export function buildDebtReminderMessage({ shopName, customerName, outstandingAmount, businessPhone, formatKES }) {
-  const lines = [
-    `Hello ${customerName || 'there'},`,
-    '',
-    `This is a friendly reminder from ${shopName} regarding your outstanding balance of ${formatKES(outstandingAmount)}.`,
-    '',
-    'Please arrange payment at your earliest convenience.',
-  ];
-const contactDigits = businessPhone ? normalizePhone(businessPhone) : '';
-  if (contactDigits) lines.push('', `Contact: +${contactDigits}`);  lines.push('', 'Thank you.');
-  return lines.join('\n');
-}
-
-export function buildDebtPaymentReceiptMessage({
-  shopName, customerName, amountPaid, previousBalance, remainingBalance, isCleared, documentUrl, formatKES,
-}) {
-  const lines = [`Hello ${customerName || 'there'},`, '', `We have received your payment of ${formatKES(amountPaid)}.`, ''];
-  if (isCleared) {
-    lines.push('This payment clears your outstanding balance with us.');
-    lines.push('', `Remaining balance: ${formatKES(0)}`);
-  } else {
-    lines.push(`Previous balance: ${formatKES(previousBalance)}`);
-    lines.push(`Payment received: ${formatKES(amountPaid)}`);
-    lines.push(`Remaining balance: ${formatKES(remainingBalance)}`);
-  }
-if (documentUrl) lines.push('', 'Download your payment receipt:', documentUrl);  lines.push('', `— ${shopName}`, '', 'Thank you.');
-  return lines.join('\n');
-}
-````
-
 ## File: firebase.json
 ````json
 {
@@ -7998,6 +7404,60 @@ export default function Sidebar() {
         ))}
       </nav>
     </aside>
+  );
+}
+````
+
+## File: src/components/layout/TopHeader.jsx
+````javascript
+import { useAuth } from '../../contexts/AuthContext';
+import ConnectivityIndicator from '../common/ConnectivityIndicator';
+import { isDemoMode } from '../../demo/demoMode';
+import { Link } from 'react-router-dom';
+
+export default function TopHeader() {
+  const { profile, logout, isAdmin, isPro } = useAuth();
+  const demo = isDemoMode();
+
+  return (
+    <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-ink-100 bg-sand/95 px-4 py-2 backdrop-blur sm:px-6 safe-top">
+
+      <div className="flex min-w-0 items-center gap-3">
+{isAdmin && !demo && (
+  <Link
+    to="/pro"
+    className={`inline-flex shrink-0 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+      isPro
+        ? 'bg-amber-100 text-amber-800'
+        : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'
+    }`}
+  >
+    {isPro ? 'Pro Activated' : 'FlowBiz Pro'}
+  </Link>
+)}
+        <div className="hidden truncate text-sm text-ink-500 lg:block">
+          Welcome, <span className="font-semibold text-ink-800">{profile?.displayName}</span>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        {demo && (
+          <span className="badge bg-amber-100 text-amber-800" title="Sample data only — nothing here touches Firebase">
+            Demo
+          </span>
+        )}
+        <ConnectivityIndicator />
+        {/* FIX: was checking profile?.role === 'admin', a role value that
+            no longer exists anywhere in this app — every owner was
+            showing as "Cashier" here. This app's actual roles are
+            'owner' and 'cashier'. */}
+        <span className={`badge hidden sm:inline-flex ${profile?.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>
+          {profile?.role === 'owner' ? 'Owner' : 'Cashier'}
+        </span>
+        {!demo && (
+          <button onClick={logout} className="btn-outline !px-3 !py-1.5 text-xs !min-h-0">Sign out</button>
+        )}
+      </div>
+    </header>
   );
 }
 ````
@@ -8268,166 +7728,1041 @@ export function useCameraScanner({ onDetected, active }) {
 }
 ````
 
-## File: src/pages/Setup.jsx
+## File: src/pages/AdvancedAnalytics.jsx
 ````javascript
-// src/pages/Setup.jsx — replace the entire file
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword, sendEmailVerification, deleteUser } from 'firebase/auth';
-import { doc, collection, writeBatch, setDoc, serverTimestamp } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { auth, db } from '../firebase';
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { where } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
+import { useFinancialsForRange } from '../hooks/useFinancials';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { tenantQuery } from '../lib/tenant';
+import { startOfDay, endOfDay, buildDateBuckets, toMillisValue } from '../utils/dateRanges';
+import { formatKES } from '../utils/currency';
+import { computeFinancials, isExpenseExcluded } from '../utils/financials';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import MiniLineChart from '../components/charts/MiniLineChart';
+import MiniBarChart from '../components/charts/MiniBarChart';
+import DonutChart from '../components/charts/DonutChart';
+import {
+  TrendingUp, TrendingDown, Lock, AlertCircle, CheckCircle2, Info, ArrowLeft,
+  Banknote, Package, Tag, BarChart3, Receipt, Users, UsersRound, ClipboardCheck,
+} from 'lucide-react';
 
-const DEFAULT_CATEGORIES = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
+const PERIOD_OPTIONS = [
+  { id: '7', label: '7 Days' },
+  { id: '30', label: '30 Days' },
+  { id: '90', label: '90 Days' },
+  { id: 'custom', label: 'Custom' },
+];
 
-export default function Setup() {
-  const { firebaseUser, loading: authLoading } = useAuth();
-  const navigate = useNavigate();
-  // Firestore rules can only see a doc created earlier IN THE SAME batch
-  // via getAfter() — a plain get()/exists() check (which is what
-  // businessSettings' write rule uses via isOwner()) only sees the
-  // pre-batch state. So the user profile must be written and committed
-  // FIRST, as its own step, before businessSettings is written.
-  const creatingRef = useRef(false);
+const CHART_PALETTE = [
+  { text: 'text-moss-600', bg: 'bg-moss-600' },
+  { text: 'text-blue-600', bg: 'bg-blue-600' },
+  { text: 'text-amber-500', bg: 'bg-amber-500' },
+  { text: 'text-rust-500', bg: 'bg-rust-500' },
+  { text: 'text-ink-800', bg: 'bg-ink-800' },
+  { text: 'text-moss-400', bg: 'bg-moss-400' },
+];
 
-  useEffect(() => {
-    if (authLoading) return;
-    // Bounce an already-signed-in visitor away — but never while THIS
-    // component's own signup flow is what just signed them in, or this
-    // fires the instant the Auth account is created and cuts the flow
-    // short before Firestore writes / the verification email are sent.
-    if (firebaseUser && !creatingRef.current) {
-      navigate('/', { replace: true });
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const NAIROBI_OFFSET_MS = 3 * 60 * 60 * 1000;
+function weekdayIndexNairobi(millis) {
+  return new Date(millis + NAIROBI_OFFSET_MS).getUTCDay();
+}
+
+function KpiCard({ label, value, tone = 'text-ink-900', deltaPct, sparkline, sparklineColor = 'text-moss-600' }) {
+  const isPositive = deltaPct !== null && deltaPct !== undefined && deltaPct >= 0;
+  return (
+    <div className="card p-4 sm:p-5 flex flex-col justify-between bg-white hover:shadow-md transition-shadow">
+      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
+      <p className={`mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
+      {deltaPct !== null && deltaPct !== undefined && Number.isFinite(deltaPct) && (
+        <div className={`mt-2 flex items-center gap-1.5 text-xs font-semibold ${isPositive ? 'text-moss-700' : 'text-rust-600'}`}>
+          {isPositive ? <TrendingUp className="h-3.5 w-3.5" strokeWidth={2.5} /> : <TrendingDown className="h-3.5 w-3.5" strokeWidth={2.5} />}
+          <span>{Math.abs(deltaPct).toFixed(1)}% vs prior period</span>
+        </div>
+      )}
+      {sparkline && sparkline.length > 1 && (
+        <div className="mt-3 -mb-1">
+          <MiniLineChart data={sparkline} height={36} colorClassName={sparklineColor} compact />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Section({ title, subtitle, icon: Icon, className = '', children }) {
+  return (
+    <div className={`card p-5 sm:p-6 bg-white ${className}`}>
+      <div className="mb-5 flex items-center gap-3 border-b border-ink-100 pb-4">
+        {Icon && (
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
+            <Icon className="h-4 w-4" strokeWidth={1.75} />
+          </div>
+        )}
+        <div>
+          <h2 className="font-display text-sm font-bold text-ink-900">{title}</h2>
+          {subtitle && <p className="mt-0.5 text-xs text-ink-500">{subtitle}</p>}
+        </div>
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function NoData({ children }) {
+  return <div className="py-8 flex flex-col items-center justify-center text-center"><Info className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5} /><p className="text-sm text-ink-500">{children}</p></div>;
+}
+
+// Custom dual-series trend chart (no chart library installed in this
+// project — built the same hand-rolled-SVG way MiniLineChart already is,
+// just extended to plot two series with a shared scale and a legend).
+function DualTrendChart({ data, series, height = 220, ariaLabel }) {
+  if (!data || data.length === 0) return null;
+  const width = 600;
+  const padY = 16;
+  const padBottom = 24;
+  const plotHeight = height - padY - padBottom;
+  const allValues = data.flatMap((d) => series.map((s) => Number(d[s.key]) || 0));
+  const max = Math.max(...allValues, 0);
+  const min = Math.min(...allValues, 0);
+  const range = (max - min) || 1;
+  const stepX = data.length > 1 ? width / (data.length - 1) : 0;
+  const zeroY = padY + plotHeight - ((0 - min) / range) * plotHeight;
+
+  const pointsFor = (key) => data.map((d, i) => {
+    const x = data.length > 1 ? i * stepX : width / 2;
+    const v = Number(d[key]) || 0;
+    const y = padY + plotHeight - ((v - min) / range) * plotHeight;
+    return { x, y };
+  });
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-4">
+        {series.map((s) => (
+          <span key={s.key} className="flex items-center gap-1.5 text-xs font-semibold text-ink-600">
+            <span className={`h-2 w-2 rounded-full ${s.dotClassName}`} />
+            {s.label}
+          </span>
+        ))}
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" preserveAspectRatio="none" role="img" aria-label={ariaLabel || 'Trend chart'}>
+        <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke="currentColor" className="text-ink-100" strokeWidth="1" />
+        {series.map((s) => {
+          const points = pointsFor(s.key);
+          const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+          const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${zeroY} L ${points[0].x.toFixed(1)} ${zeroY} Z`;
+          return (
+            <g key={s.key}>
+              <path d={areaPath} className={s.colorClassName} fill="currentColor" opacity="0.06" />
+              <path d={linePath} className={s.colorClassName} fill="none" stroke="currentColor" strokeWidth="2.25" vectorEffect="non-scaling-stroke" />
+              {points.length <= 31 && points.map((p, i) => (
+                <circle key={i} cx={p.x} cy={p.y} r="2.5" className={s.colorClassName} fill="currentColor" />
+              ))}
+            </g>
+          );
+        })}
+      </svg>
+      <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-400">
+        <span>{data[0].label}</span>
+        <span>{data[data.length - 1].label}</span>
+      </div>
+    </div>
+  );
+}
+
+export default function AdvancedAnalytics() {
+  const { isPro, businessId } = useAuth();
+
+  const [period, setPeriod] = useState('30');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+
+  const { start, end } = useMemo(() => {
+    if (period === 'custom' && customStart && customEnd) {
+      return { start: startOfDay(new Date(customStart)), end: endOfDay(new Date(customEnd)) };
     }
-  }, [firebaseUser, authLoading, navigate]);
+    const days = Number(period) || 30;
+    return { start: startOfDay(new Date(Date.now() - (days - 1) * 86400000)), end: endOfDay() };
+  }, [period, customStart, customEnd]);
 
-  const [businessName, setBusinessName] = useState('');
-  const [displayName, setDisplayName]   = useState('');
-  const [email, setEmail]               = useState('');
-  const [password, setPassword]         = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [submitting, setSubmitting]     = useState(false);
-  const [error, setError]               = useState(null);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
-    if (!businessName.trim()) { setError('Enter your business name.'); return; }
-    if (!displayName.trim()) { setError('Enter your name.'); return; }
-    if (password.length < 6) { setError('Password must be at least 6 characters.'); return; }
-    if (password !== confirmPassword) { setError('Passwords do not match.'); return; }
-
-    setSubmitting(true);
-    creatingRef.current = true;
-
-    let cred;
-    try {
-      cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-    } catch (err) {
-      creatingRef.current = false;
-      const message =
-        err.code === 'auth/email-already-in-use' ? 'An account with this email already exists.' :
-        err.code === 'auth/invalid-email'        ? 'Please enter a valid email address.' :
-        err.code === 'auth/weak-password'         ? 'Password is too weak.' :
-        'Could not create your account. Please try again.';
-      setError(message);
-      setSubmitting(false);
-      return;
+  const prevRange = useMemo(() => {
+    if (period === 'custom' && customStart && customEnd) {
+      const diff = end.getTime() - start.getTime();
+      const prevEnd = new Date(start.getTime() - 1);
+      const prevStart = new Date(prevEnd.getTime() - diff);
+      return { start: startOfDay(prevStart), end: endOfDay(prevEnd) };
     }
+    const days = Number(period) || 30;
+    const prevEnd = endOfDay(new Date(start.getTime() - 1));
+    const prevStart = startOfDay(new Date(start.getTime() - days * 86400000));
+    return { start: prevStart, end: prevEnd };
+  }, [start, end, period, customStart, customEnd]);
 
-    const businessId = doc(collection(db, 'businesses')).id;
+  const { loading, sales, creditSales, expenses, repayments, summary } = useFinancialsForRange(start, end);
+  const { loading: prevLoading, summary: prevSummary } = useFinancialsForRange(prevRange.start, prevRange.end);
 
-    try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'businesses', businessId), {
-        name: businessName.trim(),
-        ownerIds: [cred.user.uid],
-        createdAt: serverTimestamp(),
-        createdBy: cred.user.uid,
-        subscription: { plan: 'free', status: 'active', expiresAt: null },
+  const allCreditSalesQ = useMemo(() => (businessId ? tenantQuery('creditSales', businessId) : null), [businessId]);
+  const { data: allCreditSales } = useFirestoreCollection(allCreditSalesQ);
+
+  const outstandingCreditQ = useMemo(
+    () => (businessId ? tenantQuery('creditSales', businessId, where('status', 'in', ['pending', 'partial'])) : null),
+    [businessId]
+  );
+  const { data: outstandingCreditSales } = useFirestoreCollection(outstandingCreditQ);
+  const totalOutstanding = useMemo(
+    () => outstandingCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0),
+    [outstandingCreditSales]
+  );
+
+  const topDebtors = useMemo(() => {
+    const map = {};
+    (outstandingCreditSales || []).forEach((cs) => {
+      const key = cs.customerId || cs.customerName || 'unknown';
+      if (!map[key]) map[key] = { name: cs.customerName || 'Unknown', balance: 0, customerId: cs.customerId };
+      map[key].balance += Number(cs.remainingBalance) || 0;
+    });
+    return Object.values(map).sort((a, b) => b.balance - a.balance).slice(0, 5);
+  }, [outstandingCreditSales]);
+
+  const granularity = (end.getTime() - start.getTime()) > (45 * 86400000) ? 'week' : 'day';
+  const buckets = useMemo(() => buildDateBuckets(start, end, granularity), [start, end, granularity]);
+
+  const trend = useMemo(() => {
+    if (!buckets.length) return [];
+    const inBucket = (record, field, bucket) => {
+      const t = toMillisValue(record[field]);
+      return t !== null && t >= bucket.start.getTime() && t <= bucket.end.getTime();
+    };
+    return buckets.map((bucket) => {
+      const bucketSales = (sales || []).filter((s) => inBucket(s, 'soldAt', bucket));
+      const bucketExpenses = (expenses || []).filter((e) => inBucket(e, 'recordedAt', bucket));
+      const bucketRepayments = (repayments || []).filter((r) => inBucket(r, 'paidAt', bucket));
+      const f = computeFinancials({
+        sales: bucketSales,
+        creditSales: [],
+        allCreditSales,
+        expenses: bucketExpenses,
+        debtRepayments: bucketRepayments,
       });
-      batch.set(doc(db, 'users', cred.user.uid), {
-        uid: cred.user.uid,
-        email: email.trim(),
-        displayName: displayName.trim(),
-        role: 'owner',
-        businessId,
-        active: true,
-        createdAt: serverTimestamp(),
-      });
-      await batch.commit();
-    } catch (err) {
-      console.error('[FlowBiz] Business setup failed — rolling back Auth account:', err.code || err.name, err.message);
-      try {
-        await deleteUser(cred.user);
-      } catch (rollbackErr) {
-        console.error('[FlowBiz] Rollback failed — an orphaned Auth account may remain:', rollbackErr);
-        setError('Something went wrong finishing setup, and we could not fully undo it. Please contact support before retrying with this email.');
-        creatingRef.current = false;
-        setSubmitting(false);
-        return;
+      return {
+        label: bucket.label,
+        revenue: f.revenue,
+        netProfit: f.netProfit,
+        grossProfit: f.grossProfit,
+        expenses: f.totalExpenses,
+        margin: f.revenue > 0 ? (f.grossProfit / f.revenue) * 100 : 0,
+      };
+    });
+  }, [buckets, sales, expenses, repayments, allCreditSales]);
+
+  // FIX (multi-product cart): a Counter.jsx cart sale can carry several
+  // products on one sale/creditSale doc via `items`. Crediting the whole
+  // doc's aggregate qty/revenue/profit to its (summary) productName would
+  // badly skew Volume/Margin Drivers — each line item is now credited to
+  // its own product when `items` is present; legacy single-product docs
+  // (no `items` field) are read exactly as before.
+  const productPerf = useMemo(() => {
+    const map = {};
+    const ensure = (name) => {
+      if (!map[name]) map[name] = { name, qty: 0, revenue: 0, profit: 0 };
+      return map[name];
+    };
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      if (Array.isArray(s.items) && s.items.length > 0) {
+        s.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty += Number(it.quantity) || 0;
+          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
+          row.profit += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
+        });
+      } else {
+        const row = ensure(s.productName);
+        row.qty += Number(s.quantity) || 0;
+        row.revenue += Number(s.totalAmount) || 0;
+        row.profit += Number(s.profit) || 0;
       }
-      setError('Something went wrong setting up your business. Please try again.');
-      creatingRef.current = false;
-      setSubmitting(false);
-      return;
+    });
+    (creditSales || []).forEach((cs) => {
+      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+      if (Array.isArray(cs.items) && cs.items.length > 0) {
+        cs.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty += Number(it.quantity) || 0;
+        });
+      } else {
+        const row = ensure(cs.productName);
+        row.qty += Number(cs.quantity) || 0;
+      }
+    });
+    return Object.values(map);
+  }, [sales, creditSales]);
+
+  const bestSelling = useMemo(() => [...productPerf].sort((a, b) => b.qty - a.qty).slice(0, 5), [productPerf]);
+  const mostProfitable = useMemo(() => [...productPerf].sort((a, b) => b.profit - a.profit).slice(0, 5), [productPerf]);
+
+  const staffPerformance = useMemo(() => {
+    const m = {};
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      if (!s.soldByName) return;
+      if (!m[s.soldByName]) m[s.soldByName] = { name: s.soldByName, qty: 0, revenue: 0 };
+      m[s.soldByName].qty += Number(s.quantity) || 0;
+      m[s.soldByName].revenue += Number(s.totalAmount) || 0;
+    });
+    return Object.values(m).sort((a, b) => b.revenue - a.revenue);
+  }, [sales]);
+
+  const weekdayPerformance = useMemo(() => {
+    const totals = Array(7).fill(0);
+    const seenDates = Array.from({ length: 7 }, () => new Set());
+    const addRecord = (timestamp, amount) => {
+      const t = toMillisValue(timestamp);
+      if (t == null) return;
+      const idx = weekdayIndexNairobi(t);
+      totals[idx] += amount;
+      seenDates[idx].add(Math.floor((t + NAIROBI_OFFSET_MS) / 86400000));
+    };
+    (sales || []).forEach((s) => { if (!s.isVoided) addRecord(s.soldAt, Number(s.totalAmount) || 0); });
+    (creditSales || []).forEach((cs) => { if (cs.status !== 'cancelled' && cs.status !== 'refunded') addRecord(cs.soldAt, Number(cs.totalAmount) || 0); });
+    return WEEKDAY_LABELS.map((label, i) => ({ label, value: seenDates[i].size > 0 ? totals[i] / seenDates[i].size : 0 }));
+  }, [sales, creditSales]);
+
+  const weekdayBest = useMemo(() => {
+    const withSales = weekdayPerformance.filter((d) => d.value > 0);
+    if (!withSales.length) return null;
+    return withSales.reduce((a, b) => (b.value > a.value ? b : a));
+  }, [weekdayPerformance]);
+
+  const expenseByCategory = useMemo(() => {
+    const map = {};
+    (expenses || []).filter((e) => !isExpenseExcluded(e)).forEach((e) => {
+      const cat = e.category || 'Other';
+      map[cat] = (map[cat] || 0) + (Number(e.amount) || 0);
+    });
+    return Object.entries(map).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+  }, [expenses]);
+
+  const revenueChangePct = !prevLoading && prevSummary.revenue > 0 ? ((summary.revenue - prevSummary.revenue) / prevSummary.revenue) * 100 : null;
+  const profitChangePct = !prevLoading && prevSummary.netProfit !== 0 ? ((summary.netProfit - prevSummary.netProfit) / Math.abs(prevSummary.netProfit)) * 100 : null;
+
+  const insights = useMemo(() => {
+    const list = [];
+    if (revenueChangePct !== null) {
+      list.push({ tone: revenueChangePct >= 0 ? 'positive' : 'negative', text: `Recognized revenue is ${revenueChangePct >= 0 ? 'up' : 'down'} ${Math.abs(revenueChangePct).toFixed(1)}% vs prior period.` });
     }
-
-    // Non-critical, so it doesn't roll back the whole account if it's
-    // ever slow or briefly fails — useSettings.js and ProductFormModal.jsx
-    // both already default gracefully when this doc doesn't exist yet.
-    try {
-      await setDoc(doc(db, 'businessSettings', businessId), {
-        shopName: businessName.trim(),
-        cashierCanRecordExpenses: true,
-        categories: DEFAULT_CATEGORIES,
-      });
-    } catch (err) {
-      console.error('[FlowBiz] businessSettings write failed (non-fatal):', err.code || err.name, err.message);
+    if (profitChangePct !== null) {
+      list.push({ tone: profitChangePct >= 0 ? 'positive' : 'negative', text: `Net profit is ${profitChangePct >= 0 ? 'up' : 'down'} ${Math.abs(profitChangePct).toFixed(1)}% vs prior period.` });
     }
-
-    try {
-      await sendEmailVerification(cred.user, { url: `${window.location.origin}/auth/action`, handleCodeInApp: true });
-      toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Check your email to verify your account.`);
-    } catch (err) {
-      console.error('[FlowBiz] sendEmailVerification failed after setup:', err.code || err.name, err.message);
-      toast.success(`Welcome to FlowBiz, ${displayName.trim()}!`);
+    if (mostProfitable[0]) {
+      list.push({ tone: 'neutral', text: `"${mostProfitable[0].name}" drove the highest gross profit margin (${formatKES(mostProfitable[0].profit)}).` });
     }
+    if (weekdayBest) {
+      list.push({ tone: 'neutral', text: `${weekdayBest.label} is your strongest day, averaging ${formatKES(weekdayBest.value)} in sales per occurrence this period.` });
+    }
+    const salesActivity = summary.revenue + summary.totalCreditSales;
+    if (salesActivity > 0 && summary.totalCreditSales > 0) {
+      const pct = (summary.totalCreditSales / salesActivity) * 100;
+      list.push({ tone: pct > 30 ? 'negative' : 'neutral', text: `Credit exposure: ${pct.toFixed(0)}% of sales activity was issued on credit.` });
+    }
+    return list;
+  }, [revenueChangePct, profitChangePct, mostProfitable, weekdayBest, summary]);
 
-    setSubmitting(false);
-    navigate('/', { replace: true });
-  };
-
-  if (authLoading) {
+  if (!isPro) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-ink-950">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
+        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
+          <Lock className="h-7 w-7" strokeWidth={2} />
+        </div>
+        <h2 className="font-display text-2xl font-bold text-ink-900">Enterprise Analytics Locked</h2>
+        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Advanced Analytics provides institutional-grade visibility into profit margins, capital exposure, and staff performance trends. Requires FlowBiz Pro.</p>
+        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
       </div>
     );
   }
 
+  if (loading) return <div className="py-12"><LoadingSpinner /></div>;
+
+  const margin = summary.revenue > 0 ? (summary.grossProfit / summary.revenue) * 100 : 0;
+  const avgTransactionValue = sales.length > 0 ? summary.revenue / sales.length : 0;
+  const hasSalesData = sales.length > 0;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-white">Create your business</h1>
-            <p className="text-sm text-ink-400">Set up FlowBiz in a couple of minutes.</p>
-          </div>
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Advanced Analytics</h1>
+          <p className="text-sm text-ink-500 mt-1">A deeper look at profit, cash flow, and performance trends.</p>
         </div>
-        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
-          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-          <div><label className="label">Business name</label><input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="e.g. Mama Njeri's Shop" disabled={submitting} /></div>
-          <div><label className="label">Your name</label><input className="input" required value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="Full name" disabled={submitting} /></div>
-          <div><label className="label">Email</label><input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="owner@yourbusiness.co.ke" autoComplete="username" disabled={submitting} /></div>
-          <div><label className="label">Password</label><input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters" autoComplete="new-password" disabled={submitting} /></div>
-          <div><label className="label">Confirm password</label><input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" disabled={submitting} /></div>
-          <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Setting up…' : 'Create business'}</button>
-        </form>
-        <p className="text-center text-sm text-ink-400">Already have an account? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link></p>
+        <Link to="/reports" className="btn-outline text-xs bg-white">
+          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Standard Reports
+        </Link>
       </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-white p-3 rounded-xl border border-ink-200">
+        <span className="text-xs font-semibold text-ink-500 uppercase tracking-wider pl-1">Date Range:</span>
+        <div className="flex flex-wrap items-center gap-2">
+          {PERIOD_OPTIONS.map((opt) => (
+            <button
+              key={opt.id}
+              onClick={() => setPeriod(opt.id)}
+              className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors ${period === opt.id ? 'bg-ink-900 text-white shadow-sm' : 'bg-ink-50 text-ink-600 hover:bg-ink-100'}`}
+            >
+              {opt.label}
+            </button>
+          ))}
+          {period === 'custom' && (
+            <div className="flex items-center gap-2 ml-1 animate-fade-in">
+              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
+              <span className="text-ink-400 text-sm font-medium">to</span>
+              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Financial performance</p>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <KpiCard label="Recognized Revenue" value={formatKES(summary.revenue)} deltaPct={revenueChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.revenue }))} sparklineColor="text-moss-600" />
+          <KpiCard label="Gross Profit" value={formatKES(summary.grossProfit)} tone="text-moss-700" sparkline={trend.map((t) => ({ label: t.label, value: t.grossProfit }))} sparklineColor="text-moss-600" />
+          <KpiCard label="Net Profit" value={formatKES(summary.netProfit)} tone="text-moss-700" deltaPct={profitChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.netProfit }))} sparklineColor="text-blue-600" />
+          <KpiCard label="Profit Margin" value={`${margin.toFixed(1)}%`} tone={margin > 20 ? 'text-moss-700' : margin < 10 ? 'text-rust-600' : 'text-ink-900'} sparkline={trend.map((t) => ({ label: t.label, value: t.margin }))} sparklineColor={margin >= 0 ? 'text-moss-600' : 'text-rust-500'} />
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Operational metrics</p>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <KpiCard label="Total Expenses" value={formatKES(summary.totalExpenses)} tone="text-rust-600" />
+          <KpiCard label="Avg Transaction Size" value={hasSalesData ? formatKES(avgTransactionValue) : 'KES 0'} />
+          <KpiCard label="Credit Issued" value={formatKES(summary.totalCreditSales)} tone="text-amber-600" />
+          <KpiCard label="Total Outstanding Debt" value={formatKES(totalOutstanding)} tone="text-rust-600" />
+        </div>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Section title="Revenue &amp; Profit Trend" subtitle="Recognized revenue vs. net profit over the selected period" icon={TrendingUp} className="lg:col-span-2">
+          {hasSalesData ? (
+            <DualTrendChart
+              data={trend}
+              series={[
+                { key: 'revenue', label: 'Revenue', colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
+                { key: 'netProfit', label: 'Net Profit', colorClassName: 'text-blue-600', dotClassName: 'bg-blue-600' },
+              ]}
+              ariaLabel="Revenue vs net profit trend"
+            />
+          ) : (
+            <NoData>Insufficient data to chart trends yet.</NoData>
+          )}
+        </Section>
+        <Section title="Payment Mix" subtitle="How sales value was collected this period" icon={Banknote}>
+          {(summary.totalCashSales + summary.totalMpesaSales + summary.totalCreditSales) > 0 ? (
+            <>
+              <DonutChart
+                size={150}
+                formatValue={formatKES}
+                segments={[
+                  { label: 'Cash', value: summary.totalCashSales, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
+                  { label: 'M-Pesa', value: summary.totalMpesaSales, colorClassName: 'text-blue-600', dotClassName: 'bg-blue-600' },
+                  { label: 'Credit (uncollected)', value: summary.totalCreditSales, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
+                ]}
+              />
+              <p className="mt-3 text-[11px] leading-relaxed text-ink-400">Credit isn't counted as revenue until it's repaid — see the Executive Summary below.</p>
+            </>
+          ) : (
+            <NoData>No sales recorded yet this period.</NoData>
+          )}
+        </Section>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Section title="Volume Drivers" subtitle="Highest quantity moved" icon={Package}>
+          {bestSelling.length > 0 ? (
+            <MiniBarChart orientation="horizontal" formatValue={(v) => `${v.toLocaleString()} units`} data={bestSelling.map((p) => ({ label: p.name, value: p.qty, colorClassName: 'bg-ink-800' }))} />
+          ) : (
+            <NoData>No product movement detected.</NoData>
+          )}
+        </Section>
+        <Section title="Margin Drivers" subtitle="Highest gross profit generated" icon={Tag}>
+          {mostProfitable.length > 0 ? (
+            <MiniBarChart orientation="horizontal" formatValue={formatKES} data={mostProfitable.map((p) => ({ label: p.name, value: p.profit, colorClassName: 'bg-moss-600' }))} />
+          ) : (
+            <NoData>No profit data generated.</NoData>
+          )}
+        </Section>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Section title="Sales by Day of Week" subtitle="Average sales value per occurrence of that weekday" icon={BarChart3}>
+          {weekdayBest ? (
+            <MiniBarChart orientation="vertical" formatValue={formatKES} data={weekdayPerformance} ariaLabel="Sales by day of week" />
+          ) : (
+            <NoData>No sales activity recorded yet this period.</NoData>
+          )}
+        </Section>
+        <Section title="Expense Breakdown" subtitle="Where operating costs went this period" icon={Receipt}>
+          {expenseByCategory.length > 0 ? (
+            <DonutChart
+              size={150}
+              formatValue={formatKES}
+              segments={expenseByCategory.map((e, i) => ({ label: e.label, value: e.value, colorClassName: CHART_PALETTE[i % CHART_PALETTE.length].text, dotClassName: CHART_PALETTE[i % CHART_PALETTE.length].bg }))}
+            />
+          ) : (
+            <NoData>No expenses recorded this period.</NoData>
+          )}
+        </Section>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Section title="Capital &amp; Credit Exposure" subtitle="Liquidity tied up in customer credit" icon={Users}>
+          <div className="space-y-4 pt-1">
+            <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
+              <span className="text-ink-600 font-medium">Credit Issued (This Period)</span>
+              <span className="font-semibold text-ink-900">{formatKES(summary.totalCreditSales)}</span>
+            </div>
+            <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
+              <span className="text-ink-600 font-medium">Debt Collected (This Period)</span>
+              <span className="font-semibold text-moss-700">{formatKES(summary.totalDebtRepayments)}</span>
+            </div>
+            <div className="flex items-center justify-between pt-1 text-sm bg-rust-50 p-3 rounded-lg border border-rust-100">
+              <span className="font-bold text-rust-800 uppercase tracking-wide text-xs">Total Market Exposure</span>
+              <span className="font-bold text-rust-700 text-base">{formatKES(totalOutstanding)}</span>
+            </div>
+          </div>
+        </Section>
+        <Section title="Top Debtors" subtitle="Customers with the highest outstanding balance" icon={Users}>
+          {topDebtors.length > 0 ? (
+            <div className="space-y-1">
+              {topDebtors.map((d, i) => (
+                <Link key={d.customerId || d.name} to={d.customerId ? `/customers/${d.customerId}` : '/customers'} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2.5 hover:bg-ink-50 transition-colors">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rust-50 text-xs font-bold text-rust-700">{i + 1}</span>
+                    <span className="truncate text-sm font-medium text-ink-800">{d.name}</span>
+                  </div>
+                  <span className="shrink-0 text-sm font-bold text-rust-600">{formatKES(d.balance)}</span>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <NoData>No outstanding customer balances — nice and clean!</NoData>
+          )}
+        </Section>
+      </div>
+
+      <Section title="Staff Performance Index" subtitle="Revenue attribution by cashier" icon={UsersRound}>
+        {staffPerformance.length === 0 ? (
+          <NoData>No staff attribution data found.</NoData>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-ink-200">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-ink-50 text-xs uppercase tracking-wider font-semibold text-ink-500">
+                <tr><th className="px-4 py-3 border-b border-ink-200">Staff Member</th><th className="px-4 py-3 border-b border-ink-200 text-right">Items Sold</th><th className="px-4 py-3 border-b border-ink-200 text-right">Revenue Generated</th></tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100 bg-white">
+                {staffPerformance.map((st, i) => (
+                  <tr key={st.name} className="hover:bg-ink-50/50 transition-colors">
+                    <td className="px-4 py-3 font-semibold text-ink-900">
+                      {st.name}
+                      {i === 0 && <span className="badge ml-2 bg-amber-100 text-amber-800">Top</span>}
+                    </td>
+                    <td className="px-4 py-3 text-right text-ink-600">{st.qty.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-moss-700">{formatKES(st.revenue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
+
+      <Section title="Executive Summary" subtitle="Automated business intelligence" icon={ClipboardCheck}>
+        {insights.length > 0 ? (
+          <div className="space-y-3 pt-1">
+            {insights.map((insight, i) => (
+              <div key={i} className="flex items-start gap-3 text-sm bg-ink-50 p-3 rounded-lg border border-ink-100">
+                <div className="shrink-0 mt-0.5">
+                  {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
+                   insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
+                   <Info className="h-5 w-5 text-ink-500" strokeWidth={2} />}
+                </div>
+                <span className="text-ink-800 font-medium leading-relaxed">{insight.text}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <NoData>More transaction volume required to generate insights.</NoData>
+        )}
+      </Section>
+    </div>
+  );
+}
+````
+
+## File: src/pages/InventoryIntelligence.jsx
+````javascript
+import { useMemo } from 'react';
+import { Link } from 'react-router-dom';
+import { orderBy, where } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { formatKES } from '../utils/currency';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import MiniBarChart from '../components/charts/MiniBarChart';
+import DonutChart from '../components/charts/DonutChart';
+import {
+  Lock, ArrowLeft, AlertCircle, CheckCircle2, Info, PackageOpen,
+  Package, Tag, Truck, ClipboardCheck, AlertTriangle,
+} from 'lucide-react';
+
+const LOOKBACK_DAYS = 30;
+
+function KpiCard({ label, value, tone = 'text-ink-900', bg = 'bg-white' }) {
+  return (
+    <div className={`card p-4 sm:p-5 ${bg} hover:shadow-md transition-shadow`}>
+      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
+      <p className={`mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
+    </div>
+  );
+}
+
+function Section({ title, subtitle, icon: Icon, children }) {
+  return (
+    <div className="card p-5 sm:p-6 bg-white">
+      <div className="mb-5 flex items-center gap-3 border-b border-ink-100 pb-4">
+        {Icon && (
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
+            <Icon className="h-4 w-4" strokeWidth={1.75} />
+          </div>
+        )}
+        <div>
+          <h2 className="font-display text-sm font-bold text-ink-900">{title}</h2>
+          {subtitle && <p className="mt-0.5 text-xs text-ink-500">{subtitle}</p>}
+        </div>
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function NoData({ children }) {
+  return <div className="py-8 flex flex-col items-center justify-center text-center"><PackageOpen className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5} /><p className="text-sm text-ink-500">{children}</p></div>;
+}
+
+export default function InventoryIntelligence() {
+  const { isPro, businessId } = useAuth();
+
+  const productsQ = useMemo(
+    () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
+    [businessId]
+  );
+  const { data: products, loading } = useFirestoreCollection(productsQ);
+
+  const suppliersQ = useMemo(() => (businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null), [businessId]);
+  const { data: suppliers } = useFirestoreCollection(suppliersQ);
+
+  // Same query shape (businessId + soldAt range + orderBy soldAt) already
+  // used by useFinancials.js elsewhere in the app, so it reuses the same
+  // Firestore composite index — no new index required.
+  const thirtyDaysAgo = useMemo(() => new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000), []);
+  const recentSalesQ = useMemo(
+    () => (businessId ? tenantQuery('sales', businessId, where('soldAt', '>=', thirtyDaysAgo), orderBy('soldAt', 'desc')) : null),
+    [businessId, thirtyDaysAgo]
+  );
+  const recentCreditSalesQ = useMemo(
+    () => (businessId ? tenantQuery('creditSales', businessId, where('soldAt', '>=', thirtyDaysAgo), orderBy('soldAt', 'desc')) : null),
+    [businessId, thirtyDaysAgo]
+  );
+  const { data: recentSales } = useFirestoreCollection(recentSalesQ);
+  const { data: recentCreditSales } = useFirestoreCollection(recentCreditSalesQ);
+
+  const metrics = useMemo(() => {
+    let totalCost = 0;
+    let totalRetail = 0;
+    let unitsInStock = 0;
+    const overstocked = [];
+    const outOfStock = [];
+    const lowStock = [];
+
+    (products || []).forEach((p) => {
+      const stock = Number(p.stock) || 0;
+      const cost = Number(p.costPrice) || 0;
+      const retail = Number(p.sellingPrice) || 0;
+      const threshold = Number(p.lowStockThreshold) || 5;
+
+      if (stock > 0) {
+        totalCost += stock * cost;
+        totalRetail += stock * retail;
+        unitsInStock += stock;
+      }
+
+      if (stock <= 0) {
+        outOfStock.push(p);
+      } else if (stock > threshold * 4) {
+        overstocked.push({ ...p, value: stock * cost });
+      } else if (stock <= threshold) {
+        lowStock.push(p);
+      }
+    });
+
+    overstocked.sort((a, b) => b.value - a.value);
+    const healthyCount = (products || []).length - outOfStock.length - overstocked.length - lowStock.length;
+
+    return { totalCost, totalRetail, unitsInStock, overstocked, outOfStock, lowStock, healthyCount };
+  }, [products]);
+
+  // FIX (multi-product cart): a Counter.jsx cart sale can carry several
+  // products on one sale/creditSale doc via `items`. Crediting the whole
+  // doc's aggregate quantity/value to a single s.productId would badly
+  // skew per-product velocity (ABC classification, reorder priority,
+  // slow-moving detection) — each line item is now credited to its own
+  // productId when `items` is present; legacy single-product docs (no
+  // `items` field) are read exactly as before.
+  const velocityData = useMemo(() => {
+    const units = {};
+    const value = {};
+    const addLine = (productId, qty, amount) => {
+      if (!productId) return;
+      units[productId] = (units[productId] || 0) + qty;
+      value[productId] = (value[productId] || 0) + amount;
+    };
+    (recentSales || []).forEach((s) => {
+      if (s.isVoided) return;
+      if (Array.isArray(s.items) && s.items.length > 0) {
+        s.items.forEach((it) => addLine(it.productId, Number(it.quantity) || 0, Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0));
+      } else {
+        addLine(s.productId, Number(s.quantity) || 0, Number(s.totalAmount) || 0);
+      }
+    });
+    (recentCreditSales || []).forEach((cs) => {
+      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+      if (Array.isArray(cs.items) && cs.items.length > 0) {
+        cs.items.forEach((it) => addLine(it.productId, Number(it.quantity) || 0, Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0));
+      } else {
+        addLine(cs.productId, Number(cs.quantity) || 0, Number(cs.totalAmount) || 0);
+      }
+    });
+    return { units, value };
+  }, [recentSales, recentCreditSales]);
+
+  const productInsights = useMemo(() => {
+    const supplierNameById = {};
+    (suppliers || []).forEach((s) => { supplierNameById[s.id] = s.name; });
+
+    return (products || [])
+      .filter((p) => (Number(p.stock) || 0) > 0)
+      .map((p) => {
+        const unitsSold = velocityData.units[p.id] || 0;
+        const valueMoved = velocityData.value[p.id] || 0;
+        const velocityPerDay = unitsSold / LOOKBACK_DAYS;
+        const daysOfStock = velocityPerDay > 0 ? (Number(p.stock) || 0) / velocityPerDay : null;
+        return {
+          id: p.id,
+          name: p.name,
+          stock: Number(p.stock) || 0,
+          costPrice: Number(p.costPrice) || 0,
+          threshold: Number(p.lowStockThreshold) || 5,
+          supplierName: supplierNameById[p.supplierId] || null,
+          unitsSold,
+          valueMoved,
+          velocityPerDay,
+          daysOfStock,
+        };
+      });
+  }, [products, suppliers, velocityData]);
+
+  // ABC / Pareto classification — "A" products drive roughly the first
+  // 80% of sales value, "B" the next 15%, "C" the long tail.
+  const abcClassification = useMemo(() => {
+    const moving = [...productInsights].filter((p) => p.valueMoved > 0).sort((a, b) => b.valueMoved - a.valueMoved);
+    const totalValue = moving.reduce((sum, p) => sum + p.valueMoved, 0);
+    let cumulative = 0;
+    const tiered = moving.map((p) => {
+      cumulative += p.valueMoved;
+      const cumulativePct = totalValue > 0 ? (cumulative / totalValue) * 100 : 0;
+      const tier = cumulativePct <= 80 ? 'A' : cumulativePct <= 95 ? 'B' : 'C';
+      return { ...p, tier };
+    });
+    const counts = tiered.reduce((acc, p) => { acc[p.tier] = (acc[p.tier] || 0) + 1; return acc; }, { A: 0, B: 0, C: 0 });
+    return { tiered, counts };
+  }, [productInsights]);
+
+  const slowMoving = useMemo(
+    () => productInsights.filter((p) => p.unitsSold === 0).sort((a, b) => (b.stock * b.costPrice) - (a.stock * a.costPrice)).slice(0, 8),
+    [productInsights]
+  );
+
+  const reorderPriority = useMemo(
+    () => productInsights
+      .filter((p) => p.velocityPerDay > 0 && p.stock <= p.threshold * 2)
+      .sort((a, b) => (a.daysOfStock ?? Infinity) - (b.daysOfStock ?? Infinity))
+      .slice(0, 6)
+      .map((p) => ({ ...p, suggestedQty: Math.max(1, Math.ceil(p.velocityPerDay * 14)) })),
+    [productInsights]
+  );
+
+  const capitalBySupplier = useMemo(() => {
+    const map = {};
+    (products || []).forEach((p) => {
+      if ((Number(p.stock) || 0) <= 0) return;
+      const key = p.supplierId || 'unassigned';
+      const name = key === 'unassigned' ? 'No supplier assigned' : (suppliers.find((s) => s.id === key)?.name || 'Unknown supplier');
+      if (!map[key]) map[key] = { name, value: 0 };
+      map[key].value += (Number(p.stock) || 0) * (Number(p.costPrice) || 0);
+    });
+    return Object.values(map).sort((a, b) => b.value - a.value).slice(0, 8);
+  }, [products, suppliers]);
+
+  const avgDaysOfStock = useMemo(() => {
+    const withVelocity = productInsights.filter((p) => p.daysOfStock !== null && Number.isFinite(p.daysOfStock));
+    if (!withVelocity.length) return null;
+    return withVelocity.reduce((sum, p) => sum + p.daysOfStock, 0) / withVelocity.length;
+  }, [productInsights]);
+
+  // Deduped by product ID so a product that's both overstocked AND
+  // slow-moving is only counted once — otherwise "at risk" capital would
+  // be double-counted and the health % would understate itself.
+  const capitalHealth = useMemo(() => {
+    const seen = new Set();
+    let atRiskValue = 0;
+    const addRisk = (id, value) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      atRiskValue += value;
+    };
+    metrics.overstocked.forEach((p) => addRisk(p.id, p.value));
+    slowMoving.forEach((p) => addRisk(p.id, p.stock * p.costPrice));
+    const healthyValue = Math.max(0, metrics.totalCost - atRiskValue);
+    const pct = metrics.totalCost > 0 ? (healthyValue / metrics.totalCost) * 100 : 100;
+    return { healthyValue, atRiskValue, pct: Math.max(0, Math.min(100, pct)) };
+  }, [metrics, slowMoving]);
+
+  if (!isPro) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
+        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
+          <Lock className="h-7 w-7" strokeWidth={2} />
+        </div>
+        <h2 className="font-display text-2xl font-bold text-ink-900">Inventory Intelligence Locked</h2>
+        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Instantly uncover dead stock holding up capital and detect urgent re-order limits before stockouts hit. Requires FlowBiz Pro.</p>
+        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
+      </div>
+    );
+  }
+
+  if (loading) return <div className="py-12"><LoadingSpinner /></div>;
+
+  const potentialProfit = metrics.totalRetail - metrics.totalCost;
+  const activeProductsCount = (products || []).length;
+  const totalOverstockValue = metrics.overstocked.reduce((sum, p) => sum + p.value, 0);
+
+  const insights = [];
+  if (metrics.lowStock.length > 0) {
+    insights.push({ tone: 'negative', text: `CRITICAL: ${metrics.lowStock.length} product(s) operating below safe threshold. Restock immediately.` });
+  }
+  if (metrics.outOfStock.length > 0) {
+    insights.push({ tone: 'negative', text: `REVENUE LOSS: ${metrics.outOfStock.length} product(s) completely depleted. You are actively losing sales.` });
+  }
+  if (metrics.overstocked[0]) {
+    insights.push({ tone: 'neutral', text: `CAPITAL TRAP: "${metrics.overstocked[0].name}" alone locks up ${formatKES(metrics.overstocked[0].value)} in inventory.` });
+  }
+  if (slowMoving.length > 0) {
+    const slowValue = slowMoving.reduce((sum, p) => sum + p.stock * p.costPrice, 0);
+    insights.push({ tone: 'neutral', text: `SLOW-MOVING: ${slowMoving.length} product(s) with no sales in ${LOOKBACK_DAYS} days are holding ${formatKES(slowValue)} in capital.` });
+  }
+  if (reorderPriority.length > 0) {
+    insights.push({ tone: 'negative', text: `REORDER NEEDED: ${reorderPriority.length} fast-moving product(s) are running low and should be restocked soon.` });
+  }
+  if (insights.length === 0 && activeProductsCount > 0) {
+    insights.push({ tone: 'positive', text: 'OPTIMAL: Supply distribution perfectly matches current threshold configurations.' });
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Inventory Intelligence</h1>
+          <p className="text-sm text-ink-500 mt-1">Capital deployment and supply chain health.</p>
+        </div>
+        <Link to="/products" className="btn-outline text-xs bg-white">
+          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Back to Products
+        </Link>
+      </div>
+
+      <div>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Capital &amp; stock</p>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <KpiCard label="Capital Deployed" value={formatKES(metrics.totalCost)} />
+          <KpiCard label="Projected Gross Profit" value={formatKES(potentialProfit)} tone="text-moss-700" />
+          <KpiCard label="Physical Units" value={metrics.unitsInStock.toLocaleString()} />
+          <KpiCard label="Active SKUs" value={activeProductsCount.toLocaleString()} />
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Risk &amp; velocity</p>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+          <KpiCard label="Low Stock Risk" value={metrics.lowStock.length} tone={metrics.lowStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.lowStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
+          <KpiCard label="Stockout Status" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.outOfStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
+          <KpiCard label="Overstocked SKUs" value={metrics.overstocked.length} tone="text-amber-600" />
+          <KpiCard label="Capital Trapped" value={formatKES(totalOverstockValue)} tone="text-amber-600" />
+          <KpiCard label="Avg Days of Stock" value={avgDaysOfStock != null ? `${avgDaysOfStock.toFixed(0)} days` : '—'} />
+        </div>
+      </div>
+
+      <div className="card p-5 sm:p-6 bg-white">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="font-display text-sm font-bold text-ink-900">Capital Health</h2>
+            <p className="mt-0.5 text-xs text-ink-500">Share of inventory capital that's healthy vs. tied up in overstock or slow movers</p>
+          </div>
+          <span className={`font-display text-2xl font-bold ${capitalHealth.pct >= 80 ? 'text-moss-700' : capitalHealth.pct >= 60 ? 'text-amber-600' : 'text-rust-600'}`}>{capitalHealth.pct.toFixed(0)}%</span>
+        </div>
+        <div className="h-3 w-full overflow-hidden rounded-full bg-rust-100">
+          <div className="h-full rounded-full bg-moss-600 transition-all" style={{ width: `${capitalHealth.pct}%` }} />
+        </div>
+        <div className="mt-2 flex justify-between text-[11px] text-ink-400">
+          <span>Healthy: {formatKES(capitalHealth.healthyValue)}</span>
+          <span>At risk: {formatKES(capitalHealth.atRiskValue)}</span>
+        </div>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Section title="Global Supply Distribution" subtitle="System-wide inventory health check" icon={Package}>
+          {activeProductsCount > 0 ? (
+            <div className="pt-2">
+              <DonutChart
+                size={180}
+                formatValue={(v) => `${v} SKU${v === 1 ? '' : 's'}`}
+                segments={[
+                  { label: 'Optimal Inventory', value: metrics.healthyCount, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
+                  { label: 'Low Stock Risk', value: metrics.lowStock.length, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
+                  { label: 'Critical Stockout', value: metrics.outOfStock.length, colorClassName: 'text-rust-600', dotClassName: 'bg-rust-600' },
+                  { label: 'Capital Surplus (Overstock)', value: metrics.overstocked.length, colorClassName: 'text-ink-800', dotClassName: 'bg-ink-800' },
+                ]}
+              />
+            </div>
+          ) : (
+            <NoData>System requires active inventory definitions.</NoData>
+          )}
+        </Section>
+
+        <Section title="Overstock Concentration" subtitle="Items holding maximum illiquid capital" icon={AlertTriangle}>
+          {metrics.overstocked.length > 0 ? (
+            <div className="pt-2">
+              <MiniBarChart
+                orientation="horizontal"
+                formatValue={formatKES}
+                data={metrics.overstocked.slice(0, 6).map((p) => ({ label: p.name, value: p.value, colorClassName: 'bg-ink-800' }))}
+              />
+            </div>
+          ) : (
+            <NoData>No significant capital concentration found.</NoData>
+          )}
+        </Section>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Section title="Value Analysis (ABC)" subtitle="Which products drive most of your sales value" icon={Tag}>
+          {abcClassification.tiered.length > 0 ? (
+            <>
+              <div className="mb-4 grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-lg bg-moss-50 p-3">
+                  <p className="font-display text-lg font-bold text-moss-700">{abcClassification.counts.A}</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-moss-600">A — Top value</p>
+                </div>
+                <div className="rounded-lg bg-amber-50 p-3">
+                  <p className="font-display text-lg font-bold text-amber-700">{abcClassification.counts.B}</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600">B — Moderate</p>
+                </div>
+                <div className="rounded-lg bg-ink-50 p-3">
+                  <p className="font-display text-lg font-bold text-ink-700">{abcClassification.counts.C}</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">C — Long tail</p>
+                </div>
+              </div>
+              <div className="divide-y divide-ink-100">
+                {abcClassification.tiered.slice(0, 8).map((p) => (
+                  <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className={`badge shrink-0 ${p.tier === 'A' ? 'bg-moss-100 text-moss-700' : p.tier === 'B' ? 'bg-amber-100 text-amber-700' : 'bg-ink-100 text-ink-500'}`}>{p.tier}</span>
+                      <span className="truncate font-medium text-ink-800">{p.name}</span>
+                    </div>
+                    <span className="shrink-0 font-semibold text-ink-700">{formatKES(p.valueMoved)}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 text-[11px] leading-relaxed text-ink-400">Based on sales value over the last {LOOKBACK_DAYS} days. "A" products drive roughly 80% of your sales value — protect their stock levels first.</p>
+            </>
+          ) : (
+            <NoData>Not enough recent sales to classify products yet.</NoData>
+          )}
+        </Section>
+
+        <Section title="Capital by Supplier" subtitle="Current inventory value tied to each supplier" icon={Truck}>
+          {capitalBySupplier.length > 0 ? (
+            <MiniBarChart orientation="horizontal" formatValue={formatKES} data={capitalBySupplier.map((s) => ({ label: s.name, value: s.value, colorClassName: 'bg-blue-600' }))} />
+          ) : (
+            <NoData>No supplier-linked stock found.</NoData>
+          )}
+        </Section>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Section title="Reorder Priority" subtitle="Fast-moving items running low — suggested 2-week restock quantity" icon={ClipboardCheck}>
+          {reorderPriority.length > 0 ? (
+            <div className="divide-y divide-ink-100">
+              {reorderPriority.map((p) => (
+                <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-ink-800">{p.name}</p>
+                    <p className="text-[11px] text-ink-400">{p.supplierName || 'No supplier assigned'} &middot; {p.daysOfStock != null ? `${p.daysOfStock.toFixed(0)} days of stock left` : 'Stock estimate unavailable'}</p>
+                  </div>
+                  <span className="shrink-0 rounded-lg bg-rust-50 px-2.5 py-1 text-xs font-bold text-rust-700">+{p.suggestedQty} units</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <NoData>Nothing urgently needs restocking right now.</NoData>
+          )}
+        </Section>
+
+        <Section title="Slow-Moving Stock" subtitle={`In stock, but no sales in the last ${LOOKBACK_DAYS} days`} icon={PackageOpen}>
+          {slowMoving.length > 0 ? (
+            <div className="divide-y divide-ink-100">
+              {slowMoving.map((p) => (
+                <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-ink-800">{p.name}</p>
+                    <p className="text-[11px] text-ink-400">{p.stock} units on the shelf</p>
+                  </div>
+                  <span className="shrink-0 font-semibold text-amber-700">{formatKES(p.stock * p.costPrice)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <NoData>Everything in stock has moved in the last {LOOKBACK_DAYS} days.</NoData>
+          )}
+        </Section>
+      </div>
+
+      <Section title="Automated Intelligence Briefing" subtitle="System-generated supply chain alerts" icon={Info}>
+        <div className="space-y-4 pt-1">
+          {insights.map((insight, i) => (
+            <div key={i} className={`flex items-start gap-3 text-sm p-4 rounded-lg border ${insight.tone === 'positive' ? 'bg-moss-50 border-moss-200' : insight.tone === 'negative' ? 'bg-rust-50 border-rust-200' : 'bg-ink-50 border-ink-200'}`}>
+              <div className="shrink-0 mt-0.5">
+                {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
+                 insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
+                 <Info className="h-5 w-5 text-ink-600" strokeWidth={2} />}
+              </div>
+              <span className={`font-medium leading-relaxed ${insight.tone === 'positive' ? 'text-moss-800' : insight.tone === 'negative' ? 'text-rust-800' : 'text-ink-800'}`}>{insight.text}</span>
+            </div>
+          ))}
+        </div>
+      </Section>
     </div>
   );
 }
@@ -8640,133 +8975,140 @@ export default function Users() {
 }
 ````
 
-## File: src/router/AppRouter.jsx
+## File: src/utils/whatsapp.js
 ````javascript
-import { lazy, Suspense, useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
-import ProtectedRoute from '../components/common/ProtectedRoute';
-import AppShell from '../components/layout/AppShell';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import { useAuth } from '../contexts/AuthContext';
-import { prefetchRoutes } from './routePrefetch';
+// src/utils/whatsapp.js
+//
+// Centralized WhatsApp deep-link utilities — the ONLY place in FlowBiz that
+// builds a wa.me URL or normalizes a phone number for WhatsApp purposes.
+// Every component that needs to "send via WhatsApp" imports from here
+// instead of re-implementing phone normalization / URL construction
+// (previously duplicated between documentService.js and nowhere else —
+// this file is now the single source so future WhatsApp features don't
+// grow a third copy).
+//
+// STRICTLY a wa.me deep link mechanism: FlowBiz opens WhatsApp with a
+// pre-filled message and the person using FlowBiz presses Send themselves.
+// There is no WhatsApp Business API call, no webhook, no automated
+// sending anywhere in this file.
 
-const routeLoaders = {
-  setup: () => import('../pages/Setup'),
-  login: () => import('../pages/Login'),
-  forgotPassword: () => import('../pages/ForgotPassword'),
-  joinStaff: () => import('../pages/JoinStaff'),
-  authAction: () => import('../pages/AuthAction'),
-  dashboard: () => import('../pages/Dashboard'),
-  counter: () => import('../pages/Counter'),
-  customers: () => import('../pages/Customers'),
-  customerDetail: () => import('../pages/CustomerDetail'),
-  expenses: () => import('../pages/Expenses'),
-  purchases: () => import('../pages/Purchases'),
-  products: () => import('../pages/Products'),
-  suppliers: () => import('../pages/Suppliers'),
-  stockTake: () => import('../pages/StockTake'),
-  reports: () => import('../pages/Reports'),
-  closeDay: () => import('../pages/CloseDay'),
-  users: () => import('../pages/Users'),
-  settings: () => import('../pages/Settings'),
-  helpGuide: () => import('../pages/HelpGuide'),
-  pro: () => import('../pages/Pro'),
-  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
-  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
-  privacy: () => import('../pages/Privacy'),
-  terms: () => import('../pages/Terms'),
-};
+// Turns a locally-typed Kenyan number (07xx…, 01xx…, or a bare 7xx…/1xx…)
+// into the international-format digits WhatsApp's wa.me links expect.
+// Numbers that already look international (start with a country code) are
+// left alone — FlowBiz doesn't assume every customer is Kenyan.
+export function normalizePhone(rawPhone) {
+  const digits = String(rawPhone || '').replace(/[^\d]/g, '');
+  if (!digits) return '';
 
-const Setup      = lazy(routeLoaders.setup);
-const Login      = lazy(routeLoaders.login);
-const ForgotPassword = lazy(routeLoaders.forgotPassword);
-const JoinStaff  = lazy(routeLoaders.joinStaff);
-const AuthAction = lazy(routeLoaders.authAction);
-const Dashboard  = lazy(routeLoaders.dashboard);
-const Counter    = lazy(routeLoaders.counter);
-const Customers  = lazy(routeLoaders.customers);
-const CustomerDetail = lazy(routeLoaders.customerDetail);
-const Expenses   = lazy(routeLoaders.expenses);
-const Purchases  = lazy(routeLoaders.purchases);
-const Products   = lazy(routeLoaders.products);
-const Suppliers  = lazy(routeLoaders.suppliers);
-const StockTake  = lazy(routeLoaders.stockTake);
-const Reports    = lazy(routeLoaders.reports);
-const CloseDay   = lazy(routeLoaders.closeDay);
-const Users      = lazy(routeLoaders.users);
-const Settings   = lazy(routeLoaders.settings);
-const HelpGuide  = lazy(routeLoaders.helpGuide);
-const Pro        = lazy(routeLoaders.pro);
-const AdvancedAnalytics = lazy(routeLoaders.advancedAnalytics);
-const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
-const Privacy    = lazy(routeLoaders.privacy);
-const Terms      = lazy(routeLoaders.terms);
-
-function Page({ children, adminOnly = false }) {
-  return (
-    <ProtectedRoute adminOnly={adminOnly}>
-      <AppShell>
-        <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>
-      </AppShell>
-    </ProtectedRoute>
-  );
+  if (digits.startsWith('0') && digits.length === 10) {
+    return '254' + digits.slice(1);
+  }
+  if (digits.length === 9 && (digits.startsWith('7') || digits.startsWith('1'))) {
+    return '254' + digits;
+  }
+  return digits;
 }
 
-function PublicOnly({ children }) {
-  const { firebaseUser, loading } = useAuth();
-  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
-  if (firebaseUser) return <Navigate to="/" replace />;
-  return children;
+// A WhatsApp/E.164-style number is roughly 8–15 digits once normalized.
+// This is a sanity check, not full validation — it's what stands between
+// a typo and a broken WhatsApp link.
+export function isValidWhatsAppPhone(rawPhone) {
+  const digits = normalizePhone(rawPhone);
+  return digits.length >= 8 && digits.length <= 15;
 }
 
-function RoutePrefetcher() {
-  const { firebaseUser, isAdmin } = useAuth();
-  useEffect(() => {
-    if (!firebaseUser) return;
-    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
-    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
-    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
-  }, [firebaseUser, isAdmin]);
-  return null;
+// Returns null (never a broken URL) if the phone number doesn't pass
+// isValidWhatsAppPhone.
+export function createWhatsAppLink(rawPhone, message) {
+  if (!isValidWhatsAppPhone(rawPhone)) return null;
+  const digits = normalizePhone(rawPhone);
+  return `https://wa.me/${digits}?text=${encodeURIComponent(message || '')}`;
 }
 
-export default function AppRouter() {
-  return (
-    <Suspense fallback={<LoadingSpinner label="Loading..." />}>
-      <RoutePrefetcher />
-      <Routes>
-        <Route path="/setup" element={<PublicOnly><Setup /></PublicOnly>} />
-        <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
-        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
-        <Route path="/join/:inviteId" element={<JoinStaff />} />
-        <Route path="/auth/action" element={<AuthAction />} />
-        
-        {/* Public Legal Pages */}
-        <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
-        <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
+// Opens the link in a new tab/window and returns whether it actually did.
+// Callers use the return value to show the correct toast — FlowBiz never
+// claims a message was "sent"; only that WhatsApp was opened.
+export function openWhatsApp(rawPhone, message) {
+  const url = createWhatsAppLink(rawPhone, message);
+  if (!url) return false;
+  window.open(url, '_blank', 'noopener,noreferrer');
+  return true;
+}
 
-        <Route path="/"             element={<Page adminOnly><Dashboard /></Page>} />
-        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
-        <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
-        <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
+// ── Message templates ──────────────────────────────────────────────────
+// Kept here rather than in documentService.js so every message FlowBiz
+// ever pre-fills into WhatsApp is defined in exactly one place. All of
+// these are generated dynamically from real FlowBiz data — nothing here
+// is a hardcoded business name, amount, or date.
 
-        <Route path="/counter"      element={<Page><Counter /></Page>} />
-        <Route path="/customers"    element={<Page><Customers /></Page>} />
-        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
-        <Route path="/expenses"     element={<Page><Expenses /></Page>} />
-        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
-        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
-        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
-        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
-        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
-        <Route path="/close-day"    element={<Page adminOnly><CloseDay /></Page>} />
-        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
-        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
-        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
-        <Route path="*"             element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
-  );
+// documentUrl is optional so this still works before a share link exists
+// (e.g. a caller that hasn't been updated) — but every real call site now
+// passes one, per the "message must contain a real FlowBiz document URL"
+// requirement.
+//
+// FIX (multi-product cart): `items` is optional — when a sale/invoice was
+// built from the Counter cart with more than one product, pass its
+// `items` array (see Counter.jsx's buildLineItems) and every line is
+// listed individually instead of collapsing to a single product/quantity
+// line. Single-product sales (Dashboard's own quick-scan sale flow, or a
+// one-item cart checkout) keep working exactly as before by omitting
+// `items` or passing an array with a single entry.
+export function buildReceiptMessage({
+  shopName, customerName, productName, quantity, totalAmount,
+  isCredit, remainingBalance, businessPhone, documentUrl, formatKES, items,
+}) {
+  const label = isCredit ? 'Invoice' : 'Receipt';
+  const lines = [`*${shopName}*`];
+  if (customerName) lines.push(`Hello ${customerName},`);
+
+  if (Array.isArray(items) && items.length > 1) {
+    lines.push(`${label}:`);
+    items.forEach((it) => {
+      const lineTotal = it.lineTotal ?? (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0);
+      lines.push(`• ${it.quantity} × ${it.productName} — ${formatKES(lineTotal)}`);
+    });
+  } else {
+    const singleName = (Array.isArray(items) && items[0]?.productName) || productName;
+    const singleQty = (Array.isArray(items) && items[0]?.quantity) || quantity;
+    lines.push(`${label} — ${singleQty} × ${singleName}`);
+  }
+
+  lines.push(`Total: ${formatKES(totalAmount)}`);
+  if (isCredit) lines.push(`Amount due: ${formatKES(remainingBalance)}`);
+  if (documentUrl) lines.push('', `Download ${label}:`, documentUrl);
+  const contactDigits = businessPhone ? normalizePhone(businessPhone) : '';
+  if (contactDigits) lines.push('', `Contact ${shopName}: +${contactDigits}`);
+  lines.push('', isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!');
+  return lines.join('\n');
+}
+
+export function buildDebtReminderMessage({ shopName, customerName, outstandingAmount, businessPhone, formatKES }) {
+  const lines = [
+    `Hello ${customerName || 'there'},`,
+    '',
+    `This is a friendly reminder from ${shopName} regarding your outstanding balance of ${formatKES(outstandingAmount)}.`,
+    '',
+    'Please arrange payment at your earliest convenience.',
+  ];
+const contactDigits = businessPhone ? normalizePhone(businessPhone) : '';
+  if (contactDigits) lines.push('', `Contact: +${contactDigits}`);  lines.push('', 'Thank you.');
+  return lines.join('\n');
+}
+
+export function buildDebtPaymentReceiptMessage({
+  shopName, customerName, amountPaid, previousBalance, remainingBalance, isCleared, documentUrl, formatKES,
+}) {
+  const lines = [`Hello ${customerName || 'there'},`, '', `We have received your payment of ${formatKES(amountPaid)}.`, ''];
+  if (isCleared) {
+    lines.push('This payment clears your outstanding balance with us.');
+    lines.push('', `Remaining balance: ${formatKES(0)}`);
+  } else {
+    lines.push(`Previous balance: ${formatKES(previousBalance)}`);
+    lines.push(`Payment received: ${formatKES(amountPaid)}`);
+    lines.push(`Remaining balance: ${formatKES(remainingBalance)}`);
+  }
+if (documentUrl) lines.push('', 'Download your payment receipt:', documentUrl);  lines.push('', `— ${shopName}`, '', 'Thank you.');
+  return lines.join('\n');
 }
 ````
 
@@ -9115,710 +9457,6 @@ ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://flowbiz.p
 PAYSTACK_CALLBACK_URL = "https://flowbiz.pages.dev/pro"
 ````
 
-## File: src/components/pos/SaleCompleteModal.jsx
-````javascript
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import Modal from '../common/Modal';
-import { generateReceiptPDF, printReceipt, generateInvoicePDF, printInvoice, sendWhatsAppDocument } from '../../utils/documentService';
-import { getOrCreateShareLink } from '../../utils/documentSharing';
-import { useSettings } from '../../hooks/useSettings';
-import { useAuth } from '../../contexts/AuthContext';
-import { formatKES } from '../../utils/currency';
-import { Printer, Download, MessageCircle } from 'lucide-react';
-import toast from 'react-hot-toast';
-import { CheckCircle2, Clock } from 'lucide-react';
-
-export default function SaleCompleteModal({ open, sale, onClose }) {
-  const { settings } = useSettings();
-  const { isPro, businessId, profile } = useAuth();
-  const [phone, setPhone] = useState(sale?.customerPhone || '');
-  const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
-
-  // Keep phone input synced when a new sale is opened
-  useEffect(() => {
-    if (sale?.customerPhone) {
-      setPhone(sale.customerPhone);
-    } else {
-      setPhone('');
-    }
-  }, [sale]);
-
-  if (!sale) return null;
-
-  const docLabel = sale.isCredit ? 'Invoice' : 'Receipt';
-
-  // FIX (Pro-gating correction): View, Download, and Print are FlowBiz's
-  // basic document access and stay free on every plan. Only WhatsApp
-  // sharing — the convenience of pushing the document straight to the
-  // customer's phone — is the Pro feature. Print/Download used to be
-  // gated behind isPro here; that was a bug, not an intentional product
-  // rule (nothing else in the app treats PDF access as paid), so it's
-  // removed rather than preserved.
-  const handlePrint = () => {
-    if (sale.isCredit) printInvoice(sale, settings);
-    else printReceipt(sale, settings);
-  };
-
-  const handleDownload = () => {
-    if (sale.isCredit) generateInvoicePDF(sale, settings);
-    else generateReceiptPDF(sale, settings);
-  };
-
-  const handleWhatsApp = async () => {
-    if (!phone.trim()) {
-      toast.error('Please enter a valid customer phone number.');
-      return;
-    }
-    setSendingWhatsApp(true);
-    try {
-      const documentUrl = await getOrCreateShareLink({
-        businessId,
-        documentType: sale.isCredit ? 'invoice' : 'receipt',
-        documentId: sale.id,
-        createdBy: profile?.uid,
-      });
-      sendWhatsAppDocument(sale, settings, phone.trim(), documentUrl);
-    } catch (e) {
-      toast.error(e.message || 'Unable to generate the receipt link. Please try again.');
-    } finally {
-      setSendingWhatsApp(false);
-    }
-  };
-
-  return (
-    <Modal open={open} onClose={onClose} title={sale.isCredit ? 'Credit Sale Recorded' : 'Sale Complete'}>
-      <div className="space-y-4">
-        {/* Fixed rounded-xl2 to rounded-2xl */}
-        <div className={`flex flex-col items-center justify-center py-4 rounded-2xl border ${sale.isCredit ? 'bg-rust-50 border-rust-200' : 'bg-moss-50 border-moss-200'}`}>
-          <div className={`h-10 w-10 rounded-full flex items-center justify-center mb-2 ${sale.isCredit ? 'bg-rust-100 text-rust-700' : 'bg-moss-100 text-moss-700'}`}>
-            {sale.isCredit ? <Clock className="h-5 w-5 text-rust-600" strokeWidth={2} /> : <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} />}
-          </div>
-          <h2 className={`font-display font-bold ${sale.isCredit ? 'text-rust-700' : 'text-moss-800'}`}>
-            {sale.isCredit ? 'Credit sale recorded' : 'Sale recorded successfully'}
-          </h2>
-          <p className="text-sm font-semibold mt-2 text-ink-800">{sale.quantity} × {sale.productName}</p>
-          {sale.isCredit && sale.customerName && <p className="text-xs text-ink-500">{sale.customerName}</p>}
-          <p className="text-lg font-bold text-ink-900">{formatKES(sale.totalAmount)}</p>
-          <p className={`text-xs mt-1 font-semibold ${sale.isCredit ? 'text-rust-600' : 'text-ink-500'}`}>
-            {sale.isCredit ? 'Payment Status: Unpaid' : sale.paymentMethod}
-          </p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          <button className="btn-outline flex items-center justify-center gap-2" onClick={handlePrint}>
-            <Printer className="h-4 w-4" /> Print {docLabel}
-          </button>
-          <button className="btn-outline flex items-center justify-center gap-2" onClick={handleDownload}>
-            <Download className="h-4 w-4" /> Download {docLabel}
-          </button>
-        </div>
-
-        <div className="rounded-lg border border-ink-100 p-3 space-y-2">
-          <label className="label">
-            WhatsApp {docLabel} {!isPro && <span className="text-amber-600">— PRO</span>}
-          </label>
-          <div className="flex gap-2">
-            <input
-              className="input flex-1"
-              placeholder="Customer Phone"
-              value={phone}
-              onChange={e => setPhone(e.target.value)}
-              disabled={sendingWhatsApp}
-            />
-            {isPro ? (
-              <button className="btn-primary flex items-center justify-center gap-2 shrink-0" onClick={handleWhatsApp} disabled={sendingWhatsApp}>
-                <MessageCircle className="h-4 w-4" /> {sendingWhatsApp ? 'Preparing…' : 'Send'}
-              </button>
-            ) : (
-              <Link to="/pro" className="btn-primary flex items-center justify-center gap-2 shrink-0">
-                <MessageCircle className="h-4 w-4" /> Unlock
-              </Link>
-            )}
-          </div>
-        </div>
-
-        <div className="pt-2 border-t border-ink-100">
-          <button className="btn-secondary w-full" onClick={onClose}>Cancel</button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-````
-
-## File: src/pages/AuthAction.jsx
-````javascript
-import { useEffect, useState } from 'react';
-import { useSearchParams, useNavigate, Link } from 'react-router-dom';
-import { applyActionCode, verifyPasswordResetCode, confirmPasswordReset, reload, checkActionCode, sendEmailVerification } from 'firebase/auth';
-import toast from 'react-hot-toast';
-import { auth } from '../firebase';
-import { CheckCircle2, AlertCircle } from 'lucide-react';
-
-export default function AuthAction() {
-  const [searchParams] = useSearchParams();
-  const urlMode = searchParams.get('mode');
-  const oobCode = searchParams.get('oobCode');
-
-  const [resolvedMode, setResolvedMode] = useState(urlMode || null);
-  const [checkingMode, setCheckingMode] = useState(!urlMode && !!oobCode);
-
-  useEffect(() => {
-    if (urlMode || !oobCode) return;
-    let cancelled = false;
-    checkActionCode(auth, oobCode)
-      .then((info) => {
-        if (cancelled) return;
-        setResolvedMode(info.operation === 'PASSWORD_RESET' ? 'resetPassword' : 'verifyEmail');
-      })
-      .catch(() => { if (!cancelled) setResolvedMode('verifyEmail'); })
-      .finally(() => { if (!cancelled) setCheckingMode(false); });
-    return () => { cancelled = true; };
-  }, [urlMode, oobCode]);
-
-  if (checkingMode) {
-    return (
-      <Shell>
-        <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
-        <p className="text-sm text-ink-500">Checking your link…</p>
-      </Shell>
-    );
-  }
-
-  if (resolvedMode === 'resetPassword') {
-    return <ResetPasswordPanel oobCode={oobCode} />;
-  }
-  return <VerifyEmailPanel mode={resolvedMode} oobCode={oobCode} />;
-}
-
-function Shell({ children }) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <div className="w-full max-w-sm card p-6 text-center space-y-4">
-        <img src="/icons/icon-192.png" alt="FlowBiz" className="mx-auto h-14 w-14 rounded-2xl shadow-lg" />
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function VerifyEmailPanel({ mode, oobCode }) {
-  const [status, setStatus] = useState('working');
-  const [message, setMessage] = useState('');
-  const [resending, setResending] = useState(false);
-  const navigate = useNavigate();
-
-  const handleRequestNewEmail = async () => {
-    if (!auth.currentUser) {
-      navigate('/login', { replace: true });
-      return;
-    }
-    setResending(true);
-    try {
-      await sendEmailVerification(auth.currentUser, {
-        url: `${window.location.origin}/auth/action`,
-        handleCodeInApp: true,
-      });
-      toast.success('A new verification email has been sent — check your inbox and spam/junk folder.');
-    } catch (err) {
-      console.error('[FlowBiz] AuthAction resend failed:', err.code || err.name, err.message);
-      toast.error("Couldn't send a new verification email right now. Please try again shortly.");
-    } finally {
-      setResending(false);
-    }
-  };
-
-  useEffect(() => {
-
-    let cancelled = false;
-
-    async function run() {
-      if (oobCode && mode === 'verifyEmail') {
-        try {
-          await applyActionCode(auth, oobCode);
-          if (auth.currentUser) {
-            try { await reload(auth.currentUser); } catch { /* non-fatal */ }
-          }
-          if (!cancelled) { setStatus('success'); setMessage('Your email has been verified.'); }
-        } catch (err) {
-          if (cancelled) return;
-          const code = err.code || '';
-          if (code === 'auth/invalid-action-code' && auth.currentUser) {
-            try {
-              await reload(auth.currentUser);
-              if (auth.currentUser.emailVerified) {
-                setStatus('success');
-                setMessage('Your email has been verified.');
-                return;
-              }
-            } catch { /* fall through to error below */ }
-          }
-          setStatus('error');
-          setMessage(
-            code === 'auth/expired-action-code' ? 'This verification link has expired. Please request a new one from the app.' :
-            code === 'auth/invalid-action-code'  ? "This verification link has already been used or has expired. If you're already verified, just sign in." :
-            "We couldn't verify your email. Please request a new verification link."
-          );
-        }
-        return;
-      }
-
-      if (auth.currentUser) {
-        try {
-          await reload(auth.currentUser);
-          if (!cancelled && auth.currentUser.emailVerified) {
-            setStatus('success');
-            setMessage('Your email has been verified.');
-            return;
-          }
-        } catch { /* fall through to error below */ }
-      }
-
-if (!cancelled) {
-        setStatus('error');
-        setMessage("This verification link isn't complete or may have been altered. Please request a new one below.");
-      }
-    }
-
-    run();
-    return () => { cancelled = true; };
-  }, [mode, oobCode]);
-
-  return (
-    <Shell>
-      {status === 'working' && (
-        <>
-          <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
-          <p className="text-sm text-ink-500">Confirming…</p>
-        </>
-      )}
-      {status === 'success' && (
-        <>
-          <CheckCircle2 className="h-12 w-12 text-moss-600" strokeWidth={1.5} />
-          <h1 className="font-display text-lg font-bold text-ink-900">Email verified</h1>
-          <p className="text-sm text-ink-500">{message} You can continue to FlowBiz now.</p>
-          <Link to="/" className="btn-primary w-full">Continue to FlowBiz</Link>
-        </>
-      )}
-{status === 'error' && (
-        <>
-          
-          <h1 className="font-display text-lg font-bold text-ink-900">This verification link isn't valid</h1>
-          <p className="text-sm text-ink-500">{message}</p>
-          <div className="flex flex-col gap-2">
-            <button className="btn-primary w-full" onClick={handleRequestNewEmail} disabled={resending}>
-              {resending ? 'Sending…' : 'Request a new verification email'}
-            </button>
-            <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
-          </div>
-        </>
-      )}
-    </Shell>
-  );
-}
-
-function ResetPasswordPanel({ oobCode }) {
-  const [status, setStatus] = useState('checking');
-  const [message, setMessage] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!oobCode) {
-      setStatus('error');
-      setMessage('This link is missing required information. Please request a new password reset email.');
-      return;
-    }
-    verifyPasswordResetCode(auth, oobCode)
-      .then((verifiedEmail) => {
-        if (cancelled) return;
-        setEmail(verifiedEmail);
-        setStatus('ready');
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        const code = err.code || '';
-        setStatus('error');
-        setMessage(
-          code === 'auth/expired-action-code' ? 'This reset link has expired. Please request a new one.' :
-          code === 'auth/invalid-action-code'  ? 'This reset link has already been used or is invalid. Please request a new one.' :
-          'This reset link is invalid. Please request a new one.'
-        );
-      });
-    return () => { cancelled = true; };
-  }, [oobCode]);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (password.length < 6) { setMessage('Password must be at least 6 characters.'); return; }
-    if (password !== confirmPassword) { setMessage('Passwords do not match.'); return; }
-    setMessage('');
-    setSubmitting(true);
-    try {
-      await confirmPasswordReset(auth, oobCode, password);
-      setStatus('success');
-    } catch (err) {
-      const code = err.code || '';
-      setMessage(
-        code === 'auth/expired-action-code' ? 'This reset link has expired. Please request a new one.' :
-        code === 'auth/weak-password'        ? 'Please choose a stronger password.' :
-        "Couldn't reset your password. Please request a new link and try again."
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <Shell>
-      {status === 'checking' && (
-        <>
-          <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
-          <p className="text-sm text-ink-500">Checking your link…</p>
-        </>
-      )}
-      {status === 'ready' && (
-        <form onSubmit={handleSubmit} className="space-y-4 text-left">
-          <div className="text-center">
-            <h1 className="font-display text-lg font-bold text-ink-900">Choose a new password</h1>
-            <p className="mt-1 text-sm text-ink-500">for <span className="font-semibold">{email}</span></p>
-          </div>
-          {message && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{message}</div>}
-          <div>
-            <label className="label">New password</label>
-            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters" autoComplete="new-password" autoFocus />
-          </div>
-          <div>
-            <label className="label">Confirm new password</label>
-            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" />
-          </div>
-          <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Saving…' : 'Save new password'}</button>
-        </form>
-      )}
-      {status === 'success' && (
-        <>
-          <CheckCircle2 className="h-12 w-12 text-moss-600" strokeWidth={1.5} />
-          <h1 className="font-display text-lg font-bold text-ink-900">Password updated</h1>
-          <p className="text-sm text-ink-500">You can now sign in with your new password.</p>
-          <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
-        </>
-      )}
-      {status === 'error' && (
-        <>
-          <AlertCircle className="h-12 w-12 text-rust-500" strokeWidth={1.5} />
-          <h1 className="font-display text-lg font-bold text-ink-900">Something went wrong</h1>
-          <p className="text-sm text-ink-500">{message}</p>
-          <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
-        </>
-      )}
-    </Shell>
-  );
-}
-````
-
-## File: src/pages/Counter.jsx
-````javascript
-import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Trash2 } from 'lucide-react';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useDailySession } from '../hooks/useDailySession';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import ProductGrid from '../components/pos/ProductGrid';
-import SaleModal from '../components/pos/SaleModal';
-import SaleCompleteModal from '../components/pos/SaleCompleteModal';
-import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function Counter() {
-  const { profile, isAdmin, businessId } = useAuth();
-  const location = useLocation();
-  const navigate = useNavigate();
-  
-  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const salesQ     = useMemo(() => businessId ? tenantQuery('sales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
-  const creditSalesQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-
-  const { data: products,  loading: prodLoading }  = useFirestoreCollection(productsQ);
-  const { data: customers }                         = useFirestoreCollection(customersQ);
-  const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
-  const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
-  const { data: suppliers }                         = useFirestoreCollection(suppliersQ);
-  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
-
-  const [search, setSearch]           = useState('');
-  const [activeProduct, setActive]    = useState(null);
-  const [completedSale, setCompletedSale] = useState(null);
-  const [pendingVoid, setPendingVoid] = useState(null);
-  const [editProduct, setEditProd]    = useState(null);
-  const [prodModal, setProdModal]     = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [notFoundCode, setNotFoundCode] = useState(null);
-  const [voiding, setVoiding] = useState(false);
-
-  useEffect(() => {
-    if (location.state?.autoScan && session && !isClosed) {
-      setScannerOpen(true);
-      navigate(location.pathname, { replace: true, state: {} });
-    }
-  }, [location, navigate, session, isClosed]);
-
-  const filtered = products.filter(p =>
-    p.name.toLowerCase().includes(search.toLowerCase()) ||
-    (p.barcode && p.barcode.includes(search.trim())) ||
-    (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
-  );
-
-  const mergedSales = useMemo(() => {
-    const list = [];
-    sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
-    creditSales.forEach(cs => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
-    return list.sort((a, b) => {
-      const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
-      const bTime = b.soldAt?.toMillis?.() ?? b.soldAt?.toDate?.()?.getTime?.() ?? new Date(b.soldAt || 0).getTime();
-      return bTime - aTime;
-    }).slice(0, 100);
-  }, [sales, creditSales]);
-
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
-    return { id:ref.id, name, phone };
-  };
-
-  // FIX: Replaced runTransaction with writeBatch(db) and increment() for perfect offline capability.
-const handleSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
-    const productRef = doc(db, 'products', product.id);
-    const saleRef = doc(collection(db, 'sales'));
-    const saleData = withBusiness({
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit,
-      totalAmount: soldPricePerUnit * quantity,
-      profit: (soldPricePerUnit - product.costPrice) * quantity,
-      paymentMethod, mpesaCode: mpesaCode || null,
-      soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: new Date(), isCredit: false, isVoided: false,    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(saleRef, saleData);
-
-    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
-  };
-
-  const handleCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
-    const productRef = doc(db, 'products', product.id);
-    const totalAmount = soldPricePerUnit * quantity;
-    const creditRef = doc(collection(db, 'creditSales'));
-    const creditData = withBusiness({
-      customerId, customerName, customerPhone: customerPhone || '',
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
-      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
-      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(creditRef, creditData);
-
-    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
-  };
-
-  // FIX: Voiding a Cash Sale now creates a 'refunds' document to correct CloseDay till shortages.
-const handleVoid = async () => {
-    const sale = pendingVoid;
-    setVoiding(true);
-    try {
-      const batch = writeBatch(db);
-      const prodRef = doc(db, 'products', sale.productId);
-      const prodSnap = await getDoc(prodRef);
-
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(sale.quantity), updatedAt: serverTimestamp() });
-      }
-
-      batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
-
-      if (!sale.isCredit) {
-        const refundRef = doc(collection(db, 'refunds'));
-        batch.set(refundRef, withBusiness({
-          saleId: sale.id, amount: sale.totalAmount, method: sale.paymentMethod,
-          refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName
-        }, businessId));
-      }
-
-      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
-      if (error) throw error;
-      
-      toast.success(queuedOffline ? 'Sale voided offline.' : (prodSnap.exists() ? 'Sale voided and stock restored.' : 'Sale voided (product was deleted, no stock restored).'));
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setVoiding(false); setPendingVoid(null); }
-  };
-
-const handleProductSave = async (data) => {
-    try {
-      if (editProduct) {
-        const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
-      } else {
-        const { queuedOffline } = await createProduct(data, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
-      }
-      setEditProd(null);
-      setProdModal(false);
-      setPrefillBarcode(null);
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err));
-      throw err;
-    }
-  };
-
-const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setActive(found);
-    else setNotFoundCode(code);
-  };
-
-  useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
-  });
-
-  if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
-  if (isClosed) return (
-    <div className="mx-auto max-w-sm pt-8 space-y-4 text-center">
-      <EmptyState title="Today's session is closed" description="Sales are locked. An owner can reopen to continue trading." />
-      {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>}
-    </div>
-  );
-  if (!session) return <OpenSessionPrompt onOpen={floats => openSession({ ...floats, openedBy:profile.uid })} />;
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Tap a product, or scan a barcode, to record a sale.</p></div>
-        {isAdmin && <button className="btn-outline text-xs" onClick={()=>{setEditProd(null);setPrefillBarcode(null);setProdModal(true);}}>+ Quick add product</button>}
-      </div>
-      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
-      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
-        <ProductGrid products={filtered} onSelect={setActive} isAdmin={isAdmin} />}
-
-      {isAdmin && (
-        <div className="mt-4">
-          <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Sales log (last 100)</h2>
-          {salesLoading || creditLoading ? <LoadingSpinner /> : mergedSales.length === 0 ? <EmptyState title="No sales recorded" /> : (
-            <div className="card divide-y divide-ink-100">
-              {mergedSales.map(s=>(
-                <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided?'opacity-40 line-through':''}`}>
-                  <div>
-                    <p className="font-medium text-ink-700">{s.quantity} × {s.productName} — {formatKES(s.totalAmount)}</p>
-                    <p className="text-xs text-ink-400">
-                      {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
-                      {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
-                    </p>
-                  </div>
-                  {!s.isVoided && !s.isCredit && isAdmin && (
-                    <button onClick={()=>setPendingVoid(s)} className="p-1 text-rust-400 hover:text-rust-600 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Void sale"><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
-                  )}
-                  {s.isCredit && isAdmin && (
-                    <Link to={`/customers/${s.customerId}`} className="btn-outline !py-1 !px-2.5 !min-h-0 text-xs text-ink-500 hover:text-ink-700">View Customer</Link>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!notFoundCode} onClose={()=>setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={()=>setNotFoundCode(null)}>Cancel</button>
-          {isAdmin ? (
-            <button className="btn-primary" onClick={()=>{ setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
-          ) : (
-            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
-          )}
-        </div>
-      </Modal>
-
-      <SaleModal 
-        open={!!activeProduct} 
-        product={activeProduct} 
-        customers={customers} 
-        onClose={(record) => {
-          setActive(null);
-          if (record && record.id) {
-            setCompletedSale(record);
-          }
-        }} 
-        onConfirmSale={handleSale} 
-        onConfirmCredit={handleCredit} 
-        onCreateCustomer={handleCreateCustomer} 
-      />
-      <SaleCompleteModal
-        open={!!completedSale}
-        sale={completedSale}
-        onClose={() => setCompletedSale(null)}
-      />
-
-<ProductFormModal
-        open={prodModal}
-        onClose={()=>{setProdModal(false);setEditProd(null);setPrefillBarcode(null);}}
-        onSave={handleProductSave}
-        suppliers={suppliers}
-        initialProduct={editProduct}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-      />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-<ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" (×${pendingVoid?.quantity}) will be restored.`} confirmLabel={voiding ? "Voiding..." : "Void sale"} confirmDisabled={voiding} danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />    </div>
-  );
-}
-````
-
 ## File: src/pages/Products.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -10004,6 +9642,171 @@ const handleDel = async () => {
 }
 ````
 
+## File: src/pages/Setup.jsx
+````javascript
+// src/pages/Setup.jsx — replace the entire file
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { createUserWithEmailAndPassword, sendEmailVerification, deleteUser } from 'firebase/auth';
+import { doc, collection, writeBatch, setDoc, serverTimestamp } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { auth, db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+
+const DEFAULT_CATEGORIES = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
+
+export default function Setup() {
+  const { firebaseUser, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
+  // Firestore rules can only see a doc created earlier IN THE SAME batch
+  // via getAfter() — a plain get()/exists() check (which is what
+  // businessSettings' write rule uses via isOwner()) only sees the
+  // pre-batch state. So the user profile must be written and committed
+  // FIRST, as its own step, before businessSettings is written.
+  const creatingRef = useRef(false);
+
+  useEffect(() => {
+    if (authLoading) return;
+    // Bounce an already-signed-in visitor away — but never while THIS
+    // component's own signup flow is what just signed them in, or this
+    // fires the instant the Auth account is created and cuts the flow
+    // short before Firestore writes / the verification email are sent.
+    if (firebaseUser && !creatingRef.current) {
+      navigate('/', { replace: true });
+    }
+  }, [firebaseUser, authLoading, navigate]);
+
+  const [businessName, setBusinessName] = useState('');
+  const [displayName, setDisplayName]   = useState('');
+  const [email, setEmail]               = useState('');
+  const [password, setPassword]         = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submitting, setSubmitting]     = useState(false);
+  const [error, setError]               = useState(null);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (!businessName.trim()) { setError('Enter your business name.'); return; }
+    if (!displayName.trim()) { setError('Enter your name.'); return; }
+    if (password.length < 6) { setError('Password must be at least 6 characters.'); return; }
+    if (password !== confirmPassword) { setError('Passwords do not match.'); return; }
+
+    setSubmitting(true);
+    creatingRef.current = true;
+
+    let cred;
+    try {
+      cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+    } catch (err) {
+      creatingRef.current = false;
+      const message =
+        err.code === 'auth/email-already-in-use' ? 'An account with this email already exists.' :
+        err.code === 'auth/invalid-email'        ? 'Please enter a valid email address.' :
+        err.code === 'auth/weak-password'         ? 'Password is too weak.' :
+        'Could not create your account. Please try again.';
+      setError(message);
+      setSubmitting(false);
+      return;
+    }
+
+    const businessId = doc(collection(db, 'businesses')).id;
+
+    try {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'businesses', businessId), {
+        name: businessName.trim(),
+        ownerIds: [cred.user.uid],
+        createdAt: serverTimestamp(),
+        createdBy: cred.user.uid,
+        subscription: { plan: 'free', status: 'active', expiresAt: null },
+      });
+      batch.set(doc(db, 'users', cred.user.uid), {
+        uid: cred.user.uid,
+        email: email.trim(),
+        displayName: displayName.trim(),
+        role: 'owner',
+        businessId,
+        active: true,
+        createdAt: serverTimestamp(),
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error('[FlowBiz] Business setup failed — rolling back Auth account:', err.code || err.name, err.message);
+      try {
+        await deleteUser(cred.user);
+      } catch (rollbackErr) {
+        console.error('[FlowBiz] Rollback failed — an orphaned Auth account may remain:', rollbackErr);
+        setError('Something went wrong finishing setup, and we could not fully undo it. Please contact support before retrying with this email.');
+        creatingRef.current = false;
+        setSubmitting(false);
+        return;
+      }
+      setError('Something went wrong setting up your business. Please try again.');
+      creatingRef.current = false;
+      setSubmitting(false);
+      return;
+    }
+
+    // Non-critical, so it doesn't roll back the whole account if it's
+    // ever slow or briefly fails — useSettings.js and ProductFormModal.jsx
+    // both already default gracefully when this doc doesn't exist yet.
+    try {
+      await setDoc(doc(db, 'businessSettings', businessId), {
+        shopName: businessName.trim(),
+        cashierCanRecordExpenses: true,
+        categories: DEFAULT_CATEGORIES,
+      });
+    } catch (err) {
+      console.error('[FlowBiz] businessSettings write failed (non-fatal):', err.code || err.name, err.message);
+    }
+
+    try {
+      await sendEmailVerification(cred.user, { url: `${window.location.origin}/auth/action`, handleCodeInApp: true });
+      toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Check your email to verify your account.`);
+    } catch (err) {
+      console.error('[FlowBiz] sendEmailVerification failed after setup:', err.code || err.name, err.message);
+      toast.success(`Welcome to FlowBiz, ${displayName.trim()}!`);
+    }
+
+    setSubmitting(false);
+    navigate('/', { replace: true });
+  };
+
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-ink-950">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="flex flex-col items-center text-center gap-3">
+          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
+          <div>
+            <h1 className="font-display text-2xl font-bold text-white">Create your business</h1>
+            <p className="text-sm text-ink-400">Set up FlowBiz in a couple of minutes.</p>
+          </div>
+        </div>
+        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
+          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
+          <div><label className="label">Business name</label><input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="" disabled={submitting} /></div>
+          <div><label className="label">Your name</label><input className="input" required value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="Full name" disabled={submitting} /></div>
+          <div><label className="label">Email</label><input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="owner@yourbusiness.co.ke" autoComplete="username" disabled={submitting} /></div>
+          <div><label className="label">Password</label><input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="" autoComplete="new-password" disabled={submitting} /></div>
+          <div><label className="label">Confirm password</label><input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" disabled={submitting} /></div>
+          <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Setting up…' : 'Create business'}</button>
+        </form>
+        <p className="text-center text-sm text-ink-400">Already have an account? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link></p>
+      </div>
+    </div>
+  );
+}
+````
+
 ## File: src/pages/Suppliers.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -10177,858 +9980,626 @@ const handleDel = async () => {
 }
 ````
 
-## File: src/utils/documentService.js
+## File: src/router/AppRouter.jsx
 ````javascript
-import { jsPDF } from 'jspdf';
-import { formatKES } from './currency';
-import { formatDateTime } from './dateRanges';
-import { openWhatsApp, buildReceiptMessage } from './whatsapp';
-
-export async function loadImageAsDataUrl(url) {
-    if (!url) return null;
-    try {
-        const response = await fetch(url);
-        const blob = await response.blob();
-        return await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-        });
-    } catch (err) {
-        console.error('Could not load business logo for PDF:', err);
-        return null;
-    }
-}
-
-// Shared header used by every thermal-receipt-style document this file
-// generates (sale receipts/invoices, and now debt payment receipts) —
-// keeps the logo/business-info block identical across document types
-// instead of re-implementing it per document.
-async function drawDocumentHeader(doc, settings, marginX, startY, paperWidthMm = 80) {
-    let y = startY;
-    const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
-    const logoSize = paperWidthMm <= 58 ? 11 : 14;
-    const textX = logoDataUrl ? marginX + logoSize + 3 : marginX;
-
-    if (logoDataUrl) {
-        try {
-            const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
-            doc.addImage(logoDataUrl, format, marginX, y, logoSize, logoSize);
-        } catch (err) {
-            console.error('Could not embed business logo in PDF:', err);
-        }
-    }
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(paperWidthMm <= 58 && logoDataUrl ? 9 : 11);
-    doc.text(settings.shopName || 'Business Receipt', textX, y + 5);
-
-    let lineY = y + 9;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    // FIX (#14): shows whichever of phone/email/address are actually
-    // configured — never a placeholder — same "only if set" rule the
-    // phone line already followed. Pulled straight from businessSettings,
-    // nothing hardcoded.
-    if (settings.phone) { doc.text(`Tel: ${settings.phone}`, textX, lineY); lineY += 4; }
-    if (settings.email) { doc.text(settings.email, textX, lineY); lineY += 4; }
-    if (settings.address && paperWidthMm > 58) { doc.text(settings.address, textX, lineY); lineY += 4; }
-
-    return Math.max(y + (logoDataUrl ? logoSize + 4 : 8), lineY + 2);
-}
-// FIX (thermal paper width): FlowBiz's receipts were always generated at
-// a fixed 80mm width. Some businesses' printers use 58mm paper — read
-// from businessSettings.receiptPaperWidth (defaults to 80, set in
-// Settings.jsx) so both PDF layouts, and the public receipt page's own
-// PDF/print output, size correctly for whichever paper the business
-// actually uses. Nothing else about the layout changes.
-function resolvePaperWidthMm(settings) {
-    return settings?.receiptPaperWidth === 58 ? 58 : 80;
-}
-
-// Replace the buildDocument function in src/utils/documentService.js
-async function buildDocument(data, settings, typeLabel) {
-    const paperWidthMm = resolvePaperWidthMm(settings);
-    const doc = new jsPDF('p', 'mm', [paperWidthMm, 200]); // Thermal receipt size
-    const marginX = 5;
-    const pageWidth = paperWidthMm - marginX;
-    let y = await drawDocumentHeader(doc, settings, marginX, 8, paperWidthMm);
-
-    // 2. DOCUMENT TYPE & META DATA
-    y += 2;
-    doc.setDrawColor(0, 0, 0);
-    doc.setLineWidth(0.4);
-    doc.line(marginX, y, pageWidth, y);
-    
-    y += 6;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text(typeLabel, marginX, y); // "INVOICE" or "RECEIPT"
-    
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text(formatDateTime(data.soldAt || data.recordedAt || new Date()), pageWidth, y, { align: 'right' });
-    
-    y += 5;
-    doc.text(`Ref: ${data.id?.substring(0, 8).toUpperCase() || 'N/A'}`, marginX, y);
-    if (data.customerName) {
-        y += 4;
-        doc.text(`To: ${data.customerName}`, marginX, y);
-    }
-
-    // 3. ITEMIZED TABLE
-    y += 4;
-    doc.setDrawColor(200, 200, 200);
-    doc.setLineWidth(0.2);
-    doc.line(marginX, y, pageWidth, y);
-    
-    y += 5;
-    doc.setFont('helvetica', 'bold');
-    doc.text('ITEM', marginX, y);
-    doc.text('TOTAL', pageWidth, y, { align: 'right' });
-    
-    y += 2;
-    doc.line(marginX, y, pageWidth, y);
-
-    // Items
-    y += 5;
-    doc.setFont('helvetica', 'normal');
-    const itemName = data.productName || data.description || 'Item';
-    // Proportional to page width so the item name doesn't crowd out the
-    // right-aligned amount on narrower 58mm paper — matches the original
-    // fixed 45mm exactly when paperWidthMm is 80.
-    const splitName = doc.splitTextToSize(itemName, Math.max(pageWidth - 30, 20));
-    doc.text(splitName, marginX, y);
-    
-    const amountStr = formatKES(data.totalAmount || data.amount || 0);
-    doc.text(amountStr, pageWidth, y, { align: 'right' });
-    
-    y += (splitName.length * 4);
-    if (data.quantity) {
-        doc.setTextColor(100, 100, 100);
-        doc.text(`${data.quantity} × @ ${formatKES(data.soldPricePerUnit || 0)}`, marginX, y);
-        doc.setTextColor(0, 0, 0);
-        y += 4;
-    }
-
-    // 4. TOTALS SECTION
-    y += 2;
-    doc.line(marginX, y, pageWidth, y);
-    y += 6;
-
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    if (data.isCredit) {
-        doc.text('TOTAL DUE:', marginX, y);
-        doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth, y, { align: 'right' });
-    } else {
-        doc.text('PAID:', marginX, y);
-        doc.text(amountStr, pageWidth, y, { align: 'right' });
-        doc.setFontSize(8);
-        doc.setFont('helvetica', 'normal');
-        y += 4;
-        doc.text(`Via: ${data.paymentMethod || data.method}`, pageWidth, y, { align: 'right' });
-    }
-
-    // 5. FOOTER
-    y += 12;
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'italic');
-    doc.setTextColor(100, 100, 100);
-    doc.text(data.isCredit ? 'Payment due — thank you!' : 'Thank you for your business!', (marginX + pageWidth) / 2, y, { align: 'center' });
-
-    return doc;
-}
-
-// A debt payment receipt is deliberately its own document shape — a
-// payment against an existing debt is not a sale, and PART 15 requires it
-// to visually read as a distinct document ("DEBT PAYMENT RECEIPT"), not a
-// sales receipt with different labels bolted on.
-async function buildDebtPaymentDocument(receipt, settings) {
-    const paperWidthMm = resolvePaperWidthMm(settings);
-    const doc = new jsPDF('p', 'mm', [paperWidthMm, 200]);
-    const marginX = 5;
-    const pageWidth = paperWidthMm - marginX;
-    let y = await drawDocumentHeader(doc, settings, marginX, 8, paperWidthMm);
-
-    y += 2;
-    doc.setDrawColor(0, 0, 0);
-    doc.setLineWidth(0.4);
-    doc.line(marginX, y, pageWidth, y);
-
-    y += 6;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text('DEBT PAYMENT RECEIPT', marginX, y);
-
-    y += 5;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text(formatDateTime(receipt.paidAt || new Date()), marginX, y);
-    y += 4;
-    doc.text(`Customer: ${receipt.customerName || '—'}`, marginX, y);
-    y += 4;
-    doc.text(`Payment method: ${receipt.method}${receipt.mpesaCode ? ` (${receipt.mpesaCode})` : ''}`, marginX, y);
-    if (receipt.paymentReferences?.length) {
-        y += 4;
-        const refText = receipt.paymentReferences.join(', ');
-        const splitRef = doc.splitTextToSize(`Ref: ${refText}`, pageWidth - marginX);
-        doc.text(splitRef, marginX, y);
-        y += (splitRef.length - 1) * 3.5;
-    }
-
-    y += 6;
-    doc.setDrawColor(200, 200, 200);
-    doc.setLineWidth(0.2);
-    doc.line(marginX, y, pageWidth, y);
-    y += 6;
-
-    const row = (label, value, boldRow = false) => {
-        doc.setFont('helvetica', boldRow ? 'bold' : 'normal');
-        doc.setFontSize(9);
-        doc.text(label, marginX, y);
-        doc.text(value, pageWidth, y, { align: 'right' });
-        y += 5.5;
-    };
-    row('Previous balance', formatKES(receipt.previousBalance));
-    row('Payment received', formatKES(receipt.amountPaid));
-    y += 1;
-    doc.line(marginX, y, pageWidth, y);
-    y += 5;
-    row('Remaining balance', formatKES(receipt.remainingBalance), true);
-
-    y += 4;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    if (receipt.isCleared) {
-        doc.setTextColor(26, 98, 60); // moss
-        doc.text('STATUS: DEBT CLEARED', marginX, y);
-    } else {
-        doc.setTextColor(196, 68, 29); // rust
-        doc.text('STATUS: PARTIALLY PAID', marginX, y);
-    }
-    doc.setTextColor(0, 0, 0);
-
-    y += 10;
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'italic');
-    doc.setTextColor(100, 100, 100);
-    doc.text('Thank you for your payment!', (marginX + pageWidth) / 2, y, { align: 'center' });
-
-    return doc;
-}
-
-export async function generateReceiptPDF(sale, settings) {
-    const doc = await buildDocument(sale, settings, 'RECEIPT');
-    doc.save(`receipt-${sale.id}.pdf`);
-}
-
-export async function printReceipt(sale, settings) {
-    const doc = await buildDocument(sale, settings, 'RECEIPT');
-    doc.autoPrint();
-    window.open(doc.output('bloburl'), '_blank');
-}
-
-export async function generateInvoicePDF(creditSale, settings) {
-    const doc = await buildDocument(creditSale, settings, 'INVOICE');
-    doc.save(`invoice-${creditSale.id}.pdf`);
-}
-
-export async function printInvoice(creditSale, settings) {
-    const doc = await buildDocument(creditSale, settings, 'INVOICE');
-    doc.autoPrint();
-    window.open(doc.output('bloburl'), '_blank');
-}
-
-export async function generateDebtPaymentReceiptPDF(receipt, settings) {
-    const doc = await buildDebtPaymentDocument(receipt, settings);
-    doc.save(`debt-payment-receipt-${Date.now()}.pdf`);
-}
-
-export async function printDebtPaymentReceipt(receipt, settings) {
-    const doc = await buildDebtPaymentDocument(receipt, settings);
-    doc.autoPrint();
-    window.open(doc.output('bloburl'), '_blank');
-}
-
-// FIX (Part 24 — centralize WhatsApp deep-link construction): phone
-// normalization and wa.me URL building used to live here directly; they
-// now live in ./whatsapp.js so every WhatsApp-sharing feature (sale
-// receipts, debt reminders, debt payment receipts) shares one
-// implementation.
-//
-// documentUrl is the public share link from src/utils/documentSharing.js
-// — callers fetch/create it BEFORE calling this function (share-link
-// creation is an async Firestore write; this function stays synchronous
-// and focused on building the message + opening WhatsApp, same contract
-// as before).
-export function sendWhatsAppDocument(sale, settings, phone, documentUrl) {
-    const message = buildReceiptMessage({
-        shopName: settings.shopName || 'FlowBiz Store',
-        customerName: sale.customerName,
-        productName: sale.productName,
-        quantity: sale.quantity,
-        totalAmount: sale.totalAmount,
-        isCredit: sale.isCredit,
-        remainingBalance: sale.remainingBalance ?? sale.totalAmount,
-        businessPhone: settings.phone,
-        documentUrl,
-        formatKES,
-    });
-    const opened = openWhatsApp(phone, message);
-    if (!opened) throw new Error('Enter a valid phone number.');
-}
-````
-
-## File: src/contexts/AuthContext.jsx
-````javascript
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
-import {
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signOut as fbSignOut,
-  sendEmailVerification,
-  reload,
-} from 'firebase/auth';
-import {
-  doc,
-  onSnapshot,
-  deleteDoc,
-  updateDoc,
-  collection,
-  addDoc,
-  setDoc,
-  serverTimestamp,
-  query,
-  where,
-  getDocs,
-  getDoc,
-} from 'firebase/firestore';
-import { auth, db } from '../firebase';
-import { raceWithTimeout } from '../utils/offlineWrite';
-
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-const AuthContext = createContext(null);
-
-function getDeviceId() {
-  let id = localStorage.getItem('flowbiz_device_id');
-  if (!id) {
-    id = `dev_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-    localStorage.setItem('flowbiz_device_id', id);
-  }
-  return id;
-}
-function getSessionDocId(uid) {
-  return `${getDeviceId()}__${uid}`;
-}
-
-// src/contexts/AuthContext.jsx — replace guessDeviceLabel()
-function guessDeviceLabel() {
-  const ua = navigator.userAgent || '';
-  let os = 'Unknown device';
-  if (/Android/i.test(ua)) os = 'Android';
-  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
-  else if (/Windows/i.test(ua)) os = 'Windows';
-  else if (/Macintosh/i.test(ua)) os = 'Mac';
-  else if (/Linux/i.test(ua)) os = 'Linux';
-
-  let browser = '';
-  if (/Edg\//i.test(ua)) browser = 'Edge';
-  else if (/OPR\//i.test(ua)) browser = 'Opera';
-  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
-  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
-  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
-
-  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches;
-  if (isStandalone) return browser ? `${os} app (${browser})` : `${os} app`;
-  return browser ? `${browser} on ${os}` : os;
-}
-
-export function AuthProvider({ children }) {
-  const [firebaseUser, setFirebaseUser] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [subscription, setSubscription] = useState({ plan: 'free', status: 'active' });
-  const [loading, setLoading] = useState(true);
-  const [authError, setAuthError] = useState(null);
-  const [accountRemoved, setAccountRemoved] = useState(false);
-  const [sessionRevoked, setSessionRevoked] = useState(false);
-  const [emailVerified, setEmailVerified] = useState(false);
-
-  const profileUnsubRef = useRef(null);
-  const sessionUnsubRef = useRef(null);
-  const businessUnsubRef = useRef(null);
-  const sessionRegisteredRef = useRef(null); // `${uid}:${businessId}` already registered this auth session
-
-  const stopListeners = useCallback(() => {
-    profileUnsubRef.current?.();
-    profileUnsubRef.current = null;
-    sessionUnsubRef.current?.();
-    sessionUnsubRef.current = null;
-    businessUnsubRef.current?.();
-    businessUnsubRef.current = null;
-    sessionRegisteredRef.current = null;
-  }, []);
-
-  const registerSession = useCallback(async (uid, businessId, userName) => {
-   // FIX (#16-19/22): loadProfile's onSnapshot re-fires this on every
-   // profile change, not just at sign-in. Without a guard, each call
-   // attached a brand-new listener on sessions/{id} without ever
-   // unsubscribing the last one — a real leak, and wasted re-writes.
-   const key = `${uid}:${businessId}`;
-   if (sessionRegisteredRef.current === key) return;
-   sessionRegisteredRef.current = key;
-    const sessionId = getSessionDocId(uid);
-    const ref = doc(db, 'sessions', sessionId);
-    const currentSnap = await getDoc(ref);
-
-    if (!currentSnap.exists()) {
-      await setDoc(ref, {
-        uid,
-        businessId,
-        lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
-        deviceLabel: guessDeviceLabel(),
-        userAgent: navigator.userAgent,
-        lastActiveAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        revoked: false,
-      });
-    } else {
-      await updateDoc(ref, {
-        uid,
-        businessId,
-        lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
-        lastActiveAt: serverTimestamp(),
-        deviceLabel: guessDeviceLabel(),
-        userAgent: navigator.userAgent,
-        revoked: false, 
-      }).catch(() => {});
-    }
-    sessionUnsubRef.current?.(); // defensive: clear any stale listener first
-    sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
-      if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
-        setSessionRevoked(true);
-        fbSignOut(auth);
-      }
-    });
-  }, []);
-
-  // Background heartbeat to keep the "last seen" time accurate for active devices
-useEffect(() => {
-    if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
-        updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
-      }
-    }, 15 * 60 * 1000); // 15 mins
-    return () => clearInterval(interval);
-  }, [firebaseUser, profile?.businessId, sessionRevoked]);
-
-  // FIX: Used a named function 'doLoad' to resolve the recursive ESLint error
-  const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
-    stopListeners();
-    setAuthError(null);
-    setAccountRemoved(false);
-    setSessionRevoked(false);
-
-    if (!user) {
-      setProfile(null);
-      setSubscription({ plan: 'free', status: 'active' });
-      setEmailVerified(false);
-      setLoading(false);
-      return;
-    }
-
-    setEmailVerified(!!user.emailVerified);
-    setLoading(true);
-    const userRef = doc(db, 'users', user.uid);
-
-    profileUnsubRef.current = onSnapshot(
-      userRef,
-      (snap) => {
-        if (!snap.exists()) {
-          setTimeout(async () => {
-            try {
-              const recheck = await getDoc(userRef);
-              if (!recheck.exists()) {
-                setAccountRemoved(true);
-                setProfile(null);
-                setLoading(false);
-              }
-            } catch (err) {
-              setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
-              setProfile(null);
-              setLoading(false);
-            }
-          }, 4000);
-          return;
-        }
-        setAccountRemoved(false);
-        const data = { uid: user.uid, ...snap.data() };
-        setProfile(data);
-        setLoading(false);
-
-        if (data.businessId) {
-          registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
-          businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
-            if (bizSnap.exists()) {
-              setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
-            }
-          });
-        }
-      },
-      (err) => {
-        if (err.code === 'permission-denied' && retryCount < 3) {
-          const delay = 700 * (retryCount + 1);
-          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying`);
-          setTimeout(() => {
-            if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
-          }, delay);
-          return;
-        }
-        console.error(`[FlowBiz] onSnapshot(users/${user.uid}) failed:`, err.code || err.name, err.message);
-        setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
-        setProfile(null);
-        setLoading(false);
-      }
-    );
-  }, [registerSession, stopListeners]);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      setFirebaseUser(user);
-      loadProfile(user);
-    });
-    return () => { unsub(); stopListeners(); };
-  }, [loadProfile, stopListeners]);
-
-  const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
-  const logout = () => { stopListeners(); return fbSignOut(auth); };
-  
-  const resendVerificationEmail = async () => {
-    if (!auth.currentUser) throw new Error('Not signed in.');
-    await sendEmailVerification(auth.currentUser, {
-      url: `${window.location.origin}/auth/action`,
-      handleCodeInApp: true,
-    });
-  };
-
-  const refreshEmailVerification = useCallback(async () => {
-    if (!auth.currentUser) return false;
-    try {
-      await reload(auth.currentUser);
-    } catch (err) {
-      console.error('[FlowBiz] refreshEmailVerification: reload() failed:', err.code || err.name, err.message);
-      return auth.currentUser?.emailVerified ?? false;
-    }
-    const verified = !!auth.currentUser.emailVerified;
-    setEmailVerified(verified);
-    return verified;
-  }, []);
-
-  const createStaffInvite = async ({ displayName, role = 'cashier' }) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can invite staff.');
-    if (!['owner', 'cashier'].includes(role)) throw new Error('Invalid role.');
-    const trimmed = (displayName || '').trim();
-    if (!trimmed) throw new Error('Enter a name.');
-   const write = addDoc(collection(db, 'staffInvites'), {
-     businessId: profile.businessId,
-     displayName: trimmed,
-     role,
-     createdBy: profile.uid,
-     createdByName: profile.displayName,
-     createdAt: serverTimestamp(),
-     claimed: false,
-     linkedUid: null,
-   });
-   const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
-   if (error) throw error;
-   if (queuedOffline) return { id: null, queuedOffline: true };
-   return { id: value.id };
-  };
-
-  const cancelStaffInvite = async (inviteId) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can cancel an invite.');
-    await deleteDoc(doc(db, 'staffInvites', inviteId));
-  };
-
-  const revokeSessionsForStaffMember = useCallback(async (uid) => {
-    if (!profile?.businessId) return;
-    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', uid), where('businessId', '==', profile.businessId)));
-    await Promise.all(
-      snap.docs.filter((d) => d.data().revoked !== true).map((d) => updateDoc(doc(db, 'sessions', d.id), { revoked: true }))
-    );
-  }, [profile]);
-
-  const removeStaffAccount = async (uid) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can remove staff accounts.');
-    if (uid === profile.uid) throw new Error("You can't remove your own account here.");
-    if (!auth.currentUser) throw new Error('Your session has expired. Please sign in again.');
-
-    const idToken = await auth.currentUser.getIdToken(true);
-    await revokeSessionsForStaffMember(uid);
-
-    let response;
-    try {
-      response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-        body: JSON.stringify({ targetUid: uid }),
-      });
-    } catch (networkErr) {
-      throw new Error(`Failed to reach the API server. Check your connection.`);
-    }
-
-    let result = null;
-    try { result = await response.json(); } catch { }
-    if (!response.ok) throw new Error(result?.error || result?.message || `Failed to delete the staff account (${response.status}).`);
-
-    let retries = 3;
-    while (retries > 0) {
-      try {
-        await deleteDoc(doc(db, 'users', uid));
-        break;
-      } catch (e) {
-        retries--;
-        if (retries === 0) throw new Error("Staff Auth removed, but profile UI deletion timed out. Refresh the page.");
-        await new Promise(r => setTimeout(r, 1000));
-      }
-    }
-  };
-
-  const toggleMemberActive = async (uid, active) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can do this.');
-    await updateDoc(doc(db, 'users', uid), { active });
-    if (active === false) await revokeSessionsForStaffMember(uid);
-  };
-
-  const revokeSession = async (sessionId) => {
-    await updateDoc(doc(db, 'sessions', sessionId), { revoked: true });
-  };
-
-  const listMySessions = async () => {
-    if (!profile) return [];
-    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', profile.uid)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  };
-
-  const listBusinessSessions = async () => {
-    if (!profile?.businessId) return [];
-    const snap = await getDocs(query(collection(db, 'sessions'), where('businessId', '==', profile.businessId)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  };
-
-  const isOwner = profile?.role === 'owner';
-  
-  // FIX: Explicitly convert Timestamp to milliseconds to satisfy strict linters
-  const expiresMs = subscription?.expiresAt?.toMillis 
-    ? subscription.expiresAt.toMillis() 
-    : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
-
-  const isPro = subscription?.plan === 'pro' && 
-                subscription?.status === 'active' &&
-                (!subscription.expiresAt || expiresMs > Date.now());
-
+import { lazy, Suspense, useEffect } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import ProtectedRoute from '../components/common/ProtectedRoute';
+import AppShell from '../components/layout/AppShell';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import { useAuth } from '../contexts/AuthContext';
+import { prefetchRoutes } from './routePrefetch';
+
+const routeLoaders = {
+  setup: () => import('../pages/Setup'),
+  login: () => import('../pages/Login'),
+  forgotPassword: () => import('../pages/ForgotPassword'),
+  joinStaff: () => import('../pages/JoinStaff'),
+  authAction: () => import('../pages/AuthAction'),
+  dashboard: () => import('../pages/Dashboard'),
+  counter: () => import('../pages/Counter'),
+  customers: () => import('../pages/Customers'),
+  customerDetail: () => import('../pages/CustomerDetail'),
+  expenses: () => import('../pages/Expenses'),
+  purchases: () => import('../pages/Purchases'),
+  products: () => import('../pages/Products'),
+  suppliers: () => import('../pages/Suppliers'),
+  stockTake: () => import('../pages/StockTake'),
+  reports: () => import('../pages/Reports'),
+  closeDay: () => import('../pages/CloseDay'),
+  users: () => import('../pages/Users'),
+  settings: () => import('../pages/Settings'),
+  helpGuide: () => import('../pages/HelpGuide'),
+  pro: () => import('../pages/Pro'),
+  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
+  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
+  privacy: () => import('../pages/Privacy'),
+  terms: () => import('../pages/Terms'),
+};
+
+const Setup      = lazy(routeLoaders.setup);
+const Login      = lazy(routeLoaders.login);
+const ForgotPassword = lazy(routeLoaders.forgotPassword);
+const JoinStaff  = lazy(routeLoaders.joinStaff);
+const AuthAction = lazy(routeLoaders.authAction);
+const Dashboard  = lazy(routeLoaders.dashboard);
+const Counter    = lazy(routeLoaders.counter);
+const Customers  = lazy(routeLoaders.customers);
+const CustomerDetail = lazy(routeLoaders.customerDetail);
+const Expenses   = lazy(routeLoaders.expenses);
+const Purchases  = lazy(routeLoaders.purchases);
+const Products   = lazy(routeLoaders.products);
+const Suppliers  = lazy(routeLoaders.suppliers);
+const StockTake  = lazy(routeLoaders.stockTake);
+const Reports    = lazy(routeLoaders.reports);
+const CloseDay   = lazy(routeLoaders.closeDay);
+const Users      = lazy(routeLoaders.users);
+const Settings   = lazy(routeLoaders.settings);
+const HelpGuide  = lazy(routeLoaders.helpGuide);
+const Pro        = lazy(routeLoaders.pro);
+const AdvancedAnalytics = lazy(routeLoaders.advancedAnalytics);
+const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
+const Privacy    = lazy(routeLoaders.privacy);
+const Terms      = lazy(routeLoaders.terms);
+
+function Page({ children, adminOnly = false }) {
   return (
-    <AuthContext.Provider
-      value={{
-        firebaseUser, profile, subscription, isPro, loading, authError, accountRemoved, sessionRevoked,
-        businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
-        isActive: profile?.active !== false, emailVerified,
-        login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
-toggleMemberActive, revokeSession, listMySessions, listBusinessSessions,
-        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),        reloadProfile: async () => loadProfile(auth.currentUser),
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+    <ProtectedRoute adminOnly={adminOnly}>
+      <AppShell>
+        <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>
+      </AppShell>
+    </ProtectedRoute>
   );
 }
 
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
-  return ctx;
+function PublicOnly({ children }) {
+  const { firebaseUser, loading } = useAuth();
+  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
+  if (firebaseUser) return <Navigate to="/" replace />;
+  return children;
+}
+
+function RoutePrefetcher() {
+  const { firebaseUser, isAdmin } = useAuth();
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
+    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
+    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
+  }, [firebaseUser, isAdmin]);
+  return null;
+}
+
+export default function AppRouter() {
+  return (
+    <Suspense fallback={<LoadingSpinner label="Loading..." />}>
+      <RoutePrefetcher />
+      <Routes>
+        <Route path="/setup" element={<Setup />} />
+        <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
+        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
+        <Route path="/join/:inviteId" element={<JoinStaff />} />
+        <Route path="/auth/action" element={<AuthAction />} />
+        
+        {/* Public Legal Pages */}
+        <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
+        <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
+
+        <Route path="/"             element={<Page adminOnly><Dashboard /></Page>} />
+        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
+        <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
+        <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
+
+        <Route path="/counter"      element={<Page><Counter /></Page>} />
+        <Route path="/customers"    element={<Page><Customers /></Page>} />
+        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
+        <Route path="/expenses"     element={<Page><Expenses /></Page>} />
+        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
+        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
+        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
+        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
+        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
+        <Route path="/close-day"    element={<Page adminOnly><CloseDay /></Page>} />
+        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
+        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
+        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
+        <Route path="*"             element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
+  );
 }
 ````
 
-## File: src/pages/Dashboard.jsx
+## File: src/components/pos/SaleCompleteModal.jsx
 ````javascript
-import { useMemo, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import Modal from '../common/Modal';
+import { generateReceiptPDF, printReceipt, generateInvoicePDF, printInvoice, sendWhatsAppDocument } from '../../utils/documentService';
+import { getOrCreateShareLink } from '../../utils/documentSharing';
+import { useSettings } from '../../hooks/useSettings';
+import { useAuth } from '../../contexts/AuthContext';
+import { formatKES } from '../../utils/currency';
+import { Printer, Download, MessageCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { CheckCircle2, Clock } from 'lucide-react';
+
+export default function SaleCompleteModal({ open, sale, onClose }) {
+  const { settings } = useSettings();
+  const { isPro, businessId, profile } = useAuth();
+  const [phone, setPhone] = useState(sale?.customerPhone || '');
+  const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
+
+  // Keep phone input synced when a new sale is opened
+  useEffect(() => {
+    if (sale?.customerPhone) {
+      setPhone(sale.customerPhone);
+    } else {
+      setPhone('');
+    }
+  }, [sale]);
+
+  if (!sale) return null;
+
+  const docLabel = sale.isCredit ? 'Invoice' : 'Receipt';
+  // FIX (multi-product cart): a sale built from Counter.jsx's cart carries
+  // an `items` array when it has more than one line. Single-product sales
+  // (Dashboard's own quick-scan sale, or a one-item cart checkout) never
+  // set this, so the original single-line summary below still renders
+  // exactly as before.
+  const cartItems = Array.isArray(sale.items) && sale.items.length > 1 ? sale.items : null;
+
+  // FIX (Pro-gating correction): View, Download, and Print are FlowBiz's
+  // basic document access and stay free on every plan. Only WhatsApp
+  // sharing — the convenience of pushing the document straight to the
+  // customer's phone — is the Pro feature. Print/Download used to be
+  // gated behind isPro here; that was a bug, not an intentional product
+  // rule (nothing else in the app treats PDF access as paid), so it's
+  // removed rather than preserved.
+  const handlePrint = () => {
+    if (sale.isCredit) printInvoice(sale, settings);
+    else printReceipt(sale, settings);
+  };
+
+  const handleDownload = () => {
+    if (sale.isCredit) generateInvoicePDF(sale, settings);
+    else generateReceiptPDF(sale, settings);
+  };
+
+  const handleWhatsApp = async () => {
+    if (!phone.trim()) {
+      toast.error('Please enter a valid customer phone number.');
+      return;
+    }
+    setSendingWhatsApp(true);
+    try {
+      const documentUrl = await getOrCreateShareLink({
+        businessId,
+        documentType: sale.isCredit ? 'invoice' : 'receipt',
+        documentId: sale.id,
+        createdBy: profile?.uid,
+      });
+      sendWhatsAppDocument(sale, settings, phone.trim(), documentUrl);
+    } catch (e) {
+      toast.error(e.message || 'Unable to generate the receipt link. Please try again.');
+    } finally {
+      setSendingWhatsApp(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={sale.isCredit ? 'Credit Sale Recorded' : 'Sale Complete'}>
+      <div className="space-y-4">
+        {/* Fixed rounded-xl2 to rounded-2xl */}
+        <div className={`flex flex-col items-center justify-center py-4 rounded-2xl border ${sale.isCredit ? 'bg-rust-50 border-rust-200' : 'bg-moss-50 border-moss-200'}`}>
+          <div className={`h-10 w-10 rounded-full flex items-center justify-center mb-2 ${sale.isCredit ? 'bg-rust-100 text-rust-700' : 'bg-moss-100 text-moss-700'}`}>
+            {sale.isCredit ? <Clock className="h-5 w-5 text-rust-600" strokeWidth={2} /> : <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} />}
+          </div>
+          <h2 className={`font-display font-bold ${sale.isCredit ? 'text-rust-700' : 'text-moss-800'}`}>
+            {sale.isCredit ? 'Credit sale recorded' : 'Sale recorded successfully'}
+          </h2>
+
+          {cartItems ? (
+            <div className="w-full px-5 mt-2 space-y-1">
+              {cartItems.map((item, idx) => (
+                <div key={item.productId || idx} className="flex items-center justify-between text-xs text-ink-700">
+                  <span>{item.quantity} × {item.productName}</span>
+                  <span className="font-semibold">{formatKES(item.lineTotal ?? (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0))}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm font-semibold mt-2 text-ink-800">{sale.quantity} × {sale.productName}</p>
+          )}
+
+          {sale.isCredit && sale.customerName && <p className="text-xs text-ink-500 mt-1">{sale.customerName}</p>}
+          <p className="text-lg font-bold text-ink-900 mt-1">{formatKES(sale.totalAmount)}</p>
+          <p className={`text-xs mt-1 font-semibold ${sale.isCredit ? 'text-rust-600' : 'text-ink-500'}`}>
+            {sale.isCredit ? 'Payment Status: Unpaid' : sale.paymentMethod}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <button className="btn-outline flex items-center justify-center gap-2" onClick={handlePrint}>
+            <Printer className="h-4 w-4" /> Print {docLabel}
+          </button>
+          <button className="btn-outline flex items-center justify-center gap-2" onClick={handleDownload}>
+            <Download className="h-4 w-4" /> Download {docLabel}
+          </button>
+        </div>
+
+        <div className="rounded-lg border border-ink-100 p-3 space-y-2">
+          <label className="label">
+            WhatsApp {docLabel} {!isPro && <span className="text-amber-600">— PRO</span>}
+          </label>
+          <div className="flex gap-2">
+            <input
+              className="input flex-1"
+              placeholder="Customer Phone"
+              value={phone}
+              onChange={e => setPhone(e.target.value)}
+              disabled={sendingWhatsApp}
+            />
+            {isPro ? (
+              <button className="btn-primary flex items-center justify-center gap-2 shrink-0" onClick={handleWhatsApp} disabled={sendingWhatsApp}>
+                <MessageCircle className="h-4 w-4" /> {sendingWhatsApp ? 'Preparing…' : 'Send'}
+              </button>
+            ) : (
+              <Link to="/pro" className="btn-primary flex items-center justify-center gap-2 shrink-0">
+                <MessageCircle className="h-4 w-4" /> Unlock
+              </Link>
+            )}
+          </div>
+        </div>
+
+        <div className="pt-2 border-t border-ink-100">
+          <button className="btn-secondary w-full" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+````
+
+## File: src/pages/Counter.jsx
+````javascript
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Trash2 } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { useDailySession } from '../hooks/useDailySession';
-import { useFinancialsForRange } from '../hooks/useFinancials';
 import { useHardwareScanner } from '../hooks/useHardwareScanner';
 import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct } from '../utils/products';
+import { createProduct } from '../utils/products';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
+import ConfirmDialog from '../components/common/ConfirmDialog';
 import Modal from '../components/common/Modal';
-import SaleModal from '../components/pos/SaleModal';
+import ProductGrid from '../components/pos/ProductGrid';
+import CartList from '../components/pos/CartList';
+import CartCheckoutModal from '../components/pos/CartCheckoutModal';
 import SaleCompleteModal from '../components/pos/SaleCompleteModal';
 import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
 import ProductFormModal from '../components/products/ProductFormModal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
 import ScannerModal from '../components/scanner/ScannerModal';
 import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
-import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { formatKES, roundMoney } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
 
-function StatCard({ label, value, tone = 'text-ink-900', sub }) {
-  return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
-    </div>
-  );
+// Builds one line item for the cart doc from a cart row. Rounds every
+// money figure through roundMoney() so summing several lines (and their
+// quantity × price multiplication) never leaves floating-point noise in
+// what gets shown or written to Firestore.
+function toLineItem(cartRow) {
+  const quantity = Number(cartRow.quantity) || 0;
+  const unitPrice = Number(cartRow.unitPrice) || 0;
+  const costPrice = Number(cartRow.costPrice) || 0;
+  const lineTotal = roundMoney(quantity * unitPrice);
+  const lineCost = roundMoney(quantity * costPrice);
+  return {
+    productId: cartRow.productId,
+    productName: cartRow.productName,
+    quantity,
+    unitPrice,
+    costPrice,
+    lineTotal,
+    lineCost,
+    lineProfit: roundMoney(lineTotal - lineCost),
+    barcode: cartRow.barcode || null,
+  };
 }
 
-export default function Dashboard() {
-  const { profile, isAdmin, businessId, isPro } = useAuth();
-  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
-  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
+function summarizeProductName(lineItems) {
+  if (lineItems.length === 1) return lineItems[0].productName;
+  return `${lineItems[0].productName} +${lineItems.length - 1} more`;
+}
 
-  const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const { data: products } = useFirestoreCollection(productsQuery);
-  const { data: customers } = useFirestoreCollection(customersQuery);
-  const { data: suppliers } = useFirestoreCollection(suppliersQuery);
+export default function Counter() {
+  const { profile, isAdmin, businessId } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  
+  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  const salesQ     = useMemo(() => businessId ? tenantQuery('sales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
+  const creditSalesQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
 
-  const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
-  const [activeProduct, setActiveProduct] = useState(null);
+  const { data: products,  loading: prodLoading }  = useFirestoreCollection(productsQ);
+  const { data: customers }                         = useFirestoreCollection(customersQ);
+  const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
+  const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
+  const { data: suppliers }                         = useFirestoreCollection(suppliersQ);
+  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
+
+  const [search, setSearch]           = useState('');
+
+  // Cart: client-side only ("current sale") state — nothing is written to
+  // Firestore until checkout is confirmed in CartCheckoutModal. One row
+  // per distinct product; scanning/adding the same product again bumps
+  // its quantity instead of creating a duplicate row.
+  const [cart, setCart]               = useState([]);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+
   const [completedSale, setCompletedSale] = useState(null);
-  const [editProduct, setEditProd] = useState(null);
-  const [prodModal, setProdModal] = useState(false);
+  const [pendingVoid, setPendingVoid] = useState(null);
+  const [prodModal, setProdModal]     = useState(false);
   const [supplierModal, setSupplierModal] = useState(false);
   const [newSupplierId, setNewSupplierId] = useState(null);
   const [prefillBarcode, setPrefillBarcode] = useState(null);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [notFoundCode, setNotFoundCode] = useState(null);
+  const [voiding, setVoiding] = useState(false);
 
-  const [privacyMode, setPrivacyMode] = useState(() => {
-    try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
-    catch { return false; }
-  });
+  useEffect(() => {
+    if (location.state?.autoScan && session && !isClosed) {
+      setScannerOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location, navigate, session, isClosed]);
 
-  const togglePrivacyMode = () => {
-    setPrivacyMode((prev) => {
-      const next = !prev;
-      try { localStorage.setItem('flowbiz_dashboard_privacy', String(next)); }
-      catch (err) { console.error('Failed to save privacy mode setting', err); }
-      return next;
-    });
-  };
+  const filtered = products.filter(p =>
+    p.name.toLowerCase().includes(search.toLowerCase()) ||
+    (p.barcode && p.barcode.includes(search.trim())) ||
+    (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  );
 
-  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
-
-  const dashboardCashReceived = summary.totalCashReceipts;
-  const dashboardMpesaReceived = summary.totalMpesaReceipts;
-  const dashboardExpenses = summary.totalExpenses;
-  const dashboardNetProfit = summary.netProfit;
-
-  const lowStock = products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
-  const totalInventoryValue = products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
-  const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
-  const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
-  const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
-
-  const recentActivity = useMemo(() => {
+  const mergedSales = useMemo(() => {
     const list = [];
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      list.push({ id: `sale-${s.id}`, type: 'Sale', title: `${s.quantity} × ${s.productName}`, subtitle: `Sold by ${s.soldByName || 'Staff'}`, amount: s.totalAmount, method: s.paymentMethod, timestamp: s.soldAt, isPositive: true });
-    });
-    (repayments || []).forEach((r) => {
-      list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
-    });
-      (creditSales || []).forEach((cs) => {
-     if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-     list.push({
-       id: `credit-${cs.id}`, type: 'Credit Sale',
-       title: `${cs.quantity} × ${cs.productName}`,
-       subtitle: `${cs.customerName || 'Customer'} · Sold by ${cs.soldByName || 'Staff'}`,
-       amount: cs.totalAmount, method: 'Credit', timestamp: cs.soldAt, isPositive: false,
-     });
-   });
-   return list.sort((a, b) => {
-      const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
-      const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
+    sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
+    creditSales.forEach(cs => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
+    return list.sort((a, b) => {
+      const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
+      const bTime = b.soldAt?.toMillis?.() ?? b.soldAt?.toDate?.()?.getTime?.() ?? new Date(b.soldAt || 0).getTime();
       return bTime - aTime;
-    }).slice(0, 8);
-  }, [sales, repayments]);
+    }).slice(0, 100);
+  }, [sales, creditSales]);
 
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
-    return { id: ref.id, name, phone };
+  // ── Cart operations ──────────────────────────────────────────────────
+
+  const addToCart = (product, qty = 1) => {
+    if (!product) return;
+    if ((product.stock || 0) <= 0) { toast.error(`${product.name} is out of stock.`); return; }
+    setCart(prev => {
+      const idx = prev.findIndex(item => item.productId === product.id);
+      if (idx >= 0) {
+        const nextQty = (Number(prev[idx].quantity) || 0) + qty;
+        if (nextQty > product.stock) {
+          toast.error(`Only ${product.stock} of ${product.name} in stock.`);
+          return prev;
+        }
+        const next = [...prev];
+        next[idx] = { ...next[idx], quantity: nextQty };
+        return next;
+      }
+      if (qty > product.stock) {
+        toast.error(`Only ${product.stock} of ${product.name} in stock.`);
+        return prev;
+      }
+      return [...prev, {
+        productId: product.id,
+        productName: product.name,
+        quantity: qty,
+        unitPrice: product.sellingPrice,
+        costPrice: product.costPrice,
+        barcode: product.barcode || null,
+      }];
+    });
   };
 
-  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
-const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
-    const productRef = doc(db, 'products', product.id);
+  const updateCartQuantity = (productId, rawQty) => {
+    const product = products.find(p => p.id === productId);
+    let qty = parseInt(rawQty, 10);
+    if (!Number.isFinite(qty) || qty < 1) qty = 1;
+    if (product && qty > product.stock) {
+      toast.error(`Only ${product.stock} of ${product.name} in stock.`);
+      qty = product.stock;
+    }
+    if (qty < 1) return; // nothing in stock — leave the row as-is rather than a 0/invalid quantity
+    setCart(prev => prev.map(item => item.productId === productId ? { ...item, quantity: qty } : item));
+  };
+
+  const updateCartPrice = (productId, rawPrice) => {
+    let price = Number(rawPrice);
+    if (!Number.isFinite(price) || price < 0) price = 0;
+    setCart(prev => prev.map(item => item.productId === productId ? { ...item, unitPrice: price } : item));
+  };
+
+  const removeCartItem = (productId) => setCart(prev => prev.filter(item => item.productId !== productId));
+  const clearCart = () => setCart([]);
+
+  const cartTotal = useMemo(
+    () => roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0)),
+    [cart]
+  );
+
+  // Re-validates the cart against the LIVE product list right before
+  // building the write — stock may have moved since items were added
+  // (another cashier selling the same product, a stock take, etc).
+  function validateCartAgainstStock() {
+    for (const row of cart) {
+      const product = products.find(p => p.id === row.productId);
+      if (!product) throw new Error(`${row.productName} is no longer available.`);
+      if ((Number(row.quantity) || 0) > product.stock) {
+        throw new Error(`Only ${product.stock} of ${row.productName} left in stock.`);
+      }
+    }
+  }
+
+  // FIX: same writeBatch + increment() pattern the app already uses
+  // everywhere else for offline-first sales (see CR-8 in the README) —
+  // one sale doc now carries every product in the cart as `items`, with
+  // one stock decrement per line item in the same batch. Aggregate
+  // fields (totalAmount, quantity, productName, costOfGoodsSold, profit)
+  // are still written at the top level so every existing consumer that
+  // only reads those fields — Dashboard's activity feed, this page's own
+  // sales log, useFinancials — keeps working unchanged.
+  const handleCartSale = ({ paymentMethod, mpesaCode }) => {
+    validateCartAgainstStock();
+    const lineItems = cart.map(toLineItem);
+    const totalAmount = roundMoney(lineItems.reduce((s, i) => s + i.lineTotal, 0));
+    const costOfGoodsSold = roundMoney(lineItems.reduce((s, i) => s + i.lineCost, 0));
+    const profit = roundMoney(totalAmount - costOfGoodsSold);
+    const quantity = lineItems.reduce((s, i) => s + i.quantity, 0);
+
     const saleRef = doc(collection(db, 'sales'));
     const saleData = withBusiness({
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit,
-      totalAmount: soldPricePerUnit * quantity,
-      profit: (soldPricePerUnit - product.costPrice) * quantity,
+      items: lineItems,
+      productName: summarizeProductName(lineItems),
+      quantity,
+      totalAmount,
+      costOfGoodsSold,
+      profit,
+      // Legacy single-product compatibility: only meaningful when the
+      // cart has exactly one distinct product, mirroring exactly what
+      // the previous single-item sale flow wrote.
+      ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
       paymentMethod, mpesaCode: mpesaCode || null,
       soldBy: profile.uid, soldByName: profile.displayName,
       soldAt: new Date(), isCredit: false, isVoided: false,
     }, businessId);
 
     const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    lineItems.forEach((item) => {
+      batch.update(doc(db, 'products', item.productId), { stock: increment(-item.quantity), updatedAt: serverTimestamp() });
+    });
     batch.set(saleRef, saleData);
 
     return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
   };
 
-  const handleConfirmCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
-    const productRef = doc(db, 'products', product.id);
-    const totalAmount = soldPricePerUnit * quantity;
+  const handleCartCredit = ({ customerId, customerName, customerPhone }) => {
+    validateCartAgainstStock();
+    const lineItems = cart.map(toLineItem);
+    const totalAmount = roundMoney(lineItems.reduce((s, i) => s + i.lineTotal, 0));
+    const costOfGoodsSold = roundMoney(lineItems.reduce((s, i) => s + i.lineCost, 0));
+    const quantity = lineItems.reduce((s, i) => s + i.quantity, 0);
+
     const creditRef = doc(collection(db, 'creditSales'));
     const creditData = withBusiness({
       customerId, customerName, customerPhone: customerPhone || '',
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
+      items: lineItems,
+      productName: summarizeProductName(lineItems),
+      quantity,
+      totalAmount,
+      costOfGoodsSold,
+      ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
       soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
       status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true
+      isCredit: true,
     }, businessId);
 
     const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    lineItems.forEach((item) => {
+      batch.update(doc(db, 'products', item.productId), { stock: increment(-item.quantity), updatedAt: serverTimestamp() });
+    });
     batch.set(creditRef, creditData);
 
     return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
   };
 
-const handleProductSave = async (data) => {
-    try {
-      if (editProduct) {
-        const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
-      } else {
-        const { queuedOffline } = await createProduct(data, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
-      }
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
+    return { id:ref.id, name, phone };
   };
 
-const handleSupplierSave = async (supplierData) => {
+  const handleCheckoutClose = (record) => {
+    setCheckoutOpen(false);
+    if (record && record.id) {
+      setCompletedSale(record);
+      clearCart();
+    }
+    // record === null → cashier backed out of checkout; cart is left intact.
+  };
+
+  // Voiding restores stock for every line item on the sale (falls back to
+  // the single productId/quantity shape for pre-cart, legacy sale docs).
+  const handleVoid = async () => {
+    const sale = pendingVoid;
+    setVoiding(true);
+    try {
+      const lineItems = Array.isArray(sale.items) && sale.items.length > 0
+        ? sale.items
+        : [{ productId: sale.productId, quantity: sale.quantity }];
+
+      const targets = lineItems.filter((item) => item.productId);
+      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
+
+      const batch = writeBatch(db);
+      let anyProductMissing = false;
+      targets.forEach((item, idx) => {
+        if (snaps[idx].exists()) {
+          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
+        } else {
+          anyProductMissing = true;
+        }
+      });
+
+      batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
+
+      if (!sale.isCredit) {
+        const refundRef = doc(collection(db, 'refunds'));
+        batch.set(refundRef, withBusiness({
+          saleId: sale.id, amount: sale.totalAmount, method: sale.paymentMethod,
+          refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName
+        }, businessId));
+      }
+
+      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+      if (error) throw error;
+
+      toast.success(queuedOffline ? 'Sale voided offline.' : (anyProductMissing ? 'Sale voided (some products were deleted, stock not restored for those).' : 'Sale voided and stock restored.'));
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setVoiding(false); setPendingVoid(null); }
+  };
+
+  const handleProductSave = async (data) => {
+    try {
+      const { id, queuedOffline } = await createProduct(data, businessId);
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      // If this product was created to resolve a scanned/typed barcode
+      // that didn't match anything, add it straight to the cart so the
+      // scanning flow isn't interrupted any more than necessary.
+      if (prefillBarcode !== null && !queuedOffline) {
+        addToCart({ id, name: data.name, sellingPrice: data.sellingPrice, costPrice: data.costPrice, stock: data.stock ?? 0, barcode: data.barcode || null }, 1);
+      }
+      setProdModal(false);
+      setPrefillBarcode(null);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+      throw err;
+    }
+  };
+
+  const handleSupplierSave = async (supplierData) => {
     const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
     const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
     if (error) { toast.error(friendlyErrorMessage(error)); return; }
@@ -11037,136 +10608,131 @@ const handleSupplierSave = async (supplierData) => {
     toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
   };
 
+  // Scanning adds straight to the cart and keeps going — no confirmation
+  // step per scan, and scanning the same product again just bumps its
+  // quantity (handled inside addToCart).
   const handleScanDetected = (code) => {
     setScannerOpen(false);
     const found = findProductByCode(products, code);
-    if (found) setActiveProduct(found);
-    else setNotFoundCode(code);
+    if (found) {
+      addToCart(found, 1);
+      toast.success(`${found.name} added to cart`, { duration: 1200 });
+    } else {
+      setNotFoundCode(code);
+    }
   };
 
   useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
+    enabled: !!session && !isClosed && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale && !checkoutOpen,
   });
 
-  if (sessionLoading) return <LoadingSpinner label="Loading today's session…" />;
-
-  if (isClosed) {
-    return (
-      <div className="mx-auto max-w-sm space-y-4 text-center">
-        <EmptyState title="Day is closed" description="Sales are locked until you reopen the session or tomorrow starts." />
-        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen today's session</button>}
-      </div>
-    );
-  }
-  if (!session) {
-    return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
-  }
+  if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
+  if (isClosed) return (
+    <div className="mx-auto max-w-sm pt-8 space-y-4 text-center">
+      <EmptyState title="Today's session is closed" description="Sales are locked. An owner can reopen to continue trading." />
+      {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>}
+    </div>
+  );
+  if (!session) return <OpenSessionPrompt onOpen={floats => openSession({ ...floats, openedBy:profile.uid })} />;
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
-          <div className="flex items-center gap-2 mt-1">
-            {isAdmin && (
-<Link to="/pro" className={`badge text-[11px] font-bold transition-colors ${isPro ? 'bg-amber-100 text-amber-800' : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'}`}>                {isPro ? 'FlowBiz Pro ✓' : 'Explore FlowBiz Pro'}
-              </Link>
-            )}
-            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
-          </div>
-        </div>
-        <button
-          onClick={togglePrivacyMode}
-          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
-          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
-        >
-          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Scan, search, or tap a product to add it to the cart.</p></div>
       </div>
+      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
+      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
+        <ProductGrid products={filtered} onSelect={(product) => addToCart(product, 1)} isAdmin={false} />}
 
-      {isAdmin && (
-        <>
-          {financialsLoading ? <LoadingSpinner /> : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
-              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
-              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
-              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
-              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
-            </div>
-          )}
-          <div className="grid gap-3 sm:grid-cols-3">
-            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
-<StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
-            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
-          </div>
-        </>
+      {cart.length > 0 ? (
+        <CartList
+          cart={cart}
+          onUpdateQuantity={updateCartQuantity}
+          onUpdatePrice={updateCartPrice}
+          onRemove={removeCartItem}
+          onClear={clearCart}
+          onCheckout={() => setCheckoutOpen(true)}
+        />
+      ) : (
+        <div className="card p-4 text-center text-sm text-ink-400">Cart is empty — scan a barcode or tap a product above to add it.</div>
       )}
 
-      <div>
-        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
-        {recentActivity.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
-        ) : (
-          <div className="card divide-y divide-ink-100">
-            {recentActivity.map((act) => (
-              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
-                <div className="min-w-0 flex-1 pr-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
-                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
+      {isAdmin && (
+        <div className="mt-4">
+          <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Sales log (last 100)</h2>
+          {salesLoading || creditLoading ? <LoadingSpinner /> : mergedSales.length === 0 ? <EmptyState title="No sales recorded" /> : (
+            <div className="card divide-y divide-ink-100">
+              {mergedSales.map(s=>(
+                <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided?'opacity-40 line-through':''}`}>
+                  <div>
+                    <p className="font-medium text-ink-700">
+                      {s.quantity} × {s.productName} — {formatKES(s.totalAmount)}
+                      {Array.isArray(s.items) && s.items.length > 1 && (
+                        <span className="badge bg-ink-100 text-ink-500 ml-2 align-middle">{s.items.length} products</span>
+                      )}
+                    </p>
+                    <p className="text-xs text-ink-400">
+                      {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
+                      {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
+                    </p>
                   </div>
-                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
+                  {!s.isVoided && !s.isCredit && isAdmin && (
+                    <button onClick={()=>setPendingVoid(s)} className="p-1 text-rust-400 hover:text-rust-600 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Void sale"><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
+                  )}
+                  {s.isCredit && isAdmin && (
+                    <Link to={`/customers/${s.customerId}`} className="btn-outline !py-1 !px-2.5 !min-h-0 text-xs text-ink-500 hover:text-ink-700">View Customer</Link>
+                  )}
                 </div>
-                <div className="text-right shrink-0">
-                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <SaleModal 
-        open={!!activeProduct} 
-        product={activeProduct} 
-        customers={customers} 
-        onClose={(record) => {
-          setActiveProduct(null);
-          if (record && record.id) setCompletedSale(record);
-        }} 
-        onConfirmSale={handleConfirmSale} 
-        onConfirmCredit={handleConfirmCredit} 
-        onCreateCustomer={handleCreateCustomer} 
-      />
-      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
 
-      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
+      <Modal open={!!notFoundCode} onClose={()=>setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
         <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
         <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
+          <button className="btn-secondary" onClick={()=>setNotFoundCode(null)}>Cancel</button>
           {isAdmin ? (
-            <button className="btn-primary" onClick={() => { setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
+            <button className="btn-primary" onClick={()=>{ setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
           ) : (
             <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
           )}
         </div>
       </Modal>
 
-<ProductFormModal
+      <CartCheckoutModal
+        open={checkoutOpen}
+        cart={cart}
+        total={cartTotal}
+        customers={customers}
+        onClose={handleCheckoutClose}
+        onConfirmSale={handleCartSale}
+        onConfirmCredit={handleCartCredit}
+        onCreateCustomer={handleCreateCustomer}
+      />
+      <SaleCompleteModal
+        open={!!completedSale}
+        sale={completedSale}
+        onClose={() => setCompletedSale(null)}
+      />
+
+      <ProductFormModal
         open={prodModal}
-        onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
+        onClose={()=>{setProdModal(false);setPrefillBarcode(null);}}
         onSave={handleProductSave}
         suppliers={suppliers}
-        initialProduct={editProduct}
+        initialProduct={null}
         prefillBarcode={prefillBarcode}
         onAddSupplier={() => setSupplierModal(true)}
         newSupplierId={newSupplierId}
         productCount={products.length}
       />
       <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+      <ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" will be restored${Array.isArray(pendingVoid?.items) && pendingVoid.items.length > 1 ? ` for all ${pendingVoid.items.length} products in this sale` : ` (×${pendingVoid?.quantity})`}.`} confirmLabel={voiding ? "Voiding..." : "Void sale"} confirmDisabled={voiding} danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />
     </div>
   );
 }
@@ -11817,6 +11383,1599 @@ export default function StockTake() {
 }
 ````
 
+## File: src/utils/documentService.js
+````javascript
+import { jsPDF } from 'jspdf';
+import { formatKES } from './currency';
+import { formatDateTime } from './dateRanges';
+import { openWhatsApp, buildReceiptMessage } from './whatsapp';
+
+export async function loadImageAsDataUrl(url) {
+    if (!url) return null;
+    try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    } catch (err) {
+        console.error('Could not load business logo for PDF:', err);
+        return null;
+    }
+}
+
+// Shared header used by every thermal-receipt-style document this file
+// generates (sale receipts/invoices, and now debt payment receipts) —
+// keeps the logo/business-info block identical across document types
+// instead of re-implementing it per document.
+async function drawDocumentHeader(doc, settings, marginX, startY, paperWidthMm = 80) {
+    let y = startY;
+    const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
+    const logoSize = paperWidthMm <= 58 ? 11 : 14;
+    const textX = logoDataUrl ? marginX + logoSize + 3 : marginX;
+
+    if (logoDataUrl) {
+        try {
+            const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
+            doc.addImage(logoDataUrl, format, marginX, y, logoSize, logoSize);
+        } catch (err) {
+            console.error('Could not embed business logo in PDF:', err);
+        }
+    }
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(paperWidthMm <= 58 && logoDataUrl ? 9 : 11);
+    doc.text(settings.shopName || 'Business Receipt', textX, y + 5);
+
+    let lineY = y + 9;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    // FIX (#14): shows whichever of phone/email/address are actually
+    // configured — never a placeholder — same "only if set" rule the
+    // phone line already followed. Pulled straight from businessSettings,
+    // nothing hardcoded.
+    if (settings.phone) { doc.text(`Tel: ${settings.phone}`, textX, lineY); lineY += 4; }
+    if (settings.email) { doc.text(settings.email, textX, lineY); lineY += 4; }
+    if (settings.address && paperWidthMm > 58) { doc.text(settings.address, textX, lineY); lineY += 4; }
+
+    return Math.max(y + (logoDataUrl ? logoSize + 4 : 8), lineY + 2);
+}
+// FIX (thermal paper width): FlowBiz's receipts were always generated at
+// a fixed 80mm width. Some businesses' printers use 58mm paper — read
+// from businessSettings.receiptPaperWidth (defaults to 80, set in
+// Settings.jsx) so both PDF layouts, and the public receipt page's own
+// PDF/print output, size correctly for whichever paper the business
+// actually uses. Nothing else about the layout changes.
+function resolvePaperWidthMm(settings) {
+    return settings?.receiptPaperWidth === 58 ? 58 : 80;
+}
+
+// FIX (multi-product cart): a sale/invoice from Counter.jsx's cart may
+// contain several distinct products (data.items — see
+// Counter.jsx's buildLineItems). When present, every line item is used;
+// when absent (a legacy single-product sale, or Dashboard's own
+// single-item quick-sale flow, which is unchanged), a single synthetic
+// line is built from the doc's existing top-level fields exactly as
+// before — so single-product receipts render identically to before this
+// change.
+function resolveDocumentItems(data) {
+    if (Array.isArray(data.items) && data.items.length > 0) return data.items;
+    return [{
+        productName: data.productName || data.description || 'Item',
+        quantity: data.quantity,
+        unitPrice: data.soldPricePerUnit,
+        lineTotal: data.totalAmount ?? data.amount ?? 0,
+    }];
+}
+
+// Replace the buildDocument function in src/utils/documentService.js
+async function buildDocument(data, settings, typeLabel) {
+    const paperWidthMm = resolvePaperWidthMm(settings);
+    const items = resolveDocumentItems(data);
+
+    // FIX (multi-product cart): a single fixed 200mm page height clips a
+    // cart with several line items. Height now scales with how many
+    // distinct products are on the receipt, while staying at least as
+    // tall as the original single-item receipt was.
+    const estimatedHeight = Math.max(200, 90 + items.length * 10);
+    const doc = new jsPDF('p', 'mm', [paperWidthMm, estimatedHeight]); // Thermal receipt size
+    const marginX = 5;
+    const pageWidth = paperWidthMm - marginX;
+    let y = await drawDocumentHeader(doc, settings, marginX, 8, paperWidthMm);
+
+    // 2. DOCUMENT TYPE & META DATA
+    y += 2;
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.4);
+    doc.line(marginX, y, pageWidth, y);
+    
+    y += 6;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(typeLabel, marginX, y); // "INVOICE" or "RECEIPT"
+    
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(formatDateTime(data.soldAt || data.recordedAt || new Date()), pageWidth, y, { align: 'right' });
+    
+    y += 5;
+    doc.text(`Ref: ${data.id?.substring(0, 8).toUpperCase() || 'N/A'}`, marginX, y);
+    if (data.customerName) {
+        y += 4;
+        doc.text(`To: ${data.customerName}`, marginX, y);
+    }
+
+    // 3. ITEMIZED TABLE
+    y += 4;
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(0.2);
+    doc.line(marginX, y, pageWidth, y);
+    
+    y += 5;
+    doc.setFont('helvetica', 'bold');
+    doc.text('ITEM', marginX, y);
+    doc.text('TOTAL', pageWidth, y, { align: 'right' });
+    
+    y += 2;
+    doc.line(marginX, y, pageWidth, y);
+
+    // Items — every product in the cart gets its own line, each with its
+    // own qty × unit price sub-line, exactly mirroring how a single item
+    // was already rendered.
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+
+    items.forEach((item) => {
+        const itemName = item.productName || 'Item';
+        const splitName = doc.splitTextToSize(itemName, Math.max(pageWidth - 30, 20));
+        doc.text(splitName, marginX, y);
+
+        const lineTotal = item.lineTotal ?? ((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0));
+        doc.text(formatKES(lineTotal), pageWidth, y, { align: 'right' });
+
+        y += (splitName.length * 4);
+        if (item.quantity) {
+            doc.setTextColor(100, 100, 100);
+            doc.text(`${item.quantity} × @ ${formatKES(item.unitPrice || 0)}`, marginX, y);
+            doc.setTextColor(0, 0, 0);
+            y += 4;
+        }
+    });
+
+    // 4. TOTALS SECTION
+    y += 2;
+    doc.line(marginX, y, pageWidth, y);
+    y += 6;
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    if (data.isCredit) {
+        doc.text('TOTAL DUE:', marginX, y);
+        doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth, y, { align: 'right' });
+    } else {
+        doc.text('PAID:', marginX, y);
+        doc.text(formatKES(data.totalAmount || data.amount || 0), pageWidth, y, { align: 'right' });
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        y += 4;
+        doc.text(`Via: ${data.paymentMethod || data.method}`, pageWidth, y, { align: 'right' });
+    }
+
+    // 5. FOOTER
+    y += 12;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'italic');
+    doc.setTextColor(100, 100, 100);
+    doc.text(data.isCredit ? 'Payment due — thank you!' : 'Thank you for your business!', (marginX + pageWidth) / 2, y, { align: 'center' });
+
+    return doc;
+}
+
+// A debt payment receipt is deliberately its own document shape — a
+// payment against an existing debt is not a sale, and PART 15 requires it
+// to visually read as a distinct document ("DEBT PAYMENT RECEIPT"), not a
+// sales receipt with different labels bolted on.
+async function buildDebtPaymentDocument(receipt, settings) {
+    const paperWidthMm = resolvePaperWidthMm(settings);
+    const doc = new jsPDF('p', 'mm', [paperWidthMm, 200]);
+    const marginX = 5;
+    const pageWidth = paperWidthMm - marginX;
+    let y = await drawDocumentHeader(doc, settings, marginX, 8, paperWidthMm);
+
+    y += 2;
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.4);
+    doc.line(marginX, y, pageWidth, y);
+
+    y += 6;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('DEBT PAYMENT RECEIPT', marginX, y);
+
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(formatDateTime(receipt.paidAt || new Date()), marginX, y);
+    y += 4;
+    doc.text(`Customer: ${receipt.customerName || '—'}`, marginX, y);
+    y += 4;
+    doc.text(`Payment method: ${receipt.method}${receipt.mpesaCode ? ` (${receipt.mpesaCode})` : ''}`, marginX, y);
+    if (receipt.paymentReferences?.length) {
+        y += 4;
+        const refText = receipt.paymentReferences.join(', ');
+        const splitRef = doc.splitTextToSize(`Ref: ${refText}`, pageWidth - marginX);
+        doc.text(splitRef, marginX, y);
+        y += (splitRef.length - 1) * 3.5;
+    }
+
+    y += 6;
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(0.2);
+    doc.line(marginX, y, pageWidth, y);
+    y += 6;
+
+    const row = (label, value, boldRow = false) => {
+        doc.setFont('helvetica', boldRow ? 'bold' : 'normal');
+        doc.setFontSize(9);
+        doc.text(label, marginX, y);
+        doc.text(value, pageWidth, y, { align: 'right' });
+        y += 5.5;
+    };
+    row('Previous balance', formatKES(receipt.previousBalance));
+    row('Payment received', formatKES(receipt.amountPaid));
+    y += 1;
+    doc.line(marginX, y, pageWidth, y);
+    y += 5;
+    row('Remaining balance', formatKES(receipt.remainingBalance), true);
+
+    y += 4;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    if (receipt.isCleared) {
+        doc.setTextColor(26, 98, 60); // moss
+        doc.text('STATUS: DEBT CLEARED', marginX, y);
+    } else {
+        doc.setTextColor(196, 68, 29); // rust
+        doc.text('STATUS: PARTIALLY PAID', marginX, y);
+    }
+    doc.setTextColor(0, 0, 0);
+
+    y += 10;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'italic');
+    doc.setTextColor(100, 100, 100);
+    doc.text('Thank you for your payment!', (marginX + pageWidth) / 2, y, { align: 'center' });
+
+    return doc;
+}
+
+export async function generateReceiptPDF(sale, settings) {
+    const doc = await buildDocument(sale, settings, 'RECEIPT');
+    doc.save(`receipt-${sale.id}.pdf`);
+}
+
+export async function printReceipt(sale, settings) {
+    const doc = await buildDocument(sale, settings, 'RECEIPT');
+    doc.autoPrint();
+    window.open(doc.output('bloburl'), '_blank');
+}
+
+export async function generateInvoicePDF(creditSale, settings) {
+    const doc = await buildDocument(creditSale, settings, 'INVOICE');
+    doc.save(`invoice-${creditSale.id}.pdf`);
+}
+
+export async function printInvoice(creditSale, settings) {
+    const doc = await buildDocument(creditSale, settings, 'INVOICE');
+    doc.autoPrint();
+    window.open(doc.output('bloburl'), '_blank');
+}
+
+export async function generateDebtPaymentReceiptPDF(receipt, settings) {
+    const doc = await buildDebtPaymentDocument(receipt, settings);
+    doc.save(`debt-payment-receipt-${Date.now()}.pdf`);
+}
+
+export async function printDebtPaymentReceipt(receipt, settings) {
+    const doc = await buildDebtPaymentDocument(receipt, settings);
+    doc.autoPrint();
+    window.open(doc.output('bloburl'), '_blank');
+}
+
+// FIX (Part 24 — centralize WhatsApp deep-link construction): phone
+// normalization and wa.me URL building used to live here directly; they
+// now live in ./whatsapp.js so every WhatsApp-sharing feature (sale
+// receipts, debt reminders, debt payment receipts) shares one
+// implementation.
+//
+// documentUrl is the public share link from src/utils/documentSharing.js
+// — callers fetch/create it BEFORE calling this function (share-link
+// creation is an async Firestore write; this function stays synchronous
+// and focused on building the message + opening WhatsApp, same contract
+// as before).
+//
+// FIX (multi-product cart): passes sale.items through so a multi-product
+// cart sale's WhatsApp message lists every product, not just one.
+export function sendWhatsAppDocument(sale, settings, phone, documentUrl) {
+    const message = buildReceiptMessage({
+        shopName: settings.shopName || 'FlowBiz Store',
+        customerName: sale.customerName,
+        productName: sale.productName,
+        quantity: sale.quantity,
+        totalAmount: sale.totalAmount,
+        isCredit: sale.isCredit,
+        remainingBalance: sale.remainingBalance ?? sale.totalAmount,
+        businessPhone: settings.phone,
+        documentUrl,
+        formatKES,
+        items: sale.items,
+    });
+    const opened = openWhatsApp(phone, message);
+    if (!opened) throw new Error('Enter a valid phone number.');
+}
+````
+
+## File: src/contexts/AuthContext.jsx
+````javascript
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut as fbSignOut,
+  sendEmailVerification,
+  reload,
+} from 'firebase/auth';
+import {
+  doc,
+  onSnapshot,
+  deleteDoc,
+  updateDoc,
+  collection,
+  addDoc,
+  setDoc,
+  serverTimestamp,
+  query,
+  where,
+  getDocs,
+  getDoc,
+} from 'firebase/firestore';
+import { auth, db } from '../firebase';
+import { raceWithTimeout } from '../utils/offlineWrite';
+
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+const AuthContext = createContext(null);
+
+function getDeviceId() {
+  let id = localStorage.getItem('flowbiz_device_id');
+  if (!id) {
+    id = `dev_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem('flowbiz_device_id', id);
+  }
+  return id;
+}
+function getSessionDocId(uid) {
+  return `${getDeviceId()}__${uid}`;
+}
+
+// src/contexts/AuthContext.jsx — replace guessDeviceLabel()
+function guessDeviceLabel() {
+  const ua = navigator.userAgent || '';
+  let os = 'Unknown device';
+  if (/Android/i.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+  else if (/Windows/i.test(ua)) os = 'Windows';
+  else if (/Macintosh/i.test(ua)) os = 'Mac';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+
+  let browser = '';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/OPR\//i.test(ua)) browser = 'Opera';
+  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
+
+  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches;
+  if (isStandalone) return browser ? `${os} app (${browser})` : `${os} app`;
+  return browser ? `${browser} on ${os}` : os;
+}
+
+export function AuthProvider({ children }) {
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [subscription, setSubscription] = useState({ plan: 'free', status: 'active' });
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
+  const [accountRemoved, setAccountRemoved] = useState(false);
+  const [sessionRevoked, setSessionRevoked] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(false);
+
+  const profileUnsubRef = useRef(null);
+  const sessionUnsubRef = useRef(null);
+  const businessUnsubRef = useRef(null);
+  const sessionRegisteredRef = useRef(null); // `${uid}:${businessId}` already registered this auth session
+
+  const stopListeners = useCallback(() => {
+    profileUnsubRef.current?.();
+    profileUnsubRef.current = null;
+    sessionUnsubRef.current?.();
+    sessionUnsubRef.current = null;
+    businessUnsubRef.current?.();
+    businessUnsubRef.current = null;
+    sessionRegisteredRef.current = null;
+  }, []);
+
+  const registerSession = useCallback(async (uid, businessId, userName) => {
+   // FIX (#16-19/22): loadProfile's onSnapshot re-fires this on every
+   // profile change, not just at sign-in. Without a guard, each call
+   // attached a brand-new listener on sessions/{id} without ever
+   // unsubscribing the last one — a real leak, and wasted re-writes.
+   const key = `${uid}:${businessId}`;
+   if (sessionRegisteredRef.current === key) return;
+   sessionRegisteredRef.current = key;
+    const sessionId = getSessionDocId(uid);
+    const ref = doc(db, 'sessions', sessionId);
+    const currentSnap = await getDoc(ref);
+
+    if (!currentSnap.exists()) {
+      await setDoc(ref, {
+        uid,
+        businessId,
+        lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
+        deviceLabel: guessDeviceLabel(),
+        userAgent: navigator.userAgent,
+        lastActiveAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        revoked: false,
+      });
+    } else {
+      await updateDoc(ref, {
+        uid,
+        businessId,
+        lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
+        lastActiveAt: serverTimestamp(),
+        deviceLabel: guessDeviceLabel(),
+        userAgent: navigator.userAgent,
+        revoked: false, 
+      }).catch(() => {});
+    }
+    sessionUnsubRef.current?.(); // defensive: clear any stale listener first
+    sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
+      if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
+        setSessionRevoked(true);
+        fbSignOut(auth);
+      }
+    });
+  }, []);
+
+  // Background heartbeat to keep the "last seen" time accurate for active devices
+useEffect(() => {
+    if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
+        updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
+      }
+    }, 15 * 60 * 1000); // 15 mins
+    return () => clearInterval(interval);
+  }, [firebaseUser, profile?.businessId, sessionRevoked]);
+
+  // FIX: Used a named function 'doLoad' to resolve the recursive ESLint error
+  const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
+    stopListeners();
+    setAuthError(null);
+    setAccountRemoved(false);
+    setSessionRevoked(false);
+
+    if (!user) {
+      setProfile(null);
+      setSubscription({ plan: 'free', status: 'active' });
+      setEmailVerified(false);
+      setLoading(false);
+      return;
+    }
+
+    setEmailVerified(!!user.emailVerified);
+    setLoading(true);
+    const userRef = doc(db, 'users', user.uid);
+
+    profileUnsubRef.current = onSnapshot(
+      userRef,
+      (snap) => {
+        if (!snap.exists()) {
+          setTimeout(async () => {
+            try {
+              const recheck = await getDoc(userRef);
+              if (!recheck.exists()) {
+                setAccountRemoved(true);
+                setProfile(null);
+                setLoading(false);
+              }
+            } catch (err) {
+              setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
+              setProfile(null);
+              setLoading(false);
+            }
+          }, 4000);
+          return;
+        }
+        setAccountRemoved(false);
+        const data = { uid: user.uid, ...snap.data() };
+        setProfile(data);
+        setLoading(false);
+
+        if (data.businessId) {
+          registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
+          businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
+            if (bizSnap.exists()) {
+              setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
+            }
+          });
+        }
+      },
+      (err) => {
+        if (err.code === 'permission-denied' && retryCount < 3) {
+          const delay = 700 * (retryCount + 1);
+          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying`);
+          setTimeout(() => {
+            if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
+          }, delay);
+          return;
+        }
+        console.error(`[FlowBiz] onSnapshot(users/${user.uid}) failed:`, err.code || err.name, err.message);
+        setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
+        setProfile(null);
+        setLoading(false);
+      }
+    );
+  }, [registerSession, stopListeners]);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      loadProfile(user);
+    });
+    return () => { unsub(); stopListeners(); };
+  }, [loadProfile, stopListeners]);
+
+  const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
+  const logout = () => { stopListeners(); return fbSignOut(auth); };
+  
+  const resendVerificationEmail = async () => {
+    if (!auth.currentUser) throw new Error('Not signed in.');
+ await sendEmailVerification(auth.currentUser, {
+  url: `${window.location.origin}/auth/action`,
+  handleCodeInApp: false,
+});
+  };
+
+  const refreshEmailVerification = useCallback(async () => {
+    if (!auth.currentUser) return false;
+    try {
+      await reload(auth.currentUser);
+    } catch (err) {
+      console.error('[FlowBiz] refreshEmailVerification: reload() failed:', err.code || err.name, err.message);
+      return auth.currentUser?.emailVerified ?? false;
+    }
+    const verified = !!auth.currentUser.emailVerified;
+    setEmailVerified(verified);
+    return verified;
+  }, []);
+
+  const createStaffInvite = async ({ displayName, role = 'cashier' }) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can invite staff.');
+    if (!['owner', 'cashier'].includes(role)) throw new Error('Invalid role.');
+    const trimmed = (displayName || '').trim();
+    if (!trimmed) throw new Error('Enter a name.');
+   const write = addDoc(collection(db, 'staffInvites'), {
+     businessId: profile.businessId,
+     displayName: trimmed,
+     role,
+     createdBy: profile.uid,
+     createdByName: profile.displayName,
+     createdAt: serverTimestamp(),
+     claimed: false,
+     linkedUid: null,
+   });
+   const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
+   if (error) throw error;
+   if (queuedOffline) return { id: null, queuedOffline: true };
+   return { id: value.id };
+  };
+
+  const cancelStaffInvite = async (inviteId) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can cancel an invite.');
+    await deleteDoc(doc(db, 'staffInvites', inviteId));
+  };
+
+  const revokeSessionsForStaffMember = useCallback(async (uid) => {
+    if (!profile?.businessId) return;
+    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', uid), where('businessId', '==', profile.businessId)));
+    await Promise.all(
+      snap.docs.filter((d) => d.data().revoked !== true).map((d) => updateDoc(doc(db, 'sessions', d.id), { revoked: true }))
+    );
+  }, [profile]);
+
+  const removeStaffAccount = async (uid) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can remove staff accounts.');
+    if (uid === profile.uid) throw new Error("You can't remove your own account here.");
+    if (!auth.currentUser) throw new Error('Your session has expired. Please sign in again.');
+
+    const idToken = await auth.currentUser.getIdToken(true);
+    await revokeSessionsForStaffMember(uid);
+
+    let response;
+    try {
+      response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({ targetUid: uid }),
+      });
+    } catch (networkErr) {
+      throw new Error(`Failed to reach the API server. Check your connection.`);
+    }
+
+    let result = null;
+    try { result = await response.json(); } catch { }
+    if (!response.ok) throw new Error(result?.error || result?.message || `Failed to delete the staff account (${response.status}).`);
+
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await deleteDoc(doc(db, 'users', uid));
+        break;
+      } catch (e) {
+        retries--;
+        if (retries === 0) throw new Error("Staff Auth removed, but profile UI deletion timed out. Refresh the page.");
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+  };
+
+  const toggleMemberActive = async (uid, active) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can do this.');
+    await updateDoc(doc(db, 'users', uid), { active });
+    if (active === false) await revokeSessionsForStaffMember(uid);
+  };
+
+  const revokeSession = async (sessionId) => {
+    await updateDoc(doc(db, 'sessions', sessionId), { revoked: true });
+  };
+
+  const listMySessions = async () => {
+    if (!profile) return [];
+    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', profile.uid)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  };
+
+  const listBusinessSessions = async () => {
+    if (!profile?.businessId) return [];
+    const snap = await getDocs(query(collection(db, 'sessions'), where('businessId', '==', profile.businessId)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  };
+
+  const isOwner = profile?.role === 'owner';
+  
+  // FIX: Explicitly convert Timestamp to milliseconds to satisfy strict linters
+  const expiresMs = subscription?.expiresAt?.toMillis 
+    ? subscription.expiresAt.toMillis() 
+    : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
+
+  const isPro = subscription?.plan === 'pro' && 
+                subscription?.status === 'active' &&
+                (!subscription.expiresAt || expiresMs > Date.now());
+
+  return (
+    <AuthContext.Provider
+      value={{
+        firebaseUser, profile, subscription, isPro, loading, authError, accountRemoved, sessionRevoked,
+        businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
+        isActive: profile?.active !== false, emailVerified,
+        login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
+toggleMemberActive, revokeSession, listMySessions, listBusinessSessions,
+        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),        reloadProfile: async () => loadProfile(auth.currentUser),
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  return ctx;
+}
+````
+
+## File: src/pages/Dashboard.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useDailySession } from '../hooks/useDailySession';
+import { useFinancialsForRange } from '../hooks/useFinancials';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import Modal from '../components/common/Modal';
+import SaleModal from '../components/pos/SaleModal';
+import SaleCompleteModal from '../components/pos/SaleCompleteModal';
+import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
+import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+function StatCard({ label, value, tone = 'text-ink-900', sub }) {
+  return (
+    <div className="card p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
+      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
+    </div>
+  );
+}
+
+export default function Dashboard() {
+  const { profile, isAdmin, businessId, isPro } = useAuth();
+  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
+  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
+
+  const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const { data: products } = useFirestoreCollection(productsQuery);
+  const { data: customers } = useFirestoreCollection(customersQuery);
+  const { data: suppliers } = useFirestoreCollection(suppliersQuery);
+
+  const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
+  const [activeProduct, setActiveProduct] = useState(null);
+  const [completedSale, setCompletedSale] = useState(null);
+  const [editProduct, setEditProd] = useState(null);
+  const [prodModal, setProdModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [notFoundCode, setNotFoundCode] = useState(null);
+
+  const [privacyMode, setPrivacyMode] = useState(() => {
+    try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
+    catch { return false; }
+  });
+
+  const togglePrivacyMode = () => {
+    setPrivacyMode((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('flowbiz_dashboard_privacy', String(next)); }
+      catch (err) { console.error('Failed to save privacy mode setting', err); }
+      return next;
+    });
+  };
+
+  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
+
+  const dashboardCashReceived = summary.totalCashReceipts;
+  const dashboardMpesaReceived = summary.totalMpesaReceipts;
+  const dashboardExpenses = summary.totalExpenses;
+  const dashboardNetProfit = summary.netProfit;
+
+  const lowStock = products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
+  const totalInventoryValue = products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
+  const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
+  const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
+  const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
+
+  const recentActivity = useMemo(() => {
+    const list = [];
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      list.push({ id: `sale-${s.id}`, type: 'Sale', title: `${s.quantity} × ${s.productName}`, subtitle: `Sold by ${s.soldByName || 'Staff'}`, amount: s.totalAmount, method: s.paymentMethod, timestamp: s.soldAt, isPositive: true });
+    });
+    (repayments || []).forEach((r) => {
+      list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
+    });
+      (creditSales || []).forEach((cs) => {
+     if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+     list.push({
+       id: `credit-${cs.id}`, type: 'Credit Sale',
+       title: `${cs.quantity} × ${cs.productName}`,
+       subtitle: `${cs.customerName || 'Customer'} · Sold by ${cs.soldByName || 'Staff'}`,
+       amount: cs.totalAmount, method: 'Credit', timestamp: cs.soldAt, isPositive: false,
+     });
+   });
+   return list.sort((a, b) => {
+      const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
+      const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
+      return bTime - aTime;
+    }).slice(0, 8);
+  }, [sales, repayments]);
+
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
+    return { id: ref.id, name, phone };
+  };
+
+  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
+const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
+    const productRef = doc(db, 'products', product.id);
+    const saleRef = doc(collection(db, 'sales'));
+    const saleData = withBusiness({
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit,
+      totalAmount: soldPricePerUnit * quantity,
+      profit: (soldPricePerUnit - product.costPrice) * quantity,
+      paymentMethod, mpesaCode: mpesaCode || null,
+      soldBy: profile.uid, soldByName: profile.displayName,
+      soldAt: new Date(), isCredit: false, isVoided: false,
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(saleRef, saleData);
+
+    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleConfirmCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
+    const productRef = doc(db, 'products', product.id);
+    const totalAmount = soldPricePerUnit * quantity;
+    const creditRef = doc(collection(db, 'creditSales'));
+    const creditData = withBusiness({
+      customerId, customerName, customerPhone: customerPhone || '',
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
+      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
+      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
+      isCredit: true
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(creditRef, creditData);
+
+    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+const handleProductSave = async (data) => {
+    try {
+      if (editProduct) {
+        const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
+      } else {
+        const { queuedOffline } = await createProduct(data, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
+  };
+
+const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setActiveProduct(found);
+    else setNotFoundCode(code);
+  };
+
+  useHardwareScanner(handleScanDetected, {
+    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
+  });
+
+  if (sessionLoading) return <LoadingSpinner label="Loading today's session…" />;
+
+  if (isClosed) {
+    return (
+      <div className="mx-auto max-w-sm space-y-4 text-center">
+        <EmptyState title="Day is closed" description="Sales are locked until you reopen the session or tomorrow starts." />
+        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen today's session</button>}
+      </div>
+    );
+  }
+  if (!session) {
+    return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
+          <div className="flex items-center gap-2 mt-1">
+
+            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
+          </div>
+        </div>
+        <button
+          onClick={togglePrivacyMode}
+          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
+          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
+        >
+          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
+        </button>
+      </div>
+
+      {isAdmin && (
+        <>
+          {financialsLoading ? <LoadingSpinner /> : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
+              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
+              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
+              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
+              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
+<StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
+            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
+          </div>
+        </>
+      )}
+
+      <div>
+        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
+        {recentActivity.length === 0 ? (
+          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
+        ) : (
+          <div className="card divide-y divide-ink-100">
+            {recentActivity.map((act) => (
+              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
+                <div className="min-w-0 flex-1 pr-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
+                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
+                  </div>
+                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <SaleModal 
+        open={!!activeProduct} 
+        product={activeProduct} 
+        customers={customers} 
+        onClose={(record) => {
+          setActiveProduct(null);
+          if (record && record.id) setCompletedSale(record);
+        }} 
+        onConfirmSale={handleConfirmSale} 
+        onConfirmCredit={handleConfirmCredit} 
+        onCreateCustomer={handleCreateCustomer} 
+      />
+      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
+          {isAdmin ? (
+            <button className="btn-primary" onClick={() => { setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
+          ) : (
+            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
+          )}
+        </div>
+      </Modal>
+
+<ProductFormModal
+        open={prodModal}
+        onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
+        onSave={handleProductSave}
+        suppliers={suppliers}
+        initialProduct={editProduct}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+      />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+    </div>
+  );
+}
+````
+
+## File: src/pages/AuthAction.jsx
+````javascript
+import { useEffect, useState } from 'react';
+import { useSearchParams, useNavigate, Link } from 'react-router-dom';
+import {
+  applyActionCode,
+  verifyPasswordResetCode,
+  confirmPasswordReset,
+  reload,
+  checkActionCode,
+  sendEmailVerification,
+} from 'firebase/auth';
+import toast from 'react-hot-toast';
+import { auth } from '../firebase';
+import { CheckCircle2, AlertCircle } from 'lucide-react';
+
+export default function AuthAction() {
+  const [searchParams] = useSearchParams();
+
+  const urlMode = searchParams.get('mode');
+  const oobCode = searchParams.get('oobCode');
+
+  const [resolvedMode, setResolvedMode] = useState(urlMode || null);
+  const [checkingMode, setCheckingMode] = useState(
+    !urlMode && !!oobCode
+  );
+
+  useEffect(() => {
+    if (urlMode || !oobCode) return;
+
+    let cancelled = false;
+
+    checkActionCode(auth, oobCode)
+      .then((info) => {
+        if (cancelled) return;
+
+        if (info.operation === 'PASSWORD_RESET') {
+          setResolvedMode('resetPassword');
+        } else if (info.operation === 'VERIFY_EMAIL') {
+          setResolvedMode('verifyEmail');
+        } else {
+          setResolvedMode('unknown');
+        }
+      })
+      .catch((err) => {
+        console.error(
+          '[FlowBiz] Failed to determine auth action:',
+          err.code,
+          err.message
+        );
+
+        if (!cancelled) {
+          setResolvedMode('unknown');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCheckingMode(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [urlMode, oobCode]);
+
+  if (checkingMode) {
+    return (
+      <Shell>
+        <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
+        <p className="text-sm text-ink-500">
+          Checking your link…
+        </p>
+      </Shell>
+    );
+  }
+
+  if (!oobCode) {
+    return (
+      <Shell>
+        <AlertCircle
+          className="h-12 w-12 mx-auto text-rust-500"
+          strokeWidth={1.5}
+        />
+
+        <h1 className="font-display text-lg font-bold text-ink-900">
+          Invalid link
+        </h1>
+
+        <p className="text-sm text-ink-500">
+          This authentication link is missing required information.
+          Please request a new link.
+        </p>
+
+        <Link to="/login" className="btn-outline w-full">
+          Go to sign in
+        </Link>
+      </Shell>
+    );
+  }
+
+  if (resolvedMode === 'resetPassword') {
+    return <ResetPasswordPanel oobCode={oobCode} />;
+  }
+
+  if (resolvedMode === 'verifyEmail') {
+    return (
+      <VerifyEmailPanel
+        mode="verifyEmail"
+        oobCode={oobCode}
+      />
+    );
+  }
+
+  return (
+    <Shell>
+      <AlertCircle
+        className="h-12 w-12 mx-auto text-rust-500"
+        strokeWidth={1.5}
+      />
+
+      <h1 className="font-display text-lg font-bold text-ink-900">
+        Invalid authentication link
+      </h1>
+
+      <p className="text-sm text-ink-500">
+        We couldn't determine what this link is intended to do.
+        Please request a new link.
+      </p>
+
+      <Link to="/login" className="btn-outline w-full">
+        Go to sign in
+      </Link>
+    </Shell>
+  );
+}
+
+function Shell({ children }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+      <div className="w-full max-w-sm card p-6 text-center space-y-4">
+        <img
+          src="/icons/icon-192.png"
+          alt="FlowBiz"
+          className="mx-auto h-14 w-14 rounded-2xl shadow-lg"
+        />
+
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function VerifyEmailPanel({ mode, oobCode }) {
+  const [status, setStatus] = useState('working');
+  const [message, setMessage] = useState('');
+  const [resending, setResending] = useState(false);
+
+  const navigate = useNavigate();
+
+  const handleRequestNewEmail = async () => {
+    if (!auth.currentUser) {
+      navigate('/login', { replace: true });
+      return;
+    }
+
+    setResending(true);
+
+    try {
+      await sendEmailVerification(auth.currentUser, {
+        url: `${window.location.origin}/auth/action`,
+        handleCodeInApp: false,
+      });
+
+      toast.success(
+        'A new verification email has been sent — check your inbox and spam/junk folder.'
+      );
+    } catch (err) {
+      console.error(
+        '[FlowBiz] AuthAction resend failed:',
+        err.code || err.name,
+        err.message
+      );
+
+      toast.error(
+        "Couldn't send a new verification email right now. Please try again shortly."
+      );
+    } finally {
+      setResending(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function run() {
+      if (oobCode && mode === 'verifyEmail') {
+        try {
+          await applyActionCode(auth, oobCode);
+
+          if (auth.currentUser) {
+            try {
+              await reload(auth.currentUser);
+            } catch {
+              // Non-fatal
+            }
+          }
+
+          if (!cancelled) {
+            setStatus('success');
+            setMessage('Your email has been verified.');
+          }
+        } catch (err) {
+          if (cancelled) return;
+
+          const code = err.code || '';
+
+          if (
+            code === 'auth/invalid-action-code' &&
+            auth.currentUser
+          ) {
+            try {
+              await reload(auth.currentUser);
+
+              if (auth.currentUser.emailVerified) {
+                setStatus('success');
+                setMessage('Your email has been verified.');
+                return;
+              }
+            } catch {
+              // Fall through to error below
+            }
+          }
+
+          setStatus('error');
+
+          setMessage(
+            code === 'auth/expired-action-code'
+              ? 'This verification link has expired. Please request a new one from the app.'
+              : code === 'auth/invalid-action-code'
+                ? "This verification link has already been used or has expired. If you're already verified, just sign in."
+                : "We couldn't verify your email. Please request a new verification link."
+          );
+        }
+
+        return;
+      }
+
+      if (auth.currentUser) {
+        try {
+          await reload(auth.currentUser);
+
+          if (
+            !cancelled &&
+            auth.currentUser.emailVerified
+          ) {
+            setStatus('success');
+            setMessage('Your email has been verified.');
+            return;
+          }
+        } catch {
+          // Fall through to error below
+        }
+      }
+
+      if (!cancelled) {
+        setStatus('error');
+
+        setMessage(
+          "This verification link isn't complete or may have been altered. Please request a new one below."
+        );
+      }
+    }
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, oobCode]);
+
+  return (
+    <Shell>
+      {status === 'working' && (
+        <>
+          <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
+
+          <p className="text-sm text-ink-500">
+            Confirming…
+          </p>
+        </>
+      )}
+
+      {status === 'success' && (
+        <>
+          <CheckCircle2
+            className="h-12 w-12 text-moss-600"
+            strokeWidth={1.5}
+          />
+
+          <h1 className="font-display text-lg font-bold text-ink-900">
+            Email verified
+          </h1>
+
+          <p className="text-sm text-ink-500">
+            {message} You can continue to FlowBiz now.
+          </p>
+
+          <Link to="/" className="btn-primary w-full">
+            Continue to FlowBiz
+          </Link>
+        </>
+      )}
+
+      {status === 'error' && (
+        <>
+          <h1 className="font-display text-lg font-bold text-ink-900">
+            This verification link isn't valid
+          </h1>
+
+          <p className="text-sm text-ink-500">
+            {message}
+          </p>
+
+          <div className="flex flex-col gap-2">
+            <button
+              className="btn-primary w-full"
+              onClick={handleRequestNewEmail}
+              disabled={resending}
+            >
+              {resending
+                ? 'Sending…'
+                : 'Request a new verification email'}
+            </button>
+
+            <Link
+              to="/login"
+              className="btn-outline w-full"
+            >
+              Go to sign in
+            </Link>
+          </div>
+        </>
+      )}
+    </Shell>
+  );
+}
+
+function ResetPasswordPanel({ oobCode }) {
+  const [status, setStatus] = useState('checking');
+  const [message, setMessage] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!oobCode) {
+      setStatus('error');
+      setMessage(
+        'This link is missing required information. Please request a new password reset email.'
+      );
+      return;
+    }
+
+    verifyPasswordResetCode(auth, oobCode)
+      .then((verifiedEmail) => {
+        if (cancelled) return;
+
+        setEmail(verifiedEmail);
+        setStatus('ready');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+
+        const code = err.code || '';
+
+        setStatus('error');
+
+        setMessage(
+          code === 'auth/expired-action-code'
+            ? 'This reset link has expired. Please request a new one.'
+            : code === 'auth/invalid-action-code'
+              ? 'This reset link has already been used or is invalid. Please request a new one.'
+              : 'This reset link is invalid. Please request a new one.'
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [oobCode]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (password.length < 6) {
+      setMessage('Password must be at least 6 characters.');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setMessage('Passwords do not match.');
+      return;
+    }
+
+    setMessage('');
+    setSubmitting(true);
+
+    try {
+      await confirmPasswordReset(
+        auth,
+        oobCode,
+        password
+      );
+
+      setStatus('success');
+    } catch (err) {
+      const code = err.code || '';
+
+      setMessage(
+        code === 'auth/expired-action-code'
+          ? 'This reset link has expired. Please request a new one.'
+          : code === 'auth/weak-password'
+            ? 'Please choose a stronger password.'
+            : "Couldn't reset your password. Please request a new link and try again."
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Shell>
+      {status === 'checking' && (
+        <>
+          <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
+
+          <p className="text-sm text-ink-500">
+            Checking your link…
+          </p>
+        </>
+      )}
+
+      {status === 'ready' && (
+        <form
+          onSubmit={handleSubmit}
+          className="space-y-4 text-left"
+        >
+          <div className="text-center">
+            <h1 className="font-display text-lg font-bold text-ink-900">
+              Choose a new password
+            </h1>
+
+            <p className="mt-1 text-sm text-ink-500">
+              for{' '}
+              <span className="font-semibold">
+                {email}
+              </span>
+            </p>
+          </div>
+
+          {message && (
+            <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">
+              {message}
+            </div>
+          )}
+
+          <div>
+            <label className="label">
+              New password
+            </label>
+
+            <input
+              type="password"
+              className="input"
+              required
+              value={password}
+              onChange={(e) =>
+                setPassword(e.target.value)
+              }
+              placeholder="At least 6 characters"
+              autoComplete="new-password"
+              autoFocus
+            />
+          </div>
+
+          <div>
+            <label className="label">
+              Confirm new password
+            </label>
+
+            <input
+              type="password"
+              className="input"
+              required
+              value={confirmPassword}
+              onChange={(e) =>
+                setConfirmPassword(e.target.value)
+              }
+              autoComplete="new-password"
+            />
+          </div>
+
+          <button
+            type="submit"
+            className="btn-primary w-full"
+            disabled={submitting}
+          >
+            {submitting
+              ? 'Saving…'
+              : 'Save new password'}
+          </button>
+        </form>
+      )}
+
+      {status === 'success' && (
+        <>
+          <CheckCircle2
+            className="h-12 w-12 text-moss-600"
+            strokeWidth={1.5}
+          />
+
+          <h1 className="font-display text-lg font-bold text-ink-900">
+            Password updated
+          </h1>
+
+          <p className="text-sm text-ink-500">
+            You can now sign in with your new password.
+          </p>
+
+          <Link
+            to="/login"
+            className="btn-primary w-full"
+          >
+            Go to sign in
+          </Link>
+        </>
+      )}
+
+      {status === 'error' && (
+        <>
+          <AlertCircle
+            className="h-12 w-12 text-rust-500"
+            strokeWidth={1.5}
+          />
+
+          <h1 className="font-display text-lg font-bold text-ink-900">
+            Something went wrong
+          </h1>
+
+          <p className="text-sm text-ink-500">
+            {message}
+          </p>
+
+          <Link
+            to="/login"
+            className="btn-outline w-full"
+          >
+            Go to sign in
+          </Link>
+        </>
+      )}
+    </Shell>
+  );
+}
+````
+
 ## File: src/pages/CustomerDetail.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -11971,15 +13130,26 @@ export default function CustomerDetail() {
     } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
   };
 
+  // FIX (multi-product cart): a credit sale from Counter.jsx's cart can
+  // carry several products via `items` on one creditSale doc. Cancelling
+  // it now restores stock for every line item (falling back to the
+  // single productId/quantity shape for pre-cart, legacy creditSale docs
+  // — cancelling those still works exactly as before).
   const handleCancel = async (cs) => {
     setCancelTarget(null);
     try {
+      const lineItems = Array.isArray(cs.items) && cs.items.length > 0
+        ? cs.items
+        : [{ productId: cs.productId, quantity: cs.quantity }];
+      const targets = lineItems.filter((item) => item.productId);
+      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
+
       const batch = writeBatch(db);
-      const prodRef = doc(db,'products',cs.productId);
-      const prodSnap = await getDoc(prodRef);
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
-      }
+      targets.forEach((item, idx) => {
+        if (snaps[idx].exists()) {
+          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
+        }
+      });
       batch.update(doc(db,'creditSales',cs.id), {
         status: 'cancelled', remainingBalance: 0,
         cancelledAt: serverTimestamp(), cancelledBy: profile.uid,
@@ -11989,14 +13159,23 @@ export default function CustomerDetail() {
     } catch (err) { toast.error(friendlyErrorMessage(err)); }
   };
 
+  // FIX (multi-product cart): same line-item restoration as handleCancel
+  // above, applied to a refund (a credit sale that had some amount
+  // already paid on it).
   const handleRefund = async (cs, { method }) => {
     try {
+      const lineItems = Array.isArray(cs.items) && cs.items.length > 0
+        ? cs.items
+        : [{ productId: cs.productId, quantity: cs.quantity }];
+      const targets = lineItems.filter((item) => item.productId);
+      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
+
       const batch = writeBatch(db);
-      const prodRef = doc(db,'products',cs.productId);
-      const prodSnap = await getDoc(prodRef);
-      if (prodSnap.exists()) {
-        batch.update(prodRef, { stock: increment(cs.quantity), updatedAt: serverTimestamp() });
-      }
+      targets.forEach((item, idx) => {
+        if (snaps[idx].exists()) {
+          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
+        }
+      });
       batch.update(doc(db,'creditSales',cs.id), {
         status: 'refunded', remainingBalance: 0,
         refundedAt: serverTimestamp(), refundedBy: profile.uid,
@@ -12119,8 +13298,8 @@ import { Check, X, BarChart3, Boxes, FileText, MessageCircle, Users, Sparkles, A
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
 const FEATURE_CATEGORIES = [
-  { icon: BarChart3, title: 'Advanced Analytics', description: 'Revenue trends, profit margins, and staff performance at a glance.' },
-  { icon: Boxes, title: 'Inventory Intelligence', description: 'Spot overstocked capital and get ahead of stockouts before they cost you sales.' },
+  { icon: BarChart3, title: 'Advanced Analytics', description: 'Revenue & profit trends, payment mix, day-of-week patterns, expense breakdown, top debtors, and staff performance all in one dashboard.' },
+  { icon: Boxes, title: 'Inventory Intelligence', description: 'Capital Health scoring, ABC value analysis, reorder suggestions, slow-moving stock alerts, and capital-by-supplier breakdowns.' },
   { icon: FileText, title: 'Professional Documents', description: 'Branded PDF receipts and invoices with your logo, ready to print or download.' },
   { icon: MessageCircle, title: 'WhatsApp Sharing', description: "Send receipts, invoices, and debt reminders straight to a customer's phone." },
 ];
@@ -12130,8 +13309,9 @@ const COMPARISON_ROWS = [
   { label: 'Staff members', free: '1 owner + 1 staff', pro: 'Unlimited' },
   { label: 'Sales, credit & expense tracking', free: true, pro: true },
   { label: 'PDF receipts & invoices', free: true, pro: true },
-  { label: 'Advanced Analytics dashboard', free: false, pro: true },
-  { label: 'Inventory Intelligence', free: false, pro: true },
+  { label: 'Advanced Analytics (trends, staff, day-of-week)', free: false, pro: true },
+  { label: 'Inventory Intelligence & Capital Health', free: false, pro: true },
+  { label: 'Reorder suggestions & ABC value analysis', free: false, pro: true },
   { label: 'WhatsApp receipt & invoice sharing', free: false, pro: true },
 ];
 
@@ -12160,7 +13340,7 @@ export default function Pro() {
       if (data?.access_code && window.PaystackPop) {
         const popup = new window.PaystackPop();
         popup.resumeTransaction(data.access_code, {
-          onSuccess: () => toast.success('Payment received — activating your subscription…'),
+          onSuccess: () => toast.success('Payment received activating your subscription…'),
           onCancel: () => toast('Payment cancelled.'),
         });
       } else if (data?.authorization_url) {
@@ -12193,14 +13373,12 @@ export default function Pro() {
 
       <div className="card overflow-hidden border-moss-200">
         <div className="bg-gradient-to-br from-moss-700 to-moss-900 px-6 py-10 text-center sm:px-10">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-moss-100">
-            <Sparkles className="h-3.5 w-3.5" strokeWidth={2} /> Full business toolkit
-          </span>
+
           <h2 className="mt-4 font-display text-4xl font-extrabold text-white">
             {proPrice != null ? `KSh ${proPrice.toLocaleString('en-KE')}` : '…'}
             <span className="text-base font-medium text-moss-200"> / 30 days</span>
           </h2>
-          <p className="mt-3 max-w-md mx-auto text-sm text-moss-100">Manual renewal — no auto-billing, no surprise charges. You're always in control.</p>
+          <p className="mt-3 max-w-md mx-auto text-sm text-moss-100">Manual renewal, no auto-billing, no surprise charges. You're always in control.</p>
           {isPro ? (
             <div className="mt-7 flex flex-col items-center gap-3">
               <span className="badge bg-white text-moss-800 px-4 py-1.5 text-sm font-bold">FlowBiz Pro Active</span>
@@ -12216,7 +13394,7 @@ export default function Pro() {
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-moss-300 border-t-moss-800" />
                   Loading payment page…
                 </span>
-              ) : `Upgrade to Pro — KSh ${proPrice != null ? proPrice.toLocaleString('en-KE') : '…'}`}
+              ) : `Upgrade to Pro KSh ${proPrice != null ? proPrice.toLocaleString('en-KE') : '…'}`}
             </button>
           )}
         </div>
@@ -12264,8 +13442,8 @@ export default function Pro() {
       </div>
 
       <div className="flex items-center gap-2 text-xs text-ink-400">
-        <Users className="h-3.5 w-3.5" strokeWidth={1.75} />
-        Built for Kenyan shops — pay in KES via M-Pesa or card, powered by Paystack.
+        
+        Built for Kenyan shops pay in KES via M-Pesa or card, powered by Paystack.
       </div>
     </div>
   );

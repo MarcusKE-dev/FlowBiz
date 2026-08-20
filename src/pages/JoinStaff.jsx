@@ -107,21 +107,21 @@ export default function JoinStaff() {
     // FIX: handleCodeInApp: true routes the verification link through
     // FlowBiz's own /auth/action page instead of Firebase's generic
     // hosted page.
-    try {
-      await sendEmailVerification(cred.user, {
-        url: `${window.location.origin}/auth/action`,
-        handleCodeInApp: true,
-      });
-      toast.success(`Welcome, ${displayName}! Check your email to verify your account.`);
-    } catch (err) {
-      console.error('[JoinStaff] sendEmailVerification failed after successful signup:', err.code || err.name, err.message);
-      toast.success(
-        err.code === 'auth/too-many-requests'
-          ? `Welcome, ${displayName}! Your account was created, but too many verification emails have been requested. Use "Resend verification email" in a bit.`
-          : `Welcome, ${displayName}! Your account was created, but we couldn't send the verification email. You can request a new one once you're signed in.`,
-        { duration: 6000 }
-      );
-    }
+try {
+  const idToken = await cred.user.getIdToken(true);
+  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+  });
+  if (!response.ok) throw new Error('request-failed');
+  toast.success(`Welcome, ${displayName}! Check your email to verify your account.`);
+} catch (err) {
+  console.error('[JoinStaff] send-verification-email failed after successful signup:', err.message);
+  toast.success(
+    `Welcome, ${displayName}! Your account was created, but we couldn't send the verification email. You can request a new one once you're signed in.`,
+    { duration: 6000 }
+  );
+}
 
     setSubmitting(false);
     navigate('/', { replace: true });

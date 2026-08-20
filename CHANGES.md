@@ -42,7 +42,7 @@ still populated correctly for a multi-item sale. Only code that attributes
 activity **per product** (receipts, product-performance rankings, refund
 stock restoration) needed to branch on `items[]`.
 
-## 3. Files changed
+## 3. Files changed (round 1 — cart feature)
 
 | File | Change |
 |---|---|
@@ -65,7 +65,7 @@ stock restoration) needed to branch on `items[]`.
 Book ×3 @500 (cost 300) + Storybook ×2 @350 (cost 200) + Pen ×1 @50 (cost 20)
 → cart math produces **Total: KSh 2,250.00**, matching the spec exactly
 (`totalCost=1320`, `profit=930`). Confirmed by running the actual cart
-line-item code, not by hand-calculation — see the transcript above.
+line-item code, not by hand-calculation.
 
 All 11 `financials.test.js` tests pass, including the 3 new ones.
 
@@ -84,42 +84,98 @@ All 11 `financials.test.js` tests pass, including the 3 new ones.
 
 ## 6. Known pre-existing limitation (not introduced, not fixed)
 
-Stock validation is **client-side only** — the app has no Cloud Functions
-tier (per prior notes on this project) and the existing single-product
+Stock validation is **client-side only** — the existing single-product
 flow already relied on `increment()` without a transactional server-side
 check. A cart checkout re-validates against the live `products` snapshot
 immediately before submitting, which is the same level of protection the
 single-product flow had. Two cashiers finishing checkout on the same
 low-stock item within the same instant could still both succeed (stock
 can go negative) — this was true before this change and remains true
-after it. A real fix needs either Cloud Functions (not available on this
-project's plan) or `runTransaction` per product (which the app has
-deliberately avoided everywhere for offline-first reasons — see the
-CR-8 note in the README). Flagging this rather than silently leaving it.
+after it.
 
 ## 7. Discovered but out of scope
 
 - `src/pages/CustomerDetail.jsx`'s credit-purchase list row (`{cs.quantity}
   × {cs.productName}`) will now show something like `"6 × Book +2 more"`
   for a multi-item credit sale — functionally fine (uses the aggregate
-  fields) but not itemized in that list view. Didn't expand it further to
-  avoid an unrelated UI change to that page beyond the refund/cancel fix
-  that was actually required.
+  fields) but not itemized in that list view.
 - No migration is required for existing data: old single-product
   `sales`/`creditSales` docs have no `items` field, and every piece of
   code that now branches on `items[]` falls back to the original
   single-product fields when it's absent.
 
-## 8. Testing performed
+## 8. Testing performed (round 1)
 
 - Syntax-verified every changed/new file with esbuild (all pass).
 - Ran the full `financials.test.js` suite (11/11 pass).
 - Manually traced the spec's own Test 3 numbers through the actual cart
   line-item code (§4).
 - Full manual QA against a live Firebase project (Tests 1–16 in the
-  spec) was **not** run in this environment — there's no Firestore
-  connection available here. Recommend running through the spec's own
-  Test 1–16 checklist once this is merged into the real project,
-  particularly Test 15 (offline) and Test 16 (tenant isolation), since
-  those depend on real network/auth conditions this sandbox can't
-  reproduce.
+  original spec) was **not** run in this environment — there's no
+  Firestore connection available here. Recommend running through that
+  Test 1–16 checklist once merged, particularly offline behavior and
+  tenant isolation, since those depend on real network/auth conditions.
+
+## 9. Follow-up fixes (round 2)
+
+### Cart placement / feedback
+
+- `CartList` is now rendered **above** the search bar and product grid,
+  wrapped in a `sticky top-2 z-20` container — it stays pinned near the
+  top of the visible area as you scroll a long product list, instead of
+  sitting below potentially dozens of products.
+- The cart header (product count + total + **Sell** button) is **always
+  visible**, even collapsed — only the per-line qty/price editor
+  collapses via a chevron toggle, so it stays out of the way while
+  browsing but a sale can be completed with zero scrolling.
+- `ProductGrid` now accepts an optional `cartQuantities` map and shows a
+  small green "🛒 N" badge + highlighted border on any product card
+  already in the cart — a persistent visual confirmation that a
+  tap/scan registered, instead of relying only on the toast that
+  disappears after ~1.2s. `Products.jsx`, which doesn't pass this prop,
+  is unaffected.
+
+### Supplier not appearing after being added
+
+Root cause (found by reading the code, not guessed): `handleSupplierSave`
+across **four** pages (`Purchases.jsx`, `Products.jsx`, `Dashboard.jsx`,
+and the new cart-based `Counter.jsx`) showed an error toast and then
+`return`ed on failure instead of throwing. `SupplierFormModal`'s own
+`try/catch` only reset its "Saving…" button inside the `catch` block —
+so on any failed save, that `catch` never fired, and the button (and the
+whole form) stayed frozen on "Saving…" with no visible way to retry. The
+toast still fired, but if it wasn't seen right away it looked exactly
+like "I added a supplier and nothing happened."
+
+Separately and specifically on **Purchases.jsx**: creating a supplier via
+"+ Add new supplier" *did* get written to Firestore and *would* appear in
+the dropdown's option list (live, via the existing realtime listener) —
+but nothing ever pre-selected it in the purchase form's own
+`form.supplierId`, unlike `ProductFormModal`'s identical "+ Add new
+supplier" flow, which already had this wiring for its own supplier
+field. So a newly created supplier was there, just not selected — easy to
+mistake for "not there" without reopening the dropdown.
+
+Fixed:
+- `handleSupplierSave` now `throw`s after showing its error toast (in
+  all four pages), so `SupplierFormModal` can properly reset via
+  `finally` and the form stays open and usable for retry.
+- `SupplierFormModal.jsx` now resets `busy` in a `finally` block instead
+  of only in `catch`, so it can never get permanently stuck regardless
+  of exactly how a caller reports failure.
+- `Purchases.jsx` now has the same `useEffect(() => { if (newSupplierId)
+  setForm(p => ({ ...p, supplierId: newSupplierId })); }, [newSupplierId])`
+  wiring `ProductFormModal.jsx` already had — a newly created supplier is
+  now pre-selected in the purchase form immediately.
+
+### Files touched in round 2
+
+| File | Change |
+|---|---|
+| `src/pages/Counter.jsx` | Cart moved above search/grid, wrapped in sticky container; `cartQuantities` computed and passed to `ProductGrid`; `handleSupplierSave` throws on error. |
+| `src/components/pos/CartList.jsx` | Collapsible per-line editor; header (count/total/Sell) always visible. |
+| `src/components/pos/ProductGrid.jsx` | New optional `cartQuantities` prop → in-cart badge + highlight. |
+| `src/components/suppliers/SupplierFormModal.jsx` | `busy` reset moved to `finally`. |
+| `src/pages/Purchases.jsx` | Added `newSupplierId` → `form.supplierId` auto-select `useEffect`; `handleSupplierSave` throws on error. |
+| `src/pages/Products.jsx` | `handleSupplierSave` throws on error (consistency fix). |
+| `src/pages/Dashboard.jsx` | `handleSupplierSave` throws on error (consistency fix). |

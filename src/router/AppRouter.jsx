@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { prefetchRoutes } from './routePrefetch';
 
 const routeLoaders = {
+  landing: () => import('../pages/LandingPage'),
   setup: () => import('../pages/Setup'),
   login: () => import('../pages/Login'),
   forgotPassword: () => import('../pages/ForgotPassword'),
@@ -33,6 +34,7 @@ const routeLoaders = {
   terms: () => import('../pages/Terms'),
 };
 
+const LandingPage = lazy(routeLoaders.landing);
 const Setup      = lazy(routeLoaders.setup);
 const Login      = lazy(routeLoaders.login);
 const ForgotPassword = lazy(routeLoaders.forgotPassword);
@@ -71,8 +73,17 @@ function Page({ children, adminOnly = false }) {
 function PublicOnly({ children }) {
   const { firebaseUser, loading } = useAuth();
   if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
-  if (firebaseUser) return <Navigate to="/" replace />;
+  if (firebaseUser) return <Navigate to="/dashboard" replace />;
   return children;
+}
+
+function RootRoute() {
+  const { firebaseUser, loading, isAdmin } = useAuth();
+  if (loading) return <LoadingSpinner label="Loading FlowBiz…" />;
+  if (firebaseUser) {
+    return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
+  }
+  return <LandingPage />;
 }
 
 function RoutePrefetcher() {
@@ -91,8 +102,14 @@ export default function AppRouter() {
     <Suspense fallback={<LoadingSpinner label="Loading..." />}>
       <RoutePrefetcher />
       <Routes>
+        {/* Opens Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
+        <Route path="/" element={<RootRoute />} />
+
+        {/* Public Authentication & Setup */}
         <Route path="/setup" element={<Setup />} />
+        <Route path="/signup" element={<Setup />} />
         <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
+        <Route path="/signin" element={<PublicOnly><Login /></PublicOnly>} />
         <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
         <Route path="/join/:inviteId" element={<JoinStaff />} />
         <Route path="/auth/action" element={<AuthAction />} />
@@ -101,7 +118,8 @@ export default function AppRouter() {
         <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
         <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
 
-        <Route path="/"             element={<Page adminOnly><Dashboard /></Page>} />
+        {/* Protected Store Management Routes */}
+        <Route path="/dashboard"    element={<Page adminOnly><Dashboard /></Page>} />
         <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
         <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
         <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />

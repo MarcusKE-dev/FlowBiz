@@ -107,6 +107,14 @@ export default function Counter() {
     (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
   );
 
+  // Live productId -> quantity map, used to badge cards already in the
+  // cart (see ProductGrid) so tapping/scanning a product gives lasting
+  // visual confirmation, not just a toast that disappears.
+  const cartQuantities = useMemo(
+    () => Object.fromEntries(cart.map((item) => [item.productId, item.quantity])),
+    [cart]
+  );
+
   const mergedSales = useMemo(() => {
     const list = [];
     sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
@@ -337,7 +345,13 @@ export default function Counter() {
   const handleSupplierSave = async (supplierData) => {
     const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
     const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    // FIX (supplier save getting stuck): returning here instead of
+    // throwing left SupplierFormModal's own try/catch never firing, so
+    // its "Saving…" button never reset and the form looked frozen with
+    // no visible way to retry after a failure — the error toast still
+    // fired, but nothing in the UI signalled the form could be tried
+    // again. Throwing lets SupplierFormModal's catch/finally reset it.
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
     if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
     setSupplierModal(false);
     toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
@@ -375,11 +389,12 @@ export default function Counter() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Scan, search, or tap a product to add it to the cart.</p></div>
       </div>
-      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
-      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
-        <ProductGrid products={filtered} onSelect={(product) => addToCart(product, 1)} isAdmin={false} />}
 
-      {cart.length > 0 ? (
+      {/* FIX (cart visibility): pinned to the top and sticky as the page
+          scrolls, so after adding something the cart is never "far down"
+          below a long product list. Renders nothing when the cart is
+          empty — no placeholder clutter until there's something to show. */}
+      <div className="sticky top-2 z-20">
         <CartList
           cart={cart}
           onUpdateQuantity={updateCartQuantity}
@@ -388,9 +403,12 @@ export default function Counter() {
           onClear={clearCart}
           onCheckout={() => setCheckoutOpen(true)}
         />
-      ) : (
-        <div className="card p-4 text-center text-sm text-ink-400">Cart is empty — scan a barcode or tap a product above to add it.</div>
-      )}
+      </div>
+
+      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
+      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
+        <ProductGrid products={filtered} onSelect={(product) => addToCart(product, 1)} isAdmin={false} cartQuantities={cartQuantities} />}
+
 
       {isAdmin && (
         <div className="mt-4">

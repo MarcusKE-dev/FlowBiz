@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { sendPasswordResetEmail } from 'firebase/auth';
-import { auth } from '../firebase';
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
@@ -9,39 +8,25 @@ export default function ForgotPassword() {
   const [sent, setSent] = useState(false);
   const [error, setError] = useState(null);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
-    setSubmitting(true);
-    try {
-await sendPasswordResetEmail(auth, email.trim(), {
-  url: `${window.location.origin}/auth/action`,
-  handleCodeInApp: false,
-});
-      setSent(true);
-} catch (err) {
-      // FIX: previously every error EXCEPT invalid-email/too-many-requests
-      // silently showed "sent" — including real failures (unauthorized
-      // continue URL, network errors, misconfigured project), which is
-      // why resets appeared to silently vanish. Only auth/user-not-found
-      // is safe to mask as success; everything else now shows a real
-      // message, and every error is logged so DevTools shows the cause.
-      console.error('[FlowBiz] sendPasswordResetEmail failed:', err.code || err.name, err.message);
-      const message =
-        err.code === 'auth/invalid-email'             ? 'Please enter a valid email address.' :
-        err.code === 'auth/too-many-requests'         ? 'Too many requests. Please wait a bit before trying again.' :
-        err.code === 'auth/unauthorized-continue-uri' ? 'This site is not yet authorized to send reset links. Please contact support.' :
-        err.code === 'auth/user-not-found'            ? null :
-        "Couldn't send the reset email. Please try again in a moment.";
-      if (message === null) {
-        setSent(true);
-      } else {
-        setError(message);
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  };
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  setError(null);
+  setSubmitting(true);
+  try {
+    const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-password-reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email.trim() }),
+    });
+    if (!response.ok) throw new Error('request-failed');
+    setSent(true);
+  } catch (err) {
+    console.error('[FlowBiz] send-password-reset failed:', err.message);
+    setError("Couldn't send the reset email. Please try again in a moment.");
+  } finally {
+    setSubmitting(false);
+  }
+};
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">

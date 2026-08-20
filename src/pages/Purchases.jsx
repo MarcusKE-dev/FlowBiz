@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { doc, writeBatch, increment, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
 
 import toast from 'react-hot-toast';
@@ -37,6 +37,18 @@ export default function Purchases() {
   const [prefillBarcode, setPrefillBarcode] = useState(null);
   const [scannerOpen, setScannerOpen] = useState(false);
   const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
+
+  // FIX (supplier not showing as selected after creating it): a supplier
+  // created via "+ Add new supplier" was written to Firestore correctly
+  // and would eventually appear in the dropdown's option list once the
+  // realtime listener delivered it, but nothing ever selected it in
+  // `form.supplierId` — the newly created supplier looked like it hadn't
+  // been added at all unless you manually reopened the dropdown and
+  // scrolled to find it. This mirrors the same wiring ProductFormModal
+  // already does for its own supplier field.
+  useEffect(() => {
+    if (newSupplierId) setForm(p => ({ ...p, supplierId: newSupplierId }));
+  }, [newSupplierId]);
 
   const selProd = products.find(p=>p.id===form.productId);
   const selSupp = suppliers.find(s=>s.id===form.supplierId);
@@ -95,10 +107,15 @@ try {
     } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setBusy(false); }
   };
 
-const handleSupplierSave = async (supplierData) => {
+  // FIX (stuck "Saving…" bug): this used to `return` after showing the
+  // error toast, which meant SupplierFormModal's own try/catch never
+  // fired and its "Saving…" button never reset — the form just looked
+  // frozen after a failed save, with no obvious way to try again.
+  // Throwing here lets SupplierFormModal's catch/finally reset it.
+  const handleSupplierSave = async (supplierData) => {
     const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
     const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
     if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
     setSupplierModal(false);
     toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');

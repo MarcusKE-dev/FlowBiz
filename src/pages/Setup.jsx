@@ -1,13 +1,14 @@
 // src/pages/Setup.jsx — replace the entire file
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword, sendEmailVerification, deleteUser } from 'firebase/auth';
+import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
 import { doc, collection, writeBatch, setDoc, serverTimestamp } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { auth, db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 
 const DEFAULT_CATEGORIES = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
 export default function Setup() {
   const { firebaseUser, loading: authLoading } = useAuth();
@@ -115,13 +116,18 @@ export default function Setup() {
       console.error('[FlowBiz] businessSettings write failed (non-fatal):', err.code || err.name, err.message);
     }
 
-    try {
-      await sendEmailVerification(cred.user, { url: `${window.location.origin}/auth/action`, handleCodeInApp: true });
-      toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Check your email to verify your account.`);
-    } catch (err) {
-      console.error('[FlowBiz] sendEmailVerification failed after setup:', err.code || err.name, err.message);
-      toast.success(`Welcome to FlowBiz, ${displayName.trim()}!`);
-    }
+try {
+  const idToken = await cred.user.getIdToken(true);
+  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+  });
+  if (!response.ok) throw new Error('request-failed');
+  toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Check your email to verify your account.`);
+} catch (err) {
+  console.error('[FlowBiz] send-verification-email failed after setup:', err.message);
+  toast.success(`Welcome to FlowBiz, ${displayName.trim()}!`);
+}
 
     setSubmitting(false);
     navigate('/', { replace: true });

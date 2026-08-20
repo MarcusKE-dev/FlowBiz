@@ -8,6 +8,14 @@ export default function SupplierFormModal({ open, onClose, onSave, initialSuppli
   useEffect(() => { setForm(initialSupplier ? {...empty,...initialSupplier} : empty); setBusy(false); }, [initialSupplier, open]);
   const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
 
+  // FIX (stuck "Saving…" bug): onSave (each page's handleSupplierSave)
+  // shows its own error toast and now re-throws on failure. Previously
+  // this component only reset `busy` inside the catch block, but the
+  // pages calling onSave used to swallow the error instead of throwing
+  // it — so on a failed save this button never left "Saving…" and the
+  // form looked frozen, with the toast the only (easy-to-miss) sign
+  // anything went wrong. `finally` now resets it regardless of outcome,
+  // so a failed save leaves the form open and immediately usable again.
   const handle = async e => {
     e.preventDefault();
     if (!form.name.trim() || busy) return;
@@ -15,6 +23,9 @@ export default function SupplierFormModal({ open, onClose, onSave, initialSuppli
     try {
       await onSave({...form,name:form.name.trim()});
     } catch (err) {
+      // Already surfaced via toast by onSave — nothing further to do
+      // here besides letting the form become usable again (below).
+    } finally {
       setBusy(false);
     }
   };

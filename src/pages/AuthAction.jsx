@@ -6,11 +6,12 @@ import {
   confirmPasswordReset,
   reload,
   checkActionCode,
-  sendEmailVerification,
 } from 'firebase/auth';
 import toast from 'react-hot-toast';
 import { auth } from '../firebase';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
+
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
 export default function AuthAction() {
   const [searchParams] = useSearchParams();
@@ -149,8 +150,18 @@ function Shell({ children }) {
   );
 }
 
+// FIX (click-to-confirm): applyActionCode used to fire automatically the
+// instant this page loaded, with no user interaction. Verification
+// oobCodes are single-use — some email providers and corporate security
+// scanners (Outlook Safe Links, some antivirus/email-gateway link
+// scanners, Gmail link prefetching) silently VISIT the link themselves
+// to check it's safe, before the real person ever clicks it. That
+// silently burns the one-time code, so the actual user then lands on an
+// already-used code through no fault of their own. Requiring an explicit
+// "Verify my email" click before calling applyActionCode means only a
+// real person's deliberate action can ever consume the code.
 function VerifyEmailPanel({ mode, oobCode }) {
-  const [status, setStatus] = useState('working');
+  const [status, setStatus] = useState('ready'); // ready -> working -> success | error
   const [message, setMessage] = useState('');
   const [resending, setResending] = useState(false);
 
@@ -165,10 +176,13 @@ function VerifyEmailPanel({ mode, oobCode }) {
     setResending(true);
 
     try {
-      await sendEmailVerification(auth.currentUser, {
-        url: `${window.location.origin}/auth/action`,
-        handleCodeInApp: false,
+      const idToken = await auth.currentUser.getIdToken(true);
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
       });
+
+      if (!response.ok) throw new Error('request-failed');
 
       toast.success(
         'A new verification email has been sent — check your inbox and spam/junk folder.'
@@ -176,7 +190,6 @@ function VerifyEmailPanel({ mode, oobCode }) {
     } catch (err) {
       console.error(
         '[FlowBiz] AuthAction resend failed:',
-        err.code || err.name,
         err.message
       );
 
@@ -188,70 +201,43 @@ function VerifyEmailPanel({ mode, oobCode }) {
     }
   };
 
-  useEffect(() => {
-    let cancelled = false;
+  const handleConfirm = async () => {
+    if (!oobCode || mode !== 'verifyEmail') {
+      setStatus('error');
+      setMessage(
+        "This verification link isn't complete or may have been altered. Please request a new one below."
+      );
+      return;
+    }
 
-    async function run() {
-      if (oobCode && mode === 'verifyEmail') {
-        try {
-          await applyActionCode(auth, oobCode);
+    setStatus('working');
 
-          if (auth.currentUser) {
-            try {
-              await reload(auth.currentUser);
-            } catch {
-              // Non-fatal
-            }
-          }
-
-          if (!cancelled) {
-            setStatus('success');
-            setMessage('Your email has been verified.');
-          }
-        } catch (err) {
-          if (cancelled) return;
-
-          const code = err.code || '';
-
-          if (
-            code === 'auth/invalid-action-code' &&
-            auth.currentUser
-          ) {
-            try {
-              await reload(auth.currentUser);
-
-              if (auth.currentUser.emailVerified) {
-                setStatus('success');
-                setMessage('Your email has been verified.');
-                return;
-              }
-            } catch {
-              // Fall through to error below
-            }
-          }
-
-          setStatus('error');
-
-          setMessage(
-            code === 'auth/expired-action-code'
-              ? 'This verification link has expired. Please request a new one from the app.'
-              : code === 'auth/invalid-action-code'
-                ? "This verification link has already been used or has expired. If you're already verified, just sign in."
-                : "We couldn't verify your email. Please request a new verification link."
-          );
-        }
-
-        return;
-      }
+    try {
+      await applyActionCode(auth, oobCode);
 
       if (auth.currentUser) {
         try {
           await reload(auth.currentUser);
+        } catch {
+          // Non-fatal
+        }
+      }
 
-          if (
-            !cancelled &&
-            auth.currentUser.emailVerified
-          ) {
+      setStatus('success');
+      setMessage('Your email has been verified.');
+    } catch (err) {
+      const code = err.code || '';
+
+      // If this exact code was already consumed (e.g. by a link-scanning
+      // bot before the person clicked "Verify my email" above) but the
+      // account turns out to already be verified, treat it as success —
+      // it genuinely is one — rather than showing an error for something
+      // that already succeeded.
+      if (code === 'auth/invalid-action-code' && auth.currentUser) {
+        try {
+          await reload(auth.currentUser);
+
+          if (auth.currentUser.emailVerified) {
             setStatus('success');
             setMessage('Your email has been verified.');
             return;
@@ -261,24 +247,36 @@ function VerifyEmailPanel({ mode, oobCode }) {
         }
       }
 
-      if (!cancelled) {
-        setStatus('error');
+      setStatus('error');
 
-        setMessage(
-          "This verification link isn't complete or may have been altered. Please request a new one below."
-        );
-      }
+      setMessage(
+        code === 'auth/expired-action-code'
+          ? 'This verification link has expired. Please request a new one below.'
+          : code === 'auth/invalid-action-code'
+            ? "This verification link has already been used or has expired. If you're already verified, just sign in."
+            : "We couldn't verify your email. Please request a new verification link below."
+      );
     }
-
-    run();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [mode, oobCode]);
+  };
 
   return (
     <Shell>
+      {status === 'ready' && (
+        <>
+          <h1 className="font-display text-lg font-bold text-ink-900">
+            Verify your email
+          </h1>
+
+          <p className="text-sm text-ink-500">
+            Click below to confirm your email address and activate your FlowBiz account.
+          </p>
+
+          <button className="btn-primary w-full" onClick={handleConfirm}>
+            Verify my email
+          </button>
+        </>
+      )}
+
       {status === 'working' && (
         <>
           <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />

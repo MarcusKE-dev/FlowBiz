@@ -67,10 +67,13 @@ const handleSave = async (data) => {
       closeFormModal();
     } catch (err) { toast.error(friendlyErrorMessage(err)); }
   };
-const handleSupplierSave = async (supplierData) => {
+  // FIX (stuck "Saving…" bug — same pattern as Purchases.jsx): throw on
+  // error instead of returning, so SupplierFormModal's catch/finally can
+  // reset its "Saving…" button instead of leaving the form frozen.
+  const handleSupplierSave = async (supplierData) => {
     const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
     const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
     if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
     setSupplierModal(false);
     toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');

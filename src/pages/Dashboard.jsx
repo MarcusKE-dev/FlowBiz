@@ -171,10 +171,14 @@ const handleProductSave = async (data) => {
     finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
   };
 
-const handleSupplierSave = async (supplierData) => {
+  // FIX (stuck "Saving…" bug — same pattern as Purchases.jsx/Products.jsx):
+  // throw on error instead of returning, so SupplierFormModal's
+  // catch/finally can reset its "Saving…" button instead of leaving the
+  // form frozen after a failed save.
+  const handleSupplierSave = async (supplierData) => {
     const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
     const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
     if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
     setSupplierModal(false);
     toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
@@ -211,7 +215,10 @@ const handleSupplierSave = async (supplierData) => {
         <div>
           <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
           <div className="flex items-center gap-2 mt-1">
-
+            {isAdmin && (
+<Link to="/pro" className={`badge text-[11px] font-bold transition-colors ${isPro ? 'bg-amber-100 text-amber-800' : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'}`}>                {isPro ? 'FlowBiz Pro ✓' : 'Explore FlowBiz Pro'}
+              </Link>
+            )}
             <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
           </div>
         </div>

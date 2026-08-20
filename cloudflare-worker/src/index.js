@@ -20,7 +20,8 @@ import { handlePaystackInitialize } from './routes/paystackInitialize.js';
 import { handlePaystackWebhook } from './routes/paystackWebhook.js';
 import { handlePublicDocument } from './routes/publicDocument.js';
 import { handleProPrice } from './routes/proPrice.js';
-
+import { handleSendVerificationEmail } from './routes/sendVerificationEmail.js';
+import { handleSendPasswordReset } from './routes/sendPasswordResetEmail.js';
 function getAllowedOrigins(env) {
   return (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
@@ -67,12 +68,12 @@ export default {
     try {
       if (url.pathname === '/api/auth/delete-staff' && request.method === 'POST') {
         response = await handleDeleteStaff(request, env);
-        } else if (url.pathname === '/api/pro/price' && request.method === 'GET') {
+      } else if (url.pathname === '/api/auth/send-verification-email' && request.method === 'POST') {
+        response = await handleSendVerificationEmail(request, env);
+      } else if (url.pathname === '/api/auth/send-password-reset' && request.method === 'POST') {
+        response = await handleSendPasswordReset(request, env);
+      } else if (url.pathname === '/api/pro/price' && request.method === 'GET') {
        response = await handleProPrice();
-      } else if (url.pathname === '/api/paystack/initialize' && request.method === 'POST') {
-        response = await handlePaystackInitialize(request, env);
-      } else {
-        response = errorResponse('Not found.', 404);
       }
     } catch (err) {
       console.error('Unhandled error:', err);

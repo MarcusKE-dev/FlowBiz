@@ -1,36 +1,75 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-KE">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
     <link rel="apple-touch-icon" href="/icons/icon-180.png" />
-    <!-- PWA meta tags -->
+    
+    <!-- PWA & Mobile Meta Tags -->
     <meta name="application-name" content="FlowBiz" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="FlowBiz" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="theme-color" content="#1a623c" />
-    <!-- Viewport: cover ensures notch areas are used. PRIORITY 4 FIX: locked
-         zoom (maximum-scale=1.0, user-scalable=no) for dedicated
-         business-device usage — note this does reduce accessibility for
-         anyone who relies on pinch-zoom to read small text. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="description" content="POS and inventory management for Kenyan businesses" />
-    <!-- Fonts -->
+
+    <!-- SEO & Search Engine Optimization Meta Tags -->
+    <title>FlowBiz — POS, Inventory & Business Manager for Kenyan SMBs</title>
+    <meta name="description" content="Offline-first Point of Sale (POS), real-time stock inventory, M-Pesa till reconciliation, and customer credit (deni) ledger tailored for Kenyan retail shops, wholesalers, and supermarkets." />
+    <meta name="keywords" content="POS Kenya, Point of Sale Nairobi, M-Pesa POS integration, retail management Kenya, duka inventory app, deni credit ledger, Kenyan business software, FlowBiz, stock control Kenya" />
+    <meta name="author" content="FlowBiz" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://flowbiz.co.ke/" />
+
+    <!-- Open Graph (Facebook, WhatsApp, LinkedIn, X preview) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://flowbiz.co.ke/" />
+    <meta property="og:title" content="FlowBiz — Modern POS & Business Manager for Kenyan Shops" />
+    <meta property="og:description" content="Fast offline-first multi-product POS, automated M-Pesa float reconciliation, debt ledger, and inventory intelligence for Kenyan businesses." />
+    <meta property="og:image" content="https://flowbiz.co.ke/icons/icon-512.png" />
+    <meta property="og:locale" content="en_KE" />
+    <meta property="og:site_name" content="FlowBiz" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="FlowBiz — POS & Inventory Management for Kenyan Businesses" />
+    <meta name="twitter:description" content="Manage sales, track cash & M-Pesa till float, audit inventory, and record customer debt with zero false profit illusions." />
+    <meta name="twitter:image" content="https://flowbiz.co.ke/icons/icon-512.png" />
+
+    <!-- Structured Data (Schema.org JSON-LD for Google Rich Results) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "FlowBiz",
+        "operatingSystem": "Web, Android, iOS, Windows, macOS",
+        "applicationCategory": "BusinessApplication",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "KES"
+        },
+        "description": "Offline-first POS and business management software for Kenyan retail, wholesale, and service shops with M-Pesa reconciliation and debt tracking."
+      }
+    </script>
+
+    <!-- Google Fonts Preconnect & Stylesheets -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+    <!-- Firebase & Cloud Performance Preconnects -->
     <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
     <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
     <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
-    <title>FlowBiz | Business Manager</title>
   </head>
-  <body>
+  <body class="bg-[#faf6ef] text-[#15171d] antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <!-- Paystack Inline Payment Gateway Script -->
     <script src="https://js.paystack.co/v2/inline.js"></script>
   </body>
 </html>

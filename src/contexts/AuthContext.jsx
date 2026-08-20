@@ -141,22 +141,28 @@ useEffect(() => {
   }, [firebaseUser, profile?.businessId, sessionRevoked]);
 
   // FIX: Used a named function 'doLoad' to resolve the recursive ESLint error
-  const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
-    stopListeners();
-    setAuthError(null);
-    setAccountRemoved(false);
-    setSessionRevoked(false);
+const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
+  stopListeners();
+  setAuthError(null);
+  setAccountRemoved(false);
+  setSessionRevoked(false);
 
-    if (!user) {
-      setProfile(null);
-      setSubscription({ plan: 'free', status: 'active' });
-      setEmailVerified(false);
-      setLoading(false);
-      return;
-    }
+  if (!user) {
+    setProfile(null);
+    setSubscription({ plan: 'free', status: 'active' });
+    setEmailVerified(false);
+    setLoading(false);
+    return;
+  }
 
-    setEmailVerified(!!user.emailVerified);
-    setLoading(true);
+  setEmailVerified(!!user.emailVerified);
+  setLoading(true);
+
+  // FIX: force-refresh the ID token before attaching the Firestore
+  // listener. Right after sign-in / verification / password reset, the
+  // Firestore SDK's connection can still be using a stale token for a
+  // moment — this closes that gap instead of just hoping it resolves.
+  user.getIdToken(true).catch(() => {}).then(() => {
     const userRef = doc(db, 'users', user.uid);
 
     profileUnsubRef.current = onSnapshot(
@@ -194,9 +200,12 @@ useEffect(() => {
         }
       },
       (err) => {
-        if (err.code === 'permission-denied' && retryCount < 3) {
-          const delay = 700 * (retryCount + 1);
-          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying`);
+        // FIX: more retries, longer backoff — gives slower connections
+        // (mobile networks) a real chance to catch up instead of
+        // dumping the user on an error screen after ~4s.
+        if (err.code === 'permission-denied' && retryCount < 6) {
+          const delay = Math.min(1000 * 2 ** retryCount, 8000);
+          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying (attempt ${retryCount + 1})`);
           setTimeout(() => {
             if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
           }, delay);
@@ -208,7 +217,8 @@ useEffect(() => {
         setLoading(false);
       }
     );
-  }, [registerSession, stopListeners]);
+  });
+}, [registerSession, stopListeners]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -221,13 +231,19 @@ useEffect(() => {
   const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
   const logout = () => { stopListeners(); return fbSignOut(auth); };
   
-  const resendVerificationEmail = async () => {
-    if (!auth.currentUser) throw new Error('Not signed in.');
- await sendEmailVerification(auth.currentUser, {
-  url: `${window.location.origin}/auth/action`,
-  handleCodeInApp: false,
-});
-  };
+const resendVerificationEmail = async () => {
+  if (!auth.currentUser) throw new Error('Not signed in.');
+  const idToken = await auth.currentUser.getIdToken(true);
+  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+  });
+  if (!response.ok) {
+    let message = 'Could not send the verification email.';
+    try { const body = await response.json(); message = body?.error || message; } catch {}
+    throw new Error(message);
+  }
+};
 
   const refreshEmailVerification = useCallback(async () => {
     if (!auth.currentUser) return false;

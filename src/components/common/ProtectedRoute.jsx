@@ -80,25 +80,23 @@ if (loading) return <LoadingSpinner label="Checking your session…" />;
     );
   }
 
-  if (!profile) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
-        <div className="card max-w-md w-full p-6 text-center space-y-4">
-          <AlertCircle className="h-12 w-12 text-amber-500" strokeWidth={1.5} />
-          <h2 className="font-display text-lg font-bold text-ink-900">Profile unavailable</h2>
-          <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-left">
-            <p className="text-xs font-semibold text-rust-700 uppercase tracking-wide">Error details</p>
-            <p className="mt-1 text-sm text-rust-700 break-words font-mono">{authError || 'No error captured — check DevTools console'}</p>
-          </div>
-          <p className="text-sm text-ink-500">If you just updated Firestore rules, your browser may be using a stale offline cache.</p>
-          <div className="flex flex-col gap-2">
-            <button className="btn-primary w-full" onClick={reloadProfile}>Retry profile load</button>
-            <button className="btn-outline w-full" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out and return to login</button>
-          </div>
+if (!profile) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+      <div className="card max-w-md w-full p-6 text-center space-y-4">
+        <AlertCircle className="h-12 w-12 text-amber-500" strokeWidth={1.5} />
+        <h2 className="font-display text-lg font-bold text-ink-900">We couldn't load your account</h2>
+        <p className="text-sm text-ink-500">
+          This usually clears up on its own. Please try again, or sign out and back in if it keeps happening.
+        </p>
+        <div className="flex flex-col gap-2">
+          <button className="btn-primary w-full" onClick={reloadProfile}>Try again</button>
+          <button className="btn-outline w-full" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out and return to login</button>
         </div>
       </div>
-    );
-  }
+    </div>
+  );
+}
 
   if (!isActive) {
     return (
