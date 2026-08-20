@@ -77,12 +77,26 @@ function PublicOnly({ children }) {
   return children;
 }
 
+// src/router/AppRouter.jsx — replace RootRoute, add this helper above it
+
+function isStandalonePWA() {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
 function RootRoute() {
   const { firebaseUser, loading, isAdmin } = useAuth();
 
-  if (loading && !firebaseUser) return <LandingPage />;
   if (loading) return <LoadingSpinner label="Loading FlowBiz…" />;
-  if (firebaseUser) return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
+
+  if (firebaseUser) {
+    return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
+  }
+
+  if (isStandalonePWA()) {
+    return <Navigate to="/login" replace />;
+  }
+
   return <LandingPage />;
 }
 

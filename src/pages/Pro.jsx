@@ -43,7 +43,8 @@ export default function Pro() {
     if (loading) return;
     setLoading(true);
     try {
-      const idToken = await auth.currentUser.getIdToken(true);
+
+      const idToken = await auth.currentUser.getIdToken();
       const response = await fetch(`${FLOWBIZ_API_URL}/api/paystack/initialize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
