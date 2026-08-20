@@ -79,10 +79,10 @@ function PublicOnly({ children }) {
 
 function RootRoute() {
   const { firebaseUser, loading, isAdmin } = useAuth();
+
+  if (loading && !firebaseUser) return <LandingPage />;
   if (loading) return <LoadingSpinner label="Loading FlowBiz…" />;
-  if (firebaseUser) {
-    return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
-  }
+  if (firebaseUser) return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
   return <LandingPage />;
 }
 

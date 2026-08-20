@@ -3,7 +3,7 @@
 // Small part-to-whole breakdown (payment methods, stock health). Always
 // paired with a text legend showing exact values and percentages — the
 // slices alone are never the only way to read the data.
-export default function DonutChart({ segments, size = 148, formatValue = (v) => String(v), centerLabel }) {
+export default function DonutChart({ segments, size = 148, formatValue = (v) => String(v), centerLabel, stacked = false }) {
   const visible = (segments || []).filter((s) => (Number(s.value) || 0) > 0);
   const total = visible.reduce((sum, s) => sum + (Number(s.value) || 0), 0);
   if (total <= 0) return null;
@@ -13,7 +13,7 @@ export default function DonutChart({ segments, size = 148, formatValue = (v) => 
   let offsetAccum = 0;
 
   return (
-    <div className="flex flex-col items-center gap-4 sm:flex-row">
+    <div className={`flex flex-col items-center gap-4 ${stacked ? '' : 'sm:flex-row'}`}>
       <svg viewBox="0 0 100 100" width={size} height={size} className="shrink-0" role="img" aria-label="Breakdown chart">
         <circle cx="50" cy="50" r={radius} fill="none" stroke="currentColor" className="text-ink-100" strokeWidth="14" />
         {visible.map((s, i) => {

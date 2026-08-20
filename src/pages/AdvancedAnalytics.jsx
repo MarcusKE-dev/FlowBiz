@@ -369,28 +369,28 @@ export default function AdvancedAnalytics() {
           <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Standard Reports
         </Link>
       </div>
-
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-white p-3 rounded-xl border border-ink-200">
-        <span className="text-xs font-semibold text-ink-500 uppercase tracking-wider pl-1">Date Range:</span>
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 bg-white p-2.5 rounded-xl border border-ink-200">
+        <span className="hidden sm:inline text-xs font-semibold text-ink-500 uppercase tracking-wider pl-1">Range:</span>
+        <div className="flex flex-wrap items-center gap-1.5">
           {PERIOD_OPTIONS.map((opt) => (
             <button
               key={opt.id}
               onClick={() => setPeriod(opt.id)}
-              className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors ${period === opt.id ? 'bg-ink-900 text-white shadow-sm' : 'bg-ink-50 text-ink-600 hover:bg-ink-100'}`}
+              className={`rounded-lg px-3 py-1.5 text-xs sm:text-sm font-semibold transition-colors ${period === opt.id ? 'bg-ink-900 text-white shadow-sm' : 'bg-ink-50 text-ink-600 hover:bg-ink-100'}`}
             >
               {opt.label}
             </button>
           ))}
-          {period === 'custom' && (
-            <div className="flex items-center gap-2 ml-1 animate-fade-in">
-              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
-              <span className="text-ink-400 text-sm font-medium">to</span>
-              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
-            </div>
-          )}
         </div>
+        {period === 'custom' && (
+          <div className="flex w-full items-center gap-2 sm:w-auto sm:ml-1 animate-fade-in">
+            <input type="date" className="input flex-1 !py-1.5 !min-h-0 text-xs sm:text-sm sm:!w-auto" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
+            <span className="text-ink-400 text-xs">to</span>
+            <input type="date" className="input flex-1 !py-1.5 !min-h-0 text-xs sm:text-sm sm:!w-auto" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
+          </div>
+        )}
       </div>
+      
 
       <div>
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Financial performance</p>
@@ -430,8 +430,9 @@ export default function AdvancedAnalytics() {
         <Section title="Payment Mix" subtitle="How sales value was collected this period" icon={Banknote}>
           {(summary.totalCashSales + summary.totalMpesaSales + summary.totalCreditSales) > 0 ? (
             <>
-              <DonutChart
+             <DonutChart
                 size={150}
+                stacked
                 formatValue={formatKES}
                 segments={[
                   { label: 'Cash', value: summary.totalCashSales, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
@@ -439,7 +440,7 @@ export default function AdvancedAnalytics() {
                   { label: 'Credit (uncollected)', value: summary.totalCreditSales, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
                 ]}
               />
-              <p className="mt-3 text-[11px] leading-relaxed text-ink-400">Credit isn't counted as revenue until it's repaid — see the Executive Summary below.</p>
+              <p className="mt-3 text-[11px] leading-relaxed text-ink-400">Credit isn't counted as revenue until it's repaid see the Executive Summary below.</p>
             </>
           ) : (
             <NoData>No sales recorded yet this period.</NoData>
@@ -516,7 +517,7 @@ export default function AdvancedAnalytics() {
               ))}
             </div>
           ) : (
-            <NoData>No outstanding customer balances — nice and clean!</NoData>
+            <NoData>No outstanding customer balances, nice and clean!</NoData>
           )}
         </Section>
       </div>
