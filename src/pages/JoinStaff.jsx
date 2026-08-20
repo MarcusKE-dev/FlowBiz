@@ -1,9 +1,20 @@
+// src/pages/JoinStaff.jsx
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword, sendEmailVerification, deleteUser } from 'firebase/auth';
-import { doc, getDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
+import { doc, getDoc, writeBatch } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { auth, db } from '../firebase';
+
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+
+export function validatePassword(password) {
+  if (password.length < 8) return 'Password must be at least 8 characters long.';
+  if (!/[A-Z]/.test(password)) return 'Password must contain at least one uppercase letter.';
+  if (!/[a-z]/.test(password)) return 'Password must contain at least one lowercase letter.';
+  if (!/[0-9]/.test(password)) return 'Password must contain at least one number.';
+  return null;
+}
 
 export default function JoinStaff() {
   const { inviteId } = useParams();
@@ -25,9 +36,13 @@ export default function JoinStaff() {
       try {
         const snap = await getDoc(doc(db, 'staffInvites', inviteId));
         if (cancelled) return;
-        if (!snap.exists()) { setNotFound(true); setChecking(false); return; }
+        if (!snap.exists()) {
+          setNotFound(true);
+          setChecking(false);
+          return;
+        }
         setInvite({ id: snap.id, ...snap.data() });
-      } catch (err) {
+      } catch {
         setNotFound(true);
       } finally {
         if (!cancelled) setChecking(false);
@@ -40,8 +55,15 @@ export default function JoinStaff() {
     e.preventDefault();
     setError(null);
 
-    if (password.length < 6) { setError('Password must be at least 6 characters.'); return; }
-    if (password !== confirmPassword) { setError('Passwords do not match.'); return; }
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
 
     setSubmitting(true);
 
@@ -50,8 +72,8 @@ export default function JoinStaff() {
       freshSnap = await getDoc(doc(db, 'staffInvites', inviteId));
       if (!freshSnap.exists()) throw new Error('This invite is no longer valid.');
       if (freshSnap.data().claimed) throw new Error('This invite has already been used.');
-    } catch (err) {
-      setError(err.message || 'This invite could not be validated. Please try again.');
+    } catch (validationErr) {
+      setError(validationErr.message || 'This invite could not be validated. Please try again.');
       setSubmitting(false);
       return;
     }
@@ -60,11 +82,11 @@ export default function JoinStaff() {
     let cred;
     try {
       cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-    } catch (err) {
+    } catch (authErr) {
       const message =
-        err.code === 'auth/email-already-in-use' ? "An account with this email already exists." :
-        err.code === 'auth/invalid-email'        ? 'Please enter a valid email address.' :
-        err.code === 'auth/weak-password'         ? 'Password is too weak.' :
+        authErr.code === 'auth/email-already-in-use' ? "An account with this email already exists." :
+        authErr.code === 'auth/invalid-email'        ? 'Please enter a valid email address.' :
+        authErr.code === 'auth/weak-password'         ? 'Password should be at least 8 characters with upper, lower, and numbers.' :
         'Could not create your account. Please try again.';
       setError(message);
       setSubmitting(false);
@@ -80,48 +102,34 @@ export default function JoinStaff() {
         role,
         businessId,
         active: true,
-        createdAt: serverTimestamp(),
+        createdAt: new Date(),
         claimedFromInviteId: inviteId,
       });
       batch.update(doc(db, 'staffInvites', inviteId), {
         claimed: true,
         linkedUid: cred.user.uid,
-        claimedAt: serverTimestamp(),
+        claimedAt: new Date(),
       });
       await batch.commit();
-    } catch (err) {
-      console.error('[JoinStaff] Firestore registration failed after Auth account creation — rolling back:', err.code || err.name, err.message);
-      try {
-        await deleteUser(cred.user);
-      } catch (rollbackErr) {
-        console.error('[JoinStaff] Rollback failed — an orphaned Auth account may remain:', rollbackErr);
-        setError('Something went wrong finishing your signup, and we could not fully undo it. Please contact your business owner before trying again with this email.');
-        setSubmitting(false);
-        return;
-      }
-      setError('Something went wrong finishing your signup. Please try again.');
+    } catch (dbErr) {
+      console.error('[JoinStaff] Firestore write failed:', dbErr);
+      try { await deleteUser(cred.user); } catch {}
+      setError('Something went wrong completing your signup. Please contact your business owner.');
       setSubmitting(false);
       return;
     }
 
-    // FIX: handleCodeInApp: true routes the verification link through
-    // FlowBiz's own /auth/action page instead of Firebase's generic
-    // hosted page.
-try {
-  const idToken = await cred.user.getIdToken(true);
-  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-  });
-  if (!response.ok) throw new Error('request-failed');
-  toast.success(`Welcome, ${displayName}! Check your email to verify your account.`);
-} catch (err) {
-  console.error('[JoinStaff] send-verification-email failed after successful signup:', err.message);
-  toast.success(
-    `Welcome, ${displayName}! Your account was created, but we couldn't send the verification email. You can request a new one once you're signed in.`,
-    { duration: 6000 }
-  );
-}
+    try {
+      const idToken = await cred.user.getIdToken(true);
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      });
+      if (!response.ok) throw new Error('send-verification-failed');
+      toast.success(`Welcome, ${displayName}! Check your email to verify your account.`);
+    } catch {
+      toast.success(`Welcome, ${displayName}! Your account was created.`);
+    }
 
     setSubmitting(false);
     navigate('/', { replace: true });
@@ -135,7 +143,7 @@ try {
         <div className="w-full max-w-sm card p-6 text-center space-y-3">
           <div className="text-3xl">🔗</div>
           <h1 className="font-display text-lg font-bold text-ink-900">Invite not found</h1>
-          <p className="text-sm text-ink-500">This link may be wrong, or the invite was cancelled. Ask whoever invited you for a fresh link.</p>
+          <p className="text-sm text-ink-500">This link may be invalid or was cancelled by the business owner.</p>
           <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
         </div>
       </div>
@@ -147,8 +155,8 @@ try {
       <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
         <div className="w-full max-w-sm card p-6 text-center space-y-3">
           <div className="text-3xl">✅</div>
-          <h1 className="font-display text-lg font-bold text-ink-900">This invite has already been used</h1>
-          <p className="text-sm text-ink-500">If this is you, sign in with the email and password you already set.</p>
+          <h1 className="font-display text-lg font-bold text-ink-900">Invite Already Claimed</h1>
+          <p className="text-sm text-ink-500">Please sign in with your email and password.</p>
           <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
         </div>
       </div>
@@ -164,7 +172,7 @@ try {
           <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
           <div>
             <h1 className="font-display text-2xl font-bold text-white">Welcome, {invite.displayName}</h1>
-            <p className="text-sm text-ink-400">You've been invited as {roleLabel}. Set up your sign-in below.</p>
+            <p className="text-sm text-ink-400">You have been invited as {roleLabel}.</p>
           </div>
         </div>
         <form onSubmit={handleSubmit} className="card space-y-4 p-6">
@@ -176,7 +184,7 @@ try {
           </div>
           <div>
             <label className="label">Choose a password</label>
-            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters" autoComplete="new-password" />
+            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 chars (upper, lower, number)" autoComplete="new-password" />
           </div>
           <div>
             <label className="label">Confirm password</label>

@@ -4,14 +4,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { tenantQuery } from '../lib/tenant';
 import { computeFinancials } from '../utils/financials';
 
-// MULTI-TENANT CHANGE: every query here used to read the WHOLE `sales`,
-// `creditSales`, etc. collections (filtered only by date). On a
-// multi-tenant project those collections hold every business's
-// documents, so each query below now also filters on this business's
-// `businessId` via tenantQuery() — the exact same date-range filtering
-// as before, just additionally scoped. businessId comes from useAuth()
-// internally so every existing caller (Dashboard.jsx, CloseDay.jsx,
-// Reports.jsx) needs NO changes to how they call this hook.
 export function useFinancialsForRange(start, end) {
   const { businessId } = useAuth();
   const [state, setState] = useState({
@@ -29,22 +21,27 @@ export function useFinancialsForRange(start, end) {
     const flush = () => {
       if (!mounted) return;
       const { sales, allCreditSales, expenses, repayments, purchases, supplierPayments, refunds } = dataRef.current;
-      const startMs = typeof start?.toMillis === 'function' ? start.toMillis() : start.getTime();
-      const endMs = typeof end?.toMillis === 'function' ? end.toMillis() : end.getTime();
+      const startMs = typeof start?.toMillis === 'function' ? start.toMillis() : (start instanceof Date ? start.getTime() : new Date(start).getTime());
+      const endMs = typeof end?.toMillis === 'function' ? end.toMillis() : (end instanceof Date ? end.getTime() : new Date(end).getTime());
+
       const rangeCreditSales = allCreditSales.filter((entry) => {
-        const soldAt = entry?.soldAt?.toMillis?.() ?? entry?.soldAt?.toDate?.().getTime?.() ?? entry?.soldAt;
+        const raw = entry?.soldAt;
+        const soldAt = raw?.toMillis?.() ?? (raw instanceof Date ? raw.getTime() : (typeof raw === 'number' ? raw : (raw?.toDate?.()?.getTime?.() ?? Date.now())));
         return typeof soldAt === 'number' && soldAt >= startMs && soldAt <= endMs;
       });
+
       setState({
         loading: false, error: null,
         sales, creditSales: rangeCreditSales, expenses, repayments, purchases, supplierPayments, refunds,
         summary: computeFinancials({ sales, creditSales: rangeCreditSales, allCreditSales, expenses, debtRepayments: repayments, purchases, supplierPayments, refunds }),
       });
     };
+
     const schedule = () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = requestAnimationFrame(flush);
     };
+
     const onErr = err => mounted && setState(s => ({ ...s, loading: false, error: err.message }));
 
     const salesQ      = tenantQuery('sales', businessId, where('soldAt','>=',start), where('soldAt','<=',end), orderBy('soldAt','desc'));
@@ -63,7 +60,11 @@ export function useFinancialsForRange(start, end) {
     const u6 = onSnapshot(supplierPaymentsQ, s => { dataRef.current.supplierPayments = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
     const u7 = onSnapshot(refundsQ, s => { dataRef.current.refunds = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
 
-    return () => { mounted=false; u1(); u2(); u3(); u4(); u5(); u6(); u7(); if(rafRef.current) cancelAnimationFrame(rafRef.current); };
+    return () => {
+      mounted = false;
+      u1(); u2(); u3(); u4(); u5(); u6(); u7();
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
   }, [start, end, businessId]);
 
   return state;

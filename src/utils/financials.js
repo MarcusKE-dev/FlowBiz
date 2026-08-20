@@ -1,16 +1,8 @@
+// src/utils/financials.js
 function sumBy(rows, field) {
   return rows.reduce((acc, row) => acc + (Number(row[field]) || 0), 0);
 }
 
-// FIX (multi-product cart): a multi-item cart sale/creditSale doc stores
-// its aggregate cost of goods sold directly on the doc as
-// `costOfGoodsSold` (see Counter.jsx's buildLineItems/handleCartSale/
-// handleCartCredit) — a single costPricePerUnit can no longer represent a
-// transaction that mixes several products at different cost prices.
-// Older, single-product sale/creditSale docs (and any new single-item
-// cart checkout) never had that field, so this falls back to the
-// original costPricePerUnit × quantity calculation for those — nothing
-// about how existing single-product sales are read changes.
 function getCostOfSale(row) {
   if (row && typeof row.costOfGoodsSold === 'number' && Number.isFinite(row.costOfGoodsSold)) {
     return row.costOfGoodsSold;
@@ -23,33 +15,35 @@ function getCostOfSale(row) {
 export function isExpenseExcluded(expense) {
   const category = String(expense?.category || '').toLowerCase();
   const description = String(expense?.description || '').toLowerCase();
-  return category === 'stock purchase' || category === 'supplier payment' || description.includes('stock purchase') || description.includes('supplier payment');
+  return (
+    category === 'stock purchase' ||
+    category === 'supplier payment' ||
+    description.includes('stock purchase') ||
+    description.includes('supplier payment')
+  );
 }
 
-// A credit sale that was cancelled (nothing was ever paid on it) or
-// refunded (goods returned, whatever was paid handed back) no longer
-// represents real business — it must not contribute to Outstanding Debt
-// or the Credit Sales metric. Same precedent as `isVoided` on cash sales.
 function isCreditSaleReversed(creditSale) {
   return creditSale?.status === 'cancelled' || creditSale?.status === 'refunded';
 }
 
-// HYBRID MODEL (FINAL business decision): a credit sale is NOT realized
-// revenue until the customer actually pays. The moment a credit sale is
-// recorded, Inventory Value drops and Outstanding Debt / Credit Sales
-// rise — but Revenue, COGS, and Profit all stay at ZERO for that sale.
-// Only a Debt Repayment converts a portion of it into Revenue, COGS, and
-// Profit — proportional to how much of THAT specific credit sale has
-// just been collected. `creditSaleById` must be built from the FULL,
-// all-time credit sales list (not just the reporting period's), because
-// a repayment can land in a different period than the original sale.
 function recognizeRepayment(repayment, creditSaleById) {
   const amount = Number(repayment?.amount) || 0;
   const creditSale = creditSaleById.get(repayment?.creditSaleId);
   if (!creditSale) {
-    // Originating credit sale not found (shouldn't normally happen) —
-    // recognize the cash as revenue with no cost basis rather than
-    // silently dropping it from the books.
+    return { revenue: amount, cogs: 0 };
+  }
+  const totalAmount = Number(creditSale.totalAmount) || 0;
+  const totalCost = getCostOfSale(creditSale);
+  const ratio = totalAmount > 0 ? amount / totalAmount : 0;
+  const cogs = totalCost * ratio;
+  return { revenue: amount, cogs };
+}
+
+function recognizeRefund(refund, creditSaleById) {
+  const amount = Number(refund?.amount) || 0;
+  const creditSale = creditSaleById.get(refund?.creditSaleId);
+  if (!creditSale) {
     return { revenue: amount, cogs: 0 };
   }
   const totalAmount = Number(creditSale.totalAmount) || 0;
@@ -77,11 +71,6 @@ export function computeFinancials({
   const totalCashSales  = sumBy(cashSales,  'totalAmount');
   const totalMpesaSales = sumBy(mpesaSales, 'totalAmount');
 
-  // "Credit Sales" is a business-activity metric — total value of goods
-  // sold on credit this period. It intentionally does NOT feed into
-  // Revenue / COGS / Profit below (see recognizeRepayment()). This is the
-  // core of the FINAL decision: the owner should never see profit that
-  // has not yet been collected.
   const totalCreditSales = sumBy(activeCreditSales, 'totalAmount');
 
   const cashRepayments  = debtRepayments.filter(r => r.method === 'Cash');
@@ -90,10 +79,12 @@ export function computeFinancials({
   const totalDebtRepaymentsMpesa = sumBy(mpesaRepayments, 'amount');
   const totalDebtRepayments = totalDebtRepaymentsCash + totalDebtRepaymentsMpesa;
 
-  // Lookup of EVERY credit sale (not just this period's) so a repayment
-  // can find its cost basis even when the sale happened earlier. Falls
-  // back to the period-scoped `creditSales` if the caller didn't supply
-  // the full list.
+  const cashRefunds  = (refunds || []).filter(r => r.method === 'Cash');
+  const mpesaRefunds = (refunds || []).filter(r => r.method === 'M-Pesa');
+  const totalRefundsCash  = sumBy(cashRefunds,  'amount');
+  const totalRefundsMpesa = sumBy(mpesaRefunds, 'amount');
+  const totalRefunds = totalRefundsCash + totalRefundsMpesa;
+
   const creditSaleSource = allCreditSales || creditSales || [];
   const creditSaleById = new Map(creditSaleSource.map((cs) => [cs.id, cs]));
 
@@ -105,22 +96,19 @@ export function computeFinancials({
     repaymentCogs += cogs;
   });
 
-  // Direct (cash/M-Pesa) sales realize revenue and COGS the instant they
-  // happen. Credit sales contribute ZERO here directly — only the
-  // repaymentRevenue / repaymentCogs recognized above, at the moment the
-  // customer actually pays.
+  let refundRevenue = 0;
+  let refundCogs = 0;
+  (refunds || []).forEach((ref) => {
+    const { revenue, cogs } = recognizeRefund(ref, creditSaleById);
+    refundRevenue += revenue;
+    refundCogs += cogs;
+  });
+
   const directSalesCostOfGoodsSold = activeSales.reduce((acc, s) => acc + getCostOfSale(s), 0);
-  const costOfGoodsSold = directSalesCostOfGoodsSold + repaymentCogs;
+  const costOfGoodsSold = Math.max(0, directSalesCostOfGoodsSold + repaymentCogs - refundCogs);
 
-  // "Gross sales revenue" — total value of everything SOLD this period
-  // regardless of payment method. Informational only (Sales Summary) —
-  // it is NOT used for profit. See `revenue` below.
   const grossSalesRevenue = totalCashSales + totalMpesaSales + totalCreditSales;
-
-  // Realized revenue — what actually counts toward profit, per the FINAL
-  // business decision: cash + M-Pesa sales, plus whatever portion of
-  // credit sales (from any period) was actually collected this period.
-  const revenue = totalCashSales + totalMpesaSales + repaymentRevenue;
+  const revenue = Math.max(0, totalCashSales + totalMpesaSales + repaymentRevenue - refundRevenue);
   const grossProfit = revenue - costOfGoodsSold;
 
   const filteredExpenses = (expenses || []).filter((expense) => !isExpenseExcluded(expense));
@@ -131,25 +119,15 @@ export function computeFinancials({
   const totalExpenses = totalExpensesCash + totalExpensesMpesa;
   const netProfit     = grossProfit - totalExpenses;
 
-  // CASH POSITION: strictly real money movement, independent of the
-  // revenue-recognition timing above. This is what Cash Received Today /
-  // M-Pesa Received Today and the Close Day till reconciliation rely on.
-  const totalCashReceipts  = totalCashSales  + totalDebtRepaymentsCash;
-  const totalMpesaReceipts = totalMpesaSales + totalDebtRepaymentsMpesa;
-
-  const cashRefunds  = (refunds || []).filter(r => r.method === 'Cash');
-  const mpesaRefunds = (refunds || []).filter(r => r.method === 'M-Pesa');
-  const totalRefundsCash  = sumBy(cashRefunds,  'amount');
-  const totalRefundsMpesa = sumBy(mpesaRefunds, 'amount');
-  const totalRefunds = totalRefundsCash + totalRefundsMpesa;
+  // Realized net receipts by tender method
+  const totalCashReceipts  = Math.max(0, totalCashSales  + totalDebtRepaymentsCash  - totalRefundsCash);
+  const totalMpesaReceipts = Math.max(0, totalMpesaSales + totalDebtRepaymentsMpesa - totalRefundsMpesa);
 
   const purchasePaymentsCash  = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash');
   const purchasePaymentsMpesa = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa');
   const supplierPaymentsCash  = (supplierPayments || []).filter((p) => p.method === 'Cash');
   const supplierPaymentsMpesa = (supplierPayments || []).filter((p) => p.method === 'M-Pesa');
-  // Refunds are cash/M-Pesa leaving the till, just like an expense or a
-  // supplier payment — folded into the same outflow totals so Close Day's
-  // till reconciliation stays correct without any formula change there.
+
   const totalCashOutflows  = sumBy(purchasePaymentsCash,  'totalCost') + sumBy(supplierPaymentsCash,  'amount') + totalRefundsCash;
   const totalMpesaOutflows = sumBy(purchasePaymentsMpesa, 'totalCost') + sumBy(supplierPaymentsMpesa, 'amount') + totalRefundsMpesa;
 

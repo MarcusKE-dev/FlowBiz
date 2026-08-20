@@ -58,6 +58,7 @@ service cloud.firestore {
       allow delete: if isOwner() && owns(resource.data);
       allow update: if false;
     }
+
     match /productCodeCounters/{businessId} {
       allow read, write: if isOwner() && myBusinessId() == businessId;
     }
@@ -103,7 +104,7 @@ service cloud.firestore {
       allow delete: if isOwner() && resource.data.businessId == myBusinessId();
     }
 
-    // ── Device sessions (Settings > Device Management) ────────────────
+    // ── Device sessions ───────────────────────────────────────────────
     match /sessions/{sessionId} {
       allow create: if isStaff() && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == myBusinessId();
 
@@ -120,10 +121,10 @@ service cloud.firestore {
         (isOwner() && resource.data.businessId == myBusinessId()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked']))
       );
-      allow delete: if false;
+      allow delete: if isOwner() && resource.data.businessId == myBusinessId();
     }
 
-    // ── Business data ───────────────────────────────────────────────────
+    // ── Business operational data ──────────────────────────────────────
     match /products/{id} {
       allow read: if owns(resource.data);
       allow create: if isOwner() && owns(request.resource.data);
@@ -169,37 +170,19 @@ service cloud.firestore {
       allow delete: if isOwner() && owns(resource.data);
     }
 
-    // FIX (debt-payment receipt sharing): an immutable read-only snapshot
-    // of a debt payment, written by CustomerDetail.jsx in the same batch
-    // as the repayments it summarizes. It exists purely so a document
-    // (previousBalance/amountPaid/remainingBalance/status) can be shared
-    // publicly the same way a sales/creditSales doc already can — see
-    // src/utils/documentSharing.js and cloudflare-worker/src/routes/
-    // publicDocument.js. Never publicly readable via the client SDK: the
-    // public route resolves it with the Worker's own service-account
-    // credentials, which bypass these rules entirely, same as every other
-    // Worker route already does.
     match /debtPaymentReceipts/{id} {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data);
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if isOwner() && owns(resource.data);
     }
 
-    // FIX (secure public document links): maps an opaque, unguessable
-    // token (the document ID itself — see documentSharing.js) to exactly
-    // one { businessId, documentType, documentId }. This collection is
-    // NEVER publicly readable — these rules only ever let a business's
-    // own signed-in staff create a share link or look up whether one
-    // already exists (Part: reuse an existing token instead of minting a
-    // new one every time WhatsApp sharing is clicked). The actual public
-    // /r/<token> page never touches these rules at all; it's resolved
-    // Worker-side with service-account credentials, same trust boundary
-    // as every other privileged Worker route.
     match /sharedDocuments/{token} {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data)
                     && request.resource.data.documentType in ['receipt', 'invoice', 'debtPaymentReceipt'];
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if isOwner() && owns(resource.data);
     }
 
     match /refunds/{id} {

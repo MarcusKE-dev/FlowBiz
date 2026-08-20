@@ -1,3 +1,4 @@
+// src/pages/Settings.jsx
 import { useEffect, useMemo, useState } from 'react';
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
@@ -15,7 +16,6 @@ import { raceWithTimeout } from '../utils/offlineWrite';
 const RESET_CONFIRM_PHRASE = 'RESET';
 
 export default function Settings() {
-  // FIX: Removed unused 'isOwner' and 'subscription' variables from extraction
   const { profile, businessId, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro } = useAuth();
   const demo = isDemoMode();
   const [loading, setLoading]     = useState(true);
@@ -36,6 +36,7 @@ export default function Settings() {
 
   const [sessions, setSessions] = useState([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
+
   const deviceGroups = useMemo(() => {
     const groups = new Map();
     for (const s of sessions) {
@@ -47,7 +48,10 @@ export default function Settings() {
       } else {
         existing.ids.push(s.id);
         if (s.revoked !== true) existing.anyActive = true;
-        if (lastActiveMs > existing.lastActiveMs) { existing.lastActiveMs = lastActiveMs; existing.lastUserName = s.lastUserName; }
+        if (lastActiveMs > existing.lastActiveMs) {
+          existing.lastActiveMs = lastActiveMs;
+          existing.lastUserName = s.lastUserName;
+        }
       }
     }
     return Array.from(groups.values()).sort((a, b) => b.lastActiveMs - a.lastActiveMs);
@@ -57,7 +61,7 @@ export default function Settings() {
   const [archivedLoading, setArchivedLoading] = useState(false);
   const [archivedOpen, setArchivedOpen] = useState(false);
 
-  const settingsRef = businessId ? doc(db, 'businessSettings', businessId) : null;
+  const settingsRef = useMemo(() => (businessId ? doc(db, 'businessSettings', businessId) : null), [businessId]);
 
   function compressImage(file, maxDimension = 480, quality = 0.75) {
     return new Promise((resolve, reject) => {
@@ -70,6 +74,10 @@ export default function Settings() {
         canvas.width = Math.round(img.width * scale);
         canvas.height = Math.round(img.height * scale);
         const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas context unavailable.'));
+          return;
+        }
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         canvas.toBlob((blob) => {
           if (!blob) { reject(new Error('Could not process image.')); return; }
@@ -91,8 +99,11 @@ export default function Settings() {
   }
 
   useEffect(() => {
-    if (!settingsRef) return;
-    getDoc(settingsRef).then(snap => {
+    if (!settingsRef) {
+      setLoading(false);
+      return;
+    }
+    getDoc(settingsRef).then((snap) => {
       if (snap.exists()) { 
         const d = snap.data(); 
         setShopName(d.shopName || ''); 
@@ -103,13 +114,16 @@ export default function Settings() {
         setCashierExp(d.cashierCanRecordExpenses !== false); 
       }
       setLoading(false);
-    });
-  }, [businessId]);
+    }).catch(() => setLoading(false));
+  }, [settingsRef]);
 
   useEffect(() => {
-    if (!businessId) return;
+    if (!businessId) {
+      setSessionsLoading(false);
+      return;
+    }
     listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
-  }, [businessId]);
+  }, [businessId, listBusinessSessions]);
 
   const loadArchived = async () => {
     if (!businessId) return;
@@ -122,8 +136,9 @@ export default function Settings() {
     }
   };
 
-  const handleSave = async e => {
+  const handleSave = async (e) => {
     e.preventDefault(); 
+    if (!settingsRef) return;
     setSaving(true);
     try {
       let finalLogoUrl = logoUrl;
@@ -163,6 +178,7 @@ export default function Settings() {
   };
 
   const handleSavePermissions = async () => {
+    if (!settingsRef) return;
     setSavingPermissions(true);
     const write = setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
     const { queuedOffline, error } = await raceWithTimeout(write, 4000);
@@ -183,13 +199,13 @@ export default function Settings() {
       }
       window.location.href = '/';
     } catch (err) {
-      toast.error(`Reset failed partway through: ${err.message}`);
+      toast.error(`Reset failed: ${err.message}`);
       setResetting(false);
       setResetDialogOpen(false);
     }
   };
 
-const handleRevokeGroup = async (group) => {
+  const handleRevokeGroup = async (group) => {
     try {
       await Promise.all(group.ids.map((id) => revokeSession(id)));
       setSessions((s) => s.map((x) => (group.ids.includes(x.id) ? { ...x, revoked: true } : x)));
@@ -247,11 +263,11 @@ const handleRevokeGroup = async (group) => {
           <label className="label">Business Logo</label>
           <div className="flex items-center gap-4">
             {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
-            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files[0])} />
+            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files ? e.target.files[0] : null)} />
           </div>
         </div>
 
-        <button type="submit" className="btn-primary w-full" disabled={saving}>{saving?'Saving…':'Save settings'}</button>
+        <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
       </form>
 
       <div className="card p-5 space-y-3">
@@ -279,7 +295,9 @@ const handleRevokeGroup = async (group) => {
             <h2 className="font-display text-base font-bold text-ink-800">Logged-in Devices</h2>
           </div>
           <p className="text-sm text-ink-500 mb-2">Devices currently or recently associated with your business.</p>
-{sessionsLoading ? <p className="text-sm text-ink-400">Loading…</p> : deviceGroups.length === 0 ? (
+          {sessionsLoading ? (
+            <p className="text-sm text-ink-400">Loading…</p>
+          ) : deviceGroups.length === 0 ? (
             <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
           ) : (
             <div className="divide-y divide-ink-100">
@@ -288,35 +306,35 @@ const handleRevokeGroup = async (group) => {
                 const isActiveNow = isCurrent || (Date.now() - group.lastActiveMs < 20 * 60 * 1000);
                 const isRevoked = !group.anyActive;
                 return (
-                <div key={group.key} className="flex items-center justify-between py-3 text-sm">
-                  <div className="min-w-0 pr-3">
-                    <div className="flex flex-wrap items-center gap-2 mb-1">
-                      <p className="font-semibold text-ink-800 truncate">{group.deviceLabel || 'Unknown device'}</p>
-                      {isCurrent && <span className="badge bg-ink-900 text-white border border-ink-900 shrink-0">This device</span>}
-                      {!isCurrent && isActiveNow && !isRevoked && <span className="badge bg-moss-50 text-moss-700 border border-moss-200 shrink-0">Active</span>}
-                      {!isCurrent && !isActiveNow && !isRevoked && <span className="badge bg-ink-50 text-ink-600 border border-ink-200 shrink-0">Inactive</span>}
+                  <div key={group.key} className="flex items-center justify-between py-3 text-sm">
+                    <div className="min-w-0 pr-3">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <p className="font-semibold text-ink-800 truncate">{group.deviceLabel || 'Unknown device'}</p>
+                        {isCurrent && <span className="badge bg-ink-900 text-white border border-ink-900 shrink-0">This device</span>}
+                        {!isCurrent && isActiveNow && !isRevoked && <span className="badge bg-moss-50 text-moss-700 border border-moss-200 shrink-0">Active</span>}
+                        {!isCurrent && !isActiveNow && !isRevoked && <span className="badge bg-ink-50 text-ink-600 border border-ink-200 shrink-0">Inactive</span>}
+                      </div>
+                      <p className="text-[11px] text-ink-500 truncate">
+                        <span className="font-medium text-ink-700">{group.lastUserName || 'Unknown User'}</span> &middot; {isActiveNow ? 'Last seen: Just now' : `Last seen: ${formatDateTime(group.lastActiveMs)}`}
+                      </p>
                     </div>
-                    <p className="text-[11px] text-ink-500 truncate">
-                      <span className="font-medium text-ink-700">{group.lastUserName || 'Unknown User'}</span> &middot; {isActiveNow ? 'Last seen: Just now' : `Last seen: ${formatDateTime(new Date(group.lastActiveMs))}`}
-                    </p>
+                    {isRevoked ? (
+                      <span className="badge bg-rust-50 text-rust-600 border border-rust-200 shrink-0">Signed out</span>
+                    ) : (
+                      !isCurrent && <button className="btn-outline !px-3 !py-1.5 !min-h-0 text-xs shrink-0" onClick={() => handleRevokeGroup(group)}>Sign out</button>
+                    )}
                   </div>
-                  {isRevoked ? (
-                    <span className="badge bg-rust-50 text-rust-600 border border-rust-200 shrink-0">Signed out</span>
-                  ) : (
-                    !isCurrent && <button className="btn-outline !px-3 !py-1.5 !min-h-0 text-xs shrink-0" onClick={() => handleRevokeGroup(group)}>Sign out</button>
-                  )}
-                </div>
-              )})}
+                );
+              })}
             </div>
           )}
-                </div>
+        </div>
       )}
 
       <div className="card p-5 space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
           <div className="flex gap-2">
-
             <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
               {archivedOpen ? 'Hide' : 'View archive'}
             </button>
@@ -361,7 +379,7 @@ const handleRevokeGroup = async (group) => {
           <p className="mt-1 text-sm text-ink-500">
             {demo
               ? 'Demo Reset clears all sample data stored in this browser.'
-              : "Business Reset permanently deletes ALL of this business's data. This cannot be undone."}
+              : "Business Reset permanently deletes ALL of this business's data and removes cashier staff accounts. The owner account and Pro subscription remain active."}
           </p>
         </div>
         <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
@@ -369,7 +387,6 @@ const handleRevokeGroup = async (group) => {
         </button>
       </div>
 
-      {/* Legal & Privacy Section pushed securely to the bottom */}
       <div className="pt-6 pb-2 text-center space-y-3">
         <div className="flex items-center justify-center gap-4 text-sm font-semibold">
           <Link to="/privacy" className="text-ink-500 hover:text-ink-800 transition-colors">Privacy Policy</Link>
@@ -381,13 +398,13 @@ const handleRevokeGroup = async (group) => {
 
       <ConfirmDialog
         open={resetDialogOpen}
-        title={demo ? 'Reset the demo data?' : 'This will permanently delete ALL data for this business'}
+        title={demo ? 'Reset the demo data?' : 'This will permanently delete all store data & staff'}
         message={
           demo ? (
             <p>All sample data in this browser will be cleared and replaced with the original demo dataset.</p>
           ) : (
             <>
-              <p className="mb-2">Everything this business owns will be deleted. This cannot be undone.</p>
+              <p className="mb-2">All products, sales, debt, expenses, and cashier staff will be deleted. Your owner account and Pro plan will remain intact.</p>
               <label className="label mt-3">Type <span className="font-mono font-bold">{RESET_CONFIRM_PHRASE}</span> to confirm</label>
               <input className="input" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} autoFocus />
             </>

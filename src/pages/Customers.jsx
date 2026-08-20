@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { UserPlus, MessageCircle } from 'lucide-react';
+import { UserPlus, MessageCircle, Pencil } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { tenantQuery } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
@@ -9,7 +9,7 @@ import { useSettings } from '../hooks/useSettings';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
 import AddCustomerModal from '../components/customers/AddCustomerModal';
-import { createCustomer } from '../utils/customers';
+import { createCustomer, updateCustomer } from '../utils/customers';
 import { formatKES } from '../utils/currency';
 import { formatDate } from '../utils/dateRanges';
 import { openWhatsApp, buildDebtReminderMessage, isValidWhatsAppPhone } from '../utils/whatsapp';
@@ -19,7 +19,6 @@ export default function Customers() {
   const { businessId, isPro } = useAuth();
   const { settings } = useSettings();
 
-  // Removing orderBy('name') which causes silent listener failures without a composite index.
   const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId) : null, [businessId]);
   const creditQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
 
@@ -27,17 +26,18 @@ export default function Customers() {
   const { data: creditSales, loading: credLoading } = useFirestoreCollection(creditQ);
   
   const [search, setSearch] = useState('');
-  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState(null);
 
   const customerList = useMemo(() => {
     const map = {};
     for (const c of customers) {
-      map[c.id] = { customerId: c.id, name: c.name, phone: c.phone, totalOwed: 0, purchaseCount: 0, lastPurchase: null };
+      map[c.id] = { customerId: c.id, name: c.name, phone: c.phone, totalOwed: 0, purchaseCount: 0, lastPurchase: null, raw: c };
     }
     for (const cs of creditSales) {
       if (!cs.customerId) continue;
       if (!map[cs.customerId]) {
-        map[cs.customerId] = { customerId: cs.customerId, name: cs.customerName, phone: cs.customerPhone, totalOwed: 0, purchaseCount: 0, lastPurchase: null };
+        map[cs.customerId] = { customerId: cs.customerId, name: cs.customerName, phone: cs.customerPhone, totalOwed: 0, purchaseCount: 0, lastPurchase: null, raw: null };
       }
       const e = map[cs.customerId];
       if (cs.status === 'pending' || cs.status === 'partial') {
@@ -56,11 +56,17 @@ export default function Customers() {
   const loading = custLoading || credLoading;
   const totalOut = customerList.reduce((acc, d) => acc + d.totalOwed, 0);
 
-  const handleAddCustomer = async ({ name, phone }) => {
+  const handleSaveCustomer = async ({ name, phone }) => {
     try {
-      const { queuedOffline } = await createCustomer({ name, phone }, businessId);
-      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Customer saved successfully.');
-      setAddModalOpen(false);
+      if (editingCustomer) {
+        const { queuedOffline } = await updateCustomer(editingCustomer.customerId, { name, phone }, businessId);
+        toast.success(queuedOffline ? "Updated offline — it'll sync later." : 'Customer updated successfully.');
+      } else {
+        const { queuedOffline } = await createCustomer({ name, phone }, businessId);
+        toast.success(queuedOffline ? "Saved offline — it'll sync later." : 'Customer saved successfully.');
+      }
+      setModalOpen(false);
+      setEditingCustomer(null);
     } catch (error) {
       toast.error(friendlyErrorMessage(error, { fallback: 'Unable to save customer. Please try again.' }));
     }
@@ -95,7 +101,7 @@ export default function Customers() {
         </div>
         <button
           type="button"
-          onClick={() => setAddModalOpen(true)}
+          onClick={() => { setEditingCustomer(null); setModalOpen(true); }}
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-600 shadow-sm hover:bg-ink-50 active:bg-ink-100"
           title="Add customer"
         >
@@ -114,10 +120,22 @@ export default function Customers() {
                   <p className="font-semibold text-ink-800 truncate">{d.name}</p>
                   <p className="text-xs text-ink-400">{d.phone || 'No phone'} · {d.purchaseCount} purchase{d.purchaseCount !== 1 ? 's' : ''} {d.lastPurchase ? `· last ${formatDate(d.lastPurchase)}` : ''}</p>
                 </Link>
-                <div className="text-right shrink-0">
+                <div className="flex items-center gap-3 shrink-0">
                   <Link to={`/customers/${d.customerId}`} className={`font-display text-base font-bold ${d.totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>
                     {d.totalOwed > 0 ? formatKES(d.totalOwed) : (d.purchaseCount > 0 ? 'Paid' : 'No history')}
                   </Link>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setEditingCustomer(d);
+                      setModalOpen(true);
+                    }}
+                    className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100"
+                    title="Edit customer details"
+                  >
+                    <Pencil className="h-4 w-4" strokeWidth={1.75} />
+                  </button>
                 </div>
               </div>
               {d.totalOwed > 0 && (
@@ -138,9 +156,10 @@ export default function Customers() {
         </div>
       )}
       <AddCustomerModal
-        open={addModalOpen}
-        onClose={() => setAddModalOpen(false)}
-        onSave={handleAddCustomer}
+        open={modalOpen}
+        onClose={() => { setModalOpen(false); setEditingCustomer(null); }}
+        onSave={handleSaveCustomer}
+        initialData={editingCustomer ? { name: editingCustomer.name, phone: editingCustomer.phone } : null}
         existingCustomers={customerList.map(d => ({ name: d.name, phone: d.phone }))}
       />
     </div>

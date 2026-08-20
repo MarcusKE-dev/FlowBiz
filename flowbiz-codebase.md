@@ -1442,75 +1442,6 @@ export async function handleSendVerificationEmail(request, env) {
 </svg>
 ````
 
-## File: src/components/charts/DonutChart.jsx
-````javascript
-// src/components/charts/DonutChart.jsx
-//
-// Small part-to-whole breakdown (payment methods, stock health). Always
-// paired with a text legend showing exact values and percentages — the
-// slices alone are never the only way to read the data.
-export default function DonutChart({ segments, size = 148, formatValue = (v) => String(v), centerLabel }) {
-  const visible = (segments || []).filter((s) => (Number(s.value) || 0) > 0);
-  const total = visible.reduce((sum, s) => sum + (Number(s.value) || 0), 0);
-  if (total <= 0) return null;
-
-  const radius = 40;
-  const circumference = 2 * Math.PI * radius;
-  let offsetAccum = 0;
-
-  return (
-    <div className="flex flex-col items-center gap-4 sm:flex-row">
-      <svg viewBox="0 0 100 100" width={size} height={size} className="shrink-0" role="img" aria-label="Breakdown chart">
-        <circle cx="50" cy="50" r={radius} fill="none" stroke="currentColor" className="text-ink-100" strokeWidth="14" />
-        {visible.map((s, i) => {
-          const value = Number(s.value) || 0;
-          const fraction = value / total;
-          const dash = fraction * circumference;
-          const gap = circumference - dash;
-          const el = (
-            <circle
-              key={i}
-              cx="50" cy="50" r={radius}
-              fill="none"
-              stroke="currentColor"
-              className={s.colorClassName || 'text-blue-600'}
-              strokeWidth="14"
-              strokeDasharray={`${dash} ${gap}`}
-              strokeDashoffset={-offsetAccum}
-              transform="rotate(-90 50 50)"
-            />
-          );
-          offsetAccum += dash;
-          return el;
-        })}
-        {centerLabel && (
-          <text x="50" y="53" textAnchor="middle" fill="currentColor" className="text-ink-900" style={{ fontSize: '11px', fontWeight: 700 }}>
-            {centerLabel}
-          </text>
-        )}
-      </svg>
-      <ul className="w-full space-y-1.5">
-        {visible.map((s, i) => {
-          const value = Number(s.value) || 0;
-          const pct = (value / total) * 100;
-          return (
-            <li key={i} className="flex items-center justify-between gap-3 text-sm">
-              <span className="flex items-center gap-2 text-ink-600">
-                <span className={`h-2.5 w-2.5 rounded-full ${s.dotClassName || 'bg-blue-600'}`} />
-                {s.label}
-              </span>
-              <span className="font-semibold text-ink-800">
-                {formatValue(value)} <span className="font-normal text-ink-400">({pct.toFixed(0)}%)</span>
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
-````
-
 ## File: src/components/charts/MiniBarChart.jsx
 ````javascript
 // src/components/charts/MiniBarChart.jsx
@@ -5552,6 +5483,75 @@ export function html(bodyHtml, init = {}) {
 }
 ````
 
+## File: src/components/charts/DonutChart.jsx
+````javascript
+// src/components/charts/DonutChart.jsx
+//
+// Small part-to-whole breakdown (payment methods, stock health). Always
+// paired with a text legend showing exact values and percentages — the
+// slices alone are never the only way to read the data.
+export default function DonutChart({ segments, size = 148, formatValue = (v) => String(v), centerLabel, stacked = false }) {
+  const visible = (segments || []).filter((s) => (Number(s.value) || 0) > 0);
+  const total = visible.reduce((sum, s) => sum + (Number(s.value) || 0), 0);
+  if (total <= 0) return null;
+
+  const radius = 40;
+  const circumference = 2 * Math.PI * radius;
+  let offsetAccum = 0;
+
+  return (
+    <div className={`flex flex-col items-center gap-4 ${stacked ? '' : 'sm:flex-row'}`}>
+      <svg viewBox="0 0 100 100" width={size} height={size} className="shrink-0" role="img" aria-label="Breakdown chart">
+        <circle cx="50" cy="50" r={radius} fill="none" stroke="currentColor" className="text-ink-100" strokeWidth="14" />
+        {visible.map((s, i) => {
+          const value = Number(s.value) || 0;
+          const fraction = value / total;
+          const dash = fraction * circumference;
+          const gap = circumference - dash;
+          const el = (
+            <circle
+              key={i}
+              cx="50" cy="50" r={radius}
+              fill="none"
+              stroke="currentColor"
+              className={s.colorClassName || 'text-blue-600'}
+              strokeWidth="14"
+              strokeDasharray={`${dash} ${gap}`}
+              strokeDashoffset={-offsetAccum}
+              transform="rotate(-90 50 50)"
+            />
+          );
+          offsetAccum += dash;
+          return el;
+        })}
+        {centerLabel && (
+          <text x="50" y="53" textAnchor="middle" fill="currentColor" className="text-ink-900" style={{ fontSize: '11px', fontWeight: 700 }}>
+            {centerLabel}
+          </text>
+        )}
+      </svg>
+      <ul className="w-full space-y-1.5">
+        {visible.map((s, i) => {
+          const value = Number(s.value) || 0;
+          const pct = (value / total) * 100;
+          return (
+            <li key={i} className="flex items-center justify-between gap-3 text-sm">
+              <span className="flex items-center gap-2 text-ink-600">
+                <span className={`h-2.5 w-2.5 rounded-full ${s.dotClassName || 'bg-blue-600'}`} />
+                {s.label}
+              </span>
+              <span className="font-semibold text-ink-800">
+                {formatValue(value)} <span className="font-normal text-ink-400">({pct.toFixed(0)}%)</span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+````
+
 ## File: src/components/charts/MiniLineChart.jsx
 ````javascript
 // src/components/charts/MiniLineChart.jsx
@@ -6058,129 +6058,6 @@ export default function MobileMoreDrawer({ open, onClose }) {
           ))}
         </div>
       </div>
-    </div>
-  );
-}
-````
-
-## File: src/components/pos/CartList.jsx
-````javascript
-// src/components/pos/CartList.jsx
-//
-// Renders the Counter page's current (client-side only, nothing written
-// to Firestore until checkout) multi-product cart: one line per distinct
-// product, with quantity +/- controls, an editable unit price (bargaining
-// support — never changes the product's stored default price), a remove
-// button per line, and the running total.
-//
-// FIX (cart visibility): this card is rendered pinned to the top of the
-// page (see Counter.jsx) instead of below a potentially long product
-// list, so it's never "far down" after adding something. The header row
-// — product count, total, and the Sell button — is ALWAYS visible even
-// when collapsed; only the per-line editor collapses, so the cart stays
-// compact while browsing but a sale can still be completed with zero
-// scrolling either way.
-
-import { useState } from 'react';
-import { ChevronDown, ChevronUp, Minus, Plus, X } from 'lucide-react';
-import { formatKES, roundMoney } from '../../utils/currency';
-
-export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemove, onClear, onCheckout }) {
-  const [expanded, setExpanded] = useState(true);
-  if (!cart || cart.length === 0) return null;
-
-  const total = roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0));
-
-  return (
-    <div className="card border-moss-200 shadow-md p-3 sm:p-4 space-y-3">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between gap-2 text-left min-h-[36px]"
-        aria-expanded={expanded}
-      >
-        <div className="flex items-center gap-2 min-w-0">
-          <h2 className="font-display text-sm font-bold text-ink-800 shrink-0">
-            Cart · {cart.length} product{cart.length !== 1 ? 's' : ''}
-          </h2>
-          <span className="font-display text-sm font-bold text-moss-700 shrink-0">{formatKES(total)}</span>
-        </div>
-        {expanded ? <ChevronUp className="h-4 w-4 text-ink-400 shrink-0" strokeWidth={2} /> : <ChevronDown className="h-4 w-4 text-ink-400 shrink-0" strokeWidth={2} />}
-      </button>
-
-      {expanded && (
-        <div className="divide-y divide-ink-100 -mt-1">
-          {cart.map((item) => {
-            const lineTotal = roundMoney((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0));
-            return (
-              <div key={item.productId} className="py-3 space-y-2">
-                <div className="flex items-start justify-between gap-2">
-                  <p className="font-medium text-ink-800 text-sm leading-snug">{item.productName}</p>
-                  <button
-                    type="button"
-                    onClick={() => onRemove(item.productId)}
-                    className="shrink-0 rounded-lg p-1.5 text-ink-300 hover:bg-rust-50 hover:text-rust-500 min-h-[36px] min-w-[36px] flex items-center justify-center"
-                    aria-label={`Remove ${item.productName}`}
-                  >
-                    <X className="h-4 w-4" strokeWidth={1.75} />
-                  </button>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => onUpdateQuantity(item.productId, (Number(item.quantity) || 1) - 1)}
-                      className="flex h-9 w-9 items-center justify-center rounded-lg border border-ink-200 text-ink-600 hover:bg-ink-50"
-                      aria-label="Decrease quantity"
-                    >
-                      <Minus className="h-3.5 w-3.5" strokeWidth={2} />
-                    </button>
-                    <input
-                      type="number"
-                      min="1"
-                      className="input !w-16 !py-2 !min-h-0 text-center"
-                      value={item.quantity}
-                      onChange={(e) => onUpdateQuantity(item.productId, e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => onUpdateQuantity(item.productId, (Number(item.quantity) || 0) + 1)}
-                      className="flex h-9 w-9 items-center justify-center rounded-lg border border-ink-200 text-ink-600 hover:bg-ink-50"
-                      aria-label="Increase quantity"
-                    >
-                      <Plus className="h-3.5 w-3.5" strokeWidth={2} />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-ink-400">@ KES</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      className="input !w-24 !py-2 !min-h-0 text-right"
-                      value={item.unitPrice}
-                      onChange={(e) => onUpdatePrice(item.productId, e.target.value)}
-                    />
-                  </div>
-
-                  <span className="ml-auto font-display text-sm font-bold text-ink-800">{formatKES(lineTotal)}</span>
-                </div>
-              </div>
-            );
-          })}
-          <div className="pt-2 text-right">
-            <button type="button" onClick={onClear} className="text-xs font-semibold text-rust-500 hover:underline">
-              Clear cart
-            </button>
-          </div>
-        </div>
-      )}
-
-      <button type="button" className="btn-primary w-full" onClick={onCheckout}>
-        Sell — {formatKES(total)}
-      </button>
     </div>
   );
 }
@@ -8004,97 +7881,6 @@ Fixed:
 | `src/pages/Dashboard.jsx` | `handleSupplierSave` throws on error (consistency fix). |
 ````
 
-## File: cloudflare-worker/src/index.js
-````javascript
-// src/index.js — the Worker's entry point / router.
-//
-// Deliberately a plain switch on pathname + method, no router library:
-// a dependency here is a dependency every one of FlowBiz's privileged
-// operations (and now the public document route) trusts.
-//
-// FIX: removed the /api/whatsapp/send route (routes/whatsappSend.js).
-// Auditing it found it called the real Meta WhatsApp Cloud API — nothing
-// in the frontend has ever called this endpoint (WhatsApp sharing has
-// always gone through the client-side wa.me deep-link utility instead),
-// so it was dead code, and its Cloud-API approach directly contradicts
-// FlowBiz's "deep links only, no WhatsApp API" product requirement. See
-// routes/whatsappSend.js.removed for the file that was deleted, and the
-// project notes for the WHATSAPP_ACCESS_TOKEN secret this leaves unused.
-
-import { corsHeaders, handleOptions } from './lib/cors.js';
-import { errorResponse } from './lib/response.js';
-import { handleDeleteStaff } from './routes/deleteStaff.js';
-import { handlePaystackInitialize } from './routes/paystackInitialize.js';
-import { handlePaystackWebhook } from './routes/paystackWebhook.js';
-import { handlePublicDocument } from './routes/publicDocument.js';
-import { handleProPrice } from './routes/proPrice.js';
-import { handleSendVerificationEmail } from './routes/sendVerificationEmail.js';
-import { handleSendPasswordReset } from './routes/sendPasswordResetEmail.js';
-function getAllowedOrigins(env) {
-  return (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
-}
-
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-
-    // Paystack calls the webhook directly (server-to-server) — it never
-    // needs, and should never get, FlowBiz's browser CORS headers.
-    if (url.pathname === '/api/paystack/webhook' && request.method === 'POST') {
-      try {
-        return await handlePaystackWebhook(request, env);
-      } catch (err) {
-        console.error('Webhook error:', err);
-        return errorResponse('Internal server error.', 500);
-      }
-    }
-
-    // Public receipt/invoice/debt-payment-receipt links (/r/<token>) are
-    // opened directly by a customer's browser — a full-page navigation,
-    // not a fetch() from the FlowBiz frontend — so it deliberately does
-    // NOT go through verifyFirebaseIdToken like every other route below.
-    // See routes/publicDocument.js for the token → document security
-    // model. Handled up front, same as the webhook, since it returns
-    // HTML rather than the JSON shape the block below assumes.
-    if (url.pathname.startsWith('/r/') && request.method === 'GET') {
-      const token = url.pathname.slice('/r/'.length);
-      try {
-        return await handlePublicDocument(request, env, token);
-      } catch (err) {
-        console.error('Public document error:', err);
-        return errorResponse('Internal server error.', 500);
-      }
-    }
-
-    const allowedOrigins = getAllowedOrigins(env);
-    if (request.method === 'OPTIONS') return handleOptions(request, allowedOrigins);
-
-    const origin = request.headers.get('Origin') || '';
-    const extraHeaders = corsHeaders(origin, allowedOrigins);
-
-    let response;
-    try {
-      if (url.pathname === '/api/auth/delete-staff' && request.method === 'POST') {
-        response = await handleDeleteStaff(request, env);
-      } else if (url.pathname === '/api/auth/send-verification-email' && request.method === 'POST') {
-        response = await handleSendVerificationEmail(request, env);
-      } else if (url.pathname === '/api/auth/send-password-reset' && request.method === 'POST') {
-        response = await handleSendPasswordReset(request, env);
-      } else if (url.pathname === '/api/pro/price' && request.method === 'GET') {
-       response = await handleProPrice();
-      }
-    } catch (err) {
-      console.error('Unhandled error:', err);
-      response = errorResponse('Internal server error.', 500);
-    }
-
-    const headers = new Headers(response.headers);
-    for (const [key, value] of Object.entries(extraHeaders)) headers.set(key, value);
-    return new Response(response.body, { status: response.status, headers });
-  },
-};
-````
-
 ## File: src/components/products/ProductFormModal.jsx
 ````javascript
 import { useEffect, useState } from 'react';
@@ -9467,83 +9253,100 @@ export async function restoreProduct(productId, barcode, businessId) {
 }
 ````
 
-## File: index.html
-````html
-<!doctype html>
-<html lang="en-KE">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
-    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
-    
-    <!-- PWA & Mobile Meta Tags -->
-    <meta name="application-name" content="FlowBiz" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="FlowBiz" />
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="theme-color" content="#1a623c" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+## File: cloudflare-worker/src/index.js
+````javascript
+// src/index.js — the Worker's entry point / router.
+//
+// Deliberately a plain switch on pathname + method, no router library:
+// a dependency here is a dependency every one of FlowBiz's privileged
+// operations (and now the public document route) trusts.
+//
+// FIX: removed the /api/whatsapp/send route (routes/whatsappSend.js).
+// Auditing it found it called the real Meta WhatsApp Cloud API — nothing
+// in the frontend has ever called this endpoint (WhatsApp sharing has
+// always gone through the client-side wa.me deep-link utility instead),
+// so it was dead code, and its Cloud-API approach directly contradicts
+// FlowBiz's "deep links only, no WhatsApp API" product requirement. See
+// routes/whatsappSend.js.removed for the file that was deleted, and the
+// project notes for the WHATSAPP_ACCESS_TOKEN secret this leaves unused.
 
-    <!-- SEO & Search Engine Optimization Meta Tags -->
-    <title>FlowBiz — POS, Inventory & Business Manager for Kenyan SMBs</title>
-    <meta name="description" content="Offline-first Point of Sale (POS), real-time stock inventory, M-Pesa till reconciliation, and customer credit (deni) ledger tailored for Kenyan retail shops, wholesalers, and supermarkets." />
-    <meta name="keywords" content="POS Kenya, Point of Sale Nairobi, M-Pesa POS integration, retail management Kenya, duka inventory app, deni credit ledger, Kenyan business software, FlowBiz, stock control Kenya" />
-    <meta name="author" content="FlowBiz" />
-    <meta name="robots" content="index, follow" />
-    <link rel="canonical" href="https://flowbiz.co.ke/" />
+import { corsHeaders, handleOptions } from './lib/cors.js';
+import { errorResponse } from './lib/response.js';
+import { handleDeleteStaff } from './routes/deleteStaff.js';
+import { handlePaystackInitialize } from './routes/paystackInitialize.js';
+import { handlePaystackWebhook } from './routes/paystackWebhook.js';
+import { handlePublicDocument } from './routes/publicDocument.js';
+import { handleProPrice } from './routes/proPrice.js';
+import { handleSendVerificationEmail } from './routes/sendVerificationEmail.js';
+import { handleSendPasswordReset } from './routes/sendPasswordResetEmail.js';
+function getAllowedOrigins(env) {
+  return (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
 
-    <!-- Open Graph (Facebook, WhatsApp, LinkedIn, X preview) -->
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://flowbiz.co.ke/" />
-    <meta property="og:title" content="FlowBiz — Modern POS & Business Manager for Kenyan Shops" />
-    <meta property="og:description" content="Fast offline-first multi-product POS, automated M-Pesa float reconciliation, debt ledger, and inventory intelligence for Kenyan businesses." />
-    <meta property="og:image" content="https://flowbiz.co.ke/icons/icon-512.png" />
-    <meta property="og:locale" content="en_KE" />
-    <meta property="og:site_name" content="FlowBiz" />
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
 
-    <!-- Twitter Card -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="FlowBiz — POS & Inventory Management for Kenyan Businesses" />
-    <meta name="twitter:description" content="Manage sales, track cash & M-Pesa till float, audit inventory, and record customer debt with zero false profit illusions." />
-    <meta name="twitter:image" content="https://flowbiz.co.ke/icons/icon-512.png" />
-
-    <!-- Structured Data (Schema.org JSON-LD for Google Rich Results) -->
-    <script type="application/ld+json">
-      {
-        "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        "name": "FlowBiz",
-        "operatingSystem": "Web, Android, iOS, Windows, macOS",
-        "applicationCategory": "BusinessApplication",
-        "offers": {
-          "@type": "Offer",
-          "price": "0",
-          "priceCurrency": "KES"
-        },
-        "description": "Offline-first POS and business management software for Kenyan retail, wholesale, and service shops with M-Pesa reconciliation and debt tracking."
+    // Paystack calls the webhook directly (server-to-server) — it never
+    // needs, and should never get, FlowBiz's browser CORS headers.
+    if (url.pathname === '/api/paystack/webhook' && request.method === 'POST') {
+      try {
+        return await handlePaystackWebhook(request, env);
+      } catch (err) {
+        console.error('Webhook error:', err);
+        return errorResponse('Internal server error.', 500);
       }
-    </script>
+    }
 
-    <!-- Google Fonts Preconnect & Stylesheets -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    // Public receipt/invoice/debt-payment-receipt links (/r/<token>) are
+    // opened directly by a customer's browser — a full-page navigation,
+    // not a fetch() from the FlowBiz frontend — so it deliberately does
+    // NOT go through verifyFirebaseIdToken like every other route below.
+    // See routes/publicDocument.js for the token → document security
+    // model. Handled up front, same as the webhook, since it returns
+    // HTML rather than the JSON shape the block below assumes.
+    if (url.pathname.startsWith('/r/') && request.method === 'GET') {
+      const token = url.pathname.slice('/r/'.length);
+      try {
+        return await handlePublicDocument(request, env, token);
+      } catch (err) {
+        console.error('Public document error:', err);
+        return errorResponse('Internal server error.', 500);
+      }
+    }
 
-    <!-- Firebase & Cloud Performance Preconnects -->
-    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
-    <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
-    <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
-  </head>
-  <body class="bg-[#faf6ef] text-[#15171d] antialiased">
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-    <!-- Paystack Inline Payment Gateway Script -->
-    <script src="https://js.paystack.co/v2/inline.js"></script>
-  </body>
-</html>
+    const allowedOrigins = getAllowedOrigins(env);
+    if (request.method === 'OPTIONS') return handleOptions(request, allowedOrigins);
+
+    const origin = request.headers.get('Origin') || '';
+    const extraHeaders = corsHeaders(origin, allowedOrigins);
+
+    let response;
+    try {
+// cloudflare-worker/src/index.js
+      if (url.pathname === '/api/auth/delete-staff' && request.method === 'POST') {
+        response = await handleDeleteStaff(request, env);
+      } else if (url.pathname === '/api/auth/send-verification-email' && request.method === 'POST') {
+        response = await handleSendVerificationEmail(request, env);
+      } else if (url.pathname === '/api/auth/send-password-reset' && request.method === 'POST') {
+        response = await handleSendPasswordReset(request, env);
+      } else if (url.pathname === '/api/paystack/initialize' && request.method === 'POST') {
+        response = await handlePaystackInitialize(request, env);
+      } else if (url.pathname === '/api/pro/price' && request.method === 'GET') {
+        response = await handleProPrice();
+      } else {
+        response = errorResponse('Not found.', 404);
+      }
+    } catch (err) {
+      console.error('Unhandled error:', err);
+      response = errorResponse('Internal server error.', 500);
+    }
+
+    const headers = new Headers(response.headers);
+    for (const [key, value] of Object.entries(extraHeaders)) headers.set(key, value);
+    return new Response(response.body, { status: response.status, headers });
+  },
+};
 ````
 
 ## File: src/components/common/ProtectedRoute.jsx
@@ -9794,6 +9597,116 @@ export default function TopHeader() {
         )}
       </div>
     </header>
+  );
+}
+````
+
+## File: src/components/pos/CartList.jsx
+````javascript
+import { useState } from 'react';
+import { ChevronDown, ChevronUp, Minus, Plus, X } from 'lucide-react';
+import { formatKES, roundMoney } from '../../utils/currency';
+
+export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemove, onClear, onCheckout }) {
+  const [expanded, setExpanded] = useState(true);
+  if (!cart || cart.length === 0) return null;
+
+  const total = roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0));
+
+  return (
+    <div className="card border-moss-200 shadow-md p-3 sm:p-4 space-y-3">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 text-left min-h-[36px]"
+        aria-expanded={expanded}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <h2 className="font-display text-sm font-bold text-ink-800 shrink-0">
+            Cart · {cart.length} product{cart.length !== 1 ? 's' : ''}
+          </h2>
+          <span className="font-display text-sm font-bold text-moss-700 shrink-0">{formatKES(total)}</span>
+        </div>
+        {expanded ? <ChevronUp className="h-4 w-4 text-ink-400 shrink-0" strokeWidth={2} /> : <ChevronDown className="h-4 w-4 text-ink-400 shrink-0" strokeWidth={2} />}
+      </button>
+
+      {expanded && (
+        <div className="-mt-1">
+      
+          <div className="max-h-[220px] overflow-y-auto pr-1 divide-y divide-ink-100">
+            {cart.map((item) => {
+              const lineTotal = roundMoney((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0));
+              return (
+                <div key={item.productId} className="py-3 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="font-medium text-ink-800 text-sm leading-snug">{item.productName}</p>
+                    <button
+                      type="button"
+                      onClick={() => onRemove(item.productId)}
+                      className="shrink-0 rounded-lg p-1.5 text-ink-300 hover:bg-rust-50 hover:text-rust-500 min-h-[36px] min-w-[36px] flex items-center justify-center"
+                      aria-label={`Remove ${item.productName}`}
+                    >
+                      <X className="h-4 w-4" strokeWidth={1.75} />
+                    </button>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onUpdateQuantity(item.productId, (Number(item.quantity) || 1) - 1)}
+                        className="flex h-9 w-9 items-center justify-center rounded-lg border border-ink-200 text-ink-600 hover:bg-ink-50"
+                        aria-label="Decrease quantity"
+                      >
+                        <Minus className="h-3.5 w-3.5" strokeWidth={2} />
+                      </button>
+                      <input
+                        type="number"
+                        min="1"
+                        className="input !w-16 !py-2 !min-h-0 text-center"
+                        value={item.quantity}
+                        onChange={(e) => onUpdateQuantity(item.productId, e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => onUpdateQuantity(item.productId, (Number(item.quantity) || 0) + 1)}
+                        className="flex h-9 w-9 items-center justify-center rounded-lg border border-ink-200 text-ink-600 hover:bg-ink-50"
+                        aria-label="Increase quantity"
+                      >
+                        <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-ink-400">@ KES</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className="input !w-24 !py-2 !min-h-0 text-right"
+                        value={item.unitPrice}
+                        onChange={(e) => onUpdatePrice(item.productId, e.target.value)}
+                      />
+                    </div>
+
+                    <span className="ml-auto font-display text-sm font-bold text-ink-800">{formatKES(lineTotal)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="pt-2 text-right">
+            <button type="button" onClick={onClear} className="text-xs font-semibold text-rust-500 hover:underline">
+              Clear cart
+            </button>
+          </div>
+        </div>
+      )}
+
+      <button type="button" className="btn-primary w-full" onClick={onCheckout}>
+        Sell  {formatKES(total)}
+      </button>
+    </div>
   );
 }
 ````
@@ -10061,580 +9974,6 @@ export function useCameraScanner({ onDetected, active }) {
   }, [torchOn, torchSupported]);
 
   return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };
-}
-````
-
-## File: src/pages/AdvancedAnalytics.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { where } from 'firebase/firestore';
-import { useAuth } from '../contexts/AuthContext';
-import { useFinancialsForRange } from '../hooks/useFinancials';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { tenantQuery } from '../lib/tenant';
-import { startOfDay, endOfDay, buildDateBuckets, toMillisValue } from '../utils/dateRanges';
-import { formatKES } from '../utils/currency';
-import { computeFinancials, isExpenseExcluded } from '../utils/financials';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import MiniLineChart from '../components/charts/MiniLineChart';
-import MiniBarChart from '../components/charts/MiniBarChart';
-import DonutChart from '../components/charts/DonutChart';
-import {
-  TrendingUp, TrendingDown, Lock, AlertCircle, CheckCircle2, Info, ArrowLeft,
-  Banknote, Package, Tag, BarChart3, Receipt, Users, UsersRound, ClipboardCheck,
-} from 'lucide-react';
-
-const PERIOD_OPTIONS = [
-  { id: '7', label: '7 Days' },
-  { id: '30', label: '30 Days' },
-  { id: '90', label: '90 Days' },
-  { id: 'custom', label: 'Custom' },
-];
-
-const CHART_PALETTE = [
-  { text: 'text-moss-600', bg: 'bg-moss-600' },
-  { text: 'text-blue-600', bg: 'bg-blue-600' },
-  { text: 'text-amber-500', bg: 'bg-amber-500' },
-  { text: 'text-rust-500', bg: 'bg-rust-500' },
-  { text: 'text-ink-800', bg: 'bg-ink-800' },
-  { text: 'text-moss-400', bg: 'bg-moss-400' },
-];
-
-const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const NAIROBI_OFFSET_MS = 3 * 60 * 60 * 1000;
-function weekdayIndexNairobi(millis) {
-  return new Date(millis + NAIROBI_OFFSET_MS).getUTCDay();
-}
-
-function KpiCard({ label, value, tone = 'text-ink-900', deltaPct, sparkline, sparklineColor = 'text-moss-600' }) {
-  const isPositive = deltaPct !== null && deltaPct !== undefined && deltaPct >= 0;
-  return (
-    <div className="card p-4 sm:p-5 flex flex-col justify-between bg-white hover:shadow-md transition-shadow">
-      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
-      <p className={`mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
-      {deltaPct !== null && deltaPct !== undefined && Number.isFinite(deltaPct) && (
-        <div className={`mt-2 flex items-center gap-1.5 text-xs font-semibold ${isPositive ? 'text-moss-700' : 'text-rust-600'}`}>
-          {isPositive ? <TrendingUp className="h-3.5 w-3.5" strokeWidth={2.5} /> : <TrendingDown className="h-3.5 w-3.5" strokeWidth={2.5} />}
-          <span>{Math.abs(deltaPct).toFixed(1)}% vs prior period</span>
-        </div>
-      )}
-      {sparkline && sparkline.length > 1 && (
-        <div className="mt-3 -mb-1">
-          <MiniLineChart data={sparkline} height={36} colorClassName={sparklineColor} compact />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Section({ title, subtitle, icon: Icon, className = '', children }) {
-  return (
-    <div className={`card p-5 sm:p-6 bg-white ${className}`}>
-      <div className="mb-5 flex items-center gap-3 border-b border-ink-100 pb-4">
-        {Icon && (
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
-            <Icon className="h-4 w-4" strokeWidth={1.75} />
-          </div>
-        )}
-        <div>
-          <h2 className="font-display text-sm font-bold text-ink-900">{title}</h2>
-          {subtitle && <p className="mt-0.5 text-xs text-ink-500">{subtitle}</p>}
-        </div>
-      </div>
-      <div>{children}</div>
-    </div>
-  );
-}
-
-function NoData({ children }) {
-  return <div className="py-8 flex flex-col items-center justify-center text-center"><Info className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5} /><p className="text-sm text-ink-500">{children}</p></div>;
-}
-
-// Custom dual-series trend chart (no chart library installed in this
-// project — built the same hand-rolled-SVG way MiniLineChart already is,
-// just extended to plot two series with a shared scale and a legend).
-function DualTrendChart({ data, series, height = 220, ariaLabel }) {
-  if (!data || data.length === 0) return null;
-  const width = 600;
-  const padY = 16;
-  const padBottom = 24;
-  const plotHeight = height - padY - padBottom;
-  const allValues = data.flatMap((d) => series.map((s) => Number(d[s.key]) || 0));
-  const max = Math.max(...allValues, 0);
-  const min = Math.min(...allValues, 0);
-  const range = (max - min) || 1;
-  const stepX = data.length > 1 ? width / (data.length - 1) : 0;
-  const zeroY = padY + plotHeight - ((0 - min) / range) * plotHeight;
-
-  const pointsFor = (key) => data.map((d, i) => {
-    const x = data.length > 1 ? i * stepX : width / 2;
-    const v = Number(d[key]) || 0;
-    const y = padY + plotHeight - ((v - min) / range) * plotHeight;
-    return { x, y };
-  });
-
-  return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-center gap-4">
-        {series.map((s) => (
-          <span key={s.key} className="flex items-center gap-1.5 text-xs font-semibold text-ink-600">
-            <span className={`h-2 w-2 rounded-full ${s.dotClassName}`} />
-            {s.label}
-          </span>
-        ))}
-      </div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" preserveAspectRatio="none" role="img" aria-label={ariaLabel || 'Trend chart'}>
-        <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke="currentColor" className="text-ink-100" strokeWidth="1" />
-        {series.map((s) => {
-          const points = pointsFor(s.key);
-          const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
-          const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${zeroY} L ${points[0].x.toFixed(1)} ${zeroY} Z`;
-          return (
-            <g key={s.key}>
-              <path d={areaPath} className={s.colorClassName} fill="currentColor" opacity="0.06" />
-              <path d={linePath} className={s.colorClassName} fill="none" stroke="currentColor" strokeWidth="2.25" vectorEffect="non-scaling-stroke" />
-              {points.length <= 31 && points.map((p, i) => (
-                <circle key={i} cx={p.x} cy={p.y} r="2.5" className={s.colorClassName} fill="currentColor" />
-              ))}
-            </g>
-          );
-        })}
-      </svg>
-      <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-400">
-        <span>{data[0].label}</span>
-        <span>{data[data.length - 1].label}</span>
-      </div>
-    </div>
-  );
-}
-
-export default function AdvancedAnalytics() {
-  const { isPro, businessId } = useAuth();
-
-  const [period, setPeriod] = useState('30');
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd, setCustomEnd] = useState('');
-
-  const { start, end } = useMemo(() => {
-    if (period === 'custom' && customStart && customEnd) {
-      return { start: startOfDay(new Date(customStart)), end: endOfDay(new Date(customEnd)) };
-    }
-    const days = Number(period) || 30;
-    return { start: startOfDay(new Date(Date.now() - (days - 1) * 86400000)), end: endOfDay() };
-  }, [period, customStart, customEnd]);
-
-  const prevRange = useMemo(() => {
-    if (period === 'custom' && customStart && customEnd) {
-      const diff = end.getTime() - start.getTime();
-      const prevEnd = new Date(start.getTime() - 1);
-      const prevStart = new Date(prevEnd.getTime() - diff);
-      return { start: startOfDay(prevStart), end: endOfDay(prevEnd) };
-    }
-    const days = Number(period) || 30;
-    const prevEnd = endOfDay(new Date(start.getTime() - 1));
-    const prevStart = startOfDay(new Date(start.getTime() - days * 86400000));
-    return { start: prevStart, end: prevEnd };
-  }, [start, end, period, customStart, customEnd]);
-
-  const { loading, sales, creditSales, expenses, repayments, summary } = useFinancialsForRange(start, end);
-  const { loading: prevLoading, summary: prevSummary } = useFinancialsForRange(prevRange.start, prevRange.end);
-
-  const allCreditSalesQ = useMemo(() => (businessId ? tenantQuery('creditSales', businessId) : null), [businessId]);
-  const { data: allCreditSales } = useFirestoreCollection(allCreditSalesQ);
-
-  const outstandingCreditQ = useMemo(
-    () => (businessId ? tenantQuery('creditSales', businessId, where('status', 'in', ['pending', 'partial'])) : null),
-    [businessId]
-  );
-  const { data: outstandingCreditSales } = useFirestoreCollection(outstandingCreditQ);
-  const totalOutstanding = useMemo(
-    () => outstandingCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0),
-    [outstandingCreditSales]
-  );
-
-  const topDebtors = useMemo(() => {
-    const map = {};
-    (outstandingCreditSales || []).forEach((cs) => {
-      const key = cs.customerId || cs.customerName || 'unknown';
-      if (!map[key]) map[key] = { name: cs.customerName || 'Unknown', balance: 0, customerId: cs.customerId };
-      map[key].balance += Number(cs.remainingBalance) || 0;
-    });
-    return Object.values(map).sort((a, b) => b.balance - a.balance).slice(0, 5);
-  }, [outstandingCreditSales]);
-
-  const granularity = (end.getTime() - start.getTime()) > (45 * 86400000) ? 'week' : 'day';
-  const buckets = useMemo(() => buildDateBuckets(start, end, granularity), [start, end, granularity]);
-
-  const trend = useMemo(() => {
-    if (!buckets.length) return [];
-    const inBucket = (record, field, bucket) => {
-      const t = toMillisValue(record[field]);
-      return t !== null && t >= bucket.start.getTime() && t <= bucket.end.getTime();
-    };
-    return buckets.map((bucket) => {
-      const bucketSales = (sales || []).filter((s) => inBucket(s, 'soldAt', bucket));
-      const bucketExpenses = (expenses || []).filter((e) => inBucket(e, 'recordedAt', bucket));
-      const bucketRepayments = (repayments || []).filter((r) => inBucket(r, 'paidAt', bucket));
-      const f = computeFinancials({
-        sales: bucketSales,
-        creditSales: [],
-        allCreditSales,
-        expenses: bucketExpenses,
-        debtRepayments: bucketRepayments,
-      });
-      return {
-        label: bucket.label,
-        revenue: f.revenue,
-        netProfit: f.netProfit,
-        grossProfit: f.grossProfit,
-        expenses: f.totalExpenses,
-        margin: f.revenue > 0 ? (f.grossProfit / f.revenue) * 100 : 0,
-      };
-    });
-  }, [buckets, sales, expenses, repayments, allCreditSales]);
-
-  // FIX (multi-product cart): a Counter.jsx cart sale can carry several
-  // products on one sale/creditSale doc via `items`. Crediting the whole
-  // doc's aggregate qty/revenue/profit to its (summary) productName would
-  // badly skew Volume/Margin Drivers — each line item is now credited to
-  // its own product when `items` is present; legacy single-product docs
-  // (no `items` field) are read exactly as before.
-  const productPerf = useMemo(() => {
-    const map = {};
-    const ensure = (name) => {
-      if (!map[name]) map[name] = { name, qty: 0, revenue: 0, profit: 0 };
-      return map[name];
-    };
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      if (Array.isArray(s.items) && s.items.length > 0) {
-        s.items.forEach((it) => {
-          const row = ensure(it.productName);
-          row.qty += Number(it.quantity) || 0;
-          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
-          row.profit += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
-        });
-      } else {
-        const row = ensure(s.productName);
-        row.qty += Number(s.quantity) || 0;
-        row.revenue += Number(s.totalAmount) || 0;
-        row.profit += Number(s.profit) || 0;
-      }
-    });
-    (creditSales || []).forEach((cs) => {
-      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-      if (Array.isArray(cs.items) && cs.items.length > 0) {
-        cs.items.forEach((it) => {
-          const row = ensure(it.productName);
-          row.qty += Number(it.quantity) || 0;
-        });
-      } else {
-        const row = ensure(cs.productName);
-        row.qty += Number(cs.quantity) || 0;
-      }
-    });
-    return Object.values(map);
-  }, [sales, creditSales]);
-
-  const bestSelling = useMemo(() => [...productPerf].sort((a, b) => b.qty - a.qty).slice(0, 5), [productPerf]);
-  const mostProfitable = useMemo(() => [...productPerf].sort((a, b) => b.profit - a.profit).slice(0, 5), [productPerf]);
-
-  const staffPerformance = useMemo(() => {
-    const m = {};
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      if (!s.soldByName) return;
-      if (!m[s.soldByName]) m[s.soldByName] = { name: s.soldByName, qty: 0, revenue: 0 };
-      m[s.soldByName].qty += Number(s.quantity) || 0;
-      m[s.soldByName].revenue += Number(s.totalAmount) || 0;
-    });
-    return Object.values(m).sort((a, b) => b.revenue - a.revenue);
-  }, [sales]);
-
-  const weekdayPerformance = useMemo(() => {
-    const totals = Array(7).fill(0);
-    const seenDates = Array.from({ length: 7 }, () => new Set());
-    const addRecord = (timestamp, amount) => {
-      const t = toMillisValue(timestamp);
-      if (t == null) return;
-      const idx = weekdayIndexNairobi(t);
-      totals[idx] += amount;
-      seenDates[idx].add(Math.floor((t + NAIROBI_OFFSET_MS) / 86400000));
-    };
-    (sales || []).forEach((s) => { if (!s.isVoided) addRecord(s.soldAt, Number(s.totalAmount) || 0); });
-    (creditSales || []).forEach((cs) => { if (cs.status !== 'cancelled' && cs.status !== 'refunded') addRecord(cs.soldAt, Number(cs.totalAmount) || 0); });
-    return WEEKDAY_LABELS.map((label, i) => ({ label, value: seenDates[i].size > 0 ? totals[i] / seenDates[i].size : 0 }));
-  }, [sales, creditSales]);
-
-  const weekdayBest = useMemo(() => {
-    const withSales = weekdayPerformance.filter((d) => d.value > 0);
-    if (!withSales.length) return null;
-    return withSales.reduce((a, b) => (b.value > a.value ? b : a));
-  }, [weekdayPerformance]);
-
-  const expenseByCategory = useMemo(() => {
-    const map = {};
-    (expenses || []).filter((e) => !isExpenseExcluded(e)).forEach((e) => {
-      const cat = e.category || 'Other';
-      map[cat] = (map[cat] || 0) + (Number(e.amount) || 0);
-    });
-    return Object.entries(map).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
-  }, [expenses]);
-
-  const revenueChangePct = !prevLoading && prevSummary.revenue > 0 ? ((summary.revenue - prevSummary.revenue) / prevSummary.revenue) * 100 : null;
-  const profitChangePct = !prevLoading && prevSummary.netProfit !== 0 ? ((summary.netProfit - prevSummary.netProfit) / Math.abs(prevSummary.netProfit)) * 100 : null;
-
-  const insights = useMemo(() => {
-    const list = [];
-    if (revenueChangePct !== null) {
-      list.push({ tone: revenueChangePct >= 0 ? 'positive' : 'negative', text: `Recognized revenue is ${revenueChangePct >= 0 ? 'up' : 'down'} ${Math.abs(revenueChangePct).toFixed(1)}% vs prior period.` });
-    }
-    if (profitChangePct !== null) {
-      list.push({ tone: profitChangePct >= 0 ? 'positive' : 'negative', text: `Net profit is ${profitChangePct >= 0 ? 'up' : 'down'} ${Math.abs(profitChangePct).toFixed(1)}% vs prior period.` });
-    }
-    if (mostProfitable[0]) {
-      list.push({ tone: 'neutral', text: `"${mostProfitable[0].name}" drove the highest gross profit margin (${formatKES(mostProfitable[0].profit)}).` });
-    }
-    if (weekdayBest) {
-      list.push({ tone: 'neutral', text: `${weekdayBest.label} is your strongest day, averaging ${formatKES(weekdayBest.value)} in sales per occurrence this period.` });
-    }
-    const salesActivity = summary.revenue + summary.totalCreditSales;
-    if (salesActivity > 0 && summary.totalCreditSales > 0) {
-      const pct = (summary.totalCreditSales / salesActivity) * 100;
-      list.push({ tone: pct > 30 ? 'negative' : 'neutral', text: `Credit exposure: ${pct.toFixed(0)}% of sales activity was issued on credit.` });
-    }
-    return list;
-  }, [revenueChangePct, profitChangePct, mostProfitable, weekdayBest, summary]);
-
-  if (!isPro) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
-        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
-          <Lock className="h-7 w-7" strokeWidth={2} />
-        </div>
-        <h2 className="font-display text-2xl font-bold text-ink-900">Enterprise Analytics Locked</h2>
-        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Advanced Analytics provides institutional-grade visibility into profit margins, capital exposure, and staff performance trends. Requires FlowBiz Pro.</p>
-        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
-      </div>
-    );
-  }
-
-  if (loading) return <div className="py-12"><LoadingSpinner /></div>;
-
-  const margin = summary.revenue > 0 ? (summary.grossProfit / summary.revenue) * 100 : 0;
-  const avgTransactionValue = sales.length > 0 ? summary.revenue / sales.length : 0;
-  const hasSalesData = sales.length > 0;
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Advanced Analytics</h1>
-          <p className="text-sm text-ink-500 mt-1">A deeper look at profit, cash flow, and performance trends.</p>
-        </div>
-        <Link to="/reports" className="btn-outline text-xs bg-white">
-          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Standard Reports
-        </Link>
-      </div>
-
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-white p-3 rounded-xl border border-ink-200">
-        <span className="text-xs font-semibold text-ink-500 uppercase tracking-wider pl-1">Date Range:</span>
-        <div className="flex flex-wrap items-center gap-2">
-          {PERIOD_OPTIONS.map((opt) => (
-            <button
-              key={opt.id}
-              onClick={() => setPeriod(opt.id)}
-              className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors ${period === opt.id ? 'bg-ink-900 text-white shadow-sm' : 'bg-ink-50 text-ink-600 hover:bg-ink-100'}`}
-            >
-              {opt.label}
-            </button>
-          ))}
-          {period === 'custom' && (
-            <div className="flex items-center gap-2 ml-1 animate-fade-in">
-              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
-              <span className="text-ink-400 text-sm font-medium">to</span>
-              <input type="date" className="input !w-auto !py-1.5 !min-h-0 text-sm" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Financial performance</p>
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <KpiCard label="Recognized Revenue" value={formatKES(summary.revenue)} deltaPct={revenueChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.revenue }))} sparklineColor="text-moss-600" />
-          <KpiCard label="Gross Profit" value={formatKES(summary.grossProfit)} tone="text-moss-700" sparkline={trend.map((t) => ({ label: t.label, value: t.grossProfit }))} sparklineColor="text-moss-600" />
-          <KpiCard label="Net Profit" value={formatKES(summary.netProfit)} tone="text-moss-700" deltaPct={profitChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.netProfit }))} sparklineColor="text-blue-600" />
-          <KpiCard label="Profit Margin" value={`${margin.toFixed(1)}%`} tone={margin > 20 ? 'text-moss-700' : margin < 10 ? 'text-rust-600' : 'text-ink-900'} sparkline={trend.map((t) => ({ label: t.label, value: t.margin }))} sparklineColor={margin >= 0 ? 'text-moss-600' : 'text-rust-500'} />
-        </div>
-      </div>
-
-      <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Operational metrics</p>
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <KpiCard label="Total Expenses" value={formatKES(summary.totalExpenses)} tone="text-rust-600" />
-          <KpiCard label="Avg Transaction Size" value={hasSalesData ? formatKES(avgTransactionValue) : 'KES 0'} />
-          <KpiCard label="Credit Issued" value={formatKES(summary.totalCreditSales)} tone="text-amber-600" />
-          <KpiCard label="Total Outstanding Debt" value={formatKES(totalOutstanding)} tone="text-rust-600" />
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Section title="Revenue &amp; Profit Trend" subtitle="Recognized revenue vs. net profit over the selected period" icon={TrendingUp} className="lg:col-span-2">
-          {hasSalesData ? (
-            <DualTrendChart
-              data={trend}
-              series={[
-                { key: 'revenue', label: 'Revenue', colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
-                { key: 'netProfit', label: 'Net Profit', colorClassName: 'text-blue-600', dotClassName: 'bg-blue-600' },
-              ]}
-              ariaLabel="Revenue vs net profit trend"
-            />
-          ) : (
-            <NoData>Insufficient data to chart trends yet.</NoData>
-          )}
-        </Section>
-        <Section title="Payment Mix" subtitle="How sales value was collected this period" icon={Banknote}>
-          {(summary.totalCashSales + summary.totalMpesaSales + summary.totalCreditSales) > 0 ? (
-            <>
-              <DonutChart
-                size={150}
-                formatValue={formatKES}
-                segments={[
-                  { label: 'Cash', value: summary.totalCashSales, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
-                  { label: 'M-Pesa', value: summary.totalMpesaSales, colorClassName: 'text-blue-600', dotClassName: 'bg-blue-600' },
-                  { label: 'Credit (uncollected)', value: summary.totalCreditSales, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
-                ]}
-              />
-              <p className="mt-3 text-[11px] leading-relaxed text-ink-400">Credit isn't counted as revenue until it's repaid — see the Executive Summary below.</p>
-            </>
-          ) : (
-            <NoData>No sales recorded yet this period.</NoData>
-          )}
-        </Section>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Volume Drivers" subtitle="Highest quantity moved" icon={Package}>
-          {bestSelling.length > 0 ? (
-            <MiniBarChart orientation="horizontal" formatValue={(v) => `${v.toLocaleString()} units`} data={bestSelling.map((p) => ({ label: p.name, value: p.qty, colorClassName: 'bg-ink-800' }))} />
-          ) : (
-            <NoData>No product movement detected.</NoData>
-          )}
-        </Section>
-        <Section title="Margin Drivers" subtitle="Highest gross profit generated" icon={Tag}>
-          {mostProfitable.length > 0 ? (
-            <MiniBarChart orientation="horizontal" formatValue={formatKES} data={mostProfitable.map((p) => ({ label: p.name, value: p.profit, colorClassName: 'bg-moss-600' }))} />
-          ) : (
-            <NoData>No profit data generated.</NoData>
-          )}
-        </Section>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Sales by Day of Week" subtitle="Average sales value per occurrence of that weekday" icon={BarChart3}>
-          {weekdayBest ? (
-            <MiniBarChart orientation="vertical" formatValue={formatKES} data={weekdayPerformance} ariaLabel="Sales by day of week" />
-          ) : (
-            <NoData>No sales activity recorded yet this period.</NoData>
-          )}
-        </Section>
-        <Section title="Expense Breakdown" subtitle="Where operating costs went this period" icon={Receipt}>
-          {expenseByCategory.length > 0 ? (
-            <DonutChart
-              size={150}
-              formatValue={formatKES}
-              segments={expenseByCategory.map((e, i) => ({ label: e.label, value: e.value, colorClassName: CHART_PALETTE[i % CHART_PALETTE.length].text, dotClassName: CHART_PALETTE[i % CHART_PALETTE.length].bg }))}
-            />
-          ) : (
-            <NoData>No expenses recorded this period.</NoData>
-          )}
-        </Section>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Capital &amp; Credit Exposure" subtitle="Liquidity tied up in customer credit" icon={Users}>
-          <div className="space-y-4 pt-1">
-            <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
-              <span className="text-ink-600 font-medium">Credit Issued (This Period)</span>
-              <span className="font-semibold text-ink-900">{formatKES(summary.totalCreditSales)}</span>
-            </div>
-            <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
-              <span className="text-ink-600 font-medium">Debt Collected (This Period)</span>
-              <span className="font-semibold text-moss-700">{formatKES(summary.totalDebtRepayments)}</span>
-            </div>
-            <div className="flex items-center justify-between pt-1 text-sm bg-rust-50 p-3 rounded-lg border border-rust-100">
-              <span className="font-bold text-rust-800 uppercase tracking-wide text-xs">Total Market Exposure</span>
-              <span className="font-bold text-rust-700 text-base">{formatKES(totalOutstanding)}</span>
-            </div>
-          </div>
-        </Section>
-        <Section title="Top Debtors" subtitle="Customers with the highest outstanding balance" icon={Users}>
-          {topDebtors.length > 0 ? (
-            <div className="space-y-1">
-              {topDebtors.map((d, i) => (
-                <Link key={d.customerId || d.name} to={d.customerId ? `/customers/${d.customerId}` : '/customers'} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2.5 hover:bg-ink-50 transition-colors">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rust-50 text-xs font-bold text-rust-700">{i + 1}</span>
-                    <span className="truncate text-sm font-medium text-ink-800">{d.name}</span>
-                  </div>
-                  <span className="shrink-0 text-sm font-bold text-rust-600">{formatKES(d.balance)}</span>
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <NoData>No outstanding customer balances — nice and clean!</NoData>
-          )}
-        </Section>
-      </div>
-
-      <Section title="Staff Performance Index" subtitle="Revenue attribution by cashier" icon={UsersRound}>
-        {staffPerformance.length === 0 ? (
-          <NoData>No staff attribution data found.</NoData>
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-ink-200">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-ink-50 text-xs uppercase tracking-wider font-semibold text-ink-500">
-                <tr><th className="px-4 py-3 border-b border-ink-200">Staff Member</th><th className="px-4 py-3 border-b border-ink-200 text-right">Items Sold</th><th className="px-4 py-3 border-b border-ink-200 text-right">Revenue Generated</th></tr>
-              </thead>
-              <tbody className="divide-y divide-ink-100 bg-white">
-                {staffPerformance.map((st, i) => (
-                  <tr key={st.name} className="hover:bg-ink-50/50 transition-colors">
-                    <td className="px-4 py-3 font-semibold text-ink-900">
-                      {st.name}
-                      {i === 0 && <span className="badge ml-2 bg-amber-100 text-amber-800">Top</span>}
-                    </td>
-                    <td className="px-4 py-3 text-right text-ink-600">{st.qty.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-moss-700">{formatKES(st.revenue)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Section>
-
-      <Section title="Executive Summary" subtitle="Automated business intelligence" icon={ClipboardCheck}>
-        {insights.length > 0 ? (
-          <div className="space-y-3 pt-1">
-            {insights.map((insight, i) => (
-              <div key={i} className="flex items-start gap-3 text-sm bg-ink-50 p-3 rounded-lg border border-ink-100">
-                <div className="shrink-0 mt-0.5">
-                  {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
-                   insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
-                   <Info className="h-5 w-5 text-ink-500" strokeWidth={2} />}
-                </div>
-                <span className="text-ink-800 font-medium leading-relaxed">{insight.text}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <NoData>More transaction volume required to generate insights.</NoData>
-        )}
-      </Section>
-    </div>
-  );
 }
 ````
 
@@ -11768,6 +11107,87 @@ service cloud.firestore {
 }
 ````
 
+## File: index.html
+````html
+<!doctype html>
+<html lang="en-KE">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <link rel="preconnect" href="https://js.paystack.co" crossorigin />
+    <link rel="preconnect" href="https://api.paystack.co" crossorigin />
+    <link rel="preconnect" href="https://flowbiz-api.flowbiz.workers.dev" crossorigin />
+    <!-- PWA & Mobile Meta Tags -->
+    <meta name="application-name" content="FlowBiz" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="FlowBiz" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#1a623c" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+
+    <!-- SEO & Search Engine Optimization Meta Tags -->
+    <title>FlowBiz — POS, Inventory & Business Manager for Kenyan SMBs</title>
+    <meta name="description" content="Offline-first Point of Sale (POS), real-time stock inventory, M-Pesa till reconciliation, and customer credit (deni) ledger tailored for Kenyan retail shops, wholesalers, and supermarkets." />
+    <meta name="keywords" content="POS Kenya, Point of Sale Nairobi, M-Pesa POS integration, retail management Kenya, duka inventory app, deni credit ledger, Kenyan business software, FlowBiz, stock control Kenya" />
+    <meta name="author" content="FlowBiz" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://flowbiz.co.ke/" />
+
+    <!-- Open Graph (Facebook, WhatsApp, LinkedIn, X preview) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://flowbiz.co.ke/" />
+    <meta property="og:title" content="FlowBiz — Modern POS & Business Manager for Kenyan Shops" />
+    <meta property="og:description" content="Fast offline-first multi-product POS, automated M-Pesa float reconciliation, debt ledger, and inventory intelligence for Kenyan businesses." />
+    <meta property="og:image" content="https://flowbiz.co.ke/icons/icon-512.png" />
+    <meta property="og:locale" content="en_KE" />
+    <meta property="og:site_name" content="FlowBiz" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="FlowBiz — POS & Inventory Management for Kenyan Businesses" />
+    <meta name="twitter:description" content="Manage sales, track cash & M-Pesa till float, audit inventory, and record customer debt with zero false profit illusions." />
+    <meta name="twitter:image" content="https://flowbiz.co.ke/icons/icon-512.png" />
+
+    <!-- Structured Data (Schema.org JSON-LD for Google Rich Results) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "FlowBiz",
+        "operatingSystem": "Web, Android, iOS, Windows, macOS",
+        "applicationCategory": "BusinessApplication",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "KES"
+        },
+        "description": "Offline-first POS and business management software for Kenyan retail, wholesale, and service shops with M-Pesa reconciliation and debt tracking."
+      }
+    </script>
+
+    <!-- Google Fonts Preconnect & Stylesheets -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+    <!-- Firebase & Cloud Performance Preconnects -->
+    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
+  </head>
+  <body class="bg-[#faf6ef] text-[#15171d] antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+    <!-- Paystack Inline Payment Gateway Script -->
+    <script src="https://js.paystack.co/v2/inline.js"></script>
+  </body>
+</html>
+````
+
 ## File: cloudflare-worker/src/routes/paystackInitialize.js
 ````javascript
 // src/routes/paystackInitialize.js
@@ -11839,6 +11259,581 @@ export async function handlePaystackInitialize(request, env) {
   });
 
 return json({ authorization_url: paystackData.data.authorization_url, access_code: paystackData.data.access_code, reference });}
+````
+
+## File: src/pages/AdvancedAnalytics.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { where } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
+import { useFinancialsForRange } from '../hooks/useFinancials';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { tenantQuery } from '../lib/tenant';
+import { startOfDay, endOfDay, buildDateBuckets, toMillisValue } from '../utils/dateRanges';
+import { formatKES } from '../utils/currency';
+import { computeFinancials, isExpenseExcluded } from '../utils/financials';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import MiniLineChart from '../components/charts/MiniLineChart';
+import MiniBarChart from '../components/charts/MiniBarChart';
+import DonutChart from '../components/charts/DonutChart';
+import {
+  TrendingUp, TrendingDown, Lock, AlertCircle, CheckCircle2, Info, ArrowLeft,
+  Banknote, Package, Tag, BarChart3, Receipt, Users, UsersRound, ClipboardCheck,
+} from 'lucide-react';
+
+const PERIOD_OPTIONS = [
+  { id: '7', label: '7 Days' },
+  { id: '30', label: '30 Days' },
+  { id: '90', label: '90 Days' },
+  { id: 'custom', label: 'Custom' },
+];
+
+const CHART_PALETTE = [
+  { text: 'text-moss-600', bg: 'bg-moss-600' },
+  { text: 'text-blue-600', bg: 'bg-blue-600' },
+  { text: 'text-amber-500', bg: 'bg-amber-500' },
+  { text: 'text-rust-500', bg: 'bg-rust-500' },
+  { text: 'text-ink-800', bg: 'bg-ink-800' },
+  { text: 'text-moss-400', bg: 'bg-moss-400' },
+];
+
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const NAIROBI_OFFSET_MS = 3 * 60 * 60 * 1000;
+function weekdayIndexNairobi(millis) {
+  return new Date(millis + NAIROBI_OFFSET_MS).getUTCDay();
+}
+
+function KpiCard({ label, value, tone = 'text-ink-900', deltaPct, sparkline, sparklineColor = 'text-moss-600' }) {
+  const isPositive = deltaPct !== null && deltaPct !== undefined && deltaPct >= 0;
+  return (
+    <div className="card p-4 sm:p-5 flex flex-col justify-between bg-white hover:shadow-md transition-shadow">
+      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
+      <p className={`mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
+      {deltaPct !== null && deltaPct !== undefined && Number.isFinite(deltaPct) && (
+        <div className={`mt-2 flex items-center gap-1.5 text-xs font-semibold ${isPositive ? 'text-moss-700' : 'text-rust-600'}`}>
+          {isPositive ? <TrendingUp className="h-3.5 w-3.5" strokeWidth={2.5} /> : <TrendingDown className="h-3.5 w-3.5" strokeWidth={2.5} />}
+          <span>{Math.abs(deltaPct).toFixed(1)}% vs prior period</span>
+        </div>
+      )}
+      {sparkline && sparkline.length > 1 && (
+        <div className="mt-3 -mb-1">
+          <MiniLineChart data={sparkline} height={36} colorClassName={sparklineColor} compact />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Section({ title, subtitle, icon: Icon, className = '', children }) {
+  return (
+    <div className={`card p-5 sm:p-6 bg-white ${className}`}>
+      <div className="mb-5 flex items-center gap-3 border-b border-ink-100 pb-4">
+        {Icon && (
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
+            <Icon className="h-4 w-4" strokeWidth={1.75} />
+          </div>
+        )}
+        <div>
+          <h2 className="font-display text-sm font-bold text-ink-900">{title}</h2>
+          {subtitle && <p className="mt-0.5 text-xs text-ink-500">{subtitle}</p>}
+        </div>
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function NoData({ children }) {
+  return <div className="py-8 flex flex-col items-center justify-center text-center"><Info className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5} /><p className="text-sm text-ink-500">{children}</p></div>;
+}
+
+// Custom dual-series trend chart (no chart library installed in this
+// project — built the same hand-rolled-SVG way MiniLineChart already is,
+// just extended to plot two series with a shared scale and a legend).
+function DualTrendChart({ data, series, height = 220, ariaLabel }) {
+  if (!data || data.length === 0) return null;
+  const width = 600;
+  const padY = 16;
+  const padBottom = 24;
+  const plotHeight = height - padY - padBottom;
+  const allValues = data.flatMap((d) => series.map((s) => Number(d[s.key]) || 0));
+  const max = Math.max(...allValues, 0);
+  const min = Math.min(...allValues, 0);
+  const range = (max - min) || 1;
+  const stepX = data.length > 1 ? width / (data.length - 1) : 0;
+  const zeroY = padY + plotHeight - ((0 - min) / range) * plotHeight;
+
+  const pointsFor = (key) => data.map((d, i) => {
+    const x = data.length > 1 ? i * stepX : width / 2;
+    const v = Number(d[key]) || 0;
+    const y = padY + plotHeight - ((v - min) / range) * plotHeight;
+    return { x, y };
+  });
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-4">
+        {series.map((s) => (
+          <span key={s.key} className="flex items-center gap-1.5 text-xs font-semibold text-ink-600">
+            <span className={`h-2 w-2 rounded-full ${s.dotClassName}`} />
+            {s.label}
+          </span>
+        ))}
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" preserveAspectRatio="none" role="img" aria-label={ariaLabel || 'Trend chart'}>
+        <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke="currentColor" className="text-ink-100" strokeWidth="1" />
+        {series.map((s) => {
+          const points = pointsFor(s.key);
+          const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+          const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${zeroY} L ${points[0].x.toFixed(1)} ${zeroY} Z`;
+          return (
+            <g key={s.key}>
+              <path d={areaPath} className={s.colorClassName} fill="currentColor" opacity="0.06" />
+              <path d={linePath} className={s.colorClassName} fill="none" stroke="currentColor" strokeWidth="2.25" vectorEffect="non-scaling-stroke" />
+              {points.length <= 31 && points.map((p, i) => (
+                <circle key={i} cx={p.x} cy={p.y} r="2.5" className={s.colorClassName} fill="currentColor" />
+              ))}
+            </g>
+          );
+        })}
+      </svg>
+      <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-400">
+        <span>{data[0].label}</span>
+        <span>{data[data.length - 1].label}</span>
+      </div>
+    </div>
+  );
+}
+
+export default function AdvancedAnalytics() {
+  const { isPro, businessId } = useAuth();
+
+  const [period, setPeriod] = useState('30');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+
+  const { start, end } = useMemo(() => {
+    if (period === 'custom' && customStart && customEnd) {
+      return { start: startOfDay(new Date(customStart)), end: endOfDay(new Date(customEnd)) };
+    }
+    const days = Number(period) || 30;
+    return { start: startOfDay(new Date(Date.now() - (days - 1) * 86400000)), end: endOfDay() };
+  }, [period, customStart, customEnd]);
+
+  const prevRange = useMemo(() => {
+    if (period === 'custom' && customStart && customEnd) {
+      const diff = end.getTime() - start.getTime();
+      const prevEnd = new Date(start.getTime() - 1);
+      const prevStart = new Date(prevEnd.getTime() - diff);
+      return { start: startOfDay(prevStart), end: endOfDay(prevEnd) };
+    }
+    const days = Number(period) || 30;
+    const prevEnd = endOfDay(new Date(start.getTime() - 1));
+    const prevStart = startOfDay(new Date(start.getTime() - days * 86400000));
+    return { start: prevStart, end: prevEnd };
+  }, [start, end, period, customStart, customEnd]);
+
+  const { loading, sales, creditSales, expenses, repayments, summary } = useFinancialsForRange(start, end);
+  const { loading: prevLoading, summary: prevSummary } = useFinancialsForRange(prevRange.start, prevRange.end);
+
+  const allCreditSalesQ = useMemo(() => (businessId ? tenantQuery('creditSales', businessId) : null), [businessId]);
+  const { data: allCreditSales } = useFirestoreCollection(allCreditSalesQ);
+
+  const outstandingCreditQ = useMemo(
+    () => (businessId ? tenantQuery('creditSales', businessId, where('status', 'in', ['pending', 'partial'])) : null),
+    [businessId]
+  );
+  const { data: outstandingCreditSales } = useFirestoreCollection(outstandingCreditQ);
+  const totalOutstanding = useMemo(
+    () => outstandingCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0),
+    [outstandingCreditSales]
+  );
+
+  const topDebtors = useMemo(() => {
+    const map = {};
+    (outstandingCreditSales || []).forEach((cs) => {
+      const key = cs.customerId || cs.customerName || 'unknown';
+      if (!map[key]) map[key] = { name: cs.customerName || 'Unknown', balance: 0, customerId: cs.customerId };
+      map[key].balance += Number(cs.remainingBalance) || 0;
+    });
+    return Object.values(map).sort((a, b) => b.balance - a.balance).slice(0, 5);
+  }, [outstandingCreditSales]);
+
+  const granularity = (end.getTime() - start.getTime()) > (45 * 86400000) ? 'week' : 'day';
+  const buckets = useMemo(() => buildDateBuckets(start, end, granularity), [start, end, granularity]);
+
+  const trend = useMemo(() => {
+    if (!buckets.length) return [];
+    const inBucket = (record, field, bucket) => {
+      const t = toMillisValue(record[field]);
+      return t !== null && t >= bucket.start.getTime() && t <= bucket.end.getTime();
+    };
+    return buckets.map((bucket) => {
+      const bucketSales = (sales || []).filter((s) => inBucket(s, 'soldAt', bucket));
+      const bucketExpenses = (expenses || []).filter((e) => inBucket(e, 'recordedAt', bucket));
+      const bucketRepayments = (repayments || []).filter((r) => inBucket(r, 'paidAt', bucket));
+      const f = computeFinancials({
+        sales: bucketSales,
+        creditSales: [],
+        allCreditSales,
+        expenses: bucketExpenses,
+        debtRepayments: bucketRepayments,
+      });
+      return {
+        label: bucket.label,
+        revenue: f.revenue,
+        netProfit: f.netProfit,
+        grossProfit: f.grossProfit,
+        expenses: f.totalExpenses,
+        margin: f.revenue > 0 ? (f.grossProfit / f.revenue) * 100 : 0,
+      };
+    });
+  }, [buckets, sales, expenses, repayments, allCreditSales]);
+
+  // FIX (multi-product cart): a Counter.jsx cart sale can carry several
+  // products on one sale/creditSale doc via `items`. Crediting the whole
+  // doc's aggregate qty/revenue/profit to its (summary) productName would
+  // badly skew Volume/Margin Drivers — each line item is now credited to
+  // its own product when `items` is present; legacy single-product docs
+  // (no `items` field) are read exactly as before.
+  const productPerf = useMemo(() => {
+    const map = {};
+    const ensure = (name) => {
+      if (!map[name]) map[name] = { name, qty: 0, revenue: 0, profit: 0 };
+      return map[name];
+    };
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      if (Array.isArray(s.items) && s.items.length > 0) {
+        s.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty += Number(it.quantity) || 0;
+          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
+          row.profit += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
+        });
+      } else {
+        const row = ensure(s.productName);
+        row.qty += Number(s.quantity) || 0;
+        row.revenue += Number(s.totalAmount) || 0;
+        row.profit += Number(s.profit) || 0;
+      }
+    });
+    (creditSales || []).forEach((cs) => {
+      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+      if (Array.isArray(cs.items) && cs.items.length > 0) {
+        cs.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty += Number(it.quantity) || 0;
+        });
+      } else {
+        const row = ensure(cs.productName);
+        row.qty += Number(cs.quantity) || 0;
+      }
+    });
+    return Object.values(map);
+  }, [sales, creditSales]);
+
+  const bestSelling = useMemo(() => [...productPerf].sort((a, b) => b.qty - a.qty).slice(0, 5), [productPerf]);
+  const mostProfitable = useMemo(() => [...productPerf].sort((a, b) => b.profit - a.profit).slice(0, 5), [productPerf]);
+
+  const staffPerformance = useMemo(() => {
+    const m = {};
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      if (!s.soldByName) return;
+      if (!m[s.soldByName]) m[s.soldByName] = { name: s.soldByName, qty: 0, revenue: 0 };
+      m[s.soldByName].qty += Number(s.quantity) || 0;
+      m[s.soldByName].revenue += Number(s.totalAmount) || 0;
+    });
+    return Object.values(m).sort((a, b) => b.revenue - a.revenue);
+  }, [sales]);
+
+  const weekdayPerformance = useMemo(() => {
+    const totals = Array(7).fill(0);
+    const seenDates = Array.from({ length: 7 }, () => new Set());
+    const addRecord = (timestamp, amount) => {
+      const t = toMillisValue(timestamp);
+      if (t == null) return;
+      const idx = weekdayIndexNairobi(t);
+      totals[idx] += amount;
+      seenDates[idx].add(Math.floor((t + NAIROBI_OFFSET_MS) / 86400000));
+    };
+    (sales || []).forEach((s) => { if (!s.isVoided) addRecord(s.soldAt, Number(s.totalAmount) || 0); });
+    (creditSales || []).forEach((cs) => { if (cs.status !== 'cancelled' && cs.status !== 'refunded') addRecord(cs.soldAt, Number(cs.totalAmount) || 0); });
+    return WEEKDAY_LABELS.map((label, i) => ({ label, value: seenDates[i].size > 0 ? totals[i] / seenDates[i].size : 0 }));
+  }, [sales, creditSales]);
+
+  const weekdayBest = useMemo(() => {
+    const withSales = weekdayPerformance.filter((d) => d.value > 0);
+    if (!withSales.length) return null;
+    return withSales.reduce((a, b) => (b.value > a.value ? b : a));
+  }, [weekdayPerformance]);
+
+  const expenseByCategory = useMemo(() => {
+    const map = {};
+    (expenses || []).filter((e) => !isExpenseExcluded(e)).forEach((e) => {
+      const cat = e.category || 'Other';
+      map[cat] = (map[cat] || 0) + (Number(e.amount) || 0);
+    });
+    return Object.entries(map).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+  }, [expenses]);
+
+  const revenueChangePct = !prevLoading && prevSummary.revenue > 0 ? ((summary.revenue - prevSummary.revenue) / prevSummary.revenue) * 100 : null;
+  const profitChangePct = !prevLoading && prevSummary.netProfit !== 0 ? ((summary.netProfit - prevSummary.netProfit) / Math.abs(prevSummary.netProfit)) * 100 : null;
+
+  const insights = useMemo(() => {
+    const list = [];
+    if (revenueChangePct !== null) {
+      list.push({ tone: revenueChangePct >= 0 ? 'positive' : 'negative', text: `Recognized revenue is ${revenueChangePct >= 0 ? 'up' : 'down'} ${Math.abs(revenueChangePct).toFixed(1)}% vs prior period.` });
+    }
+    if (profitChangePct !== null) {
+      list.push({ tone: profitChangePct >= 0 ? 'positive' : 'negative', text: `Net profit is ${profitChangePct >= 0 ? 'up' : 'down'} ${Math.abs(profitChangePct).toFixed(1)}% vs prior period.` });
+    }
+    if (mostProfitable[0]) {
+      list.push({ tone: 'neutral', text: `"${mostProfitable[0].name}" drove the highest gross profit margin (${formatKES(mostProfitable[0].profit)}).` });
+    }
+    if (weekdayBest) {
+      list.push({ tone: 'neutral', text: `${weekdayBest.label} is your strongest day, averaging ${formatKES(weekdayBest.value)} in sales per occurrence this period.` });
+    }
+    const salesActivity = summary.revenue + summary.totalCreditSales;
+    if (salesActivity > 0 && summary.totalCreditSales > 0) {
+      const pct = (summary.totalCreditSales / salesActivity) * 100;
+      list.push({ tone: pct > 30 ? 'negative' : 'neutral', text: `Credit exposure: ${pct.toFixed(0)}% of sales activity was issued on credit.` });
+    }
+    return list;
+  }, [revenueChangePct, profitChangePct, mostProfitable, weekdayBest, summary]);
+
+  if (!isPro) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
+        <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
+          <Lock className="h-7 w-7" strokeWidth={2} />
+        </div>
+        <h2 className="font-display text-2xl font-bold text-ink-900">Enterprise Analytics Locked</h2>
+        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Advanced Analytics provides institutional-grade visibility into profit margins, capital exposure, and staff performance trends. Requires FlowBiz Pro.</p>
+        <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
+      </div>
+    );
+  }
+
+  if (loading) return <div className="py-12"><LoadingSpinner /></div>;
+
+  const margin = summary.revenue > 0 ? (summary.grossProfit / summary.revenue) * 100 : 0;
+  const avgTransactionValue = sales.length > 0 ? summary.revenue / sales.length : 0;
+  const hasSalesData = sales.length > 0;
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Advanced Analytics</h1>
+          <p className="text-sm text-ink-500 mt-1">A deeper look at profit, cash flow, and performance trends.</p>
+        </div>
+        <Link to="/reports" className="btn-outline text-xs bg-white">
+          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Standard Reports
+        </Link>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 bg-white p-2.5 rounded-xl border border-ink-200">
+        <span className="hidden sm:inline text-xs font-semibold text-ink-500 uppercase tracking-wider pl-1">Range:</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {PERIOD_OPTIONS.map((opt) => (
+            <button
+              key={opt.id}
+              onClick={() => setPeriod(opt.id)}
+              className={`rounded-lg px-3 py-1.5 text-xs sm:text-sm font-semibold transition-colors ${period === opt.id ? 'bg-ink-900 text-white shadow-sm' : 'bg-ink-50 text-ink-600 hover:bg-ink-100'}`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        {period === 'custom' && (
+          <div className="flex w-full items-center gap-2 sm:w-auto sm:ml-1 animate-fade-in">
+            <input type="date" className="input flex-1 !py-1.5 !min-h-0 text-xs sm:text-sm sm:!w-auto" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
+            <span className="text-ink-400 text-xs">to</span>
+            <input type="date" className="input flex-1 !py-1.5 !min-h-0 text-xs sm:text-sm sm:!w-auto" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
+          </div>
+        )}
+      </div>
+      
+
+      <div>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Financial performance</p>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <KpiCard label="Recognized Revenue" value={formatKES(summary.revenue)} deltaPct={revenueChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.revenue }))} sparklineColor="text-moss-600" />
+          <KpiCard label="Gross Profit" value={formatKES(summary.grossProfit)} tone="text-moss-700" sparkline={trend.map((t) => ({ label: t.label, value: t.grossProfit }))} sparklineColor="text-moss-600" />
+          <KpiCard label="Net Profit" value={formatKES(summary.netProfit)} tone="text-moss-700" deltaPct={profitChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.netProfit }))} sparklineColor="text-blue-600" />
+          <KpiCard label="Profit Margin" value={`${margin.toFixed(1)}%`} tone={margin > 20 ? 'text-moss-700' : margin < 10 ? 'text-rust-600' : 'text-ink-900'} sparkline={trend.map((t) => ({ label: t.label, value: t.margin }))} sparklineColor={margin >= 0 ? 'text-moss-600' : 'text-rust-500'} />
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Operational metrics</p>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <KpiCard label="Total Expenses" value={formatKES(summary.totalExpenses)} tone="text-rust-600" />
+          <KpiCard label="Avg Transaction Size" value={hasSalesData ? formatKES(avgTransactionValue) : 'KES 0'} />
+          <KpiCard label="Credit Issued" value={formatKES(summary.totalCreditSales)} tone="text-amber-600" />
+          <KpiCard label="Total Outstanding Debt" value={formatKES(totalOutstanding)} tone="text-rust-600" />
+        </div>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Section title="Revenue &amp; Profit Trend" subtitle="Recognized revenue vs. net profit over the selected period" icon={TrendingUp} className="lg:col-span-2">
+          {hasSalesData ? (
+            <DualTrendChart
+              data={trend}
+              series={[
+                { key: 'revenue', label: 'Revenue', colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
+                { key: 'netProfit', label: 'Net Profit', colorClassName: 'text-blue-600', dotClassName: 'bg-blue-600' },
+              ]}
+              ariaLabel="Revenue vs net profit trend"
+            />
+          ) : (
+            <NoData>Insufficient data to chart trends yet.</NoData>
+          )}
+        </Section>
+        <Section title="Payment Mix" subtitle="How sales value was collected this period" icon={Banknote}>
+          {(summary.totalCashSales + summary.totalMpesaSales + summary.totalCreditSales) > 0 ? (
+            <>
+             <DonutChart
+                size={150}
+                stacked
+                formatValue={formatKES}
+                segments={[
+                  { label: 'Cash', value: summary.totalCashSales, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
+                  { label: 'M-Pesa', value: summary.totalMpesaSales, colorClassName: 'text-blue-600', dotClassName: 'bg-blue-600' },
+                  { label: 'Credit (uncollected)', value: summary.totalCreditSales, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
+                ]}
+              />
+              <p className="mt-3 text-[11px] leading-relaxed text-ink-400">Credit isn't counted as revenue until it's repaid see the Executive Summary below.</p>
+            </>
+          ) : (
+            <NoData>No sales recorded yet this period.</NoData>
+          )}
+        </Section>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Section title="Volume Drivers" subtitle="Highest quantity moved" icon={Package}>
+          {bestSelling.length > 0 ? (
+            <MiniBarChart orientation="horizontal" formatValue={(v) => `${v.toLocaleString()} units`} data={bestSelling.map((p) => ({ label: p.name, value: p.qty, colorClassName: 'bg-ink-800' }))} />
+          ) : (
+            <NoData>No product movement detected.</NoData>
+          )}
+        </Section>
+        <Section title="Margin Drivers" subtitle="Highest gross profit generated" icon={Tag}>
+          {mostProfitable.length > 0 ? (
+            <MiniBarChart orientation="horizontal" formatValue={formatKES} data={mostProfitable.map((p) => ({ label: p.name, value: p.profit, colorClassName: 'bg-moss-600' }))} />
+          ) : (
+            <NoData>No profit data generated.</NoData>
+          )}
+        </Section>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Section title="Sales by Day of Week" subtitle="Average sales value per occurrence of that weekday" icon={BarChart3}>
+          {weekdayBest ? (
+            <MiniBarChart orientation="vertical" formatValue={formatKES} data={weekdayPerformance} ariaLabel="Sales by day of week" />
+          ) : (
+            <NoData>No sales activity recorded yet this period.</NoData>
+          )}
+        </Section>
+        <Section title="Expense Breakdown" subtitle="Where operating costs went this period" icon={Receipt}>
+          {expenseByCategory.length > 0 ? (
+            <DonutChart
+              size={150}
+              formatValue={formatKES}
+              segments={expenseByCategory.map((e, i) => ({ label: e.label, value: e.value, colorClassName: CHART_PALETTE[i % CHART_PALETTE.length].text, dotClassName: CHART_PALETTE[i % CHART_PALETTE.length].bg }))}
+            />
+          ) : (
+            <NoData>No expenses recorded this period.</NoData>
+          )}
+        </Section>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Section title="Capital &amp; Credit Exposure" subtitle="Liquidity tied up in customer credit" icon={Users}>
+          <div className="space-y-4 pt-1">
+            <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
+              <span className="text-ink-600 font-medium">Credit Issued (This Period)</span>
+              <span className="font-semibold text-ink-900">{formatKES(summary.totalCreditSales)}</span>
+            </div>
+            <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
+              <span className="text-ink-600 font-medium">Debt Collected (This Period)</span>
+              <span className="font-semibold text-moss-700">{formatKES(summary.totalDebtRepayments)}</span>
+            </div>
+            <div className="flex items-center justify-between pt-1 text-sm bg-rust-50 p-3 rounded-lg border border-rust-100">
+              <span className="font-bold text-rust-800 uppercase tracking-wide text-xs">Total Market Exposure</span>
+              <span className="font-bold text-rust-700 text-base">{formatKES(totalOutstanding)}</span>
+            </div>
+          </div>
+        </Section>
+        <Section title="Top Debtors" subtitle="Customers with the highest outstanding balance" icon={Users}>
+          {topDebtors.length > 0 ? (
+            <div className="space-y-1">
+              {topDebtors.map((d, i) => (
+                <Link key={d.customerId || d.name} to={d.customerId ? `/customers/${d.customerId}` : '/customers'} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2.5 hover:bg-ink-50 transition-colors">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rust-50 text-xs font-bold text-rust-700">{i + 1}</span>
+                    <span className="truncate text-sm font-medium text-ink-800">{d.name}</span>
+                  </div>
+                  <span className="shrink-0 text-sm font-bold text-rust-600">{formatKES(d.balance)}</span>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <NoData>No outstanding customer balances, nice and clean!</NoData>
+          )}
+        </Section>
+      </div>
+
+      <Section title="Staff Performance Index" subtitle="Revenue attribution by cashier" icon={UsersRound}>
+        {staffPerformance.length === 0 ? (
+          <NoData>No staff attribution data found.</NoData>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-ink-200">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-ink-50 text-xs uppercase tracking-wider font-semibold text-ink-500">
+                <tr><th className="px-4 py-3 border-b border-ink-200">Staff Member</th><th className="px-4 py-3 border-b border-ink-200 text-right">Items Sold</th><th className="px-4 py-3 border-b border-ink-200 text-right">Revenue Generated</th></tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100 bg-white">
+                {staffPerformance.map((st, i) => (
+                  <tr key={st.name} className="hover:bg-ink-50/50 transition-colors">
+                    <td className="px-4 py-3 font-semibold text-ink-900">
+                      {st.name}
+                      {i === 0 && <span className="badge ml-2 bg-amber-100 text-amber-800">Top</span>}
+                    </td>
+                    <td className="px-4 py-3 text-right text-ink-600">{st.qty.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-moss-700">{formatKES(st.revenue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
+
+      <Section title="Executive Summary" subtitle="Automated business intelligence" icon={ClipboardCheck}>
+        {insights.length > 0 ? (
+          <div className="space-y-3 pt-1">
+            {insights.map((insight, i) => (
+              <div key={i} className="flex items-start gap-3 text-sm bg-ink-50 p-3 rounded-lg border border-ink-100">
+                <div className="shrink-0 mt-0.5">
+                  {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
+                   insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
+                   <Info className="h-5 w-5 text-ink-500" strokeWidth={2} />}
+                </div>
+                <span className="text-ink-800 font-medium leading-relaxed">{insight.text}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <NoData>More transaction volume required to generate insights.</NoData>
+        )}
+      </Section>
+    </div>
+  );
+}
 ````
 
 ## File: src/pages/Suppliers.jsx
@@ -12997,154 +12992,6 @@ export default function StockTake() {
         onCancel={() => setConfirm(false)}
       />
     </div>
-  );
-}
-````
-
-## File: src/router/AppRouter.jsx
-````javascript
-import { lazy, Suspense, useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
-import ProtectedRoute from '../components/common/ProtectedRoute';
-import AppShell from '../components/layout/AppShell';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import { useAuth } from '../contexts/AuthContext';
-import { prefetchRoutes } from './routePrefetch';
-
-const routeLoaders = {
-  landing: () => import('../pages/LandingPage'),
-  setup: () => import('../pages/Setup'),
-  login: () => import('../pages/Login'),
-  forgotPassword: () => import('../pages/ForgotPassword'),
-  joinStaff: () => import('../pages/JoinStaff'),
-  authAction: () => import('../pages/AuthAction'),
-  dashboard: () => import('../pages/Dashboard'),
-  counter: () => import('../pages/Counter'),
-  customers: () => import('../pages/Customers'),
-  customerDetail: () => import('../pages/CustomerDetail'),
-  expenses: () => import('../pages/Expenses'),
-  purchases: () => import('../pages/Purchases'),
-  products: () => import('../pages/Products'),
-  suppliers: () => import('../pages/Suppliers'),
-  stockTake: () => import('../pages/StockTake'),
-  reports: () => import('../pages/Reports'),
-  closeDay: () => import('../pages/CloseDay'),
-  users: () => import('../pages/Users'),
-  settings: () => import('../pages/Settings'),
-  helpGuide: () => import('../pages/HelpGuide'),
-  pro: () => import('../pages/Pro'),
-  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
-  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
-  privacy: () => import('../pages/Privacy'),
-  terms: () => import('../pages/Terms'),
-};
-
-const LandingPage = lazy(routeLoaders.landing);
-const Setup      = lazy(routeLoaders.setup);
-const Login      = lazy(routeLoaders.login);
-const ForgotPassword = lazy(routeLoaders.forgotPassword);
-const JoinStaff  = lazy(routeLoaders.joinStaff);
-const AuthAction = lazy(routeLoaders.authAction);
-const Dashboard  = lazy(routeLoaders.dashboard);
-const Counter    = lazy(routeLoaders.counter);
-const Customers  = lazy(routeLoaders.customers);
-const CustomerDetail = lazy(routeLoaders.customerDetail);
-const Expenses   = lazy(routeLoaders.expenses);
-const Purchases  = lazy(routeLoaders.purchases);
-const Products   = lazy(routeLoaders.products);
-const Suppliers  = lazy(routeLoaders.suppliers);
-const StockTake  = lazy(routeLoaders.stockTake);
-const Reports    = lazy(routeLoaders.reports);
-const CloseDay   = lazy(routeLoaders.closeDay);
-const Users      = lazy(routeLoaders.users);
-const Settings   = lazy(routeLoaders.settings);
-const HelpGuide  = lazy(routeLoaders.helpGuide);
-const Pro        = lazy(routeLoaders.pro);
-const AdvancedAnalytics = lazy(routeLoaders.advancedAnalytics);
-const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
-const Privacy    = lazy(routeLoaders.privacy);
-const Terms      = lazy(routeLoaders.terms);
-
-function Page({ children, adminOnly = false }) {
-  return (
-    <ProtectedRoute adminOnly={adminOnly}>
-      <AppShell>
-        <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>
-      </AppShell>
-    </ProtectedRoute>
-  );
-}
-
-function PublicOnly({ children }) {
-  const { firebaseUser, loading } = useAuth();
-  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
-  if (firebaseUser) return <Navigate to="/dashboard" replace />;
-  return children;
-}
-
-function RootRoute() {
-  const { firebaseUser, loading, isAdmin } = useAuth();
-  if (loading) return <LoadingSpinner label="Loading FlowBiz…" />;
-  if (firebaseUser) {
-    return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
-  }
-  return <LandingPage />;
-}
-
-function RoutePrefetcher() {
-  const { firebaseUser, isAdmin } = useAuth();
-  useEffect(() => {
-    if (!firebaseUser) return;
-    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
-    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
-    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
-  }, [firebaseUser, isAdmin]);
-  return null;
-}
-
-export default function AppRouter() {
-  return (
-    <Suspense fallback={<LoadingSpinner label="Loading..." />}>
-      <RoutePrefetcher />
-      <Routes>
-        {/* Opens Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
-        <Route path="/" element={<RootRoute />} />
-
-        {/* Public Authentication & Setup */}
-        <Route path="/setup" element={<Setup />} />
-        <Route path="/signup" element={<Setup />} />
-        <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
-        <Route path="/signin" element={<PublicOnly><Login /></PublicOnly>} />
-        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
-        <Route path="/join/:inviteId" element={<JoinStaff />} />
-        <Route path="/auth/action" element={<AuthAction />} />
-        
-        {/* Public Legal Pages */}
-        <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
-        <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
-
-        {/* Protected Store Management Routes */}
-        <Route path="/dashboard"    element={<Page adminOnly><Dashboard /></Page>} />
-        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
-        <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
-        <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
-
-        <Route path="/counter"      element={<Page><Counter /></Page>} />
-        <Route path="/customers"    element={<Page><Customers /></Page>} />
-        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
-        <Route path="/expenses"     element={<Page><Expenses /></Page>} />
-        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
-        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
-        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
-        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
-        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
-        <Route path="/close-day"    element={<Page adminOnly><CloseDay /></Page>} />
-        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
-        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
-        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
-        <Route path="*"             element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
   );
 }
 ````
@@ -14882,172 +14729,6 @@ export default function CustomerDetail() {
 }
 ````
 
-## File: src/pages/Pro.jsx
-````javascript
-// src/pages/Pro.jsx
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { auth } from '../firebase';
-import toast from 'react-hot-toast';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-import { Check, X, BarChart3, Boxes, FileText, MessageCircle, Users, Sparkles, ArrowLeft } from 'lucide-react';
-
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-
-const FEATURE_CATEGORIES = [
-  { icon: BarChart3, title: 'Advanced Analytics', description: 'Revenue & profit trends, payment mix, day-of-week patterns, expense breakdown, top debtors, and staff performance all in one dashboard.' },
-  { icon: Boxes, title: 'Inventory Intelligence', description: 'Capital Health scoring, ABC value analysis, reorder suggestions, slow-moving stock alerts, and capital-by-supplier breakdowns.' },
-  { icon: FileText, title: 'Professional Documents', description: 'Branded PDF receipts and invoices with your logo, ready to print or download.' },
-  { icon: MessageCircle, title: 'WhatsApp Sharing', description: "Send receipts, invoices, and debt reminders straight to a customer's phone." },
-];
-
-const COMPARISON_ROWS = [
-  { label: 'Products tracked', free: 'Up to 100', pro: 'Unlimited' },
-  { label: 'Staff members', free: '1 owner + 1 staff', pro: 'Unlimited' },
-  { label: 'Sales, credit & expense tracking', free: true, pro: true },
-  { label: 'PDF receipts & invoices', free: true, pro: true },
-  { label: 'Advanced Analytics (trends, staff, day-of-week)', free: false, pro: true },
-  { label: 'Inventory Intelligence & Capital Health', free: false, pro: true },
-  { label: 'Reorder suggestions & ABC value analysis', free: false, pro: true },
-  { label: 'WhatsApp receipt & invoice sharing', free: false, pro: true },
-];
-
-export default function Pro() {
-  const { isPro, subscription } = useAuth();
-  const [loading, setLoading] = useState(false);
-  const [proPrice, setProPrice] = useState(null);
-
-  useEffect(() => {
-    fetch(`${FLOWBIZ_API_URL}/api/pro/price`)
-      .then((r) => r.json())
-      .then((data) => setProPrice(data.amountKes))
-      .catch(() => {});
-  }, []);
-
-  const handleSubscribe = async () => {
-    if (loading) return;
-    setLoading(true);
-    try {
-      const idToken = await auth.currentUser.getIdToken(true);
-      const response = await fetch(`${FLOWBIZ_API_URL}/api/paystack/initialize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-      });
-      const data = await response.json();
-      if (data?.access_code && window.PaystackPop) {
-        const popup = new window.PaystackPop();
-        popup.resumeTransaction(data.access_code, {
-          onSuccess: () => toast.success('Payment received activating your subscription…'),
-          onCancel: () => toast('Payment cancelled.'),
-        });
-      } else if (data?.authorization_url) {
-        window.location.href = data.authorization_url;
-      } else {
-        toast.error(data?.error || "Couldn't initialize payment. Please try again.");
-      }
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, { fallback: 'Unable to load the payment page. Please check your connection and try again.' }));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const expiresLabel = subscription?.expiresAt
-    ? new Date(subscription.expiresAt.toMillis ? subscription.expiresAt.toMillis() : subscription.expiresAt).toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' })
-    : null;
-
-  return (
-    <div className="mx-auto max-w-5xl space-y-8 pb-12">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-moss-700">FlowBiz Pro</p>
-          <h1 className="font-display text-2xl font-bold text-ink-900 mt-0.5">Run your shop with sharper insight</h1>
-        </div>
-        <Link to="/" className="btn-outline text-xs shrink-0">
-          <ArrowLeft className="h-4 w-4" strokeWidth={1.75} /> Dashboard
-        </Link>
-      </div>
-
-      <div className="card overflow-hidden border-moss-200">
-        <div className="bg-gradient-to-br from-moss-700 to-moss-900 px-6 py-10 text-center sm:px-10">
-
-          <h2 className="mt-4 font-display text-4xl font-extrabold text-white">
-            {proPrice != null ? `KSh ${proPrice.toLocaleString('en-KE')}` : '…'}
-            <span className="text-base font-medium text-moss-200"> / 30 days</span>
-          </h2>
-          <p className="mt-3 max-w-md mx-auto text-sm text-moss-100">Manual renewal, no auto-billing, no surprise charges. You're always in control.</p>
-          {isPro ? (
-            <div className="mt-7 flex flex-col items-center gap-3">
-              <span className="badge bg-white text-moss-800 px-4 py-1.5 text-sm font-bold">FlowBiz Pro Active</span>
-              {expiresLabel && <p className="text-xs text-moss-200">Renews / expires on {expiresLabel}</p>}
-              <button onClick={handleSubscribe} disabled={loading} className="btn-outline !border-white/40 !text-white hover:!bg-white/10">
-                {loading ? 'Loading…' : 'Extend subscription'}
-              </button>
-            </div>
-          ) : (
-            <button onClick={handleSubscribe} disabled={loading} className="mt-7 btn-primary !bg-white !text-moss-800 hover:!bg-moss-50 px-8 py-3 text-base">
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-moss-300 border-t-moss-800" />
-                  Loading payment page…
-                </span>
-              ) : `Upgrade to Pro KSh ${proPrice != null ? proPrice.toLocaleString('en-KE') : '…'}`}
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div>
-        <h3 className="font-display text-sm font-bold uppercase tracking-wide text-ink-500 mb-3">What's included</h3>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {FEATURE_CATEGORIES.map(({ icon: Icon, title, description }) => (
-            <div key={title} className="card p-5 space-y-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
-                <Icon className="h-5 w-5" strokeWidth={1.75} />
-              </div>
-              <h4 className="font-display text-sm font-bold text-ink-900">{title}</h4>
-              <p className="text-xs leading-relaxed text-ink-500">{description}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <h3 className="font-display text-sm font-bold uppercase tracking-wide text-ink-500 mb-3">Free vs Pro</h3>
-        <div className="card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                <tr><th className="px-4 py-3">Feature</th><th className="px-4 py-3 text-center">Free</th><th className="px-4 py-3 text-center text-moss-700">Pro</th></tr>
-              </thead>
-              <tbody className="divide-y divide-ink-100">
-                {COMPARISON_ROWS.map((row) => (
-                  <tr key={row.label}>
-                    <td className="px-4 py-3 font-medium text-ink-700">{row.label}</td>
-                    <td className="px-4 py-3 text-center text-ink-500">
-                      {typeof row.free === 'boolean' ? (row.free ? <Check className="mx-auto h-4 w-4 text-moss-600" strokeWidth={2} /> : <X className="mx-auto h-4 w-4 text-ink-300" strokeWidth={2} />) : row.free}
-                    </td>
-                    <td className="px-4 py-3 text-center font-semibold text-moss-700">
-                      {typeof row.pro === 'boolean' ? (row.pro ? <Check className="mx-auto h-4 w-4 text-moss-600" strokeWidth={2} /> : <X className="mx-auto h-4 w-4 text-ink-300" strokeWidth={2} />) : row.pro}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 text-xs text-ink-400">
-        
-        Built for Kenyan shops pay in KES via M-Pesa or card, powered by Paystack.
-      </div>
-    </div>
-  );
-}
-````
-
 ## File: src/pages/Settings.jsx
 ````javascript
 import { useEffect, useMemo, useState } from 'react';
@@ -15464,8 +15145,658 @@ function Row({ label, value, tone = '', mono = false }) {
 }
 ````
 
+## File: src/router/AppRouter.jsx
+````javascript
+import { lazy, Suspense, useEffect } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import ProtectedRoute from '../components/common/ProtectedRoute';
+import AppShell from '../components/layout/AppShell';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import { useAuth } from '../contexts/AuthContext';
+import { prefetchRoutes } from './routePrefetch';
+
+const routeLoaders = {
+  landing: () => import('../pages/LandingPage'),
+  setup: () => import('../pages/Setup'),
+  login: () => import('../pages/Login'),
+  forgotPassword: () => import('../pages/ForgotPassword'),
+  joinStaff: () => import('../pages/JoinStaff'),
+  authAction: () => import('../pages/AuthAction'),
+  dashboard: () => import('../pages/Dashboard'),
+  counter: () => import('../pages/Counter'),
+  customers: () => import('../pages/Customers'),
+  customerDetail: () => import('../pages/CustomerDetail'),
+  expenses: () => import('../pages/Expenses'),
+  purchases: () => import('../pages/Purchases'),
+  products: () => import('../pages/Products'),
+  suppliers: () => import('../pages/Suppliers'),
+  stockTake: () => import('../pages/StockTake'),
+  reports: () => import('../pages/Reports'),
+  closeDay: () => import('../pages/CloseDay'),
+  users: () => import('../pages/Users'),
+  settings: () => import('../pages/Settings'),
+  helpGuide: () => import('../pages/HelpGuide'),
+  pro: () => import('../pages/Pro'),
+  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
+  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
+  privacy: () => import('../pages/Privacy'),
+  terms: () => import('../pages/Terms'),
+};
+
+const LandingPage = lazy(routeLoaders.landing);
+const Setup      = lazy(routeLoaders.setup);
+const Login      = lazy(routeLoaders.login);
+const ForgotPassword = lazy(routeLoaders.forgotPassword);
+const JoinStaff  = lazy(routeLoaders.joinStaff);
+const AuthAction = lazy(routeLoaders.authAction);
+const Dashboard  = lazy(routeLoaders.dashboard);
+const Counter    = lazy(routeLoaders.counter);
+const Customers  = lazy(routeLoaders.customers);
+const CustomerDetail = lazy(routeLoaders.customerDetail);
+const Expenses   = lazy(routeLoaders.expenses);
+const Purchases  = lazy(routeLoaders.purchases);
+const Products   = lazy(routeLoaders.products);
+const Suppliers  = lazy(routeLoaders.suppliers);
+const StockTake  = lazy(routeLoaders.stockTake);
+const Reports    = lazy(routeLoaders.reports);
+const CloseDay   = lazy(routeLoaders.closeDay);
+const Users      = lazy(routeLoaders.users);
+const Settings   = lazy(routeLoaders.settings);
+const HelpGuide  = lazy(routeLoaders.helpGuide);
+const Pro        = lazy(routeLoaders.pro);
+const AdvancedAnalytics = lazy(routeLoaders.advancedAnalytics);
+const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
+const Privacy    = lazy(routeLoaders.privacy);
+const Terms      = lazy(routeLoaders.terms);
+
+function Page({ children, adminOnly = false }) {
+  return (
+    <ProtectedRoute adminOnly={adminOnly}>
+      <AppShell>
+        <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>
+      </AppShell>
+    </ProtectedRoute>
+  );
+}
+
+function PublicOnly({ children }) {
+  const { firebaseUser, loading } = useAuth();
+  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
+  if (firebaseUser) return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
+// src/router/AppRouter.jsx — replace RootRoute, add this helper above it
+
+function isStandalonePWA() {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+function RootRoute() {
+  const { firebaseUser, loading, isAdmin } = useAuth();
+
+  if (loading) return <LoadingSpinner label="Loading FlowBiz…" />;
+
+  if (firebaseUser) {
+    return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
+  }
+
+  if (isStandalonePWA()) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <LandingPage />;
+}
+
+function RoutePrefetcher() {
+  const { firebaseUser, isAdmin } = useAuth();
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
+    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
+    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
+  }, [firebaseUser, isAdmin]);
+  return null;
+}
+
+export default function AppRouter() {
+  return (
+    <Suspense fallback={<LoadingSpinner label="Loading..." />}>
+      <RoutePrefetcher />
+      <Routes>
+        {/* Opens Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
+        <Route path="/" element={<RootRoute />} />
+
+        {/* Public Authentication & Setup */}
+        <Route path="/setup" element={<Setup />} />
+        <Route path="/signup" element={<Setup />} />
+        <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
+        <Route path="/signin" element={<PublicOnly><Login /></PublicOnly>} />
+        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
+        <Route path="/join/:inviteId" element={<JoinStaff />} />
+        <Route path="/auth/action" element={<AuthAction />} />
+        
+        {/* Public Legal Pages */}
+        <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
+        <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
+
+        {/* Protected Store Management Routes */}
+        <Route path="/dashboard"    element={<Page adminOnly><Dashboard /></Page>} />
+        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
+        <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
+        <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
+
+        <Route path="/counter"      element={<Page><Counter /></Page>} />
+        <Route path="/customers"    element={<Page><Customers /></Page>} />
+        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
+        <Route path="/expenses"     element={<Page><Expenses /></Page>} />
+        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
+        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
+        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
+        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
+        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
+        <Route path="/close-day"    element={<Page adminOnly><CloseDay /></Page>} />
+        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
+        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
+        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
+        <Route path="*"             element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
+  );
+}
+````
+
+## File: src/pages/Dashboard.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useDailySession } from '../hooks/useDailySession';
+import { useFinancialsForRange } from '../hooks/useFinancials';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import Modal from '../components/common/Modal';
+import SaleModal from '../components/pos/SaleModal';
+import SaleCompleteModal from '../components/pos/SaleCompleteModal';
+import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
+import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+function StatCard({ label, value, tone = 'text-ink-900', sub }) {
+  return (
+    <div className="card p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
+      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
+    </div>
+  );
+}
+
+export default function Dashboard() {
+  const { profile, isAdmin, businessId, isPro } = useAuth();
+  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
+  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
+
+  const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const { data: products } = useFirestoreCollection(productsQuery);
+  const { data: customers } = useFirestoreCollection(customersQuery);
+  const { data: suppliers } = useFirestoreCollection(suppliersQuery);
+
+  const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
+  const [activeProduct, setActiveProduct] = useState(null);
+  const [completedSale, setCompletedSale] = useState(null);
+  const [editProduct, setEditProd] = useState(null);
+  const [prodModal, setProdModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [notFoundCode, setNotFoundCode] = useState(null);
+
+  const [privacyMode, setPrivacyMode] = useState(() => {
+    try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
+    catch { return false; }
+  });
+
+  const togglePrivacyMode = () => {
+    setPrivacyMode((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('flowbiz_dashboard_privacy', String(next)); }
+      catch (err) { console.error('Failed to save privacy mode setting', err); }
+      return next;
+    });
+  };
+
+  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
+
+  const dashboardCashReceived = summary.totalCashReceipts;
+  const dashboardMpesaReceived = summary.totalMpesaReceipts;
+  const dashboardExpenses = summary.totalExpenses;
+  const dashboardNetProfit = summary.netProfit;
+
+  const lowStock = products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
+  const totalInventoryValue = products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
+  const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
+  const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
+  const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
+
+  const recentActivity = useMemo(() => {
+    const list = [];
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      list.push({ id: `sale-${s.id}`, type: 'Sale', title: `${s.quantity} × ${s.productName}`, subtitle: `Sold by ${s.soldByName || 'Staff'}`, amount: s.totalAmount, method: s.paymentMethod, timestamp: s.soldAt, isPositive: true });
+    });
+    (repayments || []).forEach((r) => {
+      list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
+    });
+      (creditSales || []).forEach((cs) => {
+     if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+     list.push({
+       id: `credit-${cs.id}`, type: 'Credit Sale',
+       title: `${cs.quantity} × ${cs.productName}`,
+       subtitle: `${cs.customerName || 'Customer'} · Sold by ${cs.soldByName || 'Staff'}`,
+       amount: cs.totalAmount, method: 'Credit', timestamp: cs.soldAt, isPositive: false,
+     });
+   });
+   return list.sort((a, b) => {
+      const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
+      const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
+      return bTime - aTime;
+    }).slice(0, 8);
+  }, [sales, repayments]);
+
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
+    return { id: ref.id, name, phone };
+  };
+
+  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
+const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
+    const productRef = doc(db, 'products', product.id);
+    const saleRef = doc(collection(db, 'sales'));
+    const saleData = withBusiness({
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit,
+      totalAmount: soldPricePerUnit * quantity,
+      profit: (soldPricePerUnit - product.costPrice) * quantity,
+      paymentMethod, mpesaCode: mpesaCode || null,
+      soldBy: profile.uid, soldByName: profile.displayName,
+      soldAt: new Date(), isCredit: false, isVoided: false,
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(saleRef, saleData);
+
+    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleConfirmCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
+    const productRef = doc(db, 'products', product.id);
+    const totalAmount = soldPricePerUnit * quantity;
+    const creditRef = doc(collection(db, 'creditSales'));
+    const creditData = withBusiness({
+      customerId, customerName, customerPhone: customerPhone || '',
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
+      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
+      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
+      isCredit: true
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(creditRef, creditData);
+
+    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+const handleProductSave = async (data) => {
+    try {
+      if (editProduct) {
+        const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
+      } else {
+        const { queuedOffline } = await createProduct(data, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
+  };
+
+  // FIX (stuck "Saving…" bug — same pattern as Purchases.jsx/Products.jsx):
+  // throw on error instead of returning, so SupplierFormModal's
+  // catch/finally can reset its "Saving…" button instead of leaving the
+  // form frozen after a failed save.
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setActiveProduct(found);
+    else setNotFoundCode(code);
+  };
+
+  useHardwareScanner(handleScanDetected, {
+    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
+  });
+
+  if (sessionLoading) return <LoadingSpinner label="Loading today's session…" />;
+
+  if (isClosed) {
+    return (
+      <div className="mx-auto max-w-sm space-y-4 text-center">
+        <EmptyState title="Day is closed" description="Sales are locked until you reopen the session or tomorrow starts." />
+        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen today's session</button>}
+      </div>
+    );
+  }
+  if (!session) {
+    return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
+          <div className="flex items-center gap-2 mt-1">
+
+            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
+          </div>
+        </div>
+        <button
+          onClick={togglePrivacyMode}
+          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
+          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
+        >
+          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
+        </button>
+      </div>
+
+      {isAdmin && (
+        <>
+          {financialsLoading ? <LoadingSpinner /> : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
+              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
+              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
+              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
+              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
+<StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
+            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
+          </div>
+        </>
+      )}
+
+      <div>
+        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
+        {recentActivity.length === 0 ? (
+          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
+        ) : (
+          <div className="card divide-y divide-ink-100">
+            {recentActivity.map((act) => (
+              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
+                <div className="min-w-0 flex-1 pr-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
+                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
+                  </div>
+                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <SaleModal 
+        open={!!activeProduct} 
+        product={activeProduct} 
+        customers={customers} 
+        onClose={(record) => {
+          setActiveProduct(null);
+          if (record && record.id) setCompletedSale(record);
+        }} 
+        onConfirmSale={handleConfirmSale} 
+        onConfirmCredit={handleConfirmCredit} 
+        onCreateCustomer={handleCreateCustomer} 
+      />
+      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
+          {isAdmin ? (
+            <button className="btn-primary" onClick={() => { setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
+          ) : (
+            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
+          )}
+        </div>
+      </Modal>
+
+<ProductFormModal
+        open={prodModal}
+        onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
+        onSave={handleProductSave}
+        suppliers={suppliers}
+        initialProduct={editProduct}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+      />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+    </div>
+  );
+}
+````
+
+## File: src/pages/Pro.jsx
+````javascript
+// src/pages/Pro.jsx
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { auth } from '../firebase';
+import toast from 'react-hot-toast';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+import { Check, X, BarChart3, Boxes, FileText, MessageCircle, Users, Sparkles, ArrowLeft } from 'lucide-react';
+
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+
+const FEATURE_CATEGORIES = [
+  { icon: BarChart3, title: 'Advanced Analytics', description: 'Revenue & profit trends, payment mix, day-of-week patterns, expense breakdown, top debtors, and staff performance all in one dashboard.' },
+  { icon: Boxes, title: 'Inventory Intelligence', description: 'Capital Health scoring, ABC value analysis, reorder suggestions, slow-moving stock alerts, and capital-by-supplier breakdowns.' },
+  { icon: FileText, title: 'Professional Documents', description: 'Branded PDF receipts and invoices with your logo, ready to print or download.' },
+  { icon: MessageCircle, title: 'WhatsApp Sharing', description: "Send receipts, invoices, and debt reminders straight to a customer's phone." },
+];
+
+const COMPARISON_ROWS = [
+  { label: 'Products tracked', free: 'Up to 100', pro: 'Unlimited' },
+  { label: 'Staff members', free: '1 owner + 1 staff', pro: 'Unlimited' },
+  { label: 'Sales, credit & expense tracking', free: true, pro: true },
+  { label: 'PDF receipts & invoices', free: true, pro: true },
+  { label: 'Advanced Analytics (trends, staff, day-of-week)', free: false, pro: true },
+  { label: 'Inventory Intelligence & Capital Health', free: false, pro: true },
+  { label: 'Reorder suggestions & ABC value analysis', free: false, pro: true },
+  { label: 'WhatsApp receipt & invoice sharing', free: false, pro: true },
+];
+
+export default function Pro() {
+  const { isPro, subscription } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const [proPrice, setProPrice] = useState(null);
+
+  useEffect(() => {
+    fetch(`${FLOWBIZ_API_URL}/api/pro/price`)
+      .then((r) => r.json())
+      .then((data) => setProPrice(data.amountKes))
+      .catch(() => {});
+  }, []);
+
+  const handleSubscribe = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+
+      const idToken = await auth.currentUser.getIdToken();
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/paystack/initialize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      });
+      const data = await response.json();
+      if (data?.access_code && window.PaystackPop) {
+        const popup = new window.PaystackPop();
+        popup.resumeTransaction(data.access_code, {
+          onSuccess: () => toast.success('Payment received activating your subscription…'),
+          onCancel: () => toast('Payment cancelled.'),
+        });
+      } else if (data?.authorization_url) {
+        window.location.href = data.authorization_url;
+      } else {
+        toast.error(data?.error || "Couldn't initialize payment. Please try again.");
+      }
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, { fallback: 'Unable to load the payment page. Please check your connection and try again.' }));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const expiresLabel = subscription?.expiresAt
+    ? new Date(subscription.expiresAt.toMillis ? subscription.expiresAt.toMillis() : subscription.expiresAt).toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' })
+    : null;
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-8 pb-12">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-moss-700">FlowBiz Pro</p>
+          <h1 className="font-display text-2xl font-bold text-ink-900 mt-0.5">Run your shop with sharper insight</h1>
+        </div>
+        <Link to="/" className="btn-outline text-xs shrink-0">
+          <ArrowLeft className="h-4 w-4" strokeWidth={1.75} /> Dashboard
+        </Link>
+      </div>
+
+      <div className="card overflow-hidden border-moss-200">
+        <div className="bg-gradient-to-br from-moss-700 to-moss-900 px-6 py-10 text-center sm:px-10">
+
+          <h2 className="mt-4 font-display text-4xl font-extrabold text-white">
+            {proPrice != null ? `KSh ${proPrice.toLocaleString('en-KE')}` : '…'}
+            <span className="text-base font-medium text-moss-200"> / 30 days</span>
+          </h2>
+          <p className="mt-3 max-w-md mx-auto text-sm text-moss-100">Manual renewal, no auto-billing, no surprise charges. You're always in control.</p>
+          {isPro ? (
+            <div className="mt-7 flex flex-col items-center gap-3">
+              <span className="badge bg-white text-moss-800 px-4 py-1.5 text-sm font-bold">FlowBiz Pro Active</span>
+              {expiresLabel && <p className="text-xs text-moss-200">Renews / expires on {expiresLabel}</p>}
+              <button onClick={handleSubscribe} disabled={loading} className="btn-outline !border-white/40 !text-white hover:!bg-white/10">
+                {loading ? 'Loading…' : 'Extend subscription'}
+              </button>
+            </div>
+          ) : (
+            <button onClick={handleSubscribe} disabled={loading} className="mt-7 btn-primary !bg-white !text-moss-800 hover:!bg-moss-50 px-8 py-3 text-base">
+              {loading ? (
+                <span className="flex items-center gap-2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-moss-300 border-t-moss-800" />
+                  Loading payment page…
+                </span>
+              ) : `Upgrade to Pro KSh ${proPrice != null ? proPrice.toLocaleString('en-KE') : '…'}`}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="font-display text-sm font-bold uppercase tracking-wide text-ink-500 mb-3">What's included</h3>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {FEATURE_CATEGORIES.map(({ icon: Icon, title, description }) => (
+            <div key={title} className="card p-5 space-y-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
+                <Icon className="h-5 w-5" strokeWidth={1.75} />
+              </div>
+              <h4 className="font-display text-sm font-bold text-ink-900">{title}</h4>
+              <p className="text-xs leading-relaxed text-ink-500">{description}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="font-display text-sm font-bold uppercase tracking-wide text-ink-500 mb-3">Free vs Pro</h3>
+        <div className="card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+                <tr><th className="px-4 py-3">Feature</th><th className="px-4 py-3 text-center">Free</th><th className="px-4 py-3 text-center text-moss-700">Pro</th></tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {COMPARISON_ROWS.map((row) => (
+                  <tr key={row.label}>
+                    <td className="px-4 py-3 font-medium text-ink-700">{row.label}</td>
+                    <td className="px-4 py-3 text-center text-ink-500">
+                      {typeof row.free === 'boolean' ? (row.free ? <Check className="mx-auto h-4 w-4 text-moss-600" strokeWidth={2} /> : <X className="mx-auto h-4 w-4 text-ink-300" strokeWidth={2} />) : row.free}
+                    </td>
+                    <td className="px-4 py-3 text-center font-semibold text-moss-700">
+                      {typeof row.pro === 'boolean' ? (row.pro ? <Check className="mx-auto h-4 w-4 text-moss-600" strokeWidth={2} /> : <X className="mx-auto h-4 w-4 text-ink-300" strokeWidth={2} />) : row.pro}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 text-xs text-ink-400">
+        
+        Built for Kenyan shops pay in KES via M-Pesa or card, powered by Paystack.
+      </div>
+    </div>
+  );
+}
+````
+
 ## File: src/pages/AuthAction.jsx
 ````javascript
+// src/pages/AuthAction.jsx
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import {
@@ -15810,17 +16141,21 @@ function VerifyEmailPanel({ mode, oobCode }) {
   );
 }
 
+// FIX (click-to-confirm, reset password): same reasoning as
+// VerifyEmailPanel above — verifyPasswordResetCode used to fire
+// automatically on mount, so a link-scanner visiting the URL before the
+// person clicked it could burn the one-time code and leave the real
+// person looking at a false "expired or already used" error. Now nothing
+// touches the oobCode until the person explicitly clicks "Continue".
 function ResetPasswordPanel({ oobCode }) {
-  const [status, setStatus] = useState('checking');
+  const [status, setStatus] = useState('ready'); // ready -> checking -> form -> success | error
   const [message, setMessage] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-
+  const handleContinue = async () => {
     if (!oobCode) {
       setStatus('error');
       setMessage(
@@ -15829,33 +16164,26 @@ function ResetPasswordPanel({ oobCode }) {
       return;
     }
 
-    verifyPasswordResetCode(auth, oobCode)
-      .then((verifiedEmail) => {
-        if (cancelled) return;
+    setStatus('checking');
 
-        setEmail(verifiedEmail);
-        setStatus('ready');
-      })
-      .catch((err) => {
-        if (cancelled) return;
+    try {
+      const verifiedEmail = await verifyPasswordResetCode(auth, oobCode);
+      setEmail(verifiedEmail);
+      setStatus('form');
+    } catch (err) {
+      const code = err.code || '';
 
-        const code = err.code || '';
+      setStatus('error');
 
-        setStatus('error');
-
-        setMessage(
-          code === 'auth/expired-action-code'
-            ? 'This reset link has expired. Please request a new one.'
-            : code === 'auth/invalid-action-code'
-              ? 'This reset link has already been used or is invalid. Please request a new one.'
-              : 'This reset link is invalid. Please request a new one.'
-        );
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [oobCode]);
+      setMessage(
+        code === 'auth/expired-action-code'
+          ? 'This reset link has expired. Please request a new one.'
+          : code === 'auth/invalid-action-code'
+            ? 'This reset link has already been used or is invalid. Please request a new one.'
+            : 'This reset link is invalid. Please request a new one.'
+      );
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -15898,6 +16226,22 @@ function ResetPasswordPanel({ oobCode }) {
 
   return (
     <Shell>
+      {status === 'ready' && (
+        <>
+          <h1 className="font-display text-lg font-bold text-ink-900">
+            Reset your password
+          </h1>
+
+          <p className="text-sm text-ink-500">
+            Click below to continue.
+          </p>
+
+          <button className="btn-primary w-full" onClick={handleContinue}>
+            Continue
+          </button>
+        </>
+      )}
+
       {status === 'checking' && (
         <>
           <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
@@ -15908,7 +16252,7 @@ function ResetPasswordPanel({ oobCode }) {
         </>
       )}
 
-      {status === 'ready' && (
+      {status === 'form' && (
         <form
           onSubmit={handleSubmit}
           className="space-y-4 text-left"
@@ -16028,326 +16372,6 @@ function ResetPasswordPanel({ oobCode }) {
         </>
       )}
     </Shell>
-  );
-}
-````
-
-## File: src/pages/Dashboard.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useDailySession } from '../hooks/useDailySession';
-import { useFinancialsForRange } from '../hooks/useFinancials';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import Modal from '../components/common/Modal';
-import SaleModal from '../components/pos/SaleModal';
-import SaleCompleteModal from '../components/pos/SaleCompleteModal';
-import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
-import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-function StatCard({ label, value, tone = 'text-ink-900', sub }) {
-  return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
-    </div>
-  );
-}
-
-export default function Dashboard() {
-  const { profile, isAdmin, businessId, isPro } = useAuth();
-  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
-  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
-
-  const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const { data: products } = useFirestoreCollection(productsQuery);
-  const { data: customers } = useFirestoreCollection(customersQuery);
-  const { data: suppliers } = useFirestoreCollection(suppliersQuery);
-
-  const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
-  const [activeProduct, setActiveProduct] = useState(null);
-  const [completedSale, setCompletedSale] = useState(null);
-  const [editProduct, setEditProd] = useState(null);
-  const [prodModal, setProdModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [notFoundCode, setNotFoundCode] = useState(null);
-
-  const [privacyMode, setPrivacyMode] = useState(() => {
-    try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
-    catch { return false; }
-  });
-
-  const togglePrivacyMode = () => {
-    setPrivacyMode((prev) => {
-      const next = !prev;
-      try { localStorage.setItem('flowbiz_dashboard_privacy', String(next)); }
-      catch (err) { console.error('Failed to save privacy mode setting', err); }
-      return next;
-    });
-  };
-
-  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
-
-  const dashboardCashReceived = summary.totalCashReceipts;
-  const dashboardMpesaReceived = summary.totalMpesaReceipts;
-  const dashboardExpenses = summary.totalExpenses;
-  const dashboardNetProfit = summary.netProfit;
-
-  const lowStock = products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
-  const totalInventoryValue = products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
-  const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
-  const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
-  const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
-
-  const recentActivity = useMemo(() => {
-    const list = [];
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      list.push({ id: `sale-${s.id}`, type: 'Sale', title: `${s.quantity} × ${s.productName}`, subtitle: `Sold by ${s.soldByName || 'Staff'}`, amount: s.totalAmount, method: s.paymentMethod, timestamp: s.soldAt, isPositive: true });
-    });
-    (repayments || []).forEach((r) => {
-      list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
-    });
-      (creditSales || []).forEach((cs) => {
-     if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-     list.push({
-       id: `credit-${cs.id}`, type: 'Credit Sale',
-       title: `${cs.quantity} × ${cs.productName}`,
-       subtitle: `${cs.customerName || 'Customer'} · Sold by ${cs.soldByName || 'Staff'}`,
-       amount: cs.totalAmount, method: 'Credit', timestamp: cs.soldAt, isPositive: false,
-     });
-   });
-   return list.sort((a, b) => {
-      const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
-      const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
-      return bTime - aTime;
-    }).slice(0, 8);
-  }, [sales, repayments]);
-
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
-    return { id: ref.id, name, phone };
-  };
-
-  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
-const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
-    const productRef = doc(db, 'products', product.id);
-    const saleRef = doc(collection(db, 'sales'));
-    const saleData = withBusiness({
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit,
-      totalAmount: soldPricePerUnit * quantity,
-      profit: (soldPricePerUnit - product.costPrice) * quantity,
-      paymentMethod, mpesaCode: mpesaCode || null,
-      soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: new Date(), isCredit: false, isVoided: false,
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(saleRef, saleData);
-
-    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
-  };
-
-  const handleConfirmCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
-    const productRef = doc(db, 'products', product.id);
-    const totalAmount = soldPricePerUnit * quantity;
-    const creditRef = doc(collection(db, 'creditSales'));
-    const creditData = withBusiness({
-      customerId, customerName, customerPhone: customerPhone || '',
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
-      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
-      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(creditRef, creditData);
-
-    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
-  };
-
-const handleProductSave = async (data) => {
-    try {
-      if (editProduct) {
-        const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
-      } else {
-        const { queuedOffline } = await createProduct(data, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
-      }
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
-  };
-
-  // FIX (stuck "Saving…" bug — same pattern as Purchases.jsx/Products.jsx):
-  // throw on error instead of returning, so SupplierFormModal's
-  // catch/finally can reset its "Saving…" button instead of leaving the
-  // form frozen after a failed save.
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setActiveProduct(found);
-    else setNotFoundCode(code);
-  };
-
-  useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
-  });
-
-  if (sessionLoading) return <LoadingSpinner label="Loading today's session…" />;
-
-  if (isClosed) {
-    return (
-      <div className="mx-auto max-w-sm space-y-4 text-center">
-        <EmptyState title="Day is closed" description="Sales are locked until you reopen the session or tomorrow starts." />
-        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen today's session</button>}
-      </div>
-    );
-  }
-  if (!session) {
-    return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
-  }
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
-          <div className="flex items-center gap-2 mt-1">
-
-            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
-          </div>
-        </div>
-        <button
-          onClick={togglePrivacyMode}
-          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
-          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
-        >
-          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
-        </button>
-      </div>
-
-      {isAdmin && (
-        <>
-          {financialsLoading ? <LoadingSpinner /> : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
-              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
-              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
-              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
-              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
-            </div>
-          )}
-          <div className="grid gap-3 sm:grid-cols-3">
-            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
-<StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
-            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
-          </div>
-        </>
-      )}
-
-      <div>
-        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
-        {recentActivity.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
-        ) : (
-          <div className="card divide-y divide-ink-100">
-            {recentActivity.map((act) => (
-              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
-                <div className="min-w-0 flex-1 pr-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
-                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
-                  </div>
-                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <SaleModal 
-        open={!!activeProduct} 
-        product={activeProduct} 
-        customers={customers} 
-        onClose={(record) => {
-          setActiveProduct(null);
-          if (record && record.id) setCompletedSale(record);
-        }} 
-        onConfirmSale={handleConfirmSale} 
-        onConfirmCredit={handleConfirmCredit} 
-        onCreateCustomer={handleCreateCustomer} 
-      />
-      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
-          {isAdmin ? (
-            <button className="btn-primary" onClick={() => { setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
-          ) : (
-            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
-          )}
-        </div>
-      </Modal>
-
-<ProductFormModal
-        open={prodModal}
-        onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
-        onSave={handleProductSave}
-        suppliers={suppliers}
-        initialProduct={editProduct}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-      />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-    </div>
   );
 }
 ````
