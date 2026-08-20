@@ -27,7 +27,6 @@ export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemo
         {expanded ? <ChevronUp className="h-4 w-4 text-ink-400 shrink-0" strokeWidth={2} /> : <ChevronDown className="h-4 w-4 text-ink-400 shrink-0" strokeWidth={2} />}
       </button>
 
-     // src/components/pos/CartList.jsx — replace the expanded items block
       {expanded && (
         <div className="-mt-1">
       
@@ -102,7 +101,7 @@ export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemo
       )}
 
       <button type="button" className="btn-primary w-full" onClick={onCheckout}>
-        Sell — {formatKES(total)}
+        Sell  {formatKES(total)}
       </button>
     </div>
   );
