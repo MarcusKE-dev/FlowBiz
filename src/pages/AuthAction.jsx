@@ -1,3 +1,4 @@
+// src/pages/AuthAction.jsx
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import {
@@ -342,17 +343,21 @@ function VerifyEmailPanel({ mode, oobCode }) {
   );
 }
 
+// FIX (click-to-confirm, reset password): same reasoning as
+// VerifyEmailPanel above — verifyPasswordResetCode used to fire
+// automatically on mount, so a link-scanner visiting the URL before the
+// person clicked it could burn the one-time code and leave the real
+// person looking at a false "expired or already used" error. Now nothing
+// touches the oobCode until the person explicitly clicks "Continue".
 function ResetPasswordPanel({ oobCode }) {
-  const [status, setStatus] = useState('checking');
+  const [status, setStatus] = useState('ready'); // ready -> checking -> form -> success | error
   const [message, setMessage] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-
+  const handleContinue = async () => {
     if (!oobCode) {
       setStatus('error');
       setMessage(
@@ -361,33 +366,26 @@ function ResetPasswordPanel({ oobCode }) {
       return;
     }
 
-    verifyPasswordResetCode(auth, oobCode)
-      .then((verifiedEmail) => {
-        if (cancelled) return;
+    setStatus('checking');
 
-        setEmail(verifiedEmail);
-        setStatus('ready');
-      })
-      .catch((err) => {
-        if (cancelled) return;
+    try {
+      const verifiedEmail = await verifyPasswordResetCode(auth, oobCode);
+      setEmail(verifiedEmail);
+      setStatus('form');
+    } catch (err) {
+      const code = err.code || '';
 
-        const code = err.code || '';
+      setStatus('error');
 
-        setStatus('error');
-
-        setMessage(
-          code === 'auth/expired-action-code'
-            ? 'This reset link has expired. Please request a new one.'
-            : code === 'auth/invalid-action-code'
-              ? 'This reset link has already been used or is invalid. Please request a new one.'
-              : 'This reset link is invalid. Please request a new one.'
-        );
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [oobCode]);
+      setMessage(
+        code === 'auth/expired-action-code'
+          ? 'This reset link has expired. Please request a new one.'
+          : code === 'auth/invalid-action-code'
+            ? 'This reset link has already been used or is invalid. Please request a new one.'
+            : 'This reset link is invalid. Please request a new one.'
+      );
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -430,6 +428,22 @@ function ResetPasswordPanel({ oobCode }) {
 
   return (
     <Shell>
+      {status === 'ready' && (
+        <>
+          <h1 className="font-display text-lg font-bold text-ink-900">
+            Reset your password
+          </h1>
+
+          <p className="text-sm text-ink-500">
+            Click below to continue.
+          </p>
+
+          <button className="btn-primary w-full" onClick={handleContinue}>
+            Continue
+          </button>
+        </>
+      )}
+
       {status === 'checking' && (
         <>
           <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
@@ -440,7 +454,7 @@ function ResetPasswordPanel({ oobCode }) {
         </>
       )}
 
-      {status === 'ready' && (
+      {status === 'form' && (
         <form
           onSubmit={handleSubmit}
           className="space-y-4 text-left"
