@@ -28,13 +28,7 @@ export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({
     tabManager: persistentMultipleTabManager(),
   }),
-  // FIX: some ad blockers, privacy extensions, and corporate/school
-  // network proxies block Firestore's WebChannel long-polling transport
-  // (visible in DevTools as ERR_BLOCKED_BY_CLIENT on requests to
-  // firestore.googleapis.com). Auto-detecting long polling makes the SDK
-  // negotiate whichever transport actually gets through in the current
-  // network environment instead of always assuming the fastest one will.
-  experimentalAutoDetectLongPolling: true,
+  experimentalForceLongPolling: true, // was experimentalAutoDetectLongPolling: true
 });
 
 if (import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true') {

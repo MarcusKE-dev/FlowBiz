@@ -4265,80 +4265,6 @@ export function resetDemoData() {
 }
 ````
 
-## File: src/hooks/useFinancials.js
-````javascript
-import { useEffect, useRef, useState } from 'react';
-import { where, orderBy, onSnapshot } from 'firebase/firestore';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { computeFinancials } from '../utils/financials';
-
-// MULTI-TENANT CHANGE: every query here used to read the WHOLE `sales`,
-// `creditSales`, etc. collections (filtered only by date). On a
-// multi-tenant project those collections hold every business's
-// documents, so each query below now also filters on this business's
-// `businessId` via tenantQuery() — the exact same date-range filtering
-// as before, just additionally scoped. businessId comes from useAuth()
-// internally so every existing caller (Dashboard.jsx, CloseDay.jsx,
-// Reports.jsx) needs NO changes to how they call this hook.
-export function useFinancialsForRange(start, end) {
-  const { businessId } = useAuth();
-  const [state, setState] = useState({
-    loading: true, error: null,
-    sales: [], creditSales: [], expenses: [], repayments: [], purchases: [], supplierPayments: [], refunds: [],
-    summary: computeFinancials({}),
-  });
-  const dataRef = useRef({ sales: [], creditSales: [], allCreditSales: [], expenses: [], repayments: [], purchases: [], supplierPayments: [], refunds: [] });
-  const rafRef  = useRef(null);
-
-  useEffect(() => {
-    if (!start || !end || !businessId) return;
-    let mounted = true;
-
-    const flush = () => {
-      if (!mounted) return;
-      const { sales, allCreditSales, expenses, repayments, purchases, supplierPayments, refunds } = dataRef.current;
-      const startMs = typeof start?.toMillis === 'function' ? start.toMillis() : start.getTime();
-      const endMs = typeof end?.toMillis === 'function' ? end.toMillis() : end.getTime();
-      const rangeCreditSales = allCreditSales.filter((entry) => {
-        const soldAt = entry?.soldAt?.toMillis?.() ?? entry?.soldAt?.toDate?.().getTime?.() ?? entry?.soldAt;
-        return typeof soldAt === 'number' && soldAt >= startMs && soldAt <= endMs;
-      });
-      setState({
-        loading: false, error: null,
-        sales, creditSales: rangeCreditSales, expenses, repayments, purchases, supplierPayments, refunds,
-        summary: computeFinancials({ sales, creditSales: rangeCreditSales, allCreditSales, expenses, debtRepayments: repayments, purchases, supplierPayments, refunds }),
-      });
-    };
-    const schedule = () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      rafRef.current = requestAnimationFrame(flush);
-    };
-    const onErr = err => mounted && setState(s => ({ ...s, loading: false, error: err.message }));
-
-    const salesQ      = tenantQuery('sales', businessId, where('soldAt','>=',start), where('soldAt','<=',end), orderBy('soldAt','desc'));
-    const creditQ     = tenantQuery('creditSales', businessId, orderBy('soldAt','desc'));
-    const expensesQ   = tenantQuery('expenses', businessId, where('recordedAt','>=',start), where('recordedAt','<=',end), orderBy('recordedAt','desc'));
-    const repaymentsQ = tenantQuery('repayments', businessId, where('paidAt','>=',start), where('paidAt','<=',end), orderBy('paidAt','desc'));
-    const purchasesQ  = tenantQuery('purchases', businessId, where('purchasedAt','>=',start), where('purchasedAt','<=',end), orderBy('purchasedAt','desc'));
-    const supplierPaymentsQ = tenantQuery('supplierPayments', businessId, where('paidAt','>=',start), where('paidAt','<=',end), orderBy('paidAt','desc'));
-    const refundsQ = tenantQuery('refunds', businessId, where('refundedAt','>=',start), where('refundedAt','<=',end), orderBy('refundedAt','desc'));
-
-    const u1 = onSnapshot(salesQ,      s => { dataRef.current.sales      = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
-    const u2 = onSnapshot(creditQ,     s => { dataRef.current.allCreditSales = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
-    const u3 = onSnapshot(expensesQ,   s => { dataRef.current.expenses   = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
-    const u4 = onSnapshot(repaymentsQ, s => { dataRef.current.repayments = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
-    const u5 = onSnapshot(purchasesQ,  s => { dataRef.current.purchases  = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
-    const u6 = onSnapshot(supplierPaymentsQ, s => { dataRef.current.supplierPayments = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
-    const u7 = onSnapshot(refundsQ, s => { dataRef.current.refunds = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
-
-    return () => { mounted=false; u1(); u2(); u3(); u4(); u5(); u6(); u7(); if(rafRef.current) cancelAnimationFrame(rafRef.current); };
-  }, [start, end, businessId]);
-
-  return state;
-}
-````
-
 ## File: src/hooks/useFirestoreCollection.js
 ````javascript
 import { useEffect, useState } from 'react';
@@ -4519,11 +4445,6 @@ export default function LandingPage() {
 }
 ````
 
-## File: src/pages/Privacy.jsx
-````javascript
-
-````
-
 ## File: src/router/routePrefetch.js
 ````javascript
 const idle = typeof requestIdleCallback === 'function'
@@ -4539,52 +4460,6 @@ export function prefetchRoutes(loaders) {
   loaders.forEach((load, i) => {
     idle(() => { load().catch(() => {}); }, { timeout: 2000 + i * 500 });
   });
-}
-````
-
-## File: src/utils/businessReset.js
-````javascript
-import { collection, query, where, getDocs, writeBatch, doc, deleteDoc, limit } from 'firebase/firestore';
-import { db } from '../firebase';
-
-// FIX: added 'staffInvites' — a Business Reset previously left old
-// pending invite links valid indefinitely, even after everything else
-// about the business had been wiped.
-const RESET_COLLECTIONS = [
-  'products', 'sales', 'customers', 'suppliers', 'creditSales', 'expenses',
-  'purchases', 'dailySessions', 'repayments', 'supplierPayments',
-  'stockAdjustments', 'barcodeIndex', 'productCodeCounters', 'refunds',
-  'staffInvites',
-];
-
-async function deleteTenantCollection(name, businessId, chunkSize = 400) {
-  let totalDeleted = 0;
-  while (true) {
-    const snap = await getDocs(query(collection(db, name), where('businessId', '==', businessId), limit(chunkSize)));
-    if (snap.empty) break;
-
-    const batch = writeBatch(db);
-    snap.docs.forEach((d) => batch.delete(d.ref));
-    await batch.commit();
-
-    totalDeleted += snap.docs.length;
-  }
-  return totalDeleted;
-}
-
-export async function resetBusinessData(businessId, ownerUid) {
-  if (!businessId) throw new Error('resetBusinessData() called with no businessId');
-  const results = {};
-
-  for (const name of RESET_COLLECTIONS) {
-    results[name] = await deleteTenantCollection(name, businessId);
-  }
-
-  await deleteDoc(doc(db, 'businessSettings', businessId));
-  results.businessSettings = 1;
-  results.performedBy = ownerUid || null;
-
-  return results;
 }
 ````
 
@@ -6369,6 +6244,81 @@ export function useDailySession() {
 }
 ````
 
+## File: src/hooks/useFinancials.js
+````javascript
+import { useEffect, useRef, useState } from 'react';
+import { where, orderBy, onSnapshot } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery } from '../lib/tenant';
+import { computeFinancials } from '../utils/financials';
+
+export function useFinancialsForRange(start, end) {
+  const { businessId } = useAuth();
+  const [state, setState] = useState({
+    loading: true, error: null,
+    sales: [], creditSales: [], expenses: [], repayments: [], purchases: [], supplierPayments: [], refunds: [],
+    summary: computeFinancials({}),
+  });
+  const dataRef = useRef({ sales: [], creditSales: [], allCreditSales: [], expenses: [], repayments: [], purchases: [], supplierPayments: [], refunds: [] });
+  const rafRef  = useRef(null);
+
+  useEffect(() => {
+    if (!start || !end || !businessId) return;
+    let mounted = true;
+
+    const flush = () => {
+      if (!mounted) return;
+      const { sales, allCreditSales, expenses, repayments, purchases, supplierPayments, refunds } = dataRef.current;
+      const startMs = typeof start?.toMillis === 'function' ? start.toMillis() : (start instanceof Date ? start.getTime() : new Date(start).getTime());
+      const endMs = typeof end?.toMillis === 'function' ? end.toMillis() : (end instanceof Date ? end.getTime() : new Date(end).getTime());
+
+      const rangeCreditSales = allCreditSales.filter((entry) => {
+        const raw = entry?.soldAt;
+        const soldAt = raw?.toMillis?.() ?? (raw instanceof Date ? raw.getTime() : (typeof raw === 'number' ? raw : (raw?.toDate?.()?.getTime?.() ?? Date.now())));
+        return typeof soldAt === 'number' && soldAt >= startMs && soldAt <= endMs;
+      });
+
+      setState({
+        loading: false, error: null,
+        sales, creditSales: rangeCreditSales, expenses, repayments, purchases, supplierPayments, refunds,
+        summary: computeFinancials({ sales, creditSales: rangeCreditSales, allCreditSales, expenses, debtRepayments: repayments, purchases, supplierPayments, refunds }),
+      });
+    };
+
+    const schedule = () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(flush);
+    };
+
+    const onErr = err => mounted && setState(s => ({ ...s, loading: false, error: err.message }));
+
+    const salesQ      = tenantQuery('sales', businessId, where('soldAt','>=',start), where('soldAt','<=',end), orderBy('soldAt','desc'));
+    const creditQ     = tenantQuery('creditSales', businessId, orderBy('soldAt','desc'));
+    const expensesQ   = tenantQuery('expenses', businessId, where('recordedAt','>=',start), where('recordedAt','<=',end), orderBy('recordedAt','desc'));
+    const repaymentsQ = tenantQuery('repayments', businessId, where('paidAt','>=',start), where('paidAt','<=',end), orderBy('paidAt','desc'));
+    const purchasesQ  = tenantQuery('purchases', businessId, where('purchasedAt','>=',start), where('purchasedAt','<=',end), orderBy('purchasedAt','desc'));
+    const supplierPaymentsQ = tenantQuery('supplierPayments', businessId, where('paidAt','>=',start), where('paidAt','<=',end), orderBy('paidAt','desc'));
+    const refundsQ = tenantQuery('refunds', businessId, where('refundedAt','>=',start), where('refundedAt','<=',end), orderBy('refundedAt','desc'));
+
+    const u1 = onSnapshot(salesQ,      s => { dataRef.current.sales      = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
+    const u2 = onSnapshot(creditQ,     s => { dataRef.current.allCreditSales = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
+    const u3 = onSnapshot(expensesQ,   s => { dataRef.current.expenses   = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
+    const u4 = onSnapshot(repaymentsQ, s => { dataRef.current.repayments = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
+    const u5 = onSnapshot(purchasesQ,  s => { dataRef.current.purchases  = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
+    const u6 = onSnapshot(supplierPaymentsQ, s => { dataRef.current.supplierPayments = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
+    const u7 = onSnapshot(refundsQ, s => { dataRef.current.refunds = s.docs.map(d=>({id:d.id,...d.data()})); schedule(); }, onErr);
+
+    return () => {
+      mounted = false;
+      u1(); u2(); u3(); u4(); u5(); u6(); u7();
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [start, end, businessId]);
+
+  return state;
+}
+````
+
 ## File: src/hooks/useHardwareScanner.js
 ````javascript
 // src/hooks/useHardwareScanner.js
@@ -6625,6 +6575,64 @@ finally {
           <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting?'Signing in…':'Sign in'}</button>
         </form>
         <p className="text-center text-sm text-ink-400">New to FlowBiz? <Link to="/setup" className="font-semibold text-moss-400 hover:underline">Create a business</Link></p>
+      </div>
+    </div>
+  );
+}
+````
+
+## File: src/pages/Privacy.jsx
+````javascript
+import { Link } from 'react-router-dom';
+import { ArrowLeft, Shield } from 'lucide-react';
+
+export default function Privacy() {
+  return (
+    <div className="min-h-screen bg-sand text-ink-900 selection:bg-moss-200 py-8 px-4 sm:px-6">
+      <div className="mx-auto max-w-3xl">
+        <Link to="/" className="inline-flex items-center gap-2 text-sm font-semibold text-ink-500 hover:text-ink-800 mb-6 transition-colors">
+          <ArrowLeft className="h-4 w-4" /> Back to App
+        </Link>
+        <div className="card p-6 sm:p-10 space-y-8 bg-white border border-ink-100 shadow-sm">
+          <div className="border-b border-ink-100 pb-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-10 w-10 bg-moss-50 text-moss-700 rounded-xl flex items-center justify-center">
+                <Shield className="h-6 w-6" strokeWidth={2} />
+              </div>
+              <h1 className="font-display text-2xl font-bold text-ink-900">Privacy Policy</h1>
+            </div>
+            <p className="text-sm text-ink-500">Effective Date: August 20, 2026 · Compliant with Kenya Data Protection Act (KDPA) 2019</p>
+          </div>
+
+          <div className="space-y-6 text-sm text-ink-700 leading-relaxed">
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">1. Information We Collect</h2>
+              <p>FlowBiz collects operational data required to provide point-of-sale, inventory management, and debt ledger functionality for retail businesses:</p>
+              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+                <li><strong>Account Data:</strong> Owner/Staff email address, display name, and business identity.</li>
+                <li><strong>Store Operational Data:</strong> Product inventory, transaction receipts, expense entries, and customer contact information recorded for debt management.</li>
+                <li><strong>Technical Data:</strong> Browser user-agent and device category used for device management security.</li>
+              </ul>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">2. Role as Data Processor</h2>
+              <p>Under the Kenya Data Protection Act (2019), the business owner acts as the <strong>Data Controller</strong> for customer details stored within their workspace. FlowBiz operates strictly as a <strong>Data Processor</strong>.</p>
+              <p>We do not monetize, profile, or sell customer contact information recorded by merchants.</p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">3. Offline Storage &amp; Security</h2>
+              <p>FlowBiz uses an offline-first architecture. Transactional data is temporarily stored in local browser memory (IndexedDB) and synchronized securely via encrypted HTTPS/WSS channels to cloud servers when connectivity is available.</p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">4. Contact Us</h2>
+              <p>For data protection inquiries or requests, contact our privacy compliance team at:</p>
+              <p className="font-medium text-ink-800">support@flowbiz.co.ke</p>
+            </section>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -7031,6 +7039,108 @@ export default function Terms() {
 }
 ````
 
+## File: src/utils/businessReset.js
+````javascript
+// src/utils/businessReset.js
+import { collection, query, where, getDocs, writeBatch, doc, setDoc, limit } from 'firebase/firestore';
+import { db, auth } from '../firebase';
+
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+
+const RESET_COLLECTIONS = [
+  'products', 'sales', 'customers', 'suppliers', 'creditSales', 'expenses',
+  'purchases', 'dailySessions', 'repayments', 'supplierPayments',
+  'stockAdjustments', 'barcodeIndex', 'refunds',
+  'debtPaymentReceipts', 'sharedDocuments', 'staffInvites', 'sessions',
+];
+
+const DEFAULT_CATEGORIES = [
+  'Groceries', 'Beverages', 'Hardware', 'Household',
+  'Personal Care', 'Stationery', 'Airtime/Float', 'Other'
+];
+
+async function deleteTenantCollection(name, businessId, chunkSize = 400) {
+  let totalDeleted = 0;
+  while (true) {
+    const snap = await getDocs(query(collection(db, name), where('businessId', '==', businessId), limit(chunkSize)));
+    if (snap.empty) break;
+
+    const batch = writeBatch(db);
+    snap.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+
+    totalDeleted += snap.docs.length;
+    if (snap.docs.length < chunkSize) break;
+  }
+  return totalDeleted;
+}
+
+export async function resetBusinessData(businessId, ownerUid) {
+  if (!businessId) throw new Error('resetBusinessData() called with no businessId');
+  const results = {};
+
+  // 1. Delete all operational records across all store collections
+  for (const name of RESET_COLLECTIONS) {
+    try {
+      results[name] = await deleteTenantCollection(name, businessId);
+    } catch (err) {
+      console.warn(`[Reset] Collection ${name} cleanup skipped:`, err.message);
+      results[name] = 0;
+    }
+  }
+
+  // 2. MODEL 2: Delete Cashier Accounts completely (Firestore + Auth API)
+  try {
+    const cashiersSnap = await getDocs(query(
+      collection(db, 'users'),
+      where('businessId', '==', businessId),
+      where('role', '==', 'cashier')
+    ));
+
+    const idToken = auth.currentUser ? await auth.currentUser.getIdToken(true) : null;
+
+    for (const cashierDoc of cashiersSnap.docs) {
+      const cashierUid = cashierDoc.id;
+
+      // Delete from Firebase Auth via Cloudflare Worker API
+      if (idToken) {
+        try {
+          await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+            body: JSON.stringify({ targetUid: cashierUid }),
+          });
+        } catch (authErr) {
+          console.warn(`[Reset] Cashier auth delete error for ${cashierUid}:`, authErr);
+        }
+      }
+
+      // Delete from Firestore users collection
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'users', cashierUid));
+      await batch.commit();
+    }
+  } catch (cashierErr) {
+    console.warn('[Reset] Cashier cleanup error:', cashierErr);
+  }
+
+  // 3. Reset business settings cleanly to defaults without deleting the doc
+  await setDoc(doc(db, 'businessSettings', businessId), {
+    shopName: 'FlowBiz Store',
+    cashierCanRecordExpenses: true,
+    categories: DEFAULT_CATEGORIES,
+    receiptPaperWidth: 80,
+    resetAt: new Date(),
+    resetBy: ownerUid || null,
+  }, { merge: true });
+
+  results.businessSettings = 1;
+  results.performedBy = ownerUid || null;
+
+  return results;
+}
+````
+
 ## File: src/utils/currency.js
 ````javascript
 export function formatKES(amount) {
@@ -7051,455 +7161,6 @@ export function roundMoney(amount) {
   if (!Number.isFinite(v)) return 0;
   return Math.round((v + Number.EPSILON) * 100) / 100;
 }
-````
-
-## File: src/utils/customers.js
-````javascript
-// src/utils/customers.js
-import { doc, addDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
-import { tenantCollection, withBusiness } from '../lib/tenant';
-import { raceWithTimeout } from './offlineWrite';
-import { normalizePhone } from './whatsapp'; // FIX: Corrected import path
-
-export async function createCustomer(data, businessId) {
-  if (!businessId) throw new Error('createCustomer() called with no businessId');
-  const name = String(data.name || '').trim();
-  if (!name) throw new Error('Customer name is required.');
-
-  const phone = data.phone ? normalizePhone(data.phone) : '';
-  const customerCode = `CUS-${Math.floor(Date.now() / 1000).toString().slice(-6)}`;
-
-  const customerPayload = withBusiness({
-    name,
-    phone: phone || '',
-    customerCode,
-    email: data.email || '',
-    address: data.address || '',
-    notes: data.notes || '',
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  }, businessId);
-
-  const write = addDoc(tenantCollection('customers'), customerPayload);
-  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-  if (error) throw error;
-
-  return {
-    id: ref ? ref.id : null,
-    customerCode,
-    name,
-    phone,
-    queuedOffline,
-  };
-}
-
-export async function updateCustomer(customerId, data, businessId) {
-  if (!businessId) throw new Error('updateCustomer() called with no businessId');
-  if (!customerId) throw new Error('updateCustomer() called with no customerId');
-
-  const customerRef = doc(db, 'customers', customerId);
-  const { businessId: _ignored, id: _ignoredId, ...updates } = data;
-
-  if (updates.phone) {
-    updates.phone = normalizePhone(updates.phone);
-  }
-
-  const write = updateDoc(customerRef, {
-    ...updates,
-    updatedAt: serverTimestamp(),
-  });
-
-  const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-  if (error) throw error;
-
-  return { queuedOffline };
-}
-````
-
-## File: src/utils/financials.js
-````javascript
-function sumBy(rows, field) {
-  return rows.reduce((acc, row) => acc + (Number(row[field]) || 0), 0);
-}
-
-// FIX (multi-product cart): a multi-item cart sale/creditSale doc stores
-// its aggregate cost of goods sold directly on the doc as
-// `costOfGoodsSold` (see Counter.jsx's buildLineItems/handleCartSale/
-// handleCartCredit) — a single costPricePerUnit can no longer represent a
-// transaction that mixes several products at different cost prices.
-// Older, single-product sale/creditSale docs (and any new single-item
-// cart checkout) never had that field, so this falls back to the
-// original costPricePerUnit × quantity calculation for those — nothing
-// about how existing single-product sales are read changes.
-function getCostOfSale(row) {
-  if (row && typeof row.costOfGoodsSold === 'number' && Number.isFinite(row.costOfGoodsSold)) {
-    return row.costOfGoodsSold;
-  }
-  const costPerUnit = Number(row?.costPricePerUnit) || 0;
-  const quantity = Number(row?.quantity) || 0;
-  return costPerUnit * quantity;
-}
-
-export function isExpenseExcluded(expense) {
-  const category = String(expense?.category || '').toLowerCase();
-  const description = String(expense?.description || '').toLowerCase();
-  return category === 'stock purchase' || category === 'supplier payment' || description.includes('stock purchase') || description.includes('supplier payment');
-}
-
-// A credit sale that was cancelled (nothing was ever paid on it) or
-// refunded (goods returned, whatever was paid handed back) no longer
-// represents real business — it must not contribute to Outstanding Debt
-// or the Credit Sales metric. Same precedent as `isVoided` on cash sales.
-function isCreditSaleReversed(creditSale) {
-  return creditSale?.status === 'cancelled' || creditSale?.status === 'refunded';
-}
-
-// HYBRID MODEL (FINAL business decision): a credit sale is NOT realized
-// revenue until the customer actually pays. The moment a credit sale is
-// recorded, Inventory Value drops and Outstanding Debt / Credit Sales
-// rise — but Revenue, COGS, and Profit all stay at ZERO for that sale.
-// Only a Debt Repayment converts a portion of it into Revenue, COGS, and
-// Profit — proportional to how much of THAT specific credit sale has
-// just been collected. `creditSaleById` must be built from the FULL,
-// all-time credit sales list (not just the reporting period's), because
-// a repayment can land in a different period than the original sale.
-function recognizeRepayment(repayment, creditSaleById) {
-  const amount = Number(repayment?.amount) || 0;
-  const creditSale = creditSaleById.get(repayment?.creditSaleId);
-  if (!creditSale) {
-    // Originating credit sale not found (shouldn't normally happen) —
-    // recognize the cash as revenue with no cost basis rather than
-    // silently dropping it from the books.
-    return { revenue: amount, cogs: 0 };
-  }
-  const totalAmount = Number(creditSale.totalAmount) || 0;
-  const totalCost = getCostOfSale(creditSale);
-  const ratio = totalAmount > 0 ? amount / totalAmount : 0;
-  const cogs = totalCost * ratio;
-  return { revenue: amount, cogs };
-}
-
-export function computeFinancials({
-  sales = [],
-  creditSales = [],
-  allCreditSales = null,
-  expenses = [],
-  debtRepayments = [],
-  purchases = [],
-  supplierPayments = [],
-  refunds = [],
-} = {}) {
-  const activeSales = (sales || []).filter((sale) => !sale?.isVoided);
-  const activeCreditSales = (creditSales || []).filter((cs) => !isCreditSaleReversed(cs));
-
-  const cashSales  = activeSales.filter(s => s.paymentMethod === 'Cash');
-  const mpesaSales = activeSales.filter(s => s.paymentMethod === 'M-Pesa');
-  const totalCashSales  = sumBy(cashSales,  'totalAmount');
-  const totalMpesaSales = sumBy(mpesaSales, 'totalAmount');
-
-  // "Credit Sales" is a business-activity metric — total value of goods
-  // sold on credit this period. It intentionally does NOT feed into
-  // Revenue / COGS / Profit below (see recognizeRepayment()). This is the
-  // core of the FINAL decision: the owner should never see profit that
-  // has not yet been collected.
-  const totalCreditSales = sumBy(activeCreditSales, 'totalAmount');
-
-  const cashRepayments  = debtRepayments.filter(r => r.method === 'Cash');
-  const mpesaRepayments = debtRepayments.filter(r => r.method === 'M-Pesa');
-  const totalDebtRepaymentsCash  = sumBy(cashRepayments,  'amount');
-  const totalDebtRepaymentsMpesa = sumBy(mpesaRepayments, 'amount');
-  const totalDebtRepayments = totalDebtRepaymentsCash + totalDebtRepaymentsMpesa;
-
-  // Lookup of EVERY credit sale (not just this period's) so a repayment
-  // can find its cost basis even when the sale happened earlier. Falls
-  // back to the period-scoped `creditSales` if the caller didn't supply
-  // the full list.
-  const creditSaleSource = allCreditSales || creditSales || [];
-  const creditSaleById = new Map(creditSaleSource.map((cs) => [cs.id, cs]));
-
-  let repaymentRevenue = 0;
-  let repaymentCogs = 0;
-  (debtRepayments || []).forEach((r) => {
-    const { revenue, cogs } = recognizeRepayment(r, creditSaleById);
-    repaymentRevenue += revenue;
-    repaymentCogs += cogs;
-  });
-
-  // Direct (cash/M-Pesa) sales realize revenue and COGS the instant they
-  // happen. Credit sales contribute ZERO here directly — only the
-  // repaymentRevenue / repaymentCogs recognized above, at the moment the
-  // customer actually pays.
-  const directSalesCostOfGoodsSold = activeSales.reduce((acc, s) => acc + getCostOfSale(s), 0);
-  const costOfGoodsSold = directSalesCostOfGoodsSold + repaymentCogs;
-
-  // "Gross sales revenue" — total value of everything SOLD this period
-  // regardless of payment method. Informational only (Sales Summary) —
-  // it is NOT used for profit. See `revenue` below.
-  const grossSalesRevenue = totalCashSales + totalMpesaSales + totalCreditSales;
-
-  // Realized revenue — what actually counts toward profit, per the FINAL
-  // business decision: cash + M-Pesa sales, plus whatever portion of
-  // credit sales (from any period) was actually collected this period.
-  const revenue = totalCashSales + totalMpesaSales + repaymentRevenue;
-  const grossProfit = revenue - costOfGoodsSold;
-
-  const filteredExpenses = (expenses || []).filter((expense) => !isExpenseExcluded(expense));
-  const cashExpenses  = filteredExpenses.filter(e => e.paymentMethod === 'Cash');
-  const mpesaExpenses = filteredExpenses.filter(e => e.paymentMethod === 'M-Pesa');
-  const totalExpensesCash  = sumBy(cashExpenses,  'amount');
-  const totalExpensesMpesa = sumBy(mpesaExpenses, 'amount');
-  const totalExpenses = totalExpensesCash + totalExpensesMpesa;
-  const netProfit     = grossProfit - totalExpenses;
-
-  // CASH POSITION: strictly real money movement, independent of the
-  // revenue-recognition timing above. This is what Cash Received Today /
-  // M-Pesa Received Today and the Close Day till reconciliation rely on.
-  const totalCashReceipts  = totalCashSales  + totalDebtRepaymentsCash;
-  const totalMpesaReceipts = totalMpesaSales + totalDebtRepaymentsMpesa;
-
-  const cashRefunds  = (refunds || []).filter(r => r.method === 'Cash');
-  const mpesaRefunds = (refunds || []).filter(r => r.method === 'M-Pesa');
-  const totalRefundsCash  = sumBy(cashRefunds,  'amount');
-  const totalRefundsMpesa = sumBy(mpesaRefunds, 'amount');
-  const totalRefunds = totalRefundsCash + totalRefundsMpesa;
-
-  const purchasePaymentsCash  = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash');
-  const purchasePaymentsMpesa = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa');
-  const supplierPaymentsCash  = (supplierPayments || []).filter((p) => p.method === 'Cash');
-  const supplierPaymentsMpesa = (supplierPayments || []).filter((p) => p.method === 'M-Pesa');
-  // Refunds are cash/M-Pesa leaving the till, just like an expense or a
-  // supplier payment — folded into the same outflow totals so Close Day's
-  // till reconciliation stays correct without any formula change there.
-  const totalCashOutflows  = sumBy(purchasePaymentsCash,  'totalCost') + sumBy(supplierPaymentsCash,  'amount') + totalRefundsCash;
-  const totalMpesaOutflows = sumBy(purchasePaymentsMpesa, 'totalCost') + sumBy(supplierPaymentsMpesa, 'amount') + totalRefundsMpesa;
-
-  return {
-    grossSalesRevenue, totalCashSales, totalMpesaSales, totalCreditSales,
-    revenue, costOfGoodsSold, grossProfit,
-    totalCashReceipts, totalMpesaReceipts,
-    totalDebtRepaymentsCash, totalDebtRepaymentsMpesa, totalDebtRepayments,
-    totalExpensesCash, totalExpensesMpesa, totalExpenses, netProfit,
-    totalRefundsCash, totalRefundsMpesa, totalRefunds,
-    totalCashOutflows, totalMpesaOutflows,
-  };
-}
-
-export function computeExpectedTillBalances({
-  openingCashFloat = 0, openingMpesaFloat = 0,
-  totalCashSales = 0, totalMpesaSales = 0,
-  totalDebtRepaymentsCash = 0, totalDebtRepaymentsMpesa = 0,
-  totalExpensesCash = 0, totalExpensesMpesa = 0,
-  totalCashOutflows = 0, totalMpesaOutflows = 0,
-}) {
-  return {
-    expectedCashAtClose:  Number(openingCashFloat)  + totalCashSales  + totalDebtRepaymentsCash  - totalExpensesCash - totalCashOutflows,
-    expectedMpesaAtClose: Number(openingMpesaFloat) + totalMpesaSales + totalDebtRepaymentsMpesa - totalExpensesMpesa - totalMpesaOutflows,
-  };
-}
-
-export function computeSupplierBalances(purchases = [], supplierPayments = [], suppliers = []) {
-  const balanceById = {};
-
-  (purchases || []).forEach((p) => {
-    if (p?.paymentStatus !== 'pending_supplier_credit' || !p?.supplierId) return;
-    balanceById[p.supplierId] = (balanceById[p.supplierId] || 0) + (Number(p.totalCost) || 0);
-  });
-
-  (supplierPayments || []).forEach((sp) => {
-    if (!sp?.supplierId || balanceById[sp.supplierId] === undefined) return;
-    balanceById[sp.supplierId] -= Number(sp.amount) || 0;
-  });
-
-  const nameById = {};
-  (suppliers || []).forEach((s) => { nameById[s.id] = s.name; });
-
-  return Object.entries(balanceById)
-    .filter(([, balance]) => (Number(balance) || 0) > 0.005)
-    .map(([supplierId, balance]) => ({
-      supplierId,
-      supplierName:
-        nameById[supplierId] ||
-        (purchases || []).find((p) => p.supplierId === supplierId)?.supplierName ||
-        'Unknown supplier',
-      balance,
-    }))
-    .sort((a, b) => b.balance - a.balance);
-}
-````
-
-## File: src/utils/financials.test.js
-````javascript
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { computeFinancials } from './financials.js';
-
-test('a credit sale alone contributes zero revenue, COGS, and profit until repaid', () => {
-  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'pending', amountPaid: 0 };
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [creditSale],
-    allCreditSales: [creditSale],
-    expenses: [],
-    debtRepayments: [],
-  });
-
-  assert.equal(summary.totalCreditSales, 15000); // still tracked as business activity
-  assert.equal(summary.revenue, 0);
-  assert.equal(summary.costOfGoodsSold, 0);
-  assert.equal(summary.grossProfit, 0);
-  assert.equal(summary.netProfit, 0);
-  assert.equal(summary.totalCashReceipts, 0);
-  assert.equal(summary.totalMpesaReceipts, 0);
-});
-
-test('a full debt repayment recognizes the full sale as revenue, COGS, and profit', () => {
-  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'paid', amountPaid: 15000 };
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [],
-    allCreditSales: [creditSale],
-    expenses: [],
-    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 15000, method: 'Cash' }],
-  });
-
-  assert.equal(summary.revenue, 15000);
-  assert.equal(summary.costOfGoodsSold, 10000);
-  assert.equal(summary.grossProfit, 5000);
-  assert.equal(summary.netProfit, 5000);
-  assert.equal(summary.totalCashReceipts, 15000);
-});
-
-test('a partial debt repayment recognizes revenue, COGS, and profit proportionally', () => {
-  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'partial', amountPaid: 5000 };
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [],
-    allCreditSales: [creditSale],
-    expenses: [],
-    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 5000, method: 'Cash' }],
-  });
-
-  // 5000 / 15000 of the sale collected so far → 1/3 of its cost basis
-  assert.equal(summary.revenue, 5000);
-  assert.ok(Math.abs(summary.costOfGoodsSold - 10000 / 3) < 0.01);
-  assert.ok(Math.abs(summary.netProfit - (5000 - 10000 / 3)) < 0.01);
-});
-
-test('a repayment on a credit sale from an earlier period still finds its cost basis', () => {
-  // Simulates: sale happened last month (not in `creditSales`, which is
-  // period-scoped), repayment happens today. `allCreditSales` is what
-  // makes the lookup work regardless of period.
-  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'paid', amountPaid: 15000 };
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [], // not sold this period
-    allCreditSales: [creditSale],
-    expenses: [],
-    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 15000, method: 'M-Pesa' }],
-  });
-
-  assert.equal(summary.revenue, 15000);
-  assert.equal(summary.costOfGoodsSold, 10000);
-  assert.equal(summary.netProfit, 5000);
-});
-
-test('cancelled and refunded credit sales are excluded from the Credit Sales metric', () => {
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [
-      { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'cancelled' },
-      { id: 'c2', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'refunded' },
-    ],
-    expenses: [],
-    debtRepayments: [],
-  });
-
-  assert.equal(summary.totalCreditSales, 0);
-  assert.equal(summary.revenue, 0);
-  assert.equal(summary.netProfit, 0);
-});
-
-test('refunds reduce expected cash/M-Pesa till balance, same as any other outflow', () => {
-  const summary = computeFinancials({
-    sales: [], creditSales: [], expenses: [], debtRepayments: [],
-    refunds: [{ amount: 2000, method: 'Cash' }],
-  });
-
-  assert.equal(summary.totalRefundsCash, 2000);
-  assert.equal(summary.totalCashOutflows, 2000);
-});
-
-test('voided sales do not affect cash sales or profit', () => {
-  const summary = computeFinancials({
-    sales: [{ id: 's1', paymentMethod: 'Cash', totalAmount: 15000, costPricePerUnit: 10000, quantity: 1, isVoided: true }],
-    creditSales: [],
-    expenses: [],
-    debtRepayments: [],
-  });
-
-  assert.equal(summary.totalCashSales, 0);
-  assert.equal(summary.netProfit, 0);
-});
-
-test('purchase and supplier payments only affect outflows, not profit', () => {
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [],
-    expenses: [{ amount: 50000, paymentMethod: 'Cash', category: 'Stock Purchase' }],
-    debtRepayments: [],
-    purchases: [{ paymentStatus: 'paid', paymentMethod: 'Cash', totalCost: 50000 }],
-    supplierPayments: [{ method: 'Cash', amount: 50000 }],
-  });
-
-  assert.equal(summary.totalExpenses, 0);
-  assert.equal(summary.netProfit, 0);
-  assert.equal(summary.totalCashOutflows, 100000);
-});
-
-// ── Multi-product cart (Counter.jsx) ───────────────────────────────────
-// A multi-item cart sale stores its aggregate cost of goods sold directly
-// on the doc (`costOfGoodsSold`), since a single costPricePerUnit can't
-// represent several products at different cost prices in one line.
-
-test('a multi-item cart sale uses its stored costOfGoodsSold instead of costPricePerUnit × quantity', () => {
-  // Book ×3 @500 (cost 300) + Storybook ×2 @350 (cost 200) + Pen ×1 @50 (cost 20)
-  // revenue = 1500 + 700 + 50 = 2250; cost = 900 + 400 + 20 = 1320
-  const cartSale = {
-    id: 's1', paymentMethod: 'Cash', quantity: 6, totalAmount: 2250, costOfGoodsSold: 1320,
-    profit: 930, isVoided: false,
-  };
-  const summary = computeFinancials({ sales: [cartSale], creditSales: [], expenses: [], debtRepayments: [] });
-
-  assert.equal(summary.totalCashSales, 2250);
-  assert.equal(summary.costOfGoodsSold, 1320);
-  assert.equal(summary.grossProfit, 930);
-  assert.equal(summary.netProfit, 930);
-});
-
-test('a legacy single-product sale without costOfGoodsSold still falls back correctly', () => {
-  const legacySale = { id: 's1', paymentMethod: 'Cash', quantity: 2, totalAmount: 1000, costPricePerUnit: 300, isVoided: false };
-  const summary = computeFinancials({ sales: [legacySale], creditSales: [], expenses: [], debtRepayments: [] });
-
-  assert.equal(summary.costOfGoodsSold, 600);
-  assert.equal(summary.grossProfit, 400);
-});
-
-test('a partial repayment on a multi-item credit sale recognizes COGS from the stored aggregate', () => {
-  const creditSale = { id: 'c1', quantity: 4, totalAmount: 2000, costOfGoodsSold: 1200, status: 'partial', amountPaid: 1000 };
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [],
-    allCreditSales: [creditSale],
-    expenses: [],
-    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 1000, method: 'Cash' }],
-  });
-
-  // Half the sale collected → half its aggregate cost basis recognized
-  assert.equal(summary.revenue, 1000);
-  assert.equal(summary.costOfGoodsSold, 600);
-  assert.equal(summary.netProfit, 400);
-});
 ````
 
 ## File: src/utils/offlineWrite.js
@@ -8336,158 +7997,6 @@ export async function confirmPasswordReset() {
 }
 ````
 
-## File: src/pages/Customers.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { UserPlus, MessageCircle } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useSettings } from '../hooks/useSettings';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import AddCustomerModal from '../components/customers/AddCustomerModal';
-import { createCustomer } from '../utils/customers';
-import { formatKES } from '../utils/currency';
-import { formatDate } from '../utils/dateRanges';
-import { openWhatsApp, buildDebtReminderMessage, isValidWhatsAppPhone } from '../utils/whatsapp';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function Customers() {
-  const { businessId, isPro } = useAuth();
-  const { settings } = useSettings();
-
-  // Removing orderBy('name') which causes silent listener failures without a composite index.
-  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId) : null, [businessId]);
-  const creditQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
-
-  const { data: customers, loading: custLoading } = useFirestoreCollection(customersQ);
-  const { data: creditSales, loading: credLoading } = useFirestoreCollection(creditQ);
-  
-  const [search, setSearch] = useState('');
-  const [addModalOpen, setAddModalOpen] = useState(false);
-
-  const customerList = useMemo(() => {
-    const map = {};
-    for (const c of customers) {
-      map[c.id] = { customerId: c.id, name: c.name, phone: c.phone, totalOwed: 0, purchaseCount: 0, lastPurchase: null };
-    }
-    for (const cs of creditSales) {
-      if (!cs.customerId) continue;
-      if (!map[cs.customerId]) {
-        map[cs.customerId] = { customerId: cs.customerId, name: cs.customerName, phone: cs.customerPhone, totalOwed: 0, purchaseCount: 0, lastPurchase: null };
-      }
-      const e = map[cs.customerId];
-      if (cs.status === 'pending' || cs.status === 'partial') {
-        e.totalOwed += Number(cs.remainingBalance) || 0;
-      }
-      e.purchaseCount++;
-      if (!e.lastPurchase || (cs.soldAt?.toMillis?.() ?? 0) > (e.lastPurchase?.toMillis?.() ?? 0)) {
-        e.lastPurchase = cs.soldAt;
-      }
-    }
-    return Object.values(map)
-      .filter(d => d.name?.toLowerCase().includes(search.toLowerCase()) || d.phone?.includes(search))
-      .sort((a, b) => b.totalOwed - a.totalOwed);
-  }, [customers, creditSales, search]);
-
-  const loading = custLoading || credLoading;
-  const totalOut = customerList.reduce((acc, d) => acc + d.totalOwed, 0);
-
-  const handleAddCustomer = async ({ name, phone }) => {
-    try {
-      const { queuedOffline } = await createCustomer({ name, phone }, businessId);
-      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Customer saved successfully.');
-      setAddModalOpen(false);
-    } catch (error) {
-      toast.error(friendlyErrorMessage(error, { fallback: 'Unable to save customer. Please try again.' }));
-    }
-  };
-
-  const handleSendReminder = (d) => {
-    if (!isPro) {
-      toast.error('WhatsApp sharing is available on FlowBiz Pro.');
-      return;
-    }
-    if (!d.phone || !isValidWhatsAppPhone(d.phone)) {
-      toast.error('Add a valid phone number for this customer before sending a WhatsApp reminder.');
-      return;
-    }
-    const message = buildDebtReminderMessage({
-      shopName: settings.shopName || 'FlowBiz Store',
-      customerName: d.name,
-      outstandingAmount: d.totalOwed,
-      businessPhone: settings.phone,
-      formatKES,
-    });
-    const opened = openWhatsApp(d.phone, message);
-    toast[opened ? 'success' : 'error'](opened ? 'WhatsApp opened.' : 'WhatsApp could not be opened.');
-  };
-
-  return (
-    <div className="mx-auto max-w-4xl space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Customers</h1>
-          <p className="text-sm text-ink-400">Total outstanding debt: <span className="font-semibold text-rust-600">{formatKES(totalOut)}</span></p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setAddModalOpen(true)}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-600 shadow-sm hover:bg-ink-50 active:bg-ink-100"
-          title="Add customer"
-        >
-          <UserPlus className="h-5 w-5" strokeWidth={1.75} />
-        </button>
-      </div>
-      <input className="input" placeholder="Search customer…" value={search} onChange={e => setSearch(e.target.value)} />
-      {loading ? <LoadingSpinner /> : customerList.length === 0 ? (
-        <EmptyState title="No customers found" description="Add a customer, or they'll appear here after a credit sale." />
-      ) : (
-        <div className="space-y-2">
-          {customerList.map(d => (
-            <div key={d.customerId} className="card flex flex-col p-4 hover:shadow-md gap-2">
-              <div className="flex items-start justify-between gap-2">
-                <Link to={`/customers/${d.customerId}`} className="min-w-0 flex-1">
-                  <p className="font-semibold text-ink-800 truncate">{d.name}</p>
-                  <p className="text-xs text-ink-400">{d.phone || 'No phone'} · {d.purchaseCount} purchase{d.purchaseCount !== 1 ? 's' : ''} {d.lastPurchase ? `· last ${formatDate(d.lastPurchase)}` : ''}</p>
-                </Link>
-                <div className="text-right shrink-0">
-                  <Link to={`/customers/${d.customerId}`} className={`font-display text-base font-bold ${d.totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>
-                    {d.totalOwed > 0 ? formatKES(d.totalOwed) : (d.purchaseCount > 0 ? 'Paid' : 'No history')}
-                  </Link>
-                </div>
-              </div>
-              {d.totalOwed > 0 && (
-                 <div className="flex justify-end border-t border-ink-100 pt-2 mt-1">
-                    <button
-                      type="button"
-                      onClick={() => handleSendReminder(d)}
-                      className="flex items-center gap-1.5 rounded-lg border border-ink-200 px-3 py-1.5 text-xs font-semibold text-ink-600 hover:bg-ink-50"
-                      title={isPro ? 'Send reminder via WhatsApp' : 'FlowBiz Pro feature'}
-                    >
-                      <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
-                      Send reminder{!isPro && <span className="text-amber-600"> · PRO</span>}
-                    </button>
-                 </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-      <AddCustomerModal
-        open={addModalOpen}
-        onClose={() => setAddModalOpen(false)}
-        onSave={handleAddCustomer}
-        existingCustomers={customerList.map(d => ({ name: d.name, phone: d.phone }))}
-      />
-    </div>
-  );
-}
-````
-
 ## File: src/pages/Expenses.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -8907,200 +8416,322 @@ export default function HelpGuide() {
 }
 ````
 
-## File: src/pages/JoinStaff.jsx
+## File: src/utils/customers.js
 ````javascript
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword, sendEmailVerification, deleteUser } from 'firebase/auth';
-import { doc, getDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { auth, db } from '../firebase';
+// src/utils/customers.js
+import { doc, setDoc, updateDoc } from 'firebase/firestore';
+import { db } from '../firebase';
+import { tenantCollection, withBusiness } from '../lib/tenant';
+import { raceWithTimeout } from './offlineWrite';
+import { normalizePhone } from './whatsapp';
 
-export default function JoinStaff() {
-  const { inviteId } = useParams();
-  const navigate = useNavigate();
+export async function createCustomer(data, businessId) {
+  if (!businessId) throw new Error('createCustomer() called with no businessId');
+  const name = String(data.name || '').trim();
+  if (!name) throw new Error('Customer name is required.');
 
-  const [checking, setChecking] = useState(true);
-  const [invite, setInvite]     = useState(null);
-  const [notFound, setNotFound] = useState(false);
+  const phone = data.phone ? normalizePhone(data.phone) : '';
+  const customerCode = `CUS-${Math.floor(Date.now() / 1000).toString().slice(-6)}`;
 
-  const [email, setEmail]                     = useState('');
-  const [password, setPassword]               = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [submitting, setSubmitting]           = useState(false);
-  const [error, setError]                     = useState(null);
+  // Generate reference synchronously so the ID is immediately available offline
+  const customerRef = doc(tenantCollection('customers'));
+  const customerId = customerRef.id;
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const snap = await getDoc(doc(db, 'staffInvites', inviteId));
-        if (cancelled) return;
-        if (!snap.exists()) { setNotFound(true); setChecking(false); return; }
-        setInvite({ id: snap.id, ...snap.data() });
-      } catch (err) {
-        setNotFound(true);
-      } finally {
-        if (!cancelled) setChecking(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [inviteId]);
+  const customerPayload = withBusiness({
+    name,
+    phone: phone || '',
+    customerCode,
+    email: data.email || '',
+    address: data.address || '',
+    notes: data.notes || '',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }, businessId);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
+  const write = setDoc(customerRef, customerPayload);
+  const { queuedOffline, error } = await raceWithTimeout(write, 1500);
+  if (error) throw error;
 
-    if (password.length < 6) { setError('Password must be at least 6 characters.'); return; }
-    if (password !== confirmPassword) { setError('Passwords do not match.'); return; }
-
-    setSubmitting(true);
-
-    let freshSnap;
-    try {
-      freshSnap = await getDoc(doc(db, 'staffInvites', inviteId));
-      if (!freshSnap.exists()) throw new Error('This invite is no longer valid.');
-      if (freshSnap.data().claimed) throw new Error('This invite has already been used.');
-    } catch (err) {
-      setError(err.message || 'This invite could not be validated. Please try again.');
-      setSubmitting(false);
-      return;
-    }
-    const { businessId, role, displayName } = freshSnap.data();
-
-    let cred;
-    try {
-      cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-    } catch (err) {
-      const message =
-        err.code === 'auth/email-already-in-use' ? "An account with this email already exists." :
-        err.code === 'auth/invalid-email'        ? 'Please enter a valid email address.' :
-        err.code === 'auth/weak-password'         ? 'Password is too weak.' :
-        'Could not create your account. Please try again.';
-      setError(message);
-      setSubmitting(false);
-      return;
-    }
-
-    try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'users', cred.user.uid), {
-        uid: cred.user.uid,
-        email: email.trim(),
-        displayName,
-        role,
-        businessId,
-        active: true,
-        createdAt: serverTimestamp(),
-        claimedFromInviteId: inviteId,
-      });
-      batch.update(doc(db, 'staffInvites', inviteId), {
-        claimed: true,
-        linkedUid: cred.user.uid,
-        claimedAt: serverTimestamp(),
-      });
-      await batch.commit();
-    } catch (err) {
-      console.error('[JoinStaff] Firestore registration failed after Auth account creation — rolling back:', err.code || err.name, err.message);
-      try {
-        await deleteUser(cred.user);
-      } catch (rollbackErr) {
-        console.error('[JoinStaff] Rollback failed — an orphaned Auth account may remain:', rollbackErr);
-        setError('Something went wrong finishing your signup, and we could not fully undo it. Please contact your business owner before trying again with this email.');
-        setSubmitting(false);
-        return;
-      }
-      setError('Something went wrong finishing your signup. Please try again.');
-      setSubmitting(false);
-      return;
-    }
-
-    // FIX: handleCodeInApp: true routes the verification link through
-    // FlowBiz's own /auth/action page instead of Firebase's generic
-    // hosted page.
-try {
-  const idToken = await cred.user.getIdToken(true);
-  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-  });
-  if (!response.ok) throw new Error('request-failed');
-  toast.success(`Welcome, ${displayName}! Check your email to verify your account.`);
-} catch (err) {
-  console.error('[JoinStaff] send-verification-email failed after successful signup:', err.message);
-  toast.success(
-    `Welcome, ${displayName}! Your account was created, but we couldn't send the verification email. You can request a new one once you're signed in.`,
-    { duration: 6000 }
-  );
-}
-
-    setSubmitting(false);
-    navigate('/', { replace: true });
+  return {
+    id: customerId,
+    customerCode,
+    name,
+    phone,
+    queuedOffline,
   };
+}
 
-  if (checking) return <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4"><p className="text-sm text-ink-400">Checking invite…</p></div>;
+export async function updateCustomer(customerId, data, businessId) {
+  if (!businessId) throw new Error('updateCustomer() called with no businessId');
+  if (!customerId) throw new Error('updateCustomer() called with no customerId');
 
-  if (notFound || !invite) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-        <div className="w-full max-w-sm card p-6 text-center space-y-3">
-          <div className="text-3xl">🔗</div>
-          <h1 className="font-display text-lg font-bold text-ink-900">Invite not found</h1>
-          <p className="text-sm text-ink-500">This link may be wrong, or the invite was cancelled. Ask whoever invited you for a fresh link.</p>
-          <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
-        </div>
-      </div>
-    );
+  const customerRef = doc(db, 'customers', customerId);
+  const updates = { ...data };
+  delete updates.businessId;
+  delete updates.id;
+
+  if (updates.phone) {
+    updates.phone = normalizePhone(updates.phone);
   }
 
-  if (invite.claimed) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-        <div className="w-full max-w-sm card p-6 text-center space-y-3">
-          <div className="text-3xl">✅</div>
-          <h1 className="font-display text-lg font-bold text-ink-900">This invite has already been used</h1>
-          <p className="text-sm text-ink-500">If this is you, sign in with the email and password you already set.</p>
-          <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
-        </div>
-      </div>
-    );
+  updates.updatedAt = new Date();
+
+  const write = updateDoc(customerRef, updates);
+  const { queuedOffline, error } = await raceWithTimeout(write, 1500);
+  if (error) throw error;
+
+  return { queuedOffline };
+}
+````
+
+## File: src/utils/financials.js
+````javascript
+// src/utils/financials.js
+function sumBy(rows, field) {
+  return rows.reduce((acc, row) => acc + (Number(row[field]) || 0), 0);
+}
+
+function getCostOfSale(row) {
+  if (row && typeof row.costOfGoodsSold === 'number' && Number.isFinite(row.costOfGoodsSold)) {
+    return row.costOfGoodsSold;
   }
+  const costPerUnit = Number(row?.costPricePerUnit) || 0;
+  const quantity = Number(row?.quantity) || 0;
+  return costPerUnit * quantity;
+}
 
-  const roleLabel = invite.role === 'owner' ? 'an owner' : 'a cashier';
-
+export function isExpenseExcluded(expense) {
+  const category = String(expense?.category || '').toLowerCase();
+  const description = String(expense?.description || '').toLowerCase();
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-white">Welcome, {invite.displayName}</h1>
-            <p className="text-sm text-ink-400">You've been invited as {roleLabel}. Set up your sign-in below.</p>
-          </div>
-        </div>
-        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
-          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-
-          <div>
-            <label className="label">Your email</label>
-            <input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" autoComplete="username" />
-          </div>
-          <div>
-            <label className="label">Choose a password</label>
-            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters" autoComplete="new-password" />
-          </div>
-          <div>
-            <label className="label">Confirm password</label>
-            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" />
-          </div>
-          <button type="submit" className="btn-primary w-full" disabled={submitting}>
-            {submitting ? 'Setting up…' : 'Create my sign-in'}
-          </button>
-        </form>
-      </div>
-    </div>
+    category === 'stock purchase' ||
+    category === 'supplier payment' ||
+    description.includes('stock purchase') ||
+    description.includes('supplier payment')
   );
 }
+
+function isCreditSaleReversed(creditSale) {
+  return creditSale?.status === 'cancelled' || creditSale?.status === 'refunded';
+}
+
+function recognizeRepayment(repayment, creditSaleById) {
+  const amount = Number(repayment?.amount) || 0;
+  const creditSale = creditSaleById.get(repayment?.creditSaleId);
+  if (!creditSale) {
+    return { revenue: amount, cogs: 0 };
+  }
+  const totalAmount = Number(creditSale.totalAmount) || 0;
+  const totalCost = getCostOfSale(creditSale);
+  const ratio = totalAmount > 0 ? amount / totalAmount : 0;
+  const cogs = totalCost * ratio;
+  return { revenue: amount, cogs };
+}
+
+function recognizeRefund(refund, creditSaleById) {
+  const amount = Number(refund?.amount) || 0;
+  const creditSale = creditSaleById.get(refund?.creditSaleId);
+  if (!creditSale) {
+    return { revenue: amount, cogs: 0 };
+  }
+  const totalAmount = Number(creditSale.totalAmount) || 0;
+  const totalCost = getCostOfSale(creditSale);
+  const ratio = totalAmount > 0 ? amount / totalAmount : 0;
+  const cogs = totalCost * ratio;
+  return { revenue: amount, cogs };
+}
+
+export function computeFinancials({
+  sales = [],
+  creditSales = [],
+  allCreditSales = null,
+  expenses = [],
+  debtRepayments = [],
+  purchases = [],
+  supplierPayments = [],
+  refunds = [],
+} = {}) {
+  const activeSales = (sales || []).filter((sale) => !sale?.isVoided);
+  const activeCreditSales = (creditSales || []).filter((cs) => !isCreditSaleReversed(cs));
+
+  const cashSales  = activeSales.filter(s => s.paymentMethod === 'Cash');
+  const mpesaSales = activeSales.filter(s => s.paymentMethod === 'M-Pesa');
+  const totalCashSales  = sumBy(cashSales,  'totalAmount');
+  const totalMpesaSales = sumBy(mpesaSales, 'totalAmount');
+
+  const totalCreditSales = sumBy(activeCreditSales, 'totalAmount');
+
+  const cashRepayments  = debtRepayments.filter(r => r.method === 'Cash');
+  const mpesaRepayments = debtRepayments.filter(r => r.method === 'M-Pesa');
+  const totalDebtRepaymentsCash  = sumBy(cashRepayments,  'amount');
+  const totalDebtRepaymentsMpesa = sumBy(mpesaRepayments, 'amount');
+  const totalDebtRepayments = totalDebtRepaymentsCash + totalDebtRepaymentsMpesa;
+
+  const cashRefunds  = (refunds || []).filter(r => r.method === 'Cash');
+  const mpesaRefunds = (refunds || []).filter(r => r.method === 'M-Pesa');
+  const totalRefundsCash  = sumBy(cashRefunds,  'amount');
+  const totalRefundsMpesa = sumBy(mpesaRefunds, 'amount');
+  const totalRefunds = totalRefundsCash + totalRefundsMpesa;
+
+  const creditSaleSource = allCreditSales || creditSales || [];
+  const creditSaleById = new Map(creditSaleSource.map((cs) => [cs.id, cs]));
+
+  let repaymentRevenue = 0;
+  let repaymentCogs = 0;
+  (debtRepayments || []).forEach((r) => {
+    const { revenue, cogs } = recognizeRepayment(r, creditSaleById);
+    repaymentRevenue += revenue;
+    repaymentCogs += cogs;
+  });
+
+  let refundRevenue = 0;
+  let refundCogs = 0;
+  (refunds || []).forEach((ref) => {
+    const { revenue, cogs } = recognizeRefund(ref, creditSaleById);
+    refundRevenue += revenue;
+    refundCogs += cogs;
+  });
+
+  const directSalesCostOfGoodsSold = activeSales.reduce((acc, s) => acc + getCostOfSale(s), 0);
+  const costOfGoodsSold = Math.max(0, directSalesCostOfGoodsSold + repaymentCogs - refundCogs);
+
+  const grossSalesRevenue = totalCashSales + totalMpesaSales + totalCreditSales;
+  const revenue = Math.max(0, totalCashSales + totalMpesaSales + repaymentRevenue - refundRevenue);
+  const grossProfit = revenue - costOfGoodsSold;
+
+  const filteredExpenses = (expenses || []).filter((expense) => !isExpenseExcluded(expense));
+  const cashExpenses  = filteredExpenses.filter(e => e.paymentMethod === 'Cash');
+  const mpesaExpenses = filteredExpenses.filter(e => e.paymentMethod === 'M-Pesa');
+  const totalExpensesCash  = sumBy(cashExpenses,  'amount');
+  const totalExpensesMpesa = sumBy(mpesaExpenses, 'amount');
+  const totalExpenses = totalExpensesCash + totalExpensesMpesa;
+  const netProfit     = grossProfit - totalExpenses;
+
+  // Realized net receipts by tender method
+  const totalCashReceipts  = Math.max(0, totalCashSales  + totalDebtRepaymentsCash  - totalRefundsCash);
+  const totalMpesaReceipts = Math.max(0, totalMpesaSales + totalDebtRepaymentsMpesa - totalRefundsMpesa);
+
+  const purchasePaymentsCash  = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash');
+  const purchasePaymentsMpesa = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa');
+  const supplierPaymentsCash  = (supplierPayments || []).filter((p) => p.method === 'Cash');
+  const supplierPaymentsMpesa = (supplierPayments || []).filter((p) => p.method === 'M-Pesa');
+
+  const totalCashOutflows  = sumBy(purchasePaymentsCash,  'totalCost') + sumBy(supplierPaymentsCash,  'amount') + totalRefundsCash;
+  const totalMpesaOutflows = sumBy(purchasePaymentsMpesa, 'totalCost') + sumBy(supplierPaymentsMpesa, 'amount') + totalRefundsMpesa;
+
+  return {
+    grossSalesRevenue, totalCashSales, totalMpesaSales, totalCreditSales,
+    revenue, costOfGoodsSold, grossProfit,
+    totalCashReceipts, totalMpesaReceipts,
+    totalDebtRepaymentsCash, totalDebtRepaymentsMpesa, totalDebtRepayments,
+    totalExpensesCash, totalExpensesMpesa, totalExpenses, netProfit,
+    totalRefundsCash, totalRefundsMpesa, totalRefunds,
+    totalCashOutflows, totalMpesaOutflows,
+  };
+}
+
+export function computeExpectedTillBalances({
+  openingCashFloat = 0, openingMpesaFloat = 0,
+  totalCashSales = 0, totalMpesaSales = 0,
+  totalDebtRepaymentsCash = 0, totalDebtRepaymentsMpesa = 0,
+  totalExpensesCash = 0, totalExpensesMpesa = 0,
+  totalCashOutflows = 0, totalMpesaOutflows = 0,
+}) {
+  return {
+    expectedCashAtClose:  Number(openingCashFloat)  + totalCashSales  + totalDebtRepaymentsCash  - totalExpensesCash - totalCashOutflows,
+    expectedMpesaAtClose: Number(openingMpesaFloat) + totalMpesaSales + totalDebtRepaymentsMpesa - totalExpensesMpesa - totalMpesaOutflows,
+  };
+}
+
+export function computeSupplierBalances(purchases = [], supplierPayments = [], suppliers = []) {
+  const balanceById = {};
+
+  (purchases || []).forEach((p) => {
+    if (p?.paymentStatus !== 'pending_supplier_credit' || !p?.supplierId) return;
+    balanceById[p.supplierId] = (balanceById[p.supplierId] || 0) + (Number(p.totalCost) || 0);
+  });
+
+  (supplierPayments || []).forEach((sp) => {
+    if (!sp?.supplierId || balanceById[sp.supplierId] === undefined) return;
+    balanceById[sp.supplierId] -= Number(sp.amount) || 0;
+  });
+
+  const nameById = {};
+  (suppliers || []).forEach((s) => { nameById[s.id] = s.name; });
+
+  return Object.entries(balanceById)
+    .filter(([, balance]) => (Number(balance) || 0) > 0.005)
+    .map(([supplierId, balance]) => ({
+      supplierId,
+      supplierName:
+        nameById[supplierId] ||
+        (purchases || []).find((p) => p.supplierId === supplierId)?.supplierName ||
+        'Unknown supplier',
+      balance,
+    }))
+    .sort((a, b) => b.balance - a.balance);
+}
+````
+
+## File: src/utils/financials.test.js
+````javascript
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { computeFinancials } from './financials.js';
+
+test('a credit sale alone contributes zero revenue, COGS, and profit until repaid', () => {
+  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'pending', amountPaid: 0 };
+  const summary = computeFinancials({
+    sales: [],
+    creditSales: [creditSale],
+    allCreditSales: [creditSale],
+    expenses: [],
+    debtRepayments: [],
+  });
+
+  assert.equal(summary.totalCreditSales, 15000);
+  assert.equal(summary.revenue, 0);
+  assert.equal(summary.costOfGoodsSold, 0);
+  assert.equal(summary.grossProfit, 0);
+  assert.equal(summary.netProfit, 0);
+  assert.equal(summary.totalCashReceipts, 0);
+  assert.equal(summary.totalMpesaReceipts, 0);
+});
+
+test('a full debt repayment recognizes the full sale as revenue, COGS, and profit', () => {
+  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'paid', amountPaid: 15000 };
+  const summary = computeFinancials({
+    sales: [],
+    creditSales: [],
+    allCreditSales: [creditSale],
+    expenses: [],
+    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 15000, method: 'Cash' }],
+  });
+
+  assert.equal(summary.revenue, 15000);
+  assert.equal(summary.costOfGoodsSold, 10000);
+  assert.equal(summary.grossProfit, 5000);
+  assert.equal(summary.netProfit, 5000);
+  assert.equal(summary.totalCashReceipts, 15000);
+});
+
+test('refunding a repaid credit sale reverses revenue, cogs, profit and receipts correctly', () => {
+  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'refunded', amountPaid: 5000 };
+  const summary = computeFinancials({
+    sales: [],
+    creditSales: [creditSale],
+    allCreditSales: [creditSale],
+    expenses: [],
+    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 5000, method: 'Cash' }],
+    refunds: [{ id: 'ref1', creditSaleId: 'c1', amount: 5000, method: 'Cash' }],
+  });
+
+  assert.equal(summary.revenue, 0);
+  assert.equal(summary.costOfGoodsSold, 0);
+  assert.equal(summary.grossProfit, 0);
+  assert.equal(summary.netProfit, 0);
+  assert.equal(summary.totalCashReceipts, 0);
+});
 ````
 
 ## File: src/utils/products.js
@@ -9977,6 +9608,177 @@ export function useCameraScanner({ onDetected, active }) {
 }
 ````
 
+## File: src/pages/Customers.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { UserPlus, MessageCircle, Pencil } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useSettings } from '../hooks/useSettings';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import AddCustomerModal from '../components/customers/AddCustomerModal';
+import { createCustomer, updateCustomer } from '../utils/customers';
+import { formatKES } from '../utils/currency';
+import { formatDate } from '../utils/dateRanges';
+import { openWhatsApp, buildDebtReminderMessage, isValidWhatsAppPhone } from '../utils/whatsapp';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Customers() {
+  const { businessId, isPro } = useAuth();
+  const { settings } = useSettings();
+
+  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId) : null, [businessId]);
+  const creditQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
+
+  const { data: customers, loading: custLoading } = useFirestoreCollection(customersQ);
+  const { data: creditSales, loading: credLoading } = useFirestoreCollection(creditQ);
+  
+  const [search, setSearch] = useState('');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState(null);
+
+  const customerList = useMemo(() => {
+    const map = {};
+    for (const c of customers) {
+      map[c.id] = { customerId: c.id, name: c.name, phone: c.phone, totalOwed: 0, purchaseCount: 0, lastPurchase: null, raw: c };
+    }
+    for (const cs of creditSales) {
+      if (!cs.customerId) continue;
+      if (!map[cs.customerId]) {
+        map[cs.customerId] = { customerId: cs.customerId, name: cs.customerName, phone: cs.customerPhone, totalOwed: 0, purchaseCount: 0, lastPurchase: null, raw: null };
+      }
+      const e = map[cs.customerId];
+      if (cs.status === 'pending' || cs.status === 'partial') {
+        e.totalOwed += Number(cs.remainingBalance) || 0;
+      }
+      e.purchaseCount++;
+      if (!e.lastPurchase || (cs.soldAt?.toMillis?.() ?? 0) > (e.lastPurchase?.toMillis?.() ?? 0)) {
+        e.lastPurchase = cs.soldAt;
+      }
+    }
+    return Object.values(map)
+      .filter(d => d.name?.toLowerCase().includes(search.toLowerCase()) || d.phone?.includes(search))
+      .sort((a, b) => b.totalOwed - a.totalOwed);
+  }, [customers, creditSales, search]);
+
+  const loading = custLoading || credLoading;
+  const totalOut = customerList.reduce((acc, d) => acc + d.totalOwed, 0);
+
+  const handleSaveCustomer = async ({ name, phone }) => {
+    try {
+      if (editingCustomer) {
+        const { queuedOffline } = await updateCustomer(editingCustomer.customerId, { name, phone }, businessId);
+        toast.success(queuedOffline ? "Updated offline — it'll sync later." : 'Customer updated successfully.');
+      } else {
+        const { queuedOffline } = await createCustomer({ name, phone }, businessId);
+        toast.success(queuedOffline ? "Saved offline — it'll sync later." : 'Customer saved successfully.');
+      }
+      setModalOpen(false);
+      setEditingCustomer(null);
+    } catch (error) {
+      toast.error(friendlyErrorMessage(error, { fallback: 'Unable to save customer. Please try again.' }));
+    }
+  };
+
+  const handleSendReminder = (d) => {
+    if (!isPro) {
+      toast.error('WhatsApp sharing is available on FlowBiz Pro.');
+      return;
+    }
+    if (!d.phone || !isValidWhatsAppPhone(d.phone)) {
+      toast.error('Add a valid phone number for this customer before sending a WhatsApp reminder.');
+      return;
+    }
+    const message = buildDebtReminderMessage({
+      shopName: settings.shopName || 'FlowBiz Store',
+      customerName: d.name,
+      outstandingAmount: d.totalOwed,
+      businessPhone: settings.phone,
+      formatKES,
+    });
+    const opened = openWhatsApp(d.phone, message);
+    toast[opened ? 'success' : 'error'](opened ? 'WhatsApp opened.' : 'WhatsApp could not be opened.');
+  };
+
+  return (
+    <div className="mx-auto max-w-4xl space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Customers</h1>
+          <p className="text-sm text-ink-400">Total outstanding debt: <span className="font-semibold text-rust-600">{formatKES(totalOut)}</span></p>
+        </div>
+        <button
+          type="button"
+          onClick={() => { setEditingCustomer(null); setModalOpen(true); }}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-600 shadow-sm hover:bg-ink-50 active:bg-ink-100"
+          title="Add customer"
+        >
+          <UserPlus className="h-5 w-5" strokeWidth={1.75} />
+        </button>
+      </div>
+      <input className="input" placeholder="Search customer…" value={search} onChange={e => setSearch(e.target.value)} />
+      {loading ? <LoadingSpinner /> : customerList.length === 0 ? (
+        <EmptyState title="No customers found" description="Add a customer, or they'll appear here after a credit sale." />
+      ) : (
+        <div className="space-y-2">
+          {customerList.map(d => (
+            <div key={d.customerId} className="card flex flex-col p-4 hover:shadow-md gap-2">
+              <div className="flex items-start justify-between gap-2">
+                <Link to={`/customers/${d.customerId}`} className="min-w-0 flex-1">
+                  <p className="font-semibold text-ink-800 truncate">{d.name}</p>
+                  <p className="text-xs text-ink-400">{d.phone || 'No phone'} · {d.purchaseCount} purchase{d.purchaseCount !== 1 ? 's' : ''} {d.lastPurchase ? `· last ${formatDate(d.lastPurchase)}` : ''}</p>
+                </Link>
+                <div className="flex items-center gap-3 shrink-0">
+                  <Link to={`/customers/${d.customerId}`} className={`font-display text-base font-bold ${d.totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>
+                    {d.totalOwed > 0 ? formatKES(d.totalOwed) : (d.purchaseCount > 0 ? 'Paid' : 'No history')}
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setEditingCustomer(d);
+                      setModalOpen(true);
+                    }}
+                    className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100"
+                    title="Edit customer details"
+                  >
+                    <Pencil className="h-4 w-4" strokeWidth={1.75} />
+                  </button>
+                </div>
+              </div>
+              {d.totalOwed > 0 && (
+                 <div className="flex justify-end border-t border-ink-100 pt-2 mt-1">
+                    <button
+                      type="button"
+                      onClick={() => handleSendReminder(d)}
+                      className="flex items-center gap-1.5 rounded-lg border border-ink-200 px-3 py-1.5 text-xs font-semibold text-ink-600 hover:bg-ink-50"
+                      title={isPro ? 'Send reminder via WhatsApp' : 'FlowBiz Pro feature'}
+                    >
+                      <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
+                      Send reminder{!isPro && <span className="text-amber-600"> · PRO</span>}
+                    </button>
+                 </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <AddCustomerModal
+        open={modalOpen}
+        onClose={() => { setModalOpen(false); setEditingCustomer(null); }}
+        onSave={handleSaveCustomer}
+        initialData={editingCustomer ? { name: editingCustomer.name, phone: editingCustomer.phone } : null}
+        existingCustomers={customerList.map(d => ({ name: d.name, phone: d.phone }))}
+      />
+    </div>
+  );
+}
+````
+
 ## File: src/pages/ForgotPassword.jsx
 ````javascript
 import { useState } from 'react';
@@ -10512,208 +10314,205 @@ export default function InventoryIntelligence() {
 }
 ````
 
-## File: src/pages/Users.jsx
+## File: src/pages/JoinStaff.jsx
 ````javascript
-import { useMemo, useState } from 'react';
-import { orderBy } from 'firebase/firestore';
+// src/pages/JoinStaff.jsx
+import { useEffect, useState } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
+import { doc, getDoc, writeBatch } from 'firebase/firestore';
 import toast from 'react-hot-toast';
-import { Trash2, Copy, X } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { tenantQuery } from '../lib/tenant';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import Modal from '../components/common/Modal';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
+import { auth, db } from '../firebase';
 
-export default function Users() {
-  const { createStaffInvite, cancelStaffInvite, removeStaffAccount, toggleMemberActive, profile, businessId, isPro } = useAuth();
-  const usersQ = useMemo(() => tenantQuery('users', businessId, orderBy('displayName')), [businessId]);
-  const { data: users, loading } = useFirestoreCollection(usersQ);
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
-  const invitesQ = useMemo(() => tenantQuery('staffInvites', businessId), [businessId]);
-  const { data: allInvites, loading: invitesLoading } = useFirestoreCollection(invitesQ);
-  const invites = allInvites.filter((i) => !i.claimed);
+export function validatePassword(password) {
+  if (password.length < 8) return 'Password must be at least 8 characters long.';
+  if (!/[A-Z]/.test(password)) return 'Password must contain at least one uppercase letter.';
+  if (!/[a-z]/.test(password)) return 'Password must contain at least one lowercase letter.';
+  if (!/[0-9]/.test(password)) return 'Password must contain at least one number.';
+  return null;
+}
 
-  const ownerCount = users.filter((u) => u.role === 'owner' && u.active !== false).length;
-  const totalUsersCount = users.filter((u) => u.active !== false).length;
+export default function JoinStaff() {
+  const { inviteId } = useParams();
+  const navigate = useNavigate();
 
-  const [modal, setModal]           = useState(false);
-  const [newName, setNewName]       = useState('');
-  const [newRole, setNewRole]       = useState('cashier');
-  const [busy, setBusy]             = useState(false);
-  const [freshInvite, setFreshInvite] = useState(null);
-  const [pendToggle, setPendToggle] = useState(null);
-  const [pendDelete, setPendDelete] = useState(null);
-  const [pendCancelInvite, setPendCancelInvite] = useState(null);
+  const [checking, setChecking] = useState(true);
+  const [invite, setInvite]     = useState(null);
+  const [notFound, setNotFound] = useState(false);
 
-  const inviteLink = (inviteId) => `${window.location.origin}/join/${inviteId}`;
+  const [email, setEmail]                     = useState('');
+  const [password, setPassword]               = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submitting, setSubmitting]           = useState(false);
+  const [error, setError]                     = useState(null);
 
-  const copyLink = async (inviteId) => {
-    try { await navigator.clipboard.writeText(inviteLink(inviteId)); toast.success('Invite link copied'); }
-    catch { toast.error('Could not copy — long-press the link to copy it manually.'); }
-  };
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'staffInvites', inviteId));
+        if (cancelled) return;
+        if (!snap.exists()) {
+          setNotFound(true);
+          setChecking(false);
+          return;
+        }
+        setInvite({ id: snap.id, ...snap.data() });
+      } catch {
+        setNotFound(true);
+      } finally {
+        if (!cancelled) setChecking(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [inviteId]);
 
-  const handleCreateInvite = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!newName.trim()) return;
-    
-    // Feature 14 - Staff limits enforced in frontend for UX, backend rules would prevent it too
-    if (!isPro && (totalUsersCount + invites.length) >= 2) {
-      toast.error('Free plan allows a maximum of 1 Owner and 1 additional Staff member. Upgrade to FlowBiz Pro to add more, or cancel a pending invite first.');
+    setError(null);
+
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
       return;
     }
 
-    setBusy(true);
+    setSubmitting(true);
+
+    let freshSnap;
     try {
-      const invite = await createStaffInvite({ displayName: newName.trim(), role: newRole });
-     if (invite.queuedOffline) {
-       toast.success("Invite saved — the link will be ready once you're back online.");
-       setModal(false);
-     } else {
-       setFreshInvite({ id: invite.id, displayName: newName.trim(), role: newRole });
-     }   
-        setNewName('');
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setBusy(false); }
-  };
-
-  const handleCancelInvite = async () => {
-    try { await cancelStaffInvite(pendCancelInvite.id); toast.success('Invite cancelled'); }
-    catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setPendCancelInvite(null); }
-  };
-
-  const handleToggle = async () => {
-    if (pendToggle.role === 'owner' && pendToggle.active !== false && ownerCount <= 1) {
-      toast.error("This is the only active owner — deactivating them would lock everyone out. Invite another owner first.");
-      setPendToggle(null);
+      freshSnap = await getDoc(doc(db, 'staffInvites', inviteId));
+      if (!freshSnap.exists()) throw new Error('This invite is no longer valid.');
+      if (freshSnap.data().claimed) throw new Error('This invite has already been used.');
+    } catch (validationErr) {
+      setError(validationErr.message || 'This invite could not be validated. Please try again.');
+      setSubmitting(false);
       return;
     }
+    const { businessId, role, displayName } = freshSnap.data();
+
+    let cred;
     try {
-      await toggleMemberActive(pendToggle.id, pendToggle.active === false);
-      toast.success(pendToggle.active !== false ? 'Account deactivated' : 'Account reactivated');
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setPendToggle(null); }
-  };
-
-  const handleDelete = async () => {
-    if (pendDelete.role === 'owner' && ownerCount <= 1) {
-      toast.error('You cannot remove the only owner. Invite another owner first.');
-      setPendDelete(null);
+      cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+    } catch (authErr) {
+      const message =
+        authErr.code === 'auth/email-already-in-use' ? "An account with this email already exists." :
+        authErr.code === 'auth/invalid-email'        ? 'Please enter a valid email address.' :
+        authErr.code === 'auth/weak-password'         ? 'Password should be at least 8 characters with upper, lower, and numbers.' :
+        'Could not create your account. Please try again.';
+      setError(message);
+      setSubmitting(false);
       return;
     }
-    try { await removeStaffAccount(pendDelete.id); toast.success('Account removed.'); }
-    catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setPendDelete(null); }
+
+    try {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'users', cred.user.uid), {
+        uid: cred.user.uid,
+        email: email.trim(),
+        displayName,
+        role,
+        businessId,
+        active: true,
+        createdAt: new Date(),
+        claimedFromInviteId: inviteId,
+      });
+      batch.update(doc(db, 'staffInvites', inviteId), {
+        claimed: true,
+        linkedUid: cred.user.uid,
+        claimedAt: new Date(),
+      });
+      await batch.commit();
+    } catch (dbErr) {
+      console.error('[JoinStaff] Firestore write failed:', dbErr);
+      try { await deleteUser(cred.user); } catch {}
+      setError('Something went wrong completing your signup. Please contact your business owner.');
+      setSubmitting(false);
+      return;
+    }
+
+    try {
+      const idToken = await cred.user.getIdToken(true);
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      });
+      if (!response.ok) throw new Error('send-verification-failed');
+      toast.success(`Welcome, ${displayName}! Check your email to verify your account.`);
+    } catch {
+      toast.success(`Welcome, ${displayName}! Your account was created.`);
+    }
+
+    setSubmitting(false);
+    navigate('/', { replace: true });
   };
+
+  if (checking) return <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4"><p className="text-sm text-ink-400">Checking invite…</p></div>;
+
+  if (notFound || !invite) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+        <div className="w-full max-w-sm card p-6 text-center space-y-3">
+          <div className="text-3xl">🔗</div>
+          <h1 className="font-display text-lg font-bold text-ink-900">Invite not found</h1>
+          <p className="text-sm text-ink-500">This link may be invalid or was cancelled by the business owner.</p>
+          <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (invite.claimed) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+        <div className="w-full max-w-sm card p-6 text-center space-y-3">
+          <div className="text-3xl">✅</div>
+          <h1 className="font-display text-lg font-bold text-ink-900">Invite Already Claimed</h1>
+          <p className="text-sm text-ink-500">Please sign in with your email and password.</p>
+          <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
+        </div>
+      </div>
+    );
+  }
+
+  const roleLabel = invite.role === 'owner' ? 'an owner' : 'a cashier';
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Team</h1>
-          <p className="text-sm text-ink-400">Manage who has access to this business.</p>
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="flex flex-col items-center text-center gap-3">
+          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
+          <div>
+            <h1 className="font-display text-2xl font-bold text-white">Welcome, {invite.displayName}</h1>
+            <p className="text-sm text-ink-400">You have been invited as {roleLabel}.</p>
+          </div>
         </div>
-        <button className="btn-primary" type="button" onClick={() => { setFreshInvite(null); setNewName(''); setNewRole('cashier'); setModal(true); }}>
-          + Invite someone
-        </button>
+        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
+          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
+
+          <div>
+            <label className="label">Your email</label>
+            <input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" autoComplete="username" />
+          </div>
+          <div>
+            <label className="label">Choose a password</label>
+            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 chars (upper, lower, number)" autoComplete="new-password" />
+          </div>
+          <div>
+            <label className="label">Confirm password</label>
+            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" />
+          </div>
+          <button type="submit" className="btn-primary w-full" disabled={submitting}>
+            {submitting ? 'Setting up…' : 'Create my sign-in'}
+          </button>
+        </form>
       </div>
-
-      {invites.length > 0 && (
-        <div className="card p-4 space-y-2">
-          <h2 className="font-display text-sm font-bold text-ink-800">Pending invites</h2>
-          <div className="divide-y divide-ink-100">
-            {invites.map((inv) => (
-              <div key={inv.id} className="flex items-center justify-between gap-2 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <p className="font-semibold text-ink-800">
-                    {inv.displayName}
-                    <span className={`badge ml-2 ${inv.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{inv.role}</span>
-                  </p>
-                  <p className="text-xs text-ink-400 truncate font-mono">{inviteLink(inv.id)}</p>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => copyLink(inv.id)}>
-                    <Copy className="h-3.5 w-3.5" strokeWidth={1.75} /> Copy link
-                  </button>
-                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[40px] min-w-[40px] flex items-center justify-center" title="Cancel invite" onClick={() => setPendCancelInvite(inv)}>
-                    <X className="h-4 w-4" strokeWidth={1.75} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {loading || invitesLoading ? <LoadingSpinner /> : (
-        <div className="card divide-y divide-ink-100">
-          {users.map(u => (
-<div key={u.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-  <div className="min-w-0 flex-1">
-    <p className="font-semibold text-ink-800 truncate">
-      {u.displayName || u.email?.split('@')[0] || 'Unnamed'}
-      {u.id === profile?.uid && <span className="text-xs font-normal text-ink-400"> (you)</span>}
-    </p>
-    <p className="text-xs text-ink-400 truncate">{u.email || 'No email'}</p>
-  </div>
-  <div className="flex flex-wrap items-center gap-2">
-    <span className={`badge ${u.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{u.role || '—'}</span>
-    <span className={`badge ${u.active !== false ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>{u.active !== false ? 'Active' : 'Deactivated'}</span>
-    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => setPendToggle(u)}>
-      {u.active !== false ? 'Deactivate' : 'Reactivate'}
-    </button>
-    {u.id === profile?.uid ? (
-      <span className="text-xs text-ink-300 px-2">You</span>
-    ) : (
-      <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Remove account" onClick={() => setPendDelete(u)}>
-        <Trash2 className="h-4 w-4" strokeWidth={1.75} />
-      </button>
-    )}
-  </div>
-</div>
-          ))}
-        </div>
-      )}
-
-      <Modal open={modal} onClose={() => setModal(false)} title={freshInvite ? 'Invite ready' : 'Invite someone'}>
-        {!freshInvite ? (
-          <form onSubmit={handleCreateInvite} className="space-y-3">
-            <div>
-              <label className="label">Full name</label>
-              <input className="input" value={newName} onChange={e=>setNewName(e.target.value)} required autoComplete="off" autoFocus />
-            </div>
-            <div>
-              <label className="label">Role</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button type="button" onClick={() => setNewRole('cashier')} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole==='cashier'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Cashier</button>
-                <button type="button" onClick={() => setNewRole('owner')} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole==='owner'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Owner</button>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 pt-1">
-              <button type="button" className="btn-secondary" onClick={() => setModal(false)}>Cancel</button>
-              <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Creating…' : 'Create invite'}</button>
-            </div>
-          </form>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-sm text-ink-600">Send this link to <span className="font-semibold">{freshInvite.displayName}</span> ({freshInvite.role}).</p>
-            <div className="flex items-center gap-2">
-              <input className="input font-mono text-xs" readOnly value={inviteLink(freshInvite.id)} onFocus={(e) => e.target.select()} />
-              <button type="button" className="btn-outline shrink-0" onClick={() => copyLink(freshInvite.id)}>
-                <Copy className="h-4 w-4" strokeWidth={1.75} /> Copy
-              </button>
-            </div>
-            <button type="button" className="btn-primary w-full" onClick={() => setModal(false)}>Done</button>
-          </div>
-        )}
-      </Modal>
-
-      <ConfirmDialog open={!!pendToggle} title="Change Account Status?" confirmLabel="Confirm" onConfirm={handleToggle} onCancel={() => setPendToggle(null)} />
-      <ConfirmDialog open={!!pendDelete} title="Remove Account?" confirmLabel="Remove" danger onConfirm={handleDelete} onCancel={() => setPendDelete(null)} />
-      <ConfirmDialog open={!!pendCancelInvite} title="Cancel Invite?" confirmLabel="Cancel" danger onConfirm={handleCancelInvite} onCancel={() => setPendCancelInvite(null)} />
     </div>
   );
 }
@@ -10853,257 +10652,6 @@ export function buildDebtPaymentReceiptMessage({
   }
 if (documentUrl) lines.push('', 'Download your payment receipt:', documentUrl);  lines.push('', `— ${shopName}`, '', 'Thank you.');
   return lines.join('\n');
-}
-````
-
-## File: firestore.rules
-````
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-
-    // ── Helpers ─────────────────────────────────────────────────────────
-    function isSignedIn() { return request.auth != null; }
-
-    function hasProfile() {
-      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
-    }
-
-    function myProfile() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
-
-    function isActive() {
-      let data = myProfile();
-      return !('active' in data) || data.active != false;
-    }
-
-    function isStaff() {
-      return hasProfile() && isActive();
-    }
-
-    function myBusinessId() {
-      return myProfile().businessId;
-    }
-
-    function isOwner() {
-      return isStaff() && myProfile().role == 'owner';
-    }
-
-    function owns(data) {
-      return isStaff() && data.businessId == myBusinessId();
-    }
-
-    function ownsUpdate(existing, incoming) {
-      return owns(existing) && owns(incoming);
-    }
-
-    function isValidInviteClaim(inviteId, businessId, role) {
-      let invite = get(/databases/$(database)/documents/staffInvites/$(inviteId)).data;
-      return invite.claimed == false && invite.businessId == businessId && invite.role == role;
-    }
-
-    // ── Businesses ──────────────────────────────────────────────────────
-    match /businesses/{businessId} {
-      allow get: if isStaff() && myBusinessId() == businessId;
-      allow create: if isSignedIn();
-      allow update: if isOwner() && myBusinessId() == businessId
-                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription']);
-      allow delete: if false;
-    }
-
-    match /barcodeIndex/{docId} {
-      allow read: if isOwner() && owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-      allow update: if false;
-    }
-    match /productCodeCounters/{businessId} {
-      allow read, write: if isOwner() && myBusinessId() == businessId;
-    }
-
-    match /businessSettings/{businessId} {
-      allow get: if isStaff() && myBusinessId() == businessId;
-      allow write: if isOwner() && myBusinessId() == businessId;
-    }
-
-    // ── Users & invites ─────────────────────────────────────────────────
-    match /users/{userId} {
-      allow get: if isSignedIn() && request.auth.uid == userId;
-      allow list: if isOwner() && resource.data.businessId == myBusinessId();
-
-      allow create: if isSignedIn() && request.auth.uid == userId
-                    && request.resource.data.role in ['owner', 'cashier']
-                    && (
-                      (
-                        request.resource.data.role == 'owner'
-                        && !exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
-                        && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.createdBy == request.auth.uid
-                      )
-                      ||
-                      (
-                        request.resource.data.claimedFromInviteId is string
-                        && isValidInviteClaim(request.resource.data.claimedFromInviteId, request.resource.data.businessId, request.resource.data.role)
-                      )
-                    );
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data) && userId != request.auth.uid;
-    }
-
-    match /staffInvites/{inviteId} {
-      allow get: if true;
-      allow list: if isOwner() && resource.data.businessId == myBusinessId();
-      allow create: if isOwner() && request.resource.data.businessId == myBusinessId()
-                    && request.resource.data.role in ['owner', 'cashier'];
-      allow update: if isSignedIn()
-                    && resource.data.claimed == false
-                    && request.resource.data.claimed == true
-                    && request.resource.data.linkedUid == request.auth.uid
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'linkedUid', 'claimedAt']);
-      allow delete: if isOwner() && resource.data.businessId == myBusinessId();
-    }
-
-    // ── Device sessions (Settings > Device Management) ────────────────
-    match /sessions/{sessionId} {
-      allow create: if isStaff() && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == myBusinessId();
-
-      allow read: if isSignedIn() && (
-        resource == null || 
-        resource.data.uid == request.auth.uid || 
-        (isStaff() && resource.data.businessId == myBusinessId())
-      );
-
-      allow update: if isSignedIn() && (
-        (resource.data.uid == request.auth.uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent']))
-        ||
-        (isOwner() && resource.data.businessId == myBusinessId()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked']))
-      );
-      allow delete: if false;
-    }
-
-    // ── Business data ───────────────────────────────────────────────────
-    match /products/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data) && (
-        isOwner() ||
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt'])
-      );
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /suppliers/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /sales/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /customers/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /creditSales/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /repayments/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    // FIX (debt-payment receipt sharing): an immutable read-only snapshot
-    // of a debt payment, written by CustomerDetail.jsx in the same batch
-    // as the repayments it summarizes. It exists purely so a document
-    // (previousBalance/amountPaid/remainingBalance/status) can be shared
-    // publicly the same way a sales/creditSales doc already can — see
-    // src/utils/documentSharing.js and cloudflare-worker/src/routes/
-    // publicDocument.js. Never publicly readable via the client SDK: the
-    // public route resolves it with the Worker's own service-account
-    // credentials, which bypass these rules entirely, same as every other
-    // Worker route already does.
-    match /debtPaymentReceipts/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update, delete: if false;
-    }
-
-    // FIX (secure public document links): maps an opaque, unguessable
-    // token (the document ID itself — see documentSharing.js) to exactly
-    // one { businessId, documentType, documentId }. This collection is
-    // NEVER publicly readable — these rules only ever let a business's
-    // own signed-in staff create a share link or look up whether one
-    // already exists (Part: reuse an existing token instead of minting a
-    // new one every time WhatsApp sharing is clicked). The actual public
-    // /r/<token> page never touches these rules at all; it's resolved
-    // Worker-side with service-account credentials, same trust boundary
-    // as every other privileged Worker route.
-    match /sharedDocuments/{token} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data)
-                    && request.resource.data.documentType in ['receipt', 'invoice', 'debtPaymentReceipt'];
-      allow update, delete: if false;
-    }
-
-    match /refunds/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /expenses/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /purchases/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /supplierPayments/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /stockAdjustments/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /dailySessions/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-  }
 }
 ````
 
@@ -12009,6 +11557,502 @@ const handleDel = async () => {
 }
 ````
 
+## File: src/pages/Users.jsx
+````javascript
+// src/pages/Users.jsx
+import { useMemo, useState } from 'react';
+import toast from 'react-hot-toast';
+import { Trash2, Copy, X } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { tenantQuery } from '../lib/tenant';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import Modal from '../components/common/Modal';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Users() {
+  const { createStaffInvite, cancelStaffInvite, removeStaffAccount, toggleMemberActive, profile, businessId, isPro } = useAuth();
+  
+  // Scoped tenant query with in-memory sorting to avoid composite index requirement
+  const usersQ = useMemo(() => (businessId ? tenantQuery('users', businessId) : null), [businessId]);
+  const { data: rawUsers, loading } = useFirestoreCollection(usersQ);
+  const users = useMemo(() => [...rawUsers].sort((a, b) => (a.displayName || '').localeCompare(b.displayName || '')), [rawUsers]);
+
+  const invitesQ = useMemo(() => (businessId ? tenantQuery('staffInvites', businessId) : null), [businessId]);
+  const { data: allInvites, loading: invitesLoading } = useFirestoreCollection(invitesQ);
+  const invites = useMemo(() => allInvites.filter((i) => !i.claimed), [allInvites]);
+
+  const ownerCount = useMemo(() => users.filter((u) => u.role === 'owner' && u.active !== false).length, [users]);
+  const totalUsersCount = useMemo(() => users.filter((u) => u.active !== false).length, [users]);
+
+  const [modal, setModal]                     = useState(false);
+  const [newName, setNewName]                 = useState('');
+  const [newRole, setNewRole]                 = useState('cashier');
+  const [busy, setBusy]                       = useState(false);
+  const [freshInvite, setFreshInvite]         = useState(null);
+  const [pendToggle, setPendToggle]           = useState(null);
+  const [pendDelete, setPendDelete]           = useState(null);
+  const [pendCancelInvite, setPendCancelInvite] = useState(null);
+
+  const inviteLink = (inviteId) => `${window.location.origin}/join/${inviteId}`;
+
+  const copyLink = async (inviteId) => {
+    try {
+      await navigator.clipboard.writeText(inviteLink(inviteId));
+      toast.success('Invite link copied');
+    } catch {
+      toast.error('Could not copy — long-press the link to copy it manually.');
+    }
+  };
+
+  const handleCreateInvite = async (e) => {
+    e.preventDefault();
+    if (!newName.trim()) return;
+
+    if (!isPro && (totalUsersCount + invites.length) >= 2) {
+      toast.error('Free plan allows a maximum of 1 Owner and 1 additional Staff member. Upgrade to FlowBiz Pro to add more, or cancel a pending invite first.');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const invite = await createStaffInvite({ displayName: newName.trim(), role: newRole });
+      if (invite.queuedOffline) {
+        toast.success("Invite saved — the link will be ready once you're back online.");
+        setModal(false);
+      } else {
+        setFreshInvite({ id: invite.id, displayName: newName.trim(), role: newRole });
+      }
+      setNewName('');
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCancelInvite = async () => {
+    if (!pendCancelInvite) return;
+    try {
+      await cancelStaffInvite(pendCancelInvite.id);
+      toast.success('Invite cancelled');
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+    } finally {
+      setPendCancelInvite(null);
+    }
+  };
+
+  const handleToggle = async () => {
+    if (!pendToggle) return;
+    if (pendToggle.role === 'owner' && pendToggle.active !== false && ownerCount <= 1) {
+      toast.error("This is the only active owner — deactivating them would lock everyone out. Invite another owner first.");
+      setPendToggle(null);
+      return;
+    }
+    try {
+      await toggleMemberActive(pendToggle.id, pendToggle.active === false);
+      toast.success(pendToggle.active !== false ? 'Account deactivated' : 'Account reactivated');
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+    } finally {
+      setPendToggle(null);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!pendDelete) return;
+    if (pendDelete.role === 'owner' && ownerCount <= 1) {
+      toast.error('You cannot remove the only owner. Invite another owner first.');
+      setPendDelete(null);
+      return;
+    }
+    try {
+      await removeStaffAccount(pendDelete.id);
+      toast.success('Account removed.');
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+    } finally {
+      setPendDelete(null);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Team</h1>
+          <p className="text-sm text-ink-400">Manage who has access to this business.</p>
+        </div>
+        <button
+          className="btn-primary"
+          type="button"
+          onClick={() => {
+            setFreshInvite(null);
+            setNewName('');
+            setNewRole('cashier');
+            setModal(true);
+          }}
+        >
+          + Invite someone
+        </button>
+      </div>
+
+      {invites.length > 0 && (
+        <div className="card p-4 space-y-2">
+          <h2 className="font-display text-sm font-bold text-ink-800">Pending invites</h2>
+          <div className="divide-y divide-ink-100">
+            {invites.map((inv) => (
+              <div key={inv.id} className="flex items-center justify-between gap-2 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-ink-800">
+                    {inv.displayName}
+                    <span className={`badge ml-2 ${inv.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{inv.role}</span>
+                  </p>
+                  <p className="text-xs text-ink-400 truncate font-mono">{inviteLink(inv.id)}</p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => copyLink(inv.id)}>
+                    <Copy className="h-3.5 w-3.5" strokeWidth={1.75} /> Copy link
+                  </button>
+                  <button
+                    className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
+                    title="Cancel invite"
+                    onClick={() => setPendCancelInvite(inv)}
+                  >
+                    <X className="h-4 w-4" strokeWidth={1.75} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {loading || invitesLoading ? (
+        <LoadingSpinner />
+      ) : (
+        <div className="card divide-y divide-ink-100">
+          {users.map((u) => (
+            <div key={u.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-ink-800 truncate">
+                  {u.displayName || u.email?.split('@')[0] || 'Unnamed'}
+                  {u.id === profile?.uid && <span className="text-xs font-normal text-ink-400"> (you)</span>}
+                </p>
+                <p className="text-xs text-ink-400 truncate">{u.email || 'No email'}</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`badge ${u.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{u.role || '—'}</span>
+                <span className={`badge ${u.active !== false ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>{u.active !== false ? 'Active' : 'Deactivated'}</span>
+                <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => setPendToggle(u)}>
+                  {u.active !== false ? 'Deactivate' : 'Reactivate'}
+                </button>
+                {u.id === profile?.uid ? (
+                  <span className="text-xs text-ink-300 px-2">You</span>
+                ) : (
+                  <button
+                    className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[44px] min-w-[44px] flex items-center justify-center"
+                    title="Remove account"
+                    onClick={() => setPendDelete(u)}
+                  >
+                    <Trash2 className="h-4 w-4" strokeWidth={1.75} />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Modal open={modal} onClose={() => setModal(false)} title={freshInvite ? 'Invite ready' : 'Invite someone'}>
+        {!freshInvite ? (
+          <form onSubmit={handleCreateInvite} className="space-y-3">
+            <div>
+              <label className="label">Full name</label>
+              <input className="input" value={newName} onChange={(e) => setNewName(e.target.value)} required autoComplete="off" autoFocus />
+            </div>
+            <div>
+              <label className="label">Role</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setNewRole('cashier')}
+                  className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole === 'cashier' ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}
+                >
+                  Cashier
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewRole('owner')}
+                  className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole === 'owner' ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}
+                >
+                  Owner
+                </button>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" className="btn-secondary" onClick={() => setModal(false)}>Cancel</button>
+              <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Creating…' : 'Create invite'}</button>
+            </div>
+          </form>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-ink-600">Send this link to <span className="font-semibold">{freshInvite.displayName}</span> ({freshInvite.role}).</p>
+            <div className="flex items-center gap-2">
+              <input className="input font-mono text-xs" readOnly value={inviteLink(freshInvite.id)} onFocus={(e) => e.target.select()} />
+              <button type="button" className="btn-outline shrink-0" onClick={() => copyLink(freshInvite.id)}>
+                <Copy className="h-4 w-4" strokeWidth={1.75} /> Copy
+              </button>
+            </div>
+            <button type="button" className="btn-primary w-full" onClick={() => setModal(false)}>Done</button>
+          </div>
+        )}
+      </Modal>
+
+      <ConfirmDialog open={!!pendToggle} title="Change Account Status?" confirmLabel="Confirm" onConfirm={handleToggle} onCancel={() => setPendToggle(null)} />
+      <ConfirmDialog open={!!pendDelete} title="Remove Account?" confirmLabel="Remove" danger onConfirm={handleDelete} onCancel={() => setPendDelete(null)} />
+      <ConfirmDialog open={!!pendCancelInvite} title="Cancel Invite?" confirmLabel="Cancel" danger onConfirm={handleCancelInvite} onCancel={() => setPendCancelInvite(null)} />
+    </div>
+  );
+}
+````
+
+## File: firestore.rules
+````
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ─────────────────────────────────────────────────────────
+    function isSignedIn() { return request.auth != null; }
+
+    function hasProfile() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActive() {
+      let data = myProfile();
+      return !('active' in data) || data.active != false;
+    }
+
+    function isStaff() {
+      return hasProfile() && isActive();
+    }
+
+    function myBusinessId() {
+      return myProfile().businessId;
+    }
+
+    function isOwner() {
+      return isStaff() && myProfile().role == 'owner';
+    }
+
+    function owns(data) {
+      return isStaff() && data.businessId == myBusinessId();
+    }
+
+    function ownsUpdate(existing, incoming) {
+      return owns(existing) && owns(incoming);
+    }
+
+    function isValidInviteClaim(inviteId, businessId, role) {
+      let invite = get(/databases/$(database)/documents/staffInvites/$(inviteId)).data;
+      return invite.claimed == false && invite.businessId == businessId && invite.role == role;
+    }
+
+    // ── Businesses ──────────────────────────────────────────────────────
+    match /businesses/{businessId} {
+      allow get: if isStaff() && myBusinessId() == businessId;
+      allow create: if isSignedIn();
+      allow update: if isOwner() && myBusinessId() == businessId
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription']);
+      allow delete: if false;
+    }
+
+    match /barcodeIndex/{docId} {
+      allow read: if isOwner() && owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+      allow update: if false;
+    }
+
+    match /productCodeCounters/{businessId} {
+      allow read, write: if isOwner() && myBusinessId() == businessId;
+    }
+
+    match /businessSettings/{businessId} {
+      allow get: if isStaff() && myBusinessId() == businessId;
+      allow write: if isOwner() && myBusinessId() == businessId;
+    }
+
+    // ── Users & invites ─────────────────────────────────────────────────
+    match /users/{userId} {
+      allow get: if isSignedIn() && request.auth.uid == userId;
+      allow list: if isOwner() && resource.data.businessId == myBusinessId();
+
+      allow create: if isSignedIn() && request.auth.uid == userId
+                    && request.resource.data.role in ['owner', 'cashier']
+                    && (
+                      (
+                        request.resource.data.role == 'owner'
+                        && !exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
+                        && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.createdBy == request.auth.uid
+                      )
+                      ||
+                      (
+                        request.resource.data.claimedFromInviteId is string
+                        && isValidInviteClaim(request.resource.data.claimedFromInviteId, request.resource.data.businessId, request.resource.data.role)
+                      )
+                    );
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data) && userId != request.auth.uid;
+    }
+
+    match /staffInvites/{inviteId} {
+      allow get: if true;
+      allow list: if isOwner() && resource.data.businessId == myBusinessId();
+      allow create: if isOwner() && request.resource.data.businessId == myBusinessId()
+                    && request.resource.data.role in ['owner', 'cashier'];
+      allow update: if isSignedIn()
+                    && resource.data.claimed == false
+                    && request.resource.data.claimed == true
+                    && request.resource.data.linkedUid == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'linkedUid', 'claimedAt']);
+      allow delete: if isOwner() && resource.data.businessId == myBusinessId();
+    }
+
+    // ── Device sessions ───────────────────────────────────────────────
+    match /sessions/{sessionId} {
+      allow create: if isStaff() && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == myBusinessId();
+
+      allow read: if isSignedIn() && (
+        resource == null || 
+        resource.data.uid == request.auth.uid || 
+        (isStaff() && resource.data.businessId == myBusinessId())
+      );
+
+      allow update: if isSignedIn() && (
+        (resource.data.uid == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent']))
+        ||
+        (isOwner() && resource.data.businessId == myBusinessId()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked']))
+      );
+      allow delete: if isOwner() && resource.data.businessId == myBusinessId();
+    }
+
+    // ── Business operational data ──────────────────────────────────────
+    match /products/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if ownsUpdate(resource.data, request.resource.data) && (
+        isOwner() ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt'])
+      );
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /suppliers/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /sales/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /customers/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /creditSales/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /repayments/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /debtPaymentReceipts/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if false;
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /sharedDocuments/{token} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data)
+                    && request.resource.data.documentType in ['receipt', 'invoice', 'debtPaymentReceipt'];
+      allow update: if false;
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /refunds/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /expenses/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /purchases/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /supplierPayments/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /stockAdjustments/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /dailySessions/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+  }
+}
+````
+
 ## File: cloudflare-worker/wrangler.toml
 ````toml
 name = "flowbiz-api"
@@ -12366,177 +12410,6 @@ const handleDel = async () => {
 
 <ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
 <ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    </div>
-  );
-}
-````
-
-## File: src/pages/Setup.jsx
-````javascript
-// src/pages/Setup.jsx — replace the entire file
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
-import { doc, collection, writeBatch, setDoc, serverTimestamp } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { auth, db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-
-const DEFAULT_CATEGORIES = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-
-export default function Setup() {
-  const { firebaseUser, loading: authLoading } = useAuth();
-  const navigate = useNavigate();
-  // Firestore rules can only see a doc created earlier IN THE SAME batch
-  // via getAfter() — a plain get()/exists() check (which is what
-  // businessSettings' write rule uses via isOwner()) only sees the
-  // pre-batch state. So the user profile must be written and committed
-  // FIRST, as its own step, before businessSettings is written.
-  const creatingRef = useRef(false);
-
-  useEffect(() => {
-    if (authLoading) return;
-    // Bounce an already-signed-in visitor away — but never while THIS
-    // component's own signup flow is what just signed them in, or this
-    // fires the instant the Auth account is created and cuts the flow
-    // short before Firestore writes / the verification email are sent.
-    if (firebaseUser && !creatingRef.current) {
-      navigate('/', { replace: true });
-    }
-  }, [firebaseUser, authLoading, navigate]);
-
-  const [businessName, setBusinessName] = useState('');
-  const [displayName, setDisplayName]   = useState('');
-  const [email, setEmail]               = useState('');
-  const [password, setPassword]         = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [submitting, setSubmitting]     = useState(false);
-  const [error, setError]               = useState(null);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
-    if (!businessName.trim()) { setError('Enter your business name.'); return; }
-    if (!displayName.trim()) { setError('Enter your name.'); return; }
-    if (password.length < 6) { setError('Password must be at least 6 characters.'); return; }
-    if (password !== confirmPassword) { setError('Passwords do not match.'); return; }
-
-    setSubmitting(true);
-    creatingRef.current = true;
-
-    let cred;
-    try {
-      cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-    } catch (err) {
-      creatingRef.current = false;
-      const message =
-        err.code === 'auth/email-already-in-use' ? 'An account with this email already exists.' :
-        err.code === 'auth/invalid-email'        ? 'Please enter a valid email address.' :
-        err.code === 'auth/weak-password'         ? 'Password is too weak.' :
-        'Could not create your account. Please try again.';
-      setError(message);
-      setSubmitting(false);
-      return;
-    }
-
-    const businessId = doc(collection(db, 'businesses')).id;
-
-    try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'businesses', businessId), {
-        name: businessName.trim(),
-        ownerIds: [cred.user.uid],
-        createdAt: serverTimestamp(),
-        createdBy: cred.user.uid,
-        subscription: { plan: 'free', status: 'active', expiresAt: null },
-      });
-      batch.set(doc(db, 'users', cred.user.uid), {
-        uid: cred.user.uid,
-        email: email.trim(),
-        displayName: displayName.trim(),
-        role: 'owner',
-        businessId,
-        active: true,
-        createdAt: serverTimestamp(),
-      });
-      await batch.commit();
-    } catch (err) {
-      console.error('[FlowBiz] Business setup failed — rolling back Auth account:', err.code || err.name, err.message);
-      try {
-        await deleteUser(cred.user);
-      } catch (rollbackErr) {
-        console.error('[FlowBiz] Rollback failed — an orphaned Auth account may remain:', rollbackErr);
-        setError('Something went wrong finishing setup, and we could not fully undo it. Please contact support before retrying with this email.');
-        creatingRef.current = false;
-        setSubmitting(false);
-        return;
-      }
-      setError('Something went wrong setting up your business. Please try again.');
-      creatingRef.current = false;
-      setSubmitting(false);
-      return;
-    }
-
-    // Non-critical, so it doesn't roll back the whole account if it's
-    // ever slow or briefly fails — useSettings.js and ProductFormModal.jsx
-    // both already default gracefully when this doc doesn't exist yet.
-    try {
-      await setDoc(doc(db, 'businessSettings', businessId), {
-        shopName: businessName.trim(),
-        cashierCanRecordExpenses: true,
-        categories: DEFAULT_CATEGORIES,
-      });
-    } catch (err) {
-      console.error('[FlowBiz] businessSettings write failed (non-fatal):', err.code || err.name, err.message);
-    }
-
-try {
-  const idToken = await cred.user.getIdToken(true);
-  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-  });
-  if (!response.ok) throw new Error('request-failed');
-  toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Check your email to verify your account.`);
-} catch (err) {
-  console.error('[FlowBiz] send-verification-email failed after setup:', err.message);
-  toast.success(`Welcome to FlowBiz, ${displayName.trim()}!`);
-}
-
-    setSubmitting(false);
-    navigate('/', { replace: true });
-  };
-
-  if (authLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-ink-950">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-white">Create your business</h1>
-            <p className="text-sm text-ink-400">Set up FlowBiz in a couple of minutes.</p>
-          </div>
-        </div>
-        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
-          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-          <div><label className="label">Business name</label><input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="" disabled={submitting} /></div>
-          <div><label className="label">Your name</label><input className="input" required value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="Full name" disabled={submitting} /></div>
-          <div><label className="label">Email</label><input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="owner@yourbusiness.co.ke" autoComplete="username" disabled={submitting} /></div>
-          <div><label className="label">Password</label><input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="" autoComplete="new-password" disabled={submitting} /></div>
-          <div><label className="label">Confirm password</label><input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" disabled={submitting} /></div>
-          <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Setting up…' : 'Create business'}</button>
-        </form>
-        <p className="text-center text-sm text-ink-400">Already have an account? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link></p>
-      </div>
-    </div>
   );
 }
 ````
@@ -14033,6 +13906,195 @@ onSave={async (data) => {
 }
 ````
 
+## File: src/pages/Setup.jsx
+````javascript
+// src/pages/Setup.jsx — replace the entire file
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
+import { doc, collection, writeBatch, setDoc, serverTimestamp } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { auth, db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+
+const DEFAULT_CATEGORIES = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+
+export default function Setup() {
+  const { firebaseUser, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
+  // Firestore rules can only see a doc created earlier IN THE SAME batch
+  // via getAfter() — a plain get()/exists() check (which is what
+  // businessSettings' write rule uses via isOwner()) only sees the
+  // pre-batch state. So the user profile must be written and committed
+  // FIRST, as its own step, before businessSettings is written.
+  const creatingRef = useRef(false);
+
+  useEffect(() => {
+    if (authLoading) return;
+    // Bounce an already-signed-in visitor away — but never while THIS
+    // component's own signup flow is what just signed them in, or this
+    // fires the instant the Auth account is created and cuts the flow
+    // short before Firestore writes / the verification email are sent.
+    if (firebaseUser && !creatingRef.current) {
+      navigate('/', { replace: true });
+    }
+  }, [firebaseUser, authLoading, navigate]);
+
+  const [businessName, setBusinessName] = useState('');
+  const [displayName, setDisplayName]   = useState('');
+  const [email, setEmail]               = useState('');
+  const [password, setPassword]         = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submitting, setSubmitting]     = useState(false);
+  const [error, setError]               = useState(null);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (!businessName.trim()) { setError('Enter your business name.'); return; }
+    if (!displayName.trim()) { setError('Enter your name.'); return; }
+      if (password.length < 8) {
+      setError('Password must be at least 8 characters long.');
+      return;
+    }
+    if (!/[A-Z]/.test(password)) {
+      setError('Password must include at least one uppercase letter.');
+      return;
+    }
+    if (!/[a-z]/.test(password)) {
+      setError('Password must include at least one lowercase letter.');
+      return;
+    }
+    if (!/[0-9]/.test(password)) {
+      setError('Password must include at least one number.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setSubmitting(true);
+    creatingRef.current = true;
+
+    let cred;
+    try {
+      cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+    } catch (err) {
+      creatingRef.current = false;
+      const message =
+        err.code === 'auth/email-already-in-use' ? 'An account with this email already exists.' :
+        err.code === 'auth/invalid-email'        ? 'Please enter a valid email address.' :
+        err.code === 'auth/weak-password'         ? 'Password is too weak.' :
+        'Could not create your account. Please try again.';
+      setError(message);
+      setSubmitting(false);
+      return;
+    }
+
+    const businessId = doc(collection(db, 'businesses')).id;
+
+    try {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'businesses', businessId), {
+        name: businessName.trim(),
+        ownerIds: [cred.user.uid],
+        createdAt: serverTimestamp(),
+        createdBy: cred.user.uid,
+        subscription: { plan: 'free', status: 'active', expiresAt: null },
+      });
+      batch.set(doc(db, 'users', cred.user.uid), {
+        uid: cred.user.uid,
+        email: email.trim(),
+        displayName: displayName.trim(),
+        role: 'owner',
+        businessId,
+        active: true,
+        createdAt: serverTimestamp(),
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error('[FlowBiz] Business setup failed — rolling back Auth account:', err.code || err.name, err.message);
+      try {
+        await deleteUser(cred.user);
+      } catch (rollbackErr) {
+        console.error('[FlowBiz] Rollback failed — an orphaned Auth account may remain:', rollbackErr);
+        setError('Something went wrong finishing setup, and we could not fully undo it. Please contact support before retrying with this email.');
+        creatingRef.current = false;
+        setSubmitting(false);
+        return;
+      }
+      setError('Something went wrong setting up your business. Please try again.');
+      creatingRef.current = false;
+      setSubmitting(false);
+      return;
+    }
+
+    // Non-critical, so it doesn't roll back the whole account if it's
+    // ever slow or briefly fails — useSettings.js and ProductFormModal.jsx
+    // both already default gracefully when this doc doesn't exist yet.
+    try {
+      await setDoc(doc(db, 'businessSettings', businessId), {
+        shopName: businessName.trim(),
+        cashierCanRecordExpenses: true,
+        categories: DEFAULT_CATEGORIES,
+      });
+    } catch (err) {
+      console.error('[FlowBiz] businessSettings write failed (non-fatal):', err.code || err.name, err.message);
+    }
+
+try {
+  const idToken = await cred.user.getIdToken(true);
+  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+  });
+  if (!response.ok) throw new Error('request-failed');
+  toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Check your email to verify your account.`);
+} catch (err) {
+  console.error('[FlowBiz] send-verification-email failed after setup:', err.message);
+  toast.success(`Welcome to FlowBiz, ${displayName.trim()}!`);
+}
+
+    setSubmitting(false);
+    navigate('/', { replace: true });
+  };
+
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-ink-950">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="flex flex-col items-center text-center gap-3">
+          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
+          <div>
+            <h1 className="font-display text-2xl font-bold text-white">Create your business</h1>
+            <p className="text-sm text-ink-400">Set up FlowBiz in a couple of minutes.</p>
+          </div>
+        </div>
+        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
+          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
+          <div><label className="label">Business name</label><input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="" disabled={submitting} /></div>
+          <div><label className="label">Your name</label><input className="input" required value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="Full name" disabled={submitting} /></div>
+          <div><label className="label">Email</label><input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="owner@yourbusiness.co.ke" autoComplete="username" disabled={submitting} /></div>
+          <div><label className="label">Password</label><input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="" autoComplete="new-password" disabled={submitting} /></div>
+          <div><label className="label">Confirm password</label><input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" disabled={submitting} /></div>
+          <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Setting up…' : 'Create business'}</button>
+        </form>
+        <p className="text-center text-sm text-ink-400">Already have an account? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link></p>
+      </div>
+    </div>
+  );
+}
+````
+
 ## File: src/contexts/AuthContext.jsx
 ````javascript
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
@@ -14729,422 +14791,6 @@ export default function CustomerDetail() {
 }
 ````
 
-## File: src/pages/Settings.jsx
-````javascript
-import { useEffect, useMemo, useState } from 'react';
-import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { resetBusinessData } from '../utils/businessReset';
-import { restoreProduct, permanentlyDeleteProduct } from '../utils/products';
-import { isDemoMode } from '../demo/demoMode';
-import { resetDemoData } from '../demo/seedData';
-import { formatDateTime } from '../utils/dateRanges';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import { raceWithTimeout } from '../utils/offlineWrite';
-
-const RESET_CONFIRM_PHRASE = 'RESET';
-
-export default function Settings() {
-  // FIX: Removed unused 'isOwner' and 'subscription' variables from extraction
-  const { profile, businessId, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro } = useAuth();
-  const demo = isDemoMode();
-  const [loading, setLoading]     = useState(true);
-  
-  const [shopName, setShopName]   = useState('');
-  const [phone, setPhone]         = useState('');
-  const [email, setEmail]         = useState('');
-  const [address, setAddress]     = useState('');
-  const [logoFile, setLogoFile]   = useState(null);
-  const [logoUrl, setLogoUrl]     = useState('');
-  const [cashierExp, setCashierExp] = useState(true);
-  
-  const [saving, setSaving]       = useState(false);
-  const [savingPermissions, setSavingPermissions] = useState(false);
-  const [resetDialogOpen, setResetDialogOpen] = useState(false);
-  const [resetConfirmText, setResetConfirmText] = useState('');
-  const [resetting, setResetting] = useState(false);
-
-  const [sessions, setSessions] = useState([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-  const deviceGroups = useMemo(() => {
-    const groups = new Map();
-    for (const s of sessions) {
-      const key = `${s.deviceLabel || 'Unknown device'}|${s.userAgent || ''}`;
-      const lastActiveMs = s.lastActiveAt?.toMillis ? s.lastActiveAt.toMillis() : (s.lastActiveAt ? new Date(s.lastActiveAt).getTime() : 0);
-      const existing = groups.get(key);
-      if (!existing) {
-        groups.set(key, { key, deviceLabel: s.deviceLabel, lastUserName: s.lastUserName, lastActiveMs, ids: [s.id], anyActive: s.revoked !== true });
-      } else {
-        existing.ids.push(s.id);
-        if (s.revoked !== true) existing.anyActive = true;
-        if (lastActiveMs > existing.lastActiveMs) { existing.lastActiveMs = lastActiveMs; existing.lastUserName = s.lastUserName; }
-      }
-    }
-    return Array.from(groups.values()).sort((a, b) => b.lastActiveMs - a.lastActiveMs);
-  }, [sessions]);
-
-  const [archived, setArchived] = useState([]);
-  const [archivedLoading, setArchivedLoading] = useState(false);
-  const [archivedOpen, setArchivedOpen] = useState(false);
-
-  const settingsRef = businessId ? doc(db, 'businessSettings', businessId) : null;
-
-  function compressImage(file, maxDimension = 480, quality = 0.75) {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      const url = URL.createObjectURL(file);
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob((blob) => {
-          if (!blob) { reject(new Error('Could not process image.')); return; }
-          resolve(blob);
-        }, 'image/jpeg', quality);
-      };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
-      img.src = url;
-    });
-  }
-
-  function blobToDataUrl(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  useEffect(() => {
-    if (!settingsRef) return;
-    getDoc(settingsRef).then(snap => {
-      if (snap.exists()) { 
-        const d = snap.data(); 
-        setShopName(d.shopName || ''); 
-        setPhone(d.phone || '');
-        setEmail(d.email || '');
-        setAddress(d.address || '');
-        setLogoUrl(d.logoUrl || '');
-        setCashierExp(d.cashierCanRecordExpenses !== false); 
-      }
-      setLoading(false);
-    });
-  }, [businessId]);
-
-  useEffect(() => {
-    if (!businessId) return;
-    listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
-  }, [businessId]);
-
-  const loadArchived = async () => {
-    if (!businessId) return;
-    setArchivedLoading(true);
-    try {
-      const snap = await getDocs(query(collection(db, 'products'), where('businessId', '==', businessId), where('deleted', '==', true)));
-      setArchived(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } finally {
-      setArchivedLoading(false);
-    }
-  };
-
-  const handleSave = async e => {
-    e.preventDefault(); 
-    setSaving(true);
-    try {
-      let finalLogoUrl = logoUrl;
-
-      if (logoFile) {
-        try {
-          const compressed = await compressImage(logoFile, 480, 0.75);
-          if (compressed.size > 700 * 1024) {
-            toast.error('Logo is still too large after compression — try a simpler image.');
-          } else {
-            finalLogoUrl = await blobToDataUrl(compressed);
-          }
-        } catch (logoErr) {
-          toast.error(`Logo processing failed, but the rest of your settings will still be saved: ${logoErr.message}`);
-        }
-      }
-
-      const write = setDoc(settingsRef, { 
-        shopName: shopName.trim(), 
-        phone: phone.trim(),
-        email: email.trim(),
-        address: address.trim(),
-        logoUrl: finalLogoUrl,
-      }, { merge: true });
-
-      const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-      if (error) throw error;
-
-      setLogoUrl(finalLogoUrl);
-      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Business information saved');
-      setLogoFile(null);
-    } catch (err) { 
-      toast.error(err.message); 
-    } finally { 
-      setSaving(false); 
-    }
-  };
-
-  const handleSavePermissions = async () => {
-    setSavingPermissions(true);
-    const write = setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-    setSavingPermissions(false);
-    if (error) { toast.error(error.message); return; }
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Permissions saved');
-  };
-
-  const handleReset = async () => {
-    setResetting(true);
-    try {
-      if (demo) {
-        resetDemoData();
-        toast.success('Demo data reset. Reloading…');
-      } else {
-        await resetBusinessData(businessId, profile?.uid);
-        toast.success('Business data reset. Reloading…');
-      }
-      window.location.href = '/';
-    } catch (err) {
-      toast.error(`Reset failed partway through: ${err.message}`);
-      setResetting(false);
-      setResetDialogOpen(false);
-    }
-  };
-
-const handleRevokeGroup = async (group) => {
-    try {
-      await Promise.all(group.ids.map((id) => revokeSession(id)));
-      setSessions((s) => s.map((x) => (group.ids.includes(x.id) ? { ...x, revoked: true } : x)));
-      toast.success('Device signed out.');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handleRestore = async (productId) => {
-    const target = archived.find(p => p.id === productId);
-    try {
-      const { barcodeCleared } = await restoreProduct(productId, target?.barcode, businessId);
-      setArchived(a => a.filter(p => p.id !== productId));
-      toast.success(barcodeCleared
-        ? 'Product restored — its old barcode is now used by another product, so it was cleared. Add a new one from Products if needed.'
-        : 'Product restored');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handlePermanentDelete = async (productId) => {
-    const target = archived.find(p => p.id === productId);
-    try {
-      await permanentlyDeleteProduct(productId, target?.barcode, businessId);
-      setArchived(a => a.filter(p => p.id !== productId));
-      toast.success('Product permanently deleted');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
-
-  return (
-    <div className="mx-auto max-w-xl space-y-5">
-      <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
-
-      <div className="card p-5 space-y-2">
-        <h2 className="font-display text-base font-bold text-ink-800">Account &amp; Security</h2>
-        <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
-        <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
-        <Row label="Business ID" value={businessId || '—'} mono />
-      </div>
-
-      <form onSubmit={handleSave} className="card space-y-4 p-5">
-        <h2 className="font-display text-base font-bold text-ink-800">Business Information</h2>
-        <p className="text-sm text-ink-500 mb-2">This info dynamically populates your customer-facing documents (receipts, invoices).</p>
-        
-        <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
-        
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
-          <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
-        </div>
-
-        <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
-        
-        <div>
-          <label className="label">Business Logo</label>
-          <div className="flex items-center gap-4">
-            {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
-            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files[0])} />
-          </div>
-        </div>
-
-        <button type="submit" className="btn-primary w-full" disabled={saving}>{saving?'Saving…':'Save settings'}</button>
-      </form>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Permissions</h2>
-        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-3">
-          <div><p className="text-sm font-semibold text-ink-800">Let cashiers record expenses</p><p className="text-xs text-ink-400">Turn off if only owners should log expenses.</p></div>
-          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-moss-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
-            <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition-transform ${cashierExp?'translate-x-5':''}`} />
-          </button>
-        </div>
-        <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
-          {savingPermissions ? 'Saving…' : 'Save permissions'}
-        </button>
-      </div>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Team Management</h2>
-        <p className="text-sm text-ink-500">Invite owners or cashiers, and manage pending invites and access.</p>
-        <Link to="/users" className="btn-outline w-full flex items-center justify-center gap-2">Manage users &amp; invites</Link>
-      </div>
-
-      {!demo && (
-        <div className="card p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-display text-base font-bold text-ink-800">Logged-in Devices</h2>
-          </div>
-          <p className="text-sm text-ink-500 mb-2">Devices currently or recently associated with your business.</p>
-{sessionsLoading ? <p className="text-sm text-ink-400">Loading…</p> : deviceGroups.length === 0 ? (
-            <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {deviceGroups.map((group) => {
-                const isCurrent = group.ids.includes(currentSessionId);
-                const isActiveNow = isCurrent || (Date.now() - group.lastActiveMs < 20 * 60 * 1000);
-                const isRevoked = !group.anyActive;
-                return (
-                <div key={group.key} className="flex items-center justify-between py-3 text-sm">
-                  <div className="min-w-0 pr-3">
-                    <div className="flex flex-wrap items-center gap-2 mb-1">
-                      <p className="font-semibold text-ink-800 truncate">{group.deviceLabel || 'Unknown device'}</p>
-                      {isCurrent && <span className="badge bg-ink-900 text-white border border-ink-900 shrink-0">This device</span>}
-                      {!isCurrent && isActiveNow && !isRevoked && <span className="badge bg-moss-50 text-moss-700 border border-moss-200 shrink-0">Active</span>}
-                      {!isCurrent && !isActiveNow && !isRevoked && <span className="badge bg-ink-50 text-ink-600 border border-ink-200 shrink-0">Inactive</span>}
-                    </div>
-                    <p className="text-[11px] text-ink-500 truncate">
-                      <span className="font-medium text-ink-700">{group.lastUserName || 'Unknown User'}</span> &middot; {isActiveNow ? 'Last seen: Just now' : `Last seen: ${formatDateTime(new Date(group.lastActiveMs))}`}
-                    </p>
-                  </div>
-                  {isRevoked ? (
-                    <span className="badge bg-rust-50 text-rust-600 border border-rust-200 shrink-0">Signed out</span>
-                  ) : (
-                    !isCurrent && <button className="btn-outline !px-3 !py-1.5 !min-h-0 text-xs shrink-0" onClick={() => handleRevokeGroup(group)}>Sign out</button>
-                  )}
-                </div>
-              )})}
-            </div>
-          )}
-                </div>
-      )}
-
-      <div className="card p-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
-          <div className="flex gap-2">
-
-            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
-              {archivedOpen ? 'Hide' : 'View archive'}
-            </button>
-          </div>
-        </div>
-        <p className="text-sm text-ink-500">Deleted products are archived here first, never destroyed immediately.</p>
-        {archivedOpen && (
-          archivedLoading ? <p className="text-sm text-ink-400">Loading…</p> : archived.length === 0 ? (
-            <p className="text-sm text-ink-400">Nothing archived.</p>
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {archived.map(p => (
-                <div key={p.id} className="flex items-center justify-between py-2.5 text-sm">
-                  <span className="font-medium text-ink-700">{p.name}</span>
-                  <div className="flex gap-2">
-                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRestore(p.id)}>Restore</button>
-                    <button className="btn-danger !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handlePermanentDelete(p.id)}>Delete forever</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )
-        )}
-      </div>
-
-      <div className="card p-5 space-y-2">
-        <h2 className="font-display text-base font-bold text-ink-800">Subscription</h2>
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
-          <Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>
-        </div>
-      </div>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Guide</h2>
-        <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
-      </div>
-
-      <div className="card space-y-3 border-rust-200 p-5">
-        <div>
-          <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
-          <p className="mt-1 text-sm text-ink-500">
-            {demo
-              ? 'Demo Reset clears all sample data stored in this browser.'
-              : "Business Reset permanently deletes ALL of this business's data. This cannot be undone."}
-          </p>
-        </div>
-        <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
-          {demo ? 'Demo Reset' : 'Business Reset'}
-        </button>
-      </div>
-
-      {/* Legal & Privacy Section pushed securely to the bottom */}
-      <div className="pt-6 pb-2 text-center space-y-3">
-        <div className="flex items-center justify-center gap-4 text-sm font-semibold">
-          <Link to="/privacy" className="text-ink-500 hover:text-ink-800 transition-colors">Privacy Policy</Link>
-          <span className="text-ink-300">&middot;</span>
-          <Link to="/terms" className="text-ink-500 hover:text-ink-800 transition-colors">Terms of Service</Link>
-        </div>
-        <p className="text-xs text-ink-400">FlowBiz ensures all data handling complies with Kenyan Data Protection Act.</p>
-      </div>
-
-      <ConfirmDialog
-        open={resetDialogOpen}
-        title={demo ? 'Reset the demo data?' : 'This will permanently delete ALL data for this business'}
-        message={
-          demo ? (
-            <p>All sample data in this browser will be cleared and replaced with the original demo dataset.</p>
-          ) : (
-            <>
-              <p className="mb-2">Everything this business owns will be deleted. This cannot be undone.</p>
-              <label className="label mt-3">Type <span className="font-mono font-bold">{RESET_CONFIRM_PHRASE}</span> to confirm</label>
-              <input className="input" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} autoFocus />
-            </>
-          )
-        }
-        confirmLabel={resetting ? 'Resetting…' : demo ? 'Reset demo data' : 'Delete everything'}
-        danger
-        onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
-        onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
-      />
-    </div>
-  );
-}
-
-function Row({ label, value, tone = '', mono = false }) {
-  return (
-    <div className="flex items-center justify-between py-1 text-sm">
-      <span className="text-ink-500">{label}</span>
-      <span className={`font-semibold ${mono ? 'font-mono text-xs' : ''} ${tone || 'text-ink-800'}`}>{value}</span>
-    </div>
-  );
-}
-````
-
 ## File: src/router/AppRouter.jsx
 ````javascript
 import { lazy, Suspense, useEffect } from 'react';
@@ -15789,6 +15435,439 @@ export default function Pro() {
         
         Built for Kenyan shops pay in KES via M-Pesa or card, powered by Paystack.
       </div>
+    </div>
+  );
+}
+````
+
+## File: src/pages/Settings.jsx
+````javascript
+// src/pages/Settings.jsx
+import { useEffect, useMemo, useState } from 'react';
+import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { resetBusinessData } from '../utils/businessReset';
+import { restoreProduct, permanentlyDeleteProduct } from '../utils/products';
+import { isDemoMode } from '../demo/demoMode';
+import { resetDemoData } from '../demo/seedData';
+import { formatDateTime } from '../utils/dateRanges';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import { raceWithTimeout } from '../utils/offlineWrite';
+
+const RESET_CONFIRM_PHRASE = 'RESET';
+
+export default function Settings() {
+  const { profile, businessId, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro } = useAuth();
+  const demo = isDemoMode();
+  const [loading, setLoading]     = useState(true);
+  
+  const [shopName, setShopName]   = useState('');
+  const [phone, setPhone]         = useState('');
+  const [email, setEmail]         = useState('');
+  const [address, setAddress]     = useState('');
+  const [logoFile, setLogoFile]   = useState(null);
+  const [logoUrl, setLogoUrl]     = useState('');
+  const [cashierExp, setCashierExp] = useState(true);
+  
+  const [saving, setSaving]       = useState(false);
+  const [savingPermissions, setSavingPermissions] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resetting, setResetting] = useState(false);
+
+  const [sessions, setSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+
+  const deviceGroups = useMemo(() => {
+    const groups = new Map();
+    for (const s of sessions) {
+      const key = `${s.deviceLabel || 'Unknown device'}|${s.userAgent || ''}`;
+      const lastActiveMs = s.lastActiveAt?.toMillis ? s.lastActiveAt.toMillis() : (s.lastActiveAt ? new Date(s.lastActiveAt).getTime() : 0);
+      const existing = groups.get(key);
+      if (!existing) {
+        groups.set(key, { key, deviceLabel: s.deviceLabel, lastUserName: s.lastUserName, lastActiveMs, ids: [s.id], anyActive: s.revoked !== true });
+      } else {
+        existing.ids.push(s.id);
+        if (s.revoked !== true) existing.anyActive = true;
+        if (lastActiveMs > existing.lastActiveMs) {
+          existing.lastActiveMs = lastActiveMs;
+          existing.lastUserName = s.lastUserName;
+        }
+      }
+    }
+    return Array.from(groups.values()).sort((a, b) => b.lastActiveMs - a.lastActiveMs);
+  }, [sessions]);
+
+  const [archived, setArchived] = useState([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+
+  const settingsRef = useMemo(() => (businessId ? doc(db, 'businessSettings', businessId) : null), [businessId]);
+
+  function compressImage(file, maxDimension = 480, quality = 0.75) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas context unavailable.'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (!blob) { reject(new Error('Could not process image.')); return; }
+          resolve(blob);
+        }, 'image/jpeg', quality);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
+      img.src = url;
+    });
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  useEffect(() => {
+    if (!settingsRef) {
+      setLoading(false);
+      return;
+    }
+    getDoc(settingsRef).then((snap) => {
+      if (snap.exists()) { 
+        const d = snap.data(); 
+        setShopName(d.shopName || ''); 
+        setPhone(d.phone || '');
+        setEmail(d.email || '');
+        setAddress(d.address || '');
+        setLogoUrl(d.logoUrl || '');
+        setCashierExp(d.cashierCanRecordExpenses !== false); 
+      }
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [settingsRef]);
+
+  useEffect(() => {
+    if (!businessId) {
+      setSessionsLoading(false);
+      return;
+    }
+    listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
+  }, [businessId, listBusinessSessions]);
+
+  const loadArchived = async () => {
+    if (!businessId) return;
+    setArchivedLoading(true);
+    try {
+      const snap = await getDocs(query(collection(db, 'products'), where('businessId', '==', businessId), where('deleted', '==', true)));
+      setArchived(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } finally {
+      setArchivedLoading(false);
+    }
+  };
+
+  const handleSave = async (e) => {
+    e.preventDefault(); 
+    if (!settingsRef) return;
+    setSaving(true);
+    try {
+      let finalLogoUrl = logoUrl;
+
+      if (logoFile) {
+        try {
+          const compressed = await compressImage(logoFile, 480, 0.75);
+          if (compressed.size > 700 * 1024) {
+            toast.error('Logo is still too large after compression — try a simpler image.');
+          } else {
+            finalLogoUrl = await blobToDataUrl(compressed);
+          }
+        } catch (logoErr) {
+          toast.error(`Logo processing failed, but the rest of your settings will still be saved: ${logoErr.message}`);
+        }
+      }
+
+      const write = setDoc(settingsRef, { 
+        shopName: shopName.trim(), 
+        phone: phone.trim(),
+        email: email.trim(),
+        address: address.trim(),
+        logoUrl: finalLogoUrl,
+      }, { merge: true });
+
+      const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+      if (error) throw error;
+
+      setLogoUrl(finalLogoUrl);
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Business information saved');
+      setLogoFile(null);
+    } catch (err) { 
+      toast.error(err.message); 
+    } finally { 
+      setSaving(false); 
+    }
+  };
+
+  const handleSavePermissions = async () => {
+    if (!settingsRef) return;
+    setSavingPermissions(true);
+    const write = setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    setSavingPermissions(false);
+    if (error) { toast.error(error.message); return; }
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Permissions saved');
+  };
+
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      if (demo) {
+        resetDemoData();
+        toast.success('Demo data reset. Reloading…');
+      } else {
+        await resetBusinessData(businessId, profile?.uid);
+        toast.success('Business data reset. Reloading…');
+      }
+      window.location.href = '/';
+    } catch (err) {
+      toast.error(`Reset failed: ${err.message}`);
+      setResetting(false);
+      setResetDialogOpen(false);
+    }
+  };
+
+  const handleRevokeGroup = async (group) => {
+    try {
+      await Promise.all(group.ids.map((id) => revokeSession(id)));
+      setSessions((s) => s.map((x) => (group.ids.includes(x.id) ? { ...x, revoked: true } : x)));
+      toast.success('Device signed out.');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const handleRestore = async (productId) => {
+    const target = archived.find(p => p.id === productId);
+    try {
+      const { barcodeCleared } = await restoreProduct(productId, target?.barcode, businessId);
+      setArchived(a => a.filter(p => p.id !== productId));
+      toast.success(barcodeCleared
+        ? 'Product restored — its old barcode is now used by another product, so it was cleared. Add a new one from Products if needed.'
+        : 'Product restored');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const handlePermanentDelete = async (productId) => {
+    const target = archived.find(p => p.id === productId);
+    try {
+      await permanentlyDeleteProduct(productId, target?.barcode, businessId);
+      setArchived(a => a.filter(p => p.id !== productId));
+      toast.success('Product permanently deleted');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
+
+  return (
+    <div className="mx-auto max-w-xl space-y-5">
+      <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
+
+      <div className="card p-5 space-y-2">
+        <h2 className="font-display text-base font-bold text-ink-800">Account &amp; Security</h2>
+        <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
+        <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
+        <Row label="Business ID" value={businessId || '—'} mono />
+      </div>
+
+      <form onSubmit={handleSave} className="card space-y-4 p-5">
+        <h2 className="font-display text-base font-bold text-ink-800">Business Information</h2>
+        <p className="text-sm text-ink-500 mb-2">This info dynamically populates your customer-facing documents (receipts, invoices).</p>
+        
+        <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
+        
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
+          <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
+        </div>
+
+        <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
+        
+        <div>
+          <label className="label">Business Logo</label>
+          <div className="flex items-center gap-4">
+            {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
+            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files ? e.target.files[0] : null)} />
+          </div>
+        </div>
+
+        <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
+      </form>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Permissions</h2>
+        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-3">
+          <div><p className="text-sm font-semibold text-ink-800">Let cashiers record expenses</p><p className="text-xs text-ink-400">Turn off if only owners should log expenses.</p></div>
+          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-moss-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
+            <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition-transform ${cashierExp?'translate-x-5':''}`} />
+          </button>
+        </div>
+        <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
+          {savingPermissions ? 'Saving…' : 'Save permissions'}
+        </button>
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Team Management</h2>
+        <p className="text-sm text-ink-500">Invite owners or cashiers, and manage pending invites and access.</p>
+        <Link to="/users" className="btn-outline w-full flex items-center justify-center gap-2">Manage users &amp; invites</Link>
+      </div>
+
+      {!demo && (
+        <div className="card p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="font-display text-base font-bold text-ink-800">Logged-in Devices</h2>
+          </div>
+          <p className="text-sm text-ink-500 mb-2">Devices currently or recently associated with your business.</p>
+          {sessionsLoading ? (
+            <p className="text-sm text-ink-400">Loading…</p>
+          ) : deviceGroups.length === 0 ? (
+            <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {deviceGroups.map((group) => {
+                const isCurrent = group.ids.includes(currentSessionId);
+                const isActiveNow = isCurrent || (Date.now() - group.lastActiveMs < 20 * 60 * 1000);
+                const isRevoked = !group.anyActive;
+                return (
+                  <div key={group.key} className="flex items-center justify-between py-3 text-sm">
+                    <div className="min-w-0 pr-3">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <p className="font-semibold text-ink-800 truncate">{group.deviceLabel || 'Unknown device'}</p>
+                        {isCurrent && <span className="badge bg-ink-900 text-white border border-ink-900 shrink-0">This device</span>}
+                        {!isCurrent && isActiveNow && !isRevoked && <span className="badge bg-moss-50 text-moss-700 border border-moss-200 shrink-0">Active</span>}
+                        {!isCurrent && !isActiveNow && !isRevoked && <span className="badge bg-ink-50 text-ink-600 border border-ink-200 shrink-0">Inactive</span>}
+                      </div>
+                      <p className="text-[11px] text-ink-500 truncate">
+                        <span className="font-medium text-ink-700">{group.lastUserName || 'Unknown User'}</span> &middot; {isActiveNow ? 'Last seen: Just now' : `Last seen: ${formatDateTime(group.lastActiveMs)}`}
+                      </p>
+                    </div>
+                    {isRevoked ? (
+                      <span className="badge bg-rust-50 text-rust-600 border border-rust-200 shrink-0">Signed out</span>
+                    ) : (
+                      !isCurrent && <button className="btn-outline !px-3 !py-1.5 !min-h-0 text-xs shrink-0" onClick={() => handleRevokeGroup(group)}>Sign out</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="card p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
+          <div className="flex gap-2">
+            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
+              {archivedOpen ? 'Hide' : 'View archive'}
+            </button>
+          </div>
+        </div>
+        <p className="text-sm text-ink-500">Deleted products are archived here first, never destroyed immediately.</p>
+        {archivedOpen && (
+          archivedLoading ? <p className="text-sm text-ink-400">Loading…</p> : archived.length === 0 ? (
+            <p className="text-sm text-ink-400">Nothing archived.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {archived.map(p => (
+                <div key={p.id} className="flex items-center justify-between py-2.5 text-sm">
+                  <span className="font-medium text-ink-700">{p.name}</span>
+                  <div className="flex gap-2">
+                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRestore(p.id)}>Restore</button>
+                    <button className="btn-danger !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handlePermanentDelete(p.id)}>Delete forever</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </div>
+
+      <div className="card p-5 space-y-2">
+        <h2 className="font-display text-base font-bold text-ink-800">Subscription</h2>
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
+          <Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>
+        </div>
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Guide</h2>
+        <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
+      </div>
+
+      <div className="card space-y-3 border-rust-200 p-5">
+        <div>
+          <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
+          <p className="mt-1 text-sm text-ink-500">
+            {demo
+              ? 'Demo Reset clears all sample data stored in this browser.'
+              : "Business Reset permanently deletes ALL of this business's data and removes cashier staff accounts. The owner account and Pro subscription remain active."}
+          </p>
+        </div>
+        <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
+          {demo ? 'Demo Reset' : 'Business Reset'}
+        </button>
+      </div>
+
+      <div className="pt-6 pb-2 text-center space-y-3">
+        <div className="flex items-center justify-center gap-4 text-sm font-semibold">
+          <Link to="/privacy" className="text-ink-500 hover:text-ink-800 transition-colors">Privacy Policy</Link>
+          <span className="text-ink-300">&middot;</span>
+          <Link to="/terms" className="text-ink-500 hover:text-ink-800 transition-colors">Terms of Service</Link>
+        </div>
+        <p className="text-xs text-ink-400">FlowBiz ensures all data handling complies with Kenyan Data Protection Act.</p>
+      </div>
+
+      <ConfirmDialog
+        open={resetDialogOpen}
+        title={demo ? 'Reset the demo data?' : 'This will permanently delete all store data & staff'}
+        message={
+          demo ? (
+            <p>All sample data in this browser will be cleared and replaced with the original demo dataset.</p>
+          ) : (
+            <>
+              <p className="mb-2">All products, sales, debt, expenses, and cashier staff will be deleted. Your owner account and Pro plan will remain intact.</p>
+              <label className="label mt-3">Type <span className="font-mono font-bold">{RESET_CONFIRM_PHRASE}</span> to confirm</label>
+              <input className="input" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} autoFocus />
+            </>
+          )
+        }
+        confirmLabel={resetting ? 'Resetting…' : demo ? 'Reset demo data' : 'Delete everything'}
+        danger
+        onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
+        onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
+      />
+    </div>
+  );
+}
+
+function Row({ label, value, tone = '', mono = false }) {
+  return (
+    <div className="flex items-center justify-between py-1 text-sm">
+      <span className="text-ink-500">{label}</span>
+      <span className={`font-semibold ${mono ? 'font-mono text-xs' : ''} ${tone || 'text-ink-800'}`}>{value}</span>
     </div>
   );
 }

@@ -19,8 +19,12 @@ export default function CloseDay() {
   const { profile } = useAuth();
   const { session, loading:sessLoad, sessionId, isClosed, reopenSession } = useDailySession();
   const today = useMemo(() => ({ start:startOfDay(), end:endOfDay() }), []);
-  const { loading:finLoad, error:finErr, summary } = useFinancialsForRange(today.start, today.end);
-  const [cash,      setCash]      = useState('');
+const { loading:finLoad, error:finErr, summary, purchases, supplierPayments } = useFinancialsForRange(today.start, today.end);
+
+const cashPurchases   = purchases.filter(p => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash').reduce((s,p)=>s+(p.totalCost||0),0);
+const mpesaPurchases  = purchases.filter(p => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa').reduce((s,p)=>s+(p.totalCost||0),0);
+const cashSupplierPay = supplierPayments.filter(p=>p.method==='Cash').reduce((s,p)=>s+(p.amount||0),0);
+const mpesaSupplierPay= supplierPayments.filter(p=>p.method==='M-Pesa').reduce((s,p)=>s+(p.amount||0),0);  const [cash,      setCash]      = useState('');
   const [mpesa,     setMpesa]     = useState('');
   const [submitting,setSubmit]    = useState(false);
 
@@ -94,6 +98,8 @@ try {
         <Row label="+ Debt repayments (cash)"  value={summary.totalDebtRepaymentsCash} />
         <Row label="− Expenses (cash)"         value={-summary.totalExpensesCash} />
         <Row label="− Refunds (cash)"          value={-summary.totalRefundsCash} />
+        <Row label="− Purchases paid (cash)" value={-cashPurchases} />
+        <Row label="− Supplier debt payments (cash)" value={-cashSupplierPay} />
         <Row label="= Expected cash"           value={expectedCashAtClose} bold />
       </div>
       <div className="card p-4 space-y-2">
@@ -108,6 +114,8 @@ try {
         <Row label="+ Debt repayments (M-Pesa)"  value={summary.totalDebtRepaymentsMpesa} />
         <Row label="− Expenses (M-Pesa)"         value={-summary.totalExpensesMpesa} />
         <Row label="− Refunds (M-Pesa)"          value={-summary.totalRefundsMpesa} />
+        <Row label="− Purchases paid (cash)" value={-cashPurchases} />
+        <Row label="− Supplier debt payments (cash)" value={-cashSupplierPay} />
         <Row label="= Expected M-Pesa"           value={expectedMpesaAtClose} bold />
       </div>
       <div className="card p-4 space-y-2">

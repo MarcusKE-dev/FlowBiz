@@ -100,13 +100,16 @@ const handleAddCategory = async () => {
     if (Number(form.sellingPrice) <= 0) return toast.error('Selling price must be greater than zero.');
    if (!initialProduct && !simplifiedForPurchase && Number(form.stock) < 0) return toast.error('Stock cannot be negative.');
 
-    // FIX: Free plan capped at FREE_PLAN_PRODUCT_LIMIT active products —
-    // only blocks NEW products, never editing an existing one.
+
     if (!initialProduct && !isPro && productCount >= FREE_PLAN_PRODUCT_LIMIT) {
       toast.error(`Free plan is limited to ${FREE_PLAN_PRODUCT_LIMIT} products. Upgrade to FlowBiz Pro to add more.`);
       return;
     }
-
+const barcodeVal = form.barcode.trim();
+if (barcodeVal && /^FB-\d{6}$/i.test(barcodeVal)) {
+  toast.error("That looks like a product's internal code, not a barcode. Scan or enter the item's real barcode instead.");
+  return;
+}
     setBusy(true);
     try {
       await onSave({

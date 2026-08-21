@@ -82,14 +82,18 @@ export async function resetBusinessData(businessId, ownerUid) {
   }
 
   // 3. Reset business settings cleanly to defaults without deleting the doc
-  await setDoc(doc(db, 'businessSettings', businessId), {
-    shopName: 'FlowBiz Store',
-    cashierCanRecordExpenses: true,
-    categories: DEFAULT_CATEGORIES,
-    receiptPaperWidth: 80,
-    resetAt: new Date(),
-    resetBy: ownerUid || null,
-  }, { merge: true });
+await setDoc(doc(db, 'businessSettings', businessId), {
+  shopName: 'FlowBiz Store',
+  phone: '',
+  email: '',
+  address: '',
+  logoUrl: '',
+  cashierCanRecordExpenses: true,
+  categories: DEFAULT_CATEGORIES,
+  receiptPaperWidth: 80,
+  resetAt: new Date(),
+  resetBy: ownerUid || null,
+}, { merge: true });
 
   results.businessSettings = 1;
   results.performedBy = ownerUid || null;

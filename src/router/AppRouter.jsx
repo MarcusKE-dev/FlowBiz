@@ -5,6 +5,8 @@ import AppShell from '../components/layout/AppShell';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import { useAuth } from '../contexts/AuthContext';
 import { prefetchRoutes } from './routePrefetch';
+import RequireOpenSession from '../components/common/RequireOpenSession';
+
 
 const routeLoaders = {
   landing: () => import('../pages/LandingPage'),
@@ -60,15 +62,19 @@ const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
 const Privacy    = lazy(routeLoaders.privacy);
 const Terms      = lazy(routeLoaders.terms);
 
-function Page({ children, adminOnly = false }) {
+
+function Page({ children, adminOnly = false, requireOpenDay = false }) {
   return (
     <ProtectedRoute adminOnly={adminOnly}>
       <AppShell>
-        <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>
+        <Suspense fallback={<LoadingSpinner />}>
+          {requireOpenDay ? <RequireOpenSession>{children}</RequireOpenSession> : children}
+        </Suspense>
       </AppShell>
     </ProtectedRoute>
   );
 }
+
 
 function PublicOnly({ children }) {
   const { firebaseUser, loading } = useAuth();
@@ -116,6 +122,13 @@ export default function AppRouter() {
     <Suspense fallback={<LoadingSpinner label="Loading..." />}>
       <RoutePrefetcher />
       <Routes>
+        <Route path="/customers"    element={<Page requireOpenDay><Customers /></Page>} />
+        <Route path="/customers/:customerId" element={<Page requireOpenDay><CustomerDetail /></Page>} />
+        <Route path="/expenses"     element={<Page requireOpenDay><Expenses /></Page>} />
+        <Route path="/purchases"    element={<Page adminOnly requireOpenDay><Purchases /></Page>} />
+        <Route path="/products"     element={<Page adminOnly requireOpenDay><Products /></Page>} />
+        <Route path="/suppliers"    element={<Page adminOnly requireOpenDay><Suppliers /></Page>} />
+        <Route path="/stock-take"   element={<Page adminOnly requireOpenDay><StockTake /></Page>} />
         {/* Opens Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
         <Route path="/" element={<RootRoute />} />
 

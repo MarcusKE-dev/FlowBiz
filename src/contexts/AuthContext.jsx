@@ -190,8 +190,8 @@ const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
         setProfile(data);
         setLoading(false);
 
-        if (data.businessId) {
-          registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
+if (data.businessId && data.active !== false) {
+  registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
           businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
             if (bizSnap.exists()) {
               setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });

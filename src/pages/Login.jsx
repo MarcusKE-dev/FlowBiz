@@ -15,6 +15,14 @@ export default function Login() {
     if (firebaseUser) navigate(location.state?.from?.pathname || '/', { replace: true });
   }, [firebaseUser, navigate, location]);
 
+  const [lockoutSeconds, setLockoutSeconds] = useState(0);
+
+useEffect(() => {
+  if (lockoutSeconds <= 0) return;
+  const t = setTimeout(() => setLockoutSeconds((s) => s - 1), 1000);
+  return () => clearTimeout(t);
+}, [lockoutSeconds]);
+
   const handle = async e => {
     e.preventDefault(); setError(null); setSubmitting(true);
 try {
@@ -30,8 +38,9 @@ catch (err) {
   ) {
     setError('Incorrect email or password.');
   } else if (err.code === 'auth/too-many-requests') {
-    setError('Too many login attempts. Please try again later.');
-    } else if (err.code === 'auth/user-disabled') {
+  setLockoutSeconds(60); // Firebase's own backoff grows with repeated failures; 60s is a sane first step
+  setError('Too many attempts. Please wait before trying again.');
+} else if (err.code === 'auth/user-disabled') {
    setError('This account has been disabled. Please contact your business owner.');
    
   } else {
@@ -60,8 +69,10 @@ finally {
             </div>
             <input type="password" required className="input" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" />
           </div>
-          <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting?'Signing in…':'Sign in'}</button>
-        </form>
+// on the submit button:
+<button type="submit" className="btn-primary w-full" disabled={submitting || lockoutSeconds > 0}>
+  {lockoutSeconds > 0 ? `Try again in ${lockoutSeconds}s` : submitting ? 'Signing in…' : 'Sign in'}
+</button>        </form>
         <p className="text-center text-sm text-ink-400">New to FlowBiz? <Link to="/setup" className="font-semibold text-moss-400 hover:underline">Create a business</Link></p>
       </div>
     </div>
