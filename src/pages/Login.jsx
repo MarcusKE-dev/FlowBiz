@@ -69,7 +69,7 @@ finally {
             </div>
             <input type="password" required className="input" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" />
           </div>
-// on the submit button:
+
 <button type="submit" className="btn-primary w-full" disabled={submitting || lockoutSeconds > 0}>
   {lockoutSeconds > 0 ? `Try again in ${lockoutSeconds}s` : submitting ? 'Signing in…' : 'Sign in'}
 </button>        </form>
