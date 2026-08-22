@@ -21,9 +21,10 @@ export default function Suppliers() {
   const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
   const purchQ  = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
   const paymQ   = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
-  const { data: suppliers, loading } = useFirestoreCollection(suppQ);
+const { data: suppliers, loading, refetch } = useFirestoreCollection(suppQ);
   const { data: purchases }          = useFirestoreCollection(purchQ);
   const { data: spayments }          = useFirestoreCollection(paymQ);
+  
 
   const [modal, setModal]       = useState(false);
   const [editing, setEditing]   = useState(null);
@@ -55,6 +56,7 @@ const [deleting, setDeleting] = useState(false);
     const { queuedOffline, error } = await raceWithTimeout(write, 4000);
     if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
     toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
+    await refetch();
     setModal(false); setEditing(null);
   };
 
@@ -62,6 +64,7 @@ const handleDel = async () => {
     const stillExists = suppliers.some((s) => s.id === pendDel.id);
     if (!stillExists) {
       toast.success('Already removed.');
+      await refetch();
       setPendDel(null);
       return;
     }
@@ -77,6 +80,7 @@ const handleDel = async () => {
     if (error) { toast.error(friendlyErrorMessage(error)); return; }
     toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
     setPendDel(null);
+    await refetch();
   };
 
   const handlePay = async e => {
@@ -109,6 +113,7 @@ const handleDel = async () => {
     if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
     setSupplierModal(false);
     toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Supplier added');
+    await refetch();
   };
 
   return (

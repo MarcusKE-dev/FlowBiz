@@ -1,5 +1,6 @@
 // src/utils/offlineWrite.js — full file (small, and every call site depends on this exact contract)
 export function raceWithTimeout(promise, timeoutMs = 4000) {
+  timeoutMs = Math.min(timeoutMs, 1500); 
   return new Promise((resolve) => {
     // Already offline? There's no point waiting out the full timeout to
     // "discover" that — resolve as queued immediately instead of padding

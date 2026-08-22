@@ -308,14 +308,6 @@ export default function Counter() {
 
       batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
 
-      if (!sale.isCredit) {
-        const refundRef = doc(collection(db, 'refunds'));
-        batch.set(refundRef, withBusiness({
-          saleId: sale.id, amount: sale.totalAmount, method: sale.paymentMethod,
-          refundedAt: serverTimestamp(), refundedBy: profile.uid, refundedByName: profile.displayName
-        }, businessId));
-      }
-
       const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
       if (error) throw error;
 

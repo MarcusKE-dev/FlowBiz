@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
-import { onSnapshot } from 'firebase/firestore';
+import { useCallback, useEffect, useState } from 'react';
+import { onSnapshot, getDocs } from 'firebase/firestore';
+
 export function useFirestoreCollection(queryRef) {
   const [data, setData]       = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
+
   useEffect(() => {
     if (!queryRef) { setData([]); setLoading(false); return; }
     setLoading(true);
@@ -13,5 +15,14 @@ export function useFirestoreCollection(queryRef) {
     );
     return unsub;
   }, [queryRef]);
-  return { data, loading, error };
+
+  const refetch = useCallback(async () => {
+    if (!queryRef) return;
+    try {
+      const snap = await getDocs(queryRef);
+      setData(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) { setError(err.message); }
+  }, [queryRef]);
+
+  return { data, loading, error, refetch };
 }

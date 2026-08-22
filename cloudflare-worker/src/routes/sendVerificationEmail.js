@@ -32,8 +32,7 @@ export async function handleSendVerificationEmail(request, env) {
 
   if (!caller.email) return errorResponse('No email address on this account.', 400);
 
-  const continueUrl = `${env.APP_BASE_URL}/auth/action`;
-
+const continueUrl = `${env.APP_BASE_URL}/auth/action?flow=verifyEmail`;
   let link;
   try {
     const result = await generateActionLink(env, {

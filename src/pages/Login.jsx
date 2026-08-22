@@ -10,12 +10,28 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError]     = useState(null);
+const LOCKOUT_SCHEDULE = [60, 300, 900, 1800, 3600]; // 1m → 5m → 15m → 30m → 1h, then stays at 1h
+const LOCKOUT_KEY = 'flowbiz_login_lockout';
 
+function readLockout() {
+  try { return JSON.parse(localStorage.getItem(LOCKOUT_KEY) || 'null'); } catch { return null; }
+}
+function writeLockout(state) {
+  try { localStorage.setItem(LOCKOUT_KEY, JSON.stringify(state)); } catch {}
+}
   useEffect(() => {
     if (firebaseUser) navigate(location.state?.from?.pathname || '/', { replace: true });
   }, [firebaseUser, navigate, location]);
 
-  const [lockoutSeconds, setLockoutSeconds] = useState(0);
+const [lockoutSeconds, setLockoutSeconds] = useState(0);
+
+useEffect(() => {
+  const saved = readLockout();
+  if (saved?.until) {
+    const remaining = Math.ceil((saved.until - Date.now()) / 1000);
+    if (remaining > 0) setLockoutSeconds(remaining);
+  }
+}, []);
 
 useEffect(() => {
   if (lockoutSeconds <= 0) return;
@@ -37,8 +53,12 @@ catch (err) {
    err.code === 'auth/invalid-email'
   ) {
     setError('Incorrect email or password.');
-  } else if (err.code === 'auth/too-many-requests') {
-  setLockoutSeconds(60); // Firebase's own backoff grows with repeated failures; 60s is a sane first step
+ } else if (err.code === 'auth/too-many-requests') {
+  const saved = readLockout();
+  const level = Math.min((saved?.level ?? -1) + 1, LOCKOUT_SCHEDULE.length - 1);
+  const seconds = LOCKOUT_SCHEDULE[level];
+  writeLockout({ level, until: Date.now() + seconds * 1000 });
+  setLockoutSeconds(seconds);
   setError('Too many attempts. Please wait before trying again.');
 } else if (err.code === 'auth/user-disabled') {
    setError('This account has been disabled. Please contact your business owner.');

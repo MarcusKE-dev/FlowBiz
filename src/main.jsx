@@ -34,11 +34,7 @@ if (import.meta.env.MODE === 'demo') {
 } else {
   exitDemoMode();
 }
-// Checks for a new deployed version every 60s while the tab is visible,
-// and prompts a one-tap refresh the moment one's found — far faster than
-// only picking it up the next time someone happens to reopen the app.
-// Deliberately a prompt, not a silent forced reload: a hard refresh
-// mid-sale-entry would wipe whatever a cashier is currently typing.
+
 if (import.meta.env.MODE !== 'demo') {
   const updateSW = registerSW({
     onRegisteredSW(swUrl, registration) {
@@ -47,22 +43,9 @@ if (import.meta.env.MODE !== 'demo') {
         if (document.visibilityState === 'visible') registration.update().catch(() => {});
       }, 60 * 1000);
     },
-    onNeedRefresh() {
-      toast(
-        (t) => (
-          <span className="flex items-center gap-3">
-            A new version of FlowBiz is available.
-            <button
-              className="btn-primary !min-h-0 !px-3 !py-1.5 text-xs"
-              onClick={() => { toast.dismiss(t.id); updateSW(true); }}
-            >
-              Refresh
-            </button>
-          </span>
-        ),
-        { duration: Infinity }
-      );
-    },
+ onNeedRefresh() {
+  updateSW(true);
+},
     onOfflineReady() {},
   });
 }

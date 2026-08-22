@@ -52,7 +52,7 @@ export async function handleSendPasswordReset(request, env) {
   }
   recentRequests.set(email, now);
 
-  const continueUrl = `${env.APP_BASE_URL}/auth/action`;
+const continueUrl = `${env.APP_BASE_URL}/auth/action?flow=resetPassword`;
 
   try {
     const result = await generateActionLink(env, {

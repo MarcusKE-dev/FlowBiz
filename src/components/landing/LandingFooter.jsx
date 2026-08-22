@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Store, Mail, Shield, FileText, ArrowRight } from 'lucide-react';
+import { Mail, Shield, FileText, ArrowRight } from 'lucide-react';
 
 export function LandingFooter() {
   return (
@@ -14,9 +14,7 @@ export function LandingFooter() {
           {/* Brand Info */}
           <div className="space-y-4 md:col-span-2">
             <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-xl bg-[#1a623c] flex items-center justify-center text-white font-bold">
-                <Store className="h-5 w-5" />
-              </div>
+             
               <span className="font-bold text-xl text-white tracking-tight">FlowBiz</span>
             </div>
             <p className="text-xs text-[#9aa2b1] max-w-sm leading-relaxed">

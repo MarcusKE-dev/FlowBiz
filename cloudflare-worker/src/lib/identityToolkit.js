@@ -42,9 +42,20 @@ export async function generateActionLink(env, { requestType, email, idToken, con
     err.identityToolkitCode = code;
     throw err;
   }
-
   const data = await res.json();
-  return { oobLink: data.oobLink, email: data.email };
+  
+  // 1. Parse the ugly Firebase link
+  const originalUrl = new URL(data.oobLink);
+  
+  // 2. Extract the query parameters (?mode=...&oobCode=...&apiKey=...)
+  const queryParams = originalUrl.search;
+  
+  // 3. Attach those exact parameters to your FlowBiz React URL
+  // This uses the env.APP_BASE_URL from your worker environment
+  const customLink = `${env.APP_BASE_URL}/auth/action${queryParams}`;
+
+  // 4. Return the custom link to your Resend email template
+  return { oobLink: customLink, email: data.email };
 }
 
 export async function deleteAuthUser(env, uid) {

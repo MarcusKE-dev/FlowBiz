@@ -85,48 +85,52 @@ export function AuthProvider({ children }) {
     sessionRegisteredRef.current = null;
   }, []);
 
-  const registerSession = useCallback(async (uid, businessId, userName) => {
-   // FIX (#16-19/22): loadProfile's onSnapshot re-fires this on every
-   // profile change, not just at sign-in. Without a guard, each call
-   // attached a brand-new listener on sessions/{id} without ever
-   // unsubscribing the last one — a real leak, and wasted re-writes.
-   const key = `${uid}:${businessId}`;
-   if (sessionRegisteredRef.current === key) return;
-   sessionRegisteredRef.current = key;
-    const sessionId = getSessionDocId(uid);
-    const ref = doc(db, 'sessions', sessionId);
-    const currentSnap = await getDoc(ref);
+const registerSession = useCallback(async (uid, businessId, userName) => {
+  const key = `${uid}:${businessId}`;
+  if (sessionRegisteredRef.current === key) return;
+  sessionRegisteredRef.current = key;
 
-    if (!currentSnap.exists()) {
-      await setDoc(ref, {
-        uid,
-        businessId,
-        lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
-        deviceLabel: guessDeviceLabel(),
-        userAgent: navigator.userAgent,
-        lastActiveAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        revoked: false,
-      });
-    } else {
-      await updateDoc(ref, {
-        uid,
-        businessId,
-        lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
-        lastActiveAt: serverTimestamp(),
-        deviceLabel: guessDeviceLabel(),
-        userAgent: navigator.userAgent,
-        revoked: false, 
-      }).catch(() => {});
+  let sessionId = getSessionDocId(uid);
+  let ref = doc(db, 'sessions', sessionId);
+  let currentSnap = await getDoc(ref);
+
+  // A revoked session can never legally un-revoke itself (that's the
+  // security rule working as intended — self-updates can't touch
+  // `revoked`). A fresh sign-in is a legitimate new session, so start a
+  // new record instead of endlessly retrying a write the rules forbid.
+  if (currentSnap.exists() && currentSnap.data().revoked === true) {
+    sessionId = `${sessionId}__${Date.now().toString(36)}`;
+    ref = doc(db, 'sessions', sessionId);
+    currentSnap = await getDoc(ref);
+  }
+
+  const baseFields = {
+    uid, businessId,
+    lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
+    deviceLabel: guessDeviceLabel(),
+    userAgent: navigator.userAgent,
+    lastActiveAt: serverTimestamp(),
+  };
+
+  if (!currentSnap.exists()) {
+    await setDoc(ref, { ...baseFields, createdAt: serverTimestamp(), revoked: false });
+  } else {
+    // Never include `revoked` here — self-updates aren't allowed to
+    // touch it, and it's already false if we got this far.
+    await updateDoc(ref, baseFields).catch(() => {});
+  }
+
+  activeSessionIdRef.current = sessionId;
+  setActiveSessionId(sessionId);
+
+  sessionUnsubRef.current?.();
+  sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
+    if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
+      setSessionRevoked(true);
+      fbSignOut(auth);
     }
-    sessionUnsubRef.current?.(); // defensive: clear any stale listener first
-    sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
-      if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
-        setSessionRevoked(true);
-        fbSignOut(auth);
-      }
-    });
-  }, []);
+  });
+}, []);
 
   // Background heartbeat to keep the "last seen" time accurate for active devices
 useEffect(() => {
@@ -168,23 +172,29 @@ const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
     profileUnsubRef.current = onSnapshot(
       userRef,
       (snap) => {
-        if (!snap.exists()) {
-          setTimeout(async () => {
-            try {
-              const recheck = await getDoc(userRef);
-              if (!recheck.exists()) {
-                setAccountRemoved(true);
-                setProfile(null);
-                setLoading(false);
-              }
-            } catch (err) {
-              setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
-              setProfile(null);
-              setLoading(false);
-            }
-          }, 4000);
+if (!snap.exists()) {
+  (async () => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      if (auth.currentUser?.uid !== user.uid) return;
+      try {
+        const recheck = await getDoc(userRef);
+        if (recheck.exists()) return; // listener will pick it up
+      } catch (err) {
+        if (attempt === 3) {
+          setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
+          setProfile(null);
+          setLoading(false);
           return;
         }
+      }
+    }
+    setAccountRemoved(true);
+    setProfile(null);
+    setLoading(false);
+  })();
+  return;
+}
         setAccountRemoved(false);
         const data = { uid: user.uid, ...snap.data() };
         setProfile(data);

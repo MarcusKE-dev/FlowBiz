@@ -75,26 +75,33 @@ export default function AuthAction() {
     );
   }
 
+  const flow = searchParams.get('flow');
+
   if (!oobCode) {
+    if (flow === 'resetPassword' || flow === 'verifyEmail') {
+      return (
+        <Shell>
+          <CheckCircle2 className="h-12 w-12 mx-auto text-moss-600" strokeWidth={1.5} />
+          <h1 className="font-display text-lg font-bold text-ink-900">
+            {flow === 'resetPassword' ? 'Password updated' : 'Email verified'}
+          </h1>
+          <p className="text-sm text-ink-500">
+            {flow === 'resetPassword'
+              ? 'Your password was changed. You can now sign in with it.'
+              : 'You can continue to FlowBiz now.'}
+          </p>
+          <Link to={flow === 'resetPassword' ? '/login' : '/'} className="btn-primary w-full">
+            {flow === 'resetPassword' ? 'Go to sign in' : 'Continue to FlowBiz'}
+          </Link>
+        </Shell>
+      );
+    }
     return (
       <Shell>
-        <AlertCircle
-          className="h-12 w-12 mx-auto text-rust-500"
-          strokeWidth={1.5}
-        />
-
-        <h1 className="font-display text-lg font-bold text-ink-900">
-          Invalid link
-        </h1>
-
-        <p className="text-sm text-ink-500">
-          This authentication link is missing required information.
-          Please request a new link.
-        </p>
-
-        <Link to="/login" className="btn-outline w-full">
-          Go to sign in
-        </Link>
+        <AlertCircle className="h-12 w-12 mx-auto text-rust-500" strokeWidth={1.5} />
+        <h1 className="font-display text-lg font-bold text-ink-900">Invalid link</h1>
+        <p className="text-sm text-ink-500">This authentication link is missing required information. Please request a new link.</p>
+        <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
       </Shell>
     );
   }
@@ -151,16 +158,7 @@ function Shell({ children }) {
   );
 }
 
-// FIX (click-to-confirm): applyActionCode used to fire automatically the
-// instant this page loaded, with no user interaction. Verification
-// oobCodes are single-use — some email providers and corporate security
-// scanners (Outlook Safe Links, some antivirus/email-gateway link
-// scanners, Gmail link prefetching) silently VISIT the link themselves
-// to check it's safe, before the real person ever clicks it. That
-// silently burns the one-time code, so the actual user then lands on an
-// already-used code through no fault of their own. Requiring an explicit
-// "Verify my email" click before calling applyActionCode means only a
-// real person's deliberate action can ever consume the code.
+
 function VerifyEmailPanel({ mode, oobCode }) {
   const [status, setStatus] = useState('ready'); // ready -> working -> success | error
   const [message, setMessage] = useState('');
@@ -218,30 +216,32 @@ function VerifyEmailPanel({ mode, oobCode }) {
 
       if (auth.currentUser) {
         try {
+          // 1. Reload user and force token refresh to propagate verified status instantly
           await reload(auth.currentUser);
+          await auth.currentUser.getIdToken(true);
+          
+          // 2. Teleport straight into the dashboard cleanly
+          window.location.assign('/'); 
+          return;
         } catch {
-          // Non-fatal
+          // Non-fatal fallback
         }
+      } else {
+        window.location.assign('/login');
+        return;
       }
 
-      setStatus('success');
-      setMessage('Your email has been verified.');
     } catch (err) {
       const code = err.code || '';
 
-      // If this exact code was already consumed (e.g. by a link-scanning
-      // bot before the person clicked "Verify my email" above) but the
-      // account turns out to already be verified, treat it as success —
-      // it genuinely is one — rather than showing an error for something
-      // that already succeeded.
-      if (code === 'auth/invalid-action-code' && auth.currentUser) {
+      // If already verified or expired-code race condition, check currentUser status directly
+      if ((code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') && auth.currentUser) {
         try {
           await reload(auth.currentUser);
-
+          await auth.currentUser.getIdToken(true);
           if (auth.currentUser.emailVerified) {
-            setStatus('success');
-            setMessage('Your email has been verified.');
-            return;
+             window.location.assign('/'); 
+             return;
           }
         } catch {
           // Fall through to error below
@@ -249,7 +249,6 @@ function VerifyEmailPanel({ mode, oobCode }) {
       }
 
       setStatus('error');
-
       setMessage(
         code === 'auth/expired-action-code'
           ? 'This verification link has expired. Please request a new one below.'
@@ -288,27 +287,6 @@ function VerifyEmailPanel({ mode, oobCode }) {
         </>
       )}
 
-      {status === 'success' && (
-        <>
-          <CheckCircle2
-            className="h-12 w-12 text-moss-600"
-            strokeWidth={1.5}
-          />
-
-          <h1 className="font-display text-lg font-bold text-ink-900">
-            Email verified
-          </h1>
-
-          <p className="text-sm text-ink-500">
-            {message} You can continue to FlowBiz now.
-          </p>
-
-          <Link to="/" className="btn-primary w-full">
-            Continue to FlowBiz
-          </Link>
-        </>
-      )}
-
       {status === 'error' && (
         <>
           <h1 className="font-display text-lg font-bold text-ink-900">
@@ -343,12 +321,6 @@ function VerifyEmailPanel({ mode, oobCode }) {
   );
 }
 
-// FIX (click-to-confirm, reset password): same reasoning as
-// VerifyEmailPanel above — verifyPasswordResetCode used to fire
-// automatically on mount, so a link-scanner visiting the URL before the
-// person clicked it could burn the one-time code and leave the real
-// person looking at a false "expired or already used" error. Now nothing
-// touches the oobCode until the person explicitly clicks "Continue".
 function ResetPasswordPanel({ oobCode }) {
   const [status, setStatus] = useState('ready'); // ready -> checking -> form -> success | error
   const [message, setMessage] = useState('');
@@ -529,7 +501,7 @@ function ResetPasswordPanel({ oobCode }) {
       {status === 'success' && (
         <>
           <CheckCircle2
-            className="h-12 w-12 text-moss-600"
+            className="h-12 w-12 text-moss-600 mx-auto"
             strokeWidth={1.5}
           />
 
@@ -553,7 +525,7 @@ function ResetPasswordPanel({ oobCode }) {
       {status === 'error' && (
         <>
           <AlertCircle
-            className="h-12 w-12 text-rust-500"
+            className="h-12 w-12 text-rust-500 mx-auto"
             strokeWidth={1.5}
           />
 

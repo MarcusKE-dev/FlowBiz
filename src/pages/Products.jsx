@@ -30,8 +30,7 @@ export default function Products() {
   );
   const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
   const { data: products, loading, error } = useFirestoreCollection(productsQ);
-  const { data: suppliers } = useFirestoreCollection(suppliersQ);
-  
+const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ); 
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(false);
   const [supplierModal, setSupplierModal] = useState(false);
@@ -74,8 +73,8 @@ const handleSave = async (data) => {
     const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
     const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
     if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
+if (!queuedOffline) { setNewSupplierId(ref.id); await refetchSuppliers(); } 
+   setSupplierModal(false);
     toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
   };
 const handleDel = async () => {

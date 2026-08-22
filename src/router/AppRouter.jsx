@@ -6,10 +6,9 @@ import LoadingSpinner from '../components/common/LoadingSpinner';
 import { useAuth } from '../contexts/AuthContext';
 import { prefetchRoutes } from './routePrefetch';
 import RequireOpenSession from '../components/common/RequireOpenSession';
-
+import LandingPage from '../pages/LandingPage';
 
 const routeLoaders = {
-  landing: () => import('../pages/LandingPage'),
   setup: () => import('../pages/Setup'),
   login: () => import('../pages/Login'),
   forgotPassword: () => import('../pages/ForgotPassword'),
@@ -36,7 +35,6 @@ const routeLoaders = {
   terms: () => import('../pages/Terms'),
 };
 
-const LandingPage = lazy(routeLoaders.landing);
 const Setup      = lazy(routeLoaders.setup);
 const Login      = lazy(routeLoaders.login);
 const ForgotPassword = lazy(routeLoaders.forgotPassword);
@@ -93,16 +91,15 @@ function isStandalonePWA() {
 function RootRoute() {
   const { firebaseUser, loading, isAdmin } = useAuth();
 
-  if (loading) return <LoadingSpinner label="Loading FlowBiz…" />;
-
-  if (firebaseUser) {
+  if (!loading && firebaseUser) {
     return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
   }
-
-  if (isStandalonePWA()) {
+  if (!loading && !firebaseUser && isStandalonePWA()) {
     return <Navigate to="/login" replace />;
   }
-
+  // Never block a brand-new visitor behind an auth-loading spinner —
+  // show the landing page immediately. If they turn out to already be
+  // signed in, the redirect above fires on the next render.
   return <LandingPage />;
 }
 
