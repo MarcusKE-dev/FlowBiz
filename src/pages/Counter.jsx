@@ -72,8 +72,7 @@ export default function Counter() {
   const { data: customers }                         = useFirestoreCollection(customersQ);
   const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
   const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
-  const { data: suppliers }                         = useFirestoreCollection(suppliersQ);
-  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
+const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
 
   const [search, setSearch]           = useState('');
 
@@ -333,21 +332,18 @@ export default function Counter() {
       throw err;
     }
   };
-
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    // FIX (supplier save getting stuck): returning here instead of
-    // throwing left SupplierFormModal's own try/catch never firing, so
-    // its "Saving…" button never reset and the form looked frozen with
-    // no visible way to retry after a failure — the error toast still
-    // fired, but nothing in the UI signalled the form could be tried
-    // again. Throwing lets SupplierFormModal's catch/finally reset it.
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
+  
+const handleSupplierSave = async (supplierData) => {
+  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+  if (!queuedOffline) {
+    setNewSupplierId(ref.id);
+    await refetchSuppliers();
+  }
+  setSupplierModal(false);
+  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+};
 
   // Scanning adds straight to the cart and keeps going — no confirmation
   // step per scan, and scanning the same product again just bumps its

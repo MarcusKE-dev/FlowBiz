@@ -30,7 +30,7 @@ export default function Products() {
   );
   const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
   const { data: products, loading, error } = useFirestoreCollection(productsQ);
-const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ); 
+const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(false);
   const [supplierModal, setSupplierModal] = useState(false);
@@ -69,14 +69,17 @@ const handleSave = async (data) => {
   // FIX (stuck "Saving…" bug — same pattern as Purchases.jsx): throw on
   // error instead of returning, so SupplierFormModal's catch/finally can
   // reset its "Saving…" button instead of leaving the form frozen.
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-if (!queuedOffline) { setNewSupplierId(ref.id); await refetchSuppliers(); } 
-   setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
+const handleSupplierSave = async (supplierData) => {
+  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+  if (!queuedOffline) {
+    setNewSupplierId(ref.id);
+    await refetchSuppliers();
+  }
+  setSupplierModal(false);
+  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+};
 const handleDel = async () => {
     setDeleting(true);
     const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id, pendingDel.barcode, businessId), 4000);

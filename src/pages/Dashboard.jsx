@@ -47,8 +47,7 @@ export default function Dashboard() {
   const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
   const { data: products } = useFirestoreCollection(productsQuery);
   const { data: customers } = useFirestoreCollection(customersQuery);
-  const { data: suppliers } = useFirestoreCollection(suppliersQuery);
-
+const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQuery);
   const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
   const [activeProduct, setActiveProduct] = useState(null);
   const [completedSale, setCompletedSale] = useState(null);
@@ -175,14 +174,17 @@ const handleProductSave = async (data) => {
   // throw on error instead of returning, so SupplierFormModal's
   // catch/finally can reset its "Saving…" button instead of leaving the
   // form frozen after a failed save.
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
+const handleSupplierSave = async (supplierData) => {
+  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+  if (!queuedOffline) {
+    setNewSupplierId(ref.id);
+    await refetchSuppliers();
+  }
+  setSupplierModal(false);
+  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+};
 
   const handleScanDetected = (code) => {
     setScannerOpen(false);

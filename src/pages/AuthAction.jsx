@@ -5,7 +5,6 @@ import {
   applyActionCode,
   verifyPasswordResetCode,
   confirmPasswordReset,
-  reload,
   checkActionCode,
 } from 'firebase/auth';
 import toast from 'react-hot-toast';
@@ -160,41 +159,42 @@ function Shell({ children }) {
 
 
 function VerifyEmailPanel({ mode, oobCode }) {
-  const [status, setStatus] = useState('ready'); // ready -> working -> success | error
+  const [status, setStatus] = useState('ready');
   const [message, setMessage] = useState('');
   const [resending, setResending] = useState(false);
+  const [pendingRedirect, setPendingRedirect] = useState(false);
 
   const navigate = useNavigate();
+  const { refreshEmailVerification, loading: authLoading, firebaseUser, isAdmin } = useAuth();
+
+  // Verification itself finishes fast, but AuthContext's own profile-loading
+  // chain is separate and can still be catching up at that exact moment —
+  // that race is what was landing people on the landing page and sticking
+  // there. So instead of navigating the instant verification succeeds, we
+  // wait until AuthContext is actually ready, then go straight to the
+  // correct screen ourselves — never touching RootRoute's fallback at all.
+  useEffect(() => {
+    if (!pendingRedirect || authLoading) return;
+    navigate(firebaseUser ? (isAdmin ? '/dashboard' : '/counter') : '/login', { replace: true });
+  }, [pendingRedirect, authLoading, firebaseUser, isAdmin, navigate]);
 
   const handleRequestNewEmail = async () => {
     if (!auth.currentUser) {
       navigate('/login', { replace: true });
       return;
     }
-
     setResending(true);
-
     try {
       const idToken = await auth.currentUser.getIdToken(true);
       const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
       });
-
       if (!response.ok) throw new Error('request-failed');
-
-      toast.success(
-        'A new verification email has been sent — check your inbox and spam/junk folder.'
-      );
+      toast.success('A new verification email has been sent — check your inbox and spam/junk folder.');
     } catch (err) {
-      console.error(
-        '[FlowBiz] AuthAction resend failed:',
-        err.message
-      );
-
-      toast.error(
-        "Couldn't send a new verification email right now. Please try again shortly."
-      );
+      console.error('[FlowBiz] AuthAction resend failed:', err.message);
+      toast.error("Couldn't send a new verification email right now. Please try again shortly.");
     } finally {
       setResending(false);
     }
@@ -203,9 +203,7 @@ function VerifyEmailPanel({ mode, oobCode }) {
   const handleConfirm = async () => {
     if (!oobCode || mode !== 'verifyEmail') {
       setStatus('error');
-      setMessage(
-        "This verification link isn't complete or may have been altered. Please request a new one below."
-      );
+      setMessage("This verification link isn't complete or may have been altered. Please request a new one below.");
       return;
     }
 
@@ -215,36 +213,21 @@ function VerifyEmailPanel({ mode, oobCode }) {
       await applyActionCode(auth, oobCode);
 
       if (auth.currentUser) {
-        try {
-          // 1. Reload user and force token refresh to propagate verified status instantly
-          await reload(auth.currentUser);
-          await auth.currentUser.getIdToken(true);
-          
-          // 2. Teleport straight into the dashboard cleanly
-          window.location.assign('/'); 
-          return;
-        } catch {
-          // Non-fatal fallback
-        }
-      } else {
-        window.location.assign('/login');
+        await refreshEmailVerification();
+        setPendingRedirect(true);
         return;
       }
 
+      navigate('/login', { replace: true });
+      return;
     } catch (err) {
       const code = err.code || '';
 
-      // If already verified or expired-code race condition, check currentUser status directly
       if ((code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') && auth.currentUser) {
-        try {
-          await reload(auth.currentUser);
-          await auth.currentUser.getIdToken(true);
-          if (auth.currentUser.emailVerified) {
-             window.location.assign('/'); 
-             return;
-          }
-        } catch {
-          // Fall through to error below
+        const verified = await refreshEmailVerification();
+        if (verified) {
+          setPendingRedirect(true);
+          return;
         }
       }
 
@@ -263,64 +246,35 @@ function VerifyEmailPanel({ mode, oobCode }) {
     <Shell>
       {status === 'ready' && (
         <>
-          <h1 className="font-display text-lg font-bold text-ink-900">
-            Verify your email
-          </h1>
-
-          <p className="text-sm text-ink-500">
-            Click below to confirm your email address and activate your FlowBiz account.
-          </p>
-
-          <button className="btn-primary w-full" onClick={handleConfirm}>
-            Verify my email
-          </button>
+          <h1 className="font-display text-lg font-bold text-ink-900">Verify your email</h1>
+          <p className="text-sm text-ink-500">Click below to confirm your email address and activate your FlowBiz account.</p>
+          <button className="btn-primary w-full" onClick={handleConfirm}>Verify my email</button>
         </>
       )}
 
       {status === 'working' && (
         <>
           <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
-
-          <p className="text-sm text-ink-500">
-            Confirming…
-          </p>
+          <p className="text-sm text-ink-500">Confirming…</p>
         </>
       )}
 
       {status === 'error' && (
         <>
-          <h1 className="font-display text-lg font-bold text-ink-900">
-            This verification link isn't valid
-          </h1>
-
-          <p className="text-sm text-ink-500">
-            {message}
-          </p>
-
+          <h1 className="font-display text-lg font-bold text-ink-900">This verification link isn't valid</h1>
+          <p className="text-sm text-ink-500">{message}</p>
           <div className="flex flex-col gap-2">
-            <button
-              className="btn-primary w-full"
-              onClick={handleRequestNewEmail}
-              disabled={resending}
-            >
-              {resending
-                ? 'Sending…'
-                : 'Request a new verification email'}
+            <button className="btn-primary w-full" onClick={handleRequestNewEmail} disabled={resending}>
+              {resending ? 'Sending…' : 'Request a new verification email'}
             </button>
-
-            <Link
-              to="/login"
-              className="btn-outline w-full"
-            >
-              Go to sign in
-            </Link>
+            <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
           </div>
         </>
       )}
     </Shell>
   );
 }
-
+  
 function ResetPasswordPanel({ oobCode }) {
   const [status, setStatus] = useState('ready'); // ready -> checking -> form -> success | error
   const [message, setMessage] = useState('');

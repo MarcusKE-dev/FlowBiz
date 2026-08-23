@@ -27,7 +27,7 @@ export default function Purchases() {
   const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
   const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt','desc'), limit(50)) : null, [businessId]);
   const { data: products }  = useFirestoreCollection(productsQ);
-  const { data: suppliers } = useFirestoreCollection(suppliersQ);
+const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
   const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
   const [form, setForm] = useState(empty);
   const [busy, setBusy] = useState(false);
@@ -112,14 +112,17 @@ try {
   // fired and its "Saving…" button never reset — the form just looked
   // frozen after a failed save, with no obvious way to try again.
   // Throwing here lets SupplierFormModal's catch/finally reset it.
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
+ const handleSupplierSave = async (supplierData) => {
+  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+  if (!queuedOffline) {
+    setNewSupplierId(ref.id);
+    await refetchSuppliers();
+  }
+  setSupplierModal(false);
+  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+};
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">

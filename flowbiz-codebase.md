@@ -219,24 +219,6 @@ vite.config.js
 
 # Files
 
-## File: .kilo/kilo.json
-````json
-{
-  "$schema": "https://app.kilo.ai/config.json",
-  "mcp": {
-    "firebase": {
-      "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "firebase-tools@14.15.2",
-        "experimental:mcp"
-      ]
-    }
-  }
-}
-````
-
 ## File: cloudflare-worker/src/routes/publicDocument.js
 ````javascript
 // src/routes/publicDocument.js
@@ -644,6 +626,24 @@ export async function handlePublicDocument(request, env, token) {
     bodyHtml: renderDocumentBody(vm, settings),
     paperWidthMm,
   }));
+}
+````
+
+## File: .kilo/kilo.json
+````json
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "mcp": {
+    "firebase": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "firebase-tools@14.15.2",
+        "experimental:mcp"
+      ]
+    }
+  }
 }
 ````
 
@@ -1271,148 +1271,6 @@ import { PRO_PLAN_AMOUNT_KES } from './paystackInitialize.js';
 
 export async function handleProPrice() {
   return json({ amountKes: PRO_PLAN_AMOUNT_KES, currency: 'KES', periodDays: 30 });
-}
-````
-
-## File: cloudflare-worker/src/routes/sendPasswordResetEmail.js
-````javascript
-// src/routes/sendPasswordResetEmail.js
-//
-// POST /api/auth/send-password-reset  { email }
-//
-// Unauthenticated by necessity — someone requesting a reset usually isn't
-// signed in. ALWAYS responds with the same generic { success: true }
-// shape regardless of whether the email actually belongs to an account,
-// whether Firebase found it, or whether Resend succeeded — this is what
-// stops the endpoint being used to check who has a FlowBiz account
-// (mirrors the enumeration protection ForgotPassword.jsx already had
-// client-side, now enforced where it actually matters: server-side).
-//
-// RATE LIMITING NOTE: the in-memory map below is best-effort only — a
-// Cloudflare Worker can run many isolates in parallel across edge
-// locations, each with its OWN copy of this map, so it does not provide
-// a real global rate limit. For production-grade protection on this
-// endpoint, add a Cloudflare Rate Limiting Rule in the dashboard
-// (Security → WAF → Rate limiting rules) targeting
-// POST /api/auth/send-password-reset — that's enforced at the edge,
-// globally, with no code changes needed here.
-
-import { json, errorResponse } from '../lib/response.js';
-import { generateActionLink } from '../lib/identityToolkit.js';
-import { sendEmail } from '../lib/resend.js';
-import { passwordResetEmail } from '../lib/emailTemplates.js';
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-// Best-effort, single-isolate throttle — see note above.
-const recentRequests = new Map(); // email -> last request timestamp (ms)
-const MIN_INTERVAL_MS = 60 * 1000;
-
-export async function handleSendPasswordReset(request, env) {
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON body.', 400);
-  }
-
-  const email = String(body?.email || '').trim().toLowerCase();
-  if (!email || !EMAIL_RE.test(email) || email.length > 254) {
-    return errorResponse('Enter a valid email address.', 400);
-  }
-
-  const now = Date.now();
-  const last = recentRequests.get(email);
-  if (last && now - last < MIN_INTERVAL_MS) {
-    // Still a generic success — never let timing or response shape leak
-    // whether this is a real throttle vs. a real send.
-    return json({ success: true });
-  }
-  recentRequests.set(email, now);
-
-const continueUrl = `${env.APP_BASE_URL}/auth/action?flow=resetPassword`;
-
-  try {
-    const result = await generateActionLink(env, {
-      requestType: 'PASSWORD_RESET',
-      email,
-      continueUrl,
-    });
-    const { subject, html, text } = passwordResetEmail(result.oobLink);
-    await sendEmail(env, { to: email, subject, html, text });
-  } catch (err) {
-    // EMAIL_NOT_FOUND is expected and common (a mistyped address, or
-    // someone probing for registered accounts) — it must never produce a
-    // different response than success. Anything else gets logged for
-    // diagnosis (e.g. a real Resend/Identity Toolkit outage).
-    if (err.identityToolkitCode !== 'EMAIL_NOT_FOUND') {
-      console.error('[send-password-reset] failed:', err.identityToolkitCode || err.message);
-    }
-  }
-
-  return json({ success: true });
-}
-````
-
-## File: cloudflare-worker/src/routes/sendVerificationEmail.js
-````javascript
-// src/routes/sendVerificationEmail.js
-//
-// POST /api/auth/send-verification-email
-//
-// Replaces the frontend's direct sendEmailVerification() call. Requires
-// the caller's own Firebase ID token — this endpoint can only ever
-// trigger verification for the account that's asking, never an
-// arbitrary email address (same trust model as every other authenticated
-// route in this Worker, e.g. deleteStaff.js).
-//
-// Firebase itself never sends an email for this flow: generateActionLink
-// asks Identity Toolkit for the raw oobLink only (returnOobLink: true),
-// and FlowBiz delivers it via Resend below.
-
-import { json, errorResponse } from '../lib/response.js';
-import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
-import { generateActionLink } from '../lib/identityToolkit.js';
-import { sendEmail } from '../lib/resend.js';
-import { verificationEmail } from '../lib/emailTemplates.js';
-
-export async function handleSendVerificationEmail(request, env) {
-  const authHeader = request.headers.get('Authorization') || '';
-  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!idToken) return errorResponse('Missing Authorization header.', 401);
-
-  let caller;
-  try {
-    caller = await verifyFirebaseIdToken(idToken, env.FIREBASE_PROJECT_ID);
-  } catch (err) {
-    return errorResponse(`Invalid session: ${err.message}`, 401);
-  }
-
-  if (!caller.email) return errorResponse('No email address on this account.', 400);
-
-const continueUrl = `${env.APP_BASE_URL}/auth/action?flow=verifyEmail`;
-  let link;
-  try {
-    const result = await generateActionLink(env, {
-      requestType: 'VERIFY_EMAIL',
-      idToken,
-      continueUrl,
-    });
-    link = result.oobLink;
-  } catch (err) {
-    console.error('[send-verification-email] generateActionLink failed:', err.identityToolkitCode || err.message);
-    return errorResponse('Could not generate a verification link. Please try again.', 502);
-  }
-
-  try {
-    const { subject, html, text } = verificationEmail(link);
-    await sendEmail(env, { to: caller.email, subject, html, text });
-  } catch (err) {
-    console.error('[send-verification-email] Resend send failed:', err.message);
-    return errorResponse('Could not send the verification email. Please try again.', 502);
-  }
-
-  return json({ success: true });
 }
 ````
 
@@ -2171,263 +2029,6 @@ No technicians. No complicated setup. No expensive POS hardware.          </p>
         </div>
       </div>
     </section>
-  );
-}
-````
-
-## File: src/components/landing/LandingFooter.jsx
-````javascript
-import { Link } from 'react-router-dom';
-import { Mail, Shield, FileText, ArrowRight } from 'lucide-react';
-
-export function LandingFooter() {
-  return (
-    <footer className="bg-[#15171d] text-[#cfd3da] border-t border-[#2b303c] pt-14 pb-10 text-xs">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
-        
-
-
-        {/* Footer Navigation Columns */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-          
-          {/* Brand Info */}
-          <div className="space-y-4 md:col-span-2">
-            <div className="flex items-center gap-3">
-             
-              <span className="font-bold text-xl text-white tracking-tight">FlowBiz</span>
-            </div>
-            <p className="text-xs text-[#9aa2b1] max-w-sm leading-relaxed">
-              The offline-first Point of Sale, inventory intelligence, and cash-flow management platform purpose-built for Kenyan retailers and small businesses.
-            </p>
-            <div className="flex items-center gap-2 text-[11px] text-[#767f8f]">
-              <span>Nairobi, Kenya</span>
-              <span>·</span>
-              <a href="mailto:support@flowbiz.co.ke" className="hover:text-white transition-colors flex items-center gap-1">
-                <Mail className="h-3 w-3" /> support@flowbiz.co.ke
-              </a>
-            </div>
-          </div>
-
-          {/* Application Navigation */}
-          <div className="space-y-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-white block">
-              Application
-            </span>
-            <ul className="space-y-2 text-[#9aa2b1]">
-              <li>
-                <a href="#features" className="hover:text-white transition-colors">
-                  POS Features
-                </a>
-              </li>
-              <li>
-                <a href="#simulator" className="hover:text-white transition-colors">
-                  Live Simulator
-                </a>
-              </li>
-              <li>
-                <a href="#how-it-works" className="hover:text-white transition-colors">
-                  How It Works
-                </a>
-              </li>
-              <li>
-                <a href="#pricing" className="hover:text-white transition-colors">
-                  Pricing
-                </a>
-              </li>
-              <li>
-                <a href="#faq" className="hover:text-white transition-colors">
-                  FAQ
-                </a>
-              </li>
-            </ul>
-          </div>
-
-          {/* Legal & Trust: Tight Spacing, No Sign In */}
-       {/* Column 3: Legal & Compliance */}
-          <div className="space-y-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-white block">
-              Trust & Legal
-            </span>
-            <ul className="space-y-2">
-              <li>
-                <Link to="/privacy" className="hover:text-white transition-colors flex items-center gap-1.5">
-                  <Shield className="h-3.5 w-3.5 text-[#54b67c]" />
-                  Privacy Policy (KDPA 2019)
-                </Link>
-              </li>
-              <li>
-                <Link to="/terms" className="hover:text-white transition-colors flex items-center gap-1.5">
-                  <FileText className="h-3.5 w-3.5 text-[#54b67c]" />
-                  Terms of Service
-                </Link>
-              </li>
-             
-            </ul>
-          </div>
-
-        </div>
-
-        {/* Bottom Line */}
-        <div className="pt-8 border-t border-[#2b303c] flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-[#767f8f]">
-          <p>© {new Date().getFullYear()} FlowBiz. All rights reserved.</p>
-          
-        </div>
-
-      </div>
-    </footer>
-  );
-}
-````
-
-## File: src/components/landing/LandingHeader.jsx
-````javascript
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Menu, X, ArrowRight, } from 'lucide-react';
-
-export function LandingHeader() {
-  const [mobileOpen, setMobileOpen] = useState(false);
-
-  return (
-    <header className="sticky top-0 z-50 bg-[#faf6ef]/95 backdrop-blur-md border-b border-[#e8eaed] h-14 flex items-center">
-      <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="relative flex items-center justify-between h-full">
-          
-          {/* Left: Brand Logo */}
-          <Link to="/" className="flex items-center gap-2.5 shrink-0 z-10 leading-none">
-      
-            <div className="flex flex-col justify-center">
-              <span className="font-extrabold text-lg text-[#15171d] tracking-tight leading-none">
-                FlowBiz
-              </span>
-              <span className="text-[8px] font-bold text-[#1a623c] uppercase tracking-wider leading-none mt-1">
-                Business Manager
-              </span>
-            </div>
-          </Link>
-
-          {/* Center: Navigation Links Perfectly Centered Horizontally & Vertically */}
-          <nav className="hidden lg:flex absolute inset-0 items-center justify-center pointer-events-none">
-            <div className="flex items-center gap-6 xl:gap-8 text-xs sm:text-sm font-semibold text-[#5a6273] pointer-events-auto leading-none">
-              <a 
-                href="#features" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                Features
-              </a>
-              <a 
-                href="#live-simulator" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                Live Simulator
-              </a>
-              <a 
-                href="#how-it-works" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                How It Works
-              </a>
-              <a 
-                href="#pricing" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                Pricing
-              </a>
-              <a 
-                href="#faq" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                FAQ
-              </a>
-            </div>
-          </nav>
-
-          {/* Right: Action Buttons */}
-          <div className="hidden sm:flex items-center gap-2.5 shrink-0 z-10 leading-none">
-            <Link
-              to="/login"
-              className="text-xs sm:text-sm font-bold text-[#363b48] hover:text-[#15171d] px-3 py-2 rounded-lg hover:bg-white transition-colors"
-            >
-              Sign In
-            </Link>
-            <Link
-              to="/setup"
-              className="bg-[#1a623c] text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-bold hover:bg-[#144f30] transition-colors shadow-xs flex items-center gap-1.5 whitespace-nowrap"
-            >
-              <span>Get Started</span>
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-          </div>
-
-          {/* Mobile Menu Button */}
-          <button
-            type="button"
-            onClick={() => setMobileOpen(!mobileOpen)}
-            className="lg:hidden p-1.5 rounded-lg text-[#5a6273] hover:text-[#15171d] hover:bg-white z-10"
-            aria-label="Toggle Menu"
-          >
-            {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
-
-        </div>
-      </div>
-
-      {/* Mobile Dropdown */}
-      {mobileOpen && (
-        <div className="lg:hidden absolute top-full left-0 right-0 border-b border-[#e8eaed] bg-white px-6 py-4 space-y-3 shadow-lg">
-          <a
-            href="#features"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            Features
-          </a>
-          <a
-            href="#simulator"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            Live Simulator
-          </a>
-          <a
-            href="#how-it-works"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            How It Works
-          </a>
-          <a
-            href="#pricing"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            Pricing
-          </a>
-          <a
-            href="#faq"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            FAQ
-          </a>
-          <div className="pt-2.5 border-t border-[#e8eaed] flex flex-col gap-2">
-            <Link
-              to="/login"
-              className="w-full text-center py-2.5 border border-[#cfd3da] rounded-xl text-sm font-bold text-[#15171d]"
-            >
-              Sign In
-            </Link>
-            <Link
-              to="/setup"
-              className="w-full text-center py-3 bg-[#1a623c] text-white rounded-xl text-sm font-bold shadow-md hover:bg-[#144f30] transition-all flex items-center justify-center gap-2"
-            >
-              <span>Get Started Free</span>
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-          </div>
-        </div>
-      )}
-    </header>
   );
 }
 ````
@@ -4302,38 +3903,6 @@ export function resetDemoData() {
 }
 ````
 
-## File: src/hooks/useFirestoreCollection.js
-````javascript
-import { useCallback, useEffect, useState } from 'react';
-import { onSnapshot, getDocs } from 'firebase/firestore';
-
-export function useFirestoreCollection(queryRef) {
-  const [data, setData]       = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState(null);
-
-  useEffect(() => {
-    if (!queryRef) { setData([]); setLoading(false); return; }
-    setLoading(true);
-    const unsub = onSnapshot(queryRef,
-      snap => { setData(snap.docs.map(d=>({id:d.id,...d.data()}))); setLoading(false); setError(null); },
-      err  => { setError(err.message); setLoading(false); }
-    );
-    return unsub;
-  }, [queryRef]);
-
-  const refetch = useCallback(async () => {
-    if (!queryRef) return;
-    try {
-      const snap = await getDocs(queryRef);
-      setData(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } catch (err) { setError(err.message); }
-  }, [queryRef]);
-
-  return { data, loading, error, refetch };
-}
-````
-
 ## File: src/hooks/useOnlineStatus.js
 ````javascript
 import { useEffect, useState } from 'react';
@@ -4895,50 +4464,6 @@ export default defineConfig([
 }
 ````
 
-## File: package.json
-````json
-{
-  "name": "flowbiz",
-  "private": true,
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "dev:demo": "vite --mode demo",
-    "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@zxing/browser": "^0.2.1",
-    "@zxing/library": "^0.23.0",
-    "firebase": "^12.15.0",
-    "jspdf": "^2.5.1",
-    "lucide-react": "^1.22.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-hot-toast": "^2.4.1",
-    "react-icons": "^5.7.0",
-    "react-router-dom": "^6.30.0"
-  },
-  "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.2",
-    "autoprefixer": "^10.4.20",
-    "eslint": "^10.5.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.3",
-    "globals": "^17.6.0",
-    "postcss": "^8.4.49",
-    "tailwindcss": "^3.4.17",
-    "vite": "^8.1.0",
-    "vite-plugin-pwa": "^1.3.0"
-  }
-}
-````
-
 ## File: postcss.config.js
 ````javascript
 export default { plugins: { tailwindcss: {}, autoprefixer: {} } };
@@ -5257,77 +4782,6 @@ export default defineConfig(({ mode }) => ({
 }));
 ````
 
-## File: cloudflare-worker/src/lib/identityToolkit.js
-````javascript
-// src/lib/identityToolkit.js
-//
-// Deletes a Firebase Authentication user by uid. This is the one thing
-// FlowBiz's client SDK can never safely do itself — removing another
-// person's Auth account requires privileged, server-side credentials.
-// This is the actual fix for the staff-deletion bug described in the
-// audit: without this, the Firestore profile can be deleted all day and
-// the email stays registered in Firebase Authentication forever.
-
-import { getGoogleAccessToken } from './googleAuth.js';
-
-// Generates a Firebase Auth action link (email verification or password
-// reset) via the Identity Toolkit REST API WITHOUT letting Firebase send
-// its own email — that's what lets FlowBiz deliver the email itself via
-// Resend. returnOobLink:true is only honored for server-authenticated
-// (OAuth) callers, never a plain client API key request — same privilege
-// tier as deleteAuthUser() below.
-export async function generateActionLink(env, { requestType, email, idToken, continueUrl }) {
-  const token = await getGoogleAccessToken(env);
-  const body = {
-    requestType,               // 'VERIFY_EMAIL' | 'PASSWORD_RESET'
-    returnOobLink: true,
-    continueUrl,
-    canHandleCodeInApp: true,  // send users straight to our /auth/action page, never Firebase's hosted page
-  };
-  if (email) body.email = email;
-  if (idToken) body.idToken = idToken;
-
-  const res = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/accounts:sendOobCode`,
-    {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }
-  );
-
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    const code = errBody?.error?.message || 'UNKNOWN_ERROR';
-    const err = new Error(code);
-    err.identityToolkitCode = code;
-    throw err;
-  }
-
-  const data = await res.json();
-  return { oobLink: data.oobLink, email: data.email };
-}
-
-export async function deleteAuthUser(env, uid) {
-  const token = await getGoogleAccessToken(env);
-  const res = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/accounts:delete`,
-    {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ localId: uid }),
-    }
-  );
-  if (!res.ok) {
-    const errText = await res.text();
-    // A user that's already gone is not a failure from the caller's point
-    // of view — the goal (no orphaned Auth account) is already achieved.
-    if (res.status === 400 && errText.includes('USER_NOT_FOUND')) return;
-    throw new Error(`Failed to delete Firebase Auth user ${uid}: ${errText}`);
-  }
-}
-````
-
 ## File: cloudflare-worker/src/lib/response.js
 ````javascript
 // src/lib/response.js
@@ -5355,6 +4809,148 @@ export function html(bodyHtml, init = {}) {
       'Cache-Control': 'no-store',
     },
   });
+}
+````
+
+## File: cloudflare-worker/src/routes/sendPasswordResetEmail.js
+````javascript
+// src/routes/sendPasswordResetEmail.js
+//
+// POST /api/auth/send-password-reset  { email }
+//
+// Unauthenticated by necessity — someone requesting a reset usually isn't
+// signed in. ALWAYS responds with the same generic { success: true }
+// shape regardless of whether the email actually belongs to an account,
+// whether Firebase found it, or whether Resend succeeded — this is what
+// stops the endpoint being used to check who has a FlowBiz account
+// (mirrors the enumeration protection ForgotPassword.jsx already had
+// client-side, now enforced where it actually matters: server-side).
+//
+// RATE LIMITING NOTE: the in-memory map below is best-effort only — a
+// Cloudflare Worker can run many isolates in parallel across edge
+// locations, each with its OWN copy of this map, so it does not provide
+// a real global rate limit. For production-grade protection on this
+// endpoint, add a Cloudflare Rate Limiting Rule in the dashboard
+// (Security → WAF → Rate limiting rules) targeting
+// POST /api/auth/send-password-reset — that's enforced at the edge,
+// globally, with no code changes needed here.
+
+import { json, errorResponse } from '../lib/response.js';
+import { generateActionLink } from '../lib/identityToolkit.js';
+import { sendEmail } from '../lib/resend.js';
+import { passwordResetEmail } from '../lib/emailTemplates.js';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Best-effort, single-isolate throttle — see note above.
+const recentRequests = new Map(); // email -> last request timestamp (ms)
+const MIN_INTERVAL_MS = 60 * 1000;
+
+export async function handleSendPasswordReset(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON body.', 400);
+  }
+
+  const email = String(body?.email || '').trim().toLowerCase();
+  if (!email || !EMAIL_RE.test(email) || email.length > 254) {
+    return errorResponse('Enter a valid email address.', 400);
+  }
+
+  const now = Date.now();
+  const last = recentRequests.get(email);
+  if (last && now - last < MIN_INTERVAL_MS) {
+    // Still a generic success — never let timing or response shape leak
+    // whether this is a real throttle vs. a real send.
+    return json({ success: true });
+  }
+  recentRequests.set(email, now);
+
+const continueUrl = `${env.APP_BASE_URL}/auth/action?flow=resetPassword`;
+
+  try {
+    const result = await generateActionLink(env, {
+      requestType: 'PASSWORD_RESET',
+      email,
+      continueUrl,
+    });
+    const { subject, html, text } = passwordResetEmail(result.oobLink);
+    await sendEmail(env, { to: email, subject, html, text });
+  } catch (err) {
+    // EMAIL_NOT_FOUND is expected and common (a mistyped address, or
+    // someone probing for registered accounts) — it must never produce a
+    // different response than success. Anything else gets logged for
+    // diagnosis (e.g. a real Resend/Identity Toolkit outage).
+    if (err.identityToolkitCode !== 'EMAIL_NOT_FOUND') {
+      console.error('[send-password-reset] failed:', err.identityToolkitCode || err.message);
+    }
+  }
+
+  return json({ success: true });
+}
+````
+
+## File: cloudflare-worker/src/routes/sendVerificationEmail.js
+````javascript
+// src/routes/sendVerificationEmail.js
+//
+// POST /api/auth/send-verification-email
+//
+// Replaces the frontend's direct sendEmailVerification() call. Requires
+// the caller's own Firebase ID token — this endpoint can only ever
+// trigger verification for the account that's asking, never an
+// arbitrary email address (same trust model as every other authenticated
+// route in this Worker, e.g. deleteStaff.js).
+//
+// Firebase itself never sends an email for this flow: generateActionLink
+// asks Identity Toolkit for the raw oobLink only (returnOobLink: true),
+// and FlowBiz delivers it via Resend below.
+
+import { json, errorResponse } from '../lib/response.js';
+import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
+import { generateActionLink } from '../lib/identityToolkit.js';
+import { sendEmail } from '../lib/resend.js';
+import { verificationEmail } from '../lib/emailTemplates.js';
+
+export async function handleSendVerificationEmail(request, env) {
+  const authHeader = request.headers.get('Authorization') || '';
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!idToken) return errorResponse('Missing Authorization header.', 401);
+
+  let caller;
+  try {
+    caller = await verifyFirebaseIdToken(idToken, env.FIREBASE_PROJECT_ID);
+  } catch (err) {
+    return errorResponse(`Invalid session: ${err.message}`, 401);
+  }
+
+  if (!caller.email) return errorResponse('No email address on this account.', 400);
+
+const continueUrl = `${env.APP_BASE_URL}/auth/action?flow=verifyEmail`;
+  let link;
+  try {
+    const result = await generateActionLink(env, {
+      requestType: 'VERIFY_EMAIL',
+      idToken,
+      continueUrl,
+    });
+    link = result.oobLink;
+  } catch (err) {
+    console.error('[send-verification-email] generateActionLink failed:', err.identityToolkitCode || err.message);
+    return errorResponse('Could not generate a verification link. Please try again.', 502);
+  }
+
+  try {
+    const { subject, html, text } = verificationEmail(link);
+    await sendEmail(env, { to: caller.email, subject, html, text });
+  } catch (err) {
+    console.error('[send-verification-email] Resend send failed:', err.message);
+    return errorResponse('Could not send the verification email. Please try again.', 502);
+  }
+
+  return json({ success: true });
 }
 ````
 
@@ -5810,6 +5406,263 @@ export default function RepaymentModal({ open, customer, totalOwed, onClose, onS
         </div>
       </form>
     </Modal>
+  );
+}
+````
+
+## File: src/components/landing/LandingFooter.jsx
+````javascript
+import { Link } from 'react-router-dom';
+import { Mail, Shield, FileText, ArrowRight } from 'lucide-react';
+
+export function LandingFooter() {
+  return (
+    <footer className="bg-[#15171d] text-[#cfd3da] border-t border-[#2b303c] pt-14 pb-10 text-xs">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+        
+
+
+        {/* Footer Navigation Columns */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+          
+          {/* Brand Info */}
+          <div className="space-y-4 md:col-span-2">
+            <div className="flex items-center gap-3">
+             
+              <span className="font-bold text-xl text-white tracking-tight">FlowBiz</span>
+            </div>
+            <p className="text-xs text-[#9aa2b1] max-w-sm leading-relaxed">
+              The offline-first Point of Sale, inventory intelligence, and cash-flow management platform purpose-built for Kenyan retailers and small businesses.
+            </p>
+            <div className="flex items-center gap-2 text-[11px] text-[#767f8f]">
+              <span>Nairobi, Kenya</span>
+              <span>·</span>
+              <a href="mailto:support@flowbiz.co.ke" className="hover:text-white transition-colors flex items-center gap-1">
+                <Mail className="h-3 w-3" /> support@flowbiz.co.ke
+              </a>
+            </div>
+          </div>
+
+          {/* Application Navigation */}
+          <div className="space-y-3">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-white block">
+              Application
+            </span>
+            <ul className="space-y-2 text-[#9aa2b1]">
+              <li>
+                <a href="#features" className="hover:text-white transition-colors">
+                  POS Features
+                </a>
+              </li>
+              <li>
+                <a href="#simulator" className="hover:text-white transition-colors">
+                  Live Simulator
+                </a>
+              </li>
+              <li>
+                <a href="#how-it-works" className="hover:text-white transition-colors">
+                  How It Works
+                </a>
+              </li>
+              <li>
+                <a href="#pricing" className="hover:text-white transition-colors">
+                  Pricing
+                </a>
+              </li>
+              <li>
+                <a href="#faq" className="hover:text-white transition-colors">
+                  FAQ
+                </a>
+              </li>
+            </ul>
+          </div>
+
+          {/* Legal & Trust: Tight Spacing, No Sign In */}
+       {/* Column 3: Legal & Compliance */}
+          <div className="space-y-3">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-white block">
+              Trust & Legal
+            </span>
+            <ul className="space-y-2">
+              <li>
+                <Link to="/privacy" className="hover:text-white transition-colors flex items-center gap-1.5">
+                  <Shield className="h-3.5 w-3.5 text-[#54b67c]" />
+                  Privacy Policy (KDPA 2019)
+                </Link>
+              </li>
+              <li>
+                <Link to="/terms" className="hover:text-white transition-colors flex items-center gap-1.5">
+                  <FileText className="h-3.5 w-3.5 text-[#54b67c]" />
+                  Terms of Service
+                </Link>
+              </li>
+             
+            </ul>
+          </div>
+
+        </div>
+
+        {/* Bottom Line */}
+        <div className="pt-8 border-t border-[#2b303c] flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-[#767f8f]">
+          <p>© {new Date().getFullYear()} FlowBiz. All rights reserved.</p>
+          
+        </div>
+
+      </div>
+    </footer>
+  );
+}
+````
+
+## File: src/components/landing/LandingHeader.jsx
+````javascript
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Menu, X, ArrowRight, } from 'lucide-react';
+
+export function LandingHeader() {
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  return (
+    <header className="sticky top-0 z-50 bg-[#faf6ef]/95 backdrop-blur-md border-b border-[#e8eaed] h-14 flex items-center">
+      <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="relative flex items-center justify-between h-full">
+          
+          {/* Left: Brand Logo */}
+          <Link to="/" className="flex items-center gap-2.5 shrink-0 z-10 leading-none">
+      
+            <div className="flex flex-col justify-center">
+              <span className="font-extrabold text-lg text-[#15171d] tracking-tight leading-none">
+                FlowBiz
+              </span>
+              <span className="text-[8px] font-bold text-[#1a623c] uppercase tracking-wider leading-none mt-1">
+                Business Manager
+              </span>
+            </div>
+          </Link>
+
+          {/* Center: Navigation Links Perfectly Centered Horizontally & Vertically */}
+          <nav className="hidden lg:flex absolute inset-0 items-center justify-center pointer-events-none">
+            <div className="flex items-center gap-6 xl:gap-8 text-xs sm:text-sm font-semibold text-[#5a6273] pointer-events-auto leading-none">
+              <a 
+                href="#features" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                Features
+              </a>
+              <a 
+                href="#live-simulator" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                Live Simulator
+              </a>
+              <a 
+                href="#how-it-works" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                How It Works
+              </a>
+              <a 
+                href="#pricing" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                Pricing
+              </a>
+              <a 
+                href="#faq" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                FAQ
+              </a>
+            </div>
+          </nav>
+
+          {/* Right: Action Buttons */}
+          <div className="hidden sm:flex items-center gap-2.5 shrink-0 z-10 leading-none">
+            <Link
+              to="/login"
+              className="text-xs sm:text-sm font-bold text-[#363b48] hover:text-[#15171d] px-3 py-2 rounded-lg hover:bg-white transition-colors"
+            >
+              Sign In
+            </Link>
+            <Link
+              to="/setup"
+              className="bg-[#1a623c] text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-bold hover:bg-[#144f30] transition-colors shadow-xs flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <span>Get Started</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+
+          {/* Mobile Menu Button */}
+          <button
+            type="button"
+            onClick={() => setMobileOpen(!mobileOpen)}
+            className="lg:hidden p-1.5 rounded-lg text-[#5a6273] hover:text-[#15171d] hover:bg-white z-10"
+            aria-label="Toggle Menu"
+          >
+            {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
+
+        </div>
+      </div>
+
+      {/* Mobile Dropdown */}
+      {mobileOpen && (
+        <div className="lg:hidden absolute top-full left-0 right-0 border-b border-[#e8eaed] bg-white px-6 py-4 space-y-3 shadow-lg">
+          <a
+            href="#features"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            Features
+          </a>
+          <a
+            href="#simulator"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            Live Simulator
+          </a>
+          <a
+            href="#how-it-works"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            How It Works
+          </a>
+          <a
+            href="#pricing"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            Pricing
+          </a>
+          <a
+            href="#faq"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            FAQ
+          </a>
+          <div className="pt-2.5 border-t border-[#e8eaed] flex flex-col gap-2">
+            <Link
+              to="/login"
+              className="w-full text-center py-2.5 border border-[#cfd3da] rounded-xl text-sm font-bold text-[#15171d]"
+            >
+              Sign In
+            </Link>
+            <Link
+              to="/setup"
+              className="w-full text-center py-3 bg-[#1a623c] text-white rounded-xl text-sm font-bold shadow-md hover:bg-[#144f30] transition-all flex items-center justify-center gap-2"
+            >
+              <span>Get Started Free</span>
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
+        </div>
+      )}
+    </header>
   );
 }
 ````
@@ -6319,6 +6172,38 @@ export function useFinancialsForRange(start, end) {
 }
 ````
 
+## File: src/hooks/useFirestoreCollection.js
+````javascript
+import { useCallback, useEffect, useState } from 'react';
+import { onSnapshot, getDocs } from 'firebase/firestore';
+
+export function useFirestoreCollection(queryRef) {
+  const [data, setData]       = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+
+  useEffect(() => {
+    if (!queryRef) { setData([]); setLoading(false); return; }
+    setLoading(true);
+    const unsub = onSnapshot(queryRef,
+      snap => { setData(snap.docs.map(d=>({id:d.id,...d.data()}))); setLoading(false); setError(null); },
+      err  => { setError(err.message); setLoading(false); }
+    );
+    return unsub;
+  }, [queryRef]);
+
+  const refetch = useCallback(async () => {
+    if (!queryRef) return;
+    try {
+      const snap = await getDocs(queryRef);
+      setData(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) { setError(err.message); }
+  }, [queryRef]);
+
+  return { data, loading, error, refetch };
+}
+````
+
 ## File: src/hooks/useHardwareScanner.js
 ````javascript
 // src/hooks/useHardwareScanner.js
@@ -6368,64 +6253,6 @@ export function useHardwareScanner(onScan, { enabled = true, maxIntervalMs = 80,
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [enabled, onScan, maxIntervalMs, minLength]);
-}
-````
-
-## File: src/pages/Privacy.jsx
-````javascript
-import { Link } from 'react-router-dom';
-import { ArrowLeft, Shield } from 'lucide-react';
-
-export default function Privacy() {
-  return (
-    <div className="min-h-screen bg-sand text-ink-900 selection:bg-moss-200 py-8 px-4 sm:px-6">
-      <div className="mx-auto max-w-3xl">
-        <Link to="/" className="inline-flex items-center gap-2 text-sm font-semibold text-ink-500 hover:text-ink-800 mb-6 transition-colors">
-          <ArrowLeft className="h-4 w-4" /> Back to App
-        </Link>
-        <div className="card p-6 sm:p-10 space-y-8 bg-white border border-ink-100 shadow-sm">
-          <div className="border-b border-ink-100 pb-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="h-10 w-10 bg-moss-50 text-moss-700 rounded-xl flex items-center justify-center">
-                <Shield className="h-6 w-6" strokeWidth={2} />
-              </div>
-              <h1 className="font-display text-2xl font-bold text-ink-900">Privacy Policy</h1>
-            </div>
-            <p className="text-sm text-ink-500">Effective Date: August 20, 2026 · Compliant with Kenya Data Protection Act (KDPA) 2019</p>
-          </div>
-
-          <div className="space-y-6 text-sm text-ink-700 leading-relaxed">
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">1. Information We Collect</h2>
-              <p>FlowBiz collects operational data required to provide point-of-sale, inventory management, and debt ledger functionality for retail businesses:</p>
-              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
-                <li><strong>Account Data:</strong> Owner/Staff email address, display name, and business identity.</li>
-                <li><strong>Store Operational Data:</strong> Product inventory, transaction receipts, expense entries, and customer contact information recorded for debt management.</li>
-                <li><strong>Technical Data:</strong> Browser user-agent and device category used for device management security.</li>
-              </ul>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">2. Role as Data Processor</h2>
-              <p>Under the Kenya Data Protection Act (2019), the business owner acts as the <strong>Data Controller</strong> for customer details stored within their workspace. FlowBiz operates strictly as a <strong>Data Processor</strong>.</p>
-              <p>We do not monetize, profile, or sell customer contact information recorded by merchants.</p>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">3. Offline Storage &amp; Security</h2>
-              <p>FlowBiz uses an offline-first architecture. Transactional data is temporarily stored in local browser memory (IndexedDB) and synchronized securely via encrypted HTTPS/WSS channels to cloud servers when connectivity is available.</p>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">4. Contact Us</h2>
-              <p>For data protection inquiries or requests, contact our privacy compliance team at:</p>
-              <p className="font-medium text-ink-800">support@flowbiz.co.ke</p>
-            </section>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
 }
 ````
 
@@ -6730,105 +6557,6 @@ export default function Reports() {
 }
 ````
 
-## File: src/pages/Terms.jsx
-````javascript
-import { Link } from 'react-router-dom';
-import { ArrowLeft, FileText } from 'lucide-react';
-
-export default function Terms() {
-  return (
-    <div className="min-h-screen bg-sand text-ink-900 selection:bg-moss-200 py-8 px-4 sm:px-6">
-      <div className="mx-auto max-w-3xl">
-        <Link to="/" className="inline-flex items-center gap-2 text-sm font-semibold text-ink-500 hover:text-ink-800 mb-6 transition-colors">
-          <ArrowLeft className="h-4 w-4" /> Back to App
-        </Link>
-        <div className="card p-6 sm:p-10 space-y-8 bg-white border border-ink-100 shadow-sm">
-          <div className="border-b border-ink-100 pb-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="h-10 w-10 bg-moss-50 text-moss-700 rounded-xl flex items-center justify-center">
-                <FileText className="h-6 w-6" strokeWidth={2} />
-              </div>
-              <h1 className="font-display text-2xl font-bold text-ink-900">Terms of Service</h1>
-            </div>
-            <p className="text-sm text-ink-500">Effective Date: August 14, 2026</p>
-          </div>
-
-          <div className="space-y-6 text-sm text-ink-700 leading-relaxed">
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">1. Acceptance of Terms</h2>
-              <p>By creating an account and using FlowBiz (the "Service"), you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the Service.</p>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">2. Description of Service</h2>
-              <p>FlowBiz is a business management and point-of-sale (POS) application tailored for Kenyan small and medium-sized businesses. It provides tools for inventory tracking, sales recording, debt management, and basic financial reporting.</p>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">3. Account Registration & Security</h2>
-              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
-                <li>You must provide accurate and complete information when creating a business account.</li>
-                <li>You are responsible for maintaining the security of your password and devices.</li>
-                <li>Business owners are responsible for the actions of any staff members (e.g., Cashiers) they invite to their workspace.</li>
-              </ul>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">4. User Data & Privacy Responsibilities</h2>
-              <p>As a business owner, you use FlowBiz to store and process data regarding your own customers. <strong>You represent and warrant that you have the lawful right to collect and process this data under the Kenya Data Protection Act, 2019.</strong></p>
-              <p>FlowBiz acts strictly as a Data Processor for your business data. We will not sell, rent, or exploit your operational data. Please review our <Link to="/privacy" className="text-moss-600 hover:underline font-semibold">Privacy Policy</Link> for full details.</p>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">5. Subscriptions and Payments</h2>
-              <p>FlowBiz offers a Free tier and a Pro tier.</p>
-              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
-                <li><strong>FlowBiz Pro:</strong> Upgrading unlocks advanced features such as WhatsApp document sharing, PDF generation, unlimited staff members, and advanced analytics.</li>
-                <li><strong>Billing:</strong> Payments are processed securely via Paystack. Subscriptions are billed manually on a prepaid basis (e.g., every 30 days) to give you full control. We do not automatically charge your card.</li>
-                <li><strong>Refunds:</strong> Payments are generally non-refundable. We do not provide prorated refunds for partially unused periods.</li>
-              </ul>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">6. Acceptable Use</h2>
-              <p>You agree not to use the Service to:</p>
-              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
-                <li>Engage in any illegal, fraudulent, or deceptive business practices.</li>
-                <li>Send unauthorized promotional material (spam) using the WhatsApp receipt/invoice features.</li>
-                <li>Attempt to bypass or compromise the Service's security or multi-tenant architecture.</li>
-              </ul>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">7. Disclaimers & Limitation of Liability</h2>
-              <p><strong>Not Professional Advice:</strong> FlowBiz is a record-keeping tool. It is not a substitute for a professional accountant, tax advisor, or legal counsel. We do not guarantee automatic compliance with KRA regulations (such as eTIMS) unless explicitly stated as an integrated feature.</p>
-              <p><strong>As-Is Basis:</strong> The Service is provided "as is" and "as available" without warranties of any kind, either express or implied, including implied warranties of merchantability or fitness for a particular purpose.</p>
-              <p><strong>Limitation of Liability:</strong> To the maximum extent permitted by Kenyan law, FlowBiz and its creators shall not be liable for any indirect, incidental, or consequential damages, including loss of profits, data, or business interruption arising from your use of the Service.</p>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">8. Termination</h2>
-              <p>We reserve the right to suspend or terminate your access to the Service at any time, with or without notice, if we determine that you have violated these Terms or engaged in illegal activity. You may also terminate your account at any time.</p>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">9. Governing Law</h2>
-              <p>These Terms shall be governed by and construed in accordance with the laws of the Republic of Kenya. Any disputes arising from these Terms shall be subject to the exclusive jurisdiction of the Kenyan courts.</p>
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="font-display text-lg font-bold text-ink-900">10. Contact Us</h2>
-              <p>If you have any questions regarding these Terms, please contact us at:</p>
-              <p className="font-medium text-ink-800">support@flowbiz.co.ke</p>
-            </section>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-````
-
 ## File: src/utils/currency.js
 ````javascript
 export function formatKES(amount) {
@@ -6848,42 +6576,6 @@ export function roundMoney(amount) {
   const v = Number(amount);
   if (!Number.isFinite(v)) return 0;
   return Math.round((v + Number.EPSILON) * 100) / 100;
-}
-````
-
-## File: src/utils/offlineWrite.js
-````javascript
-// src/utils/offlineWrite.js — full file (small, and every call site depends on this exact contract)
-export function raceWithTimeout(promise, timeoutMs = 4000) {
-  timeoutMs = Math.min(timeoutMs, 1500); 
-  return new Promise((resolve) => {
-    // Already offline? There's no point waiting out the full timeout to
-    // "discover" that — resolve as queued immediately instead of padding
-    // every offline action with a fixed ~4s stall.
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      resolve({ queuedOffline: true });
-      promise.catch(() => {}); // still observed, just not blocking anything
-      return;
-    }
-
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) { settled = true; resolve({ queuedOffline: true }); }
-    }, timeoutMs);
-
-    promise.then(
-      (value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve({ queuedOffline: false, value });
-      },
-      (err) => {
-        clearTimeout(timer);
-        if (!settled) { settled = true; resolve({ queuedOffline: false, error: err }); }
-      }
-    );
-  });
 }
 ````
 
@@ -7008,68 +6700,6 @@ export default app;
     padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
   }
 }
-````
-
-## File: src/main.jsx
-````javascript
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
-import './index.css';
-import App from './App.jsx';
-import toast from 'react-hot-toast';
-import { registerSW } from 'virtual:pwa-register';
-import { enterDemoMode, exitDemoMode } from './demo/demoMode';
-import { seedDemoDataIfNeeded } from './demo/seedData';
-
-// `import.meta.env.MODE` is 'demo' only when started via `npm run dev:demo`
-// (vite --mode demo). The actual Firebase-vs-local-storage routing is
-// decided at build time by vite.config.js's module aliasing — this block
-// just does the two things that still need to happen at runtime once we
-// know we're in Demo Mode:
-//
-//  1. Seed realistic sample data on first load (no-ops on later loads —
-//     see seedDemoDataIfNeeded's own localStorage check).
-//  2. Flip the flag in src/demo/demoMode.js, so the parts of the UI that
-//     need to know "are we in Demo Mode?" for display purposes only (the
-//     Demo badge in TopHeader, choosing which Business Reset to run in
-//     Settings) read it correctly. This flag has NO bearing on whether
-//     Firebase is actually used — that's the aliasing above — it's purely
-//     cosmetic/UI state.
-//
-// The `else` branch matters too: without it, a browser that previously ran
-// `npm run dev:demo` would keep the demo flag set to true even after
-// switching back to `npm run dev`, incorrectly showing the Demo badge (and
-// routing Settings' Business Reset to the wrong implementation) in
-// Production Mode.
-if (import.meta.env.MODE === 'demo') {
-  enterDemoMode();
-  seedDemoDataIfNeeded();
-} else {
-  exitDemoMode();
-}
-
-if (import.meta.env.MODE !== 'demo') {
-  const updateSW = registerSW({
-    onRegisteredSW(swUrl, registration) {
-      if (!registration) return;
-      setInterval(() => {
-        if (document.visibilityState === 'visible') registration.update().catch(() => {});
-      }, 60 * 1000);
-    },
- onNeedRefresh() {
-  updateSW(true);
-},
-    onOfflineReady() {},
-  });
-}
-createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
-  </StrictMode>
-);
 ````
 
 ## File: CHANGES.md
@@ -7255,6 +6885,132 @@ Fixed:
 | `src/pages/Purchases.jsx` | Added `newSupplierId` → `form.supplierId` auto-select `useEffect`; `handleSupplierSave` throws on error. |
 | `src/pages/Products.jsx` | `handleSupplierSave` throws on error (consistency fix). |
 | `src/pages/Dashboard.jsx` | `handleSupplierSave` throws on error (consistency fix). |
+````
+
+## File: package.json
+````json
+{
+  "name": "flowbiz",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:demo": "vite --mode demo",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@zxing/browser": "^0.2.1",
+    "@zxing/library": "^0.23.0",
+    "firebase": "^12.15.0",
+    "jspdf": "^2.5.1",
+    "lucide-react": "^1.22.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-hot-toast": "^2.4.1",
+    "react-icons": "^5.7.0",
+    "react-router-dom": "^6.30.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^10.5.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.6.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "vite": "^8.1.0",
+    "vite-plugin-pwa": "^1.3.0"
+  }
+}
+````
+
+## File: cloudflare-worker/src/lib/identityToolkit.js
+````javascript
+// src/lib/identityToolkit.js
+//
+// Deletes a Firebase Authentication user by uid. This is the one thing
+// FlowBiz's client SDK can never safely do itself — removing another
+// person's Auth account requires privileged, server-side credentials.
+// This is the actual fix for the staff-deletion bug described in the
+// audit: without this, the Firestore profile can be deleted all day and
+// the email stays registered in Firebase Authentication forever.
+
+import { getGoogleAccessToken } from './googleAuth.js';
+
+// Generates a Firebase Auth action link (email verification or password
+// reset) via the Identity Toolkit REST API WITHOUT letting Firebase send
+// its own email — that's what lets FlowBiz deliver the email itself via
+// Resend. returnOobLink:true is only honored for server-authenticated
+// (OAuth) callers, never a plain client API key request — same privilege
+// tier as deleteAuthUser() below.
+export async function generateActionLink(env, { requestType, email, idToken, continueUrl }) {
+  const token = await getGoogleAccessToken(env);
+  const body = {
+    requestType,               // 'VERIFY_EMAIL' | 'PASSWORD_RESET'
+    returnOobLink: true,
+    continueUrl,
+    canHandleCodeInApp: true,  // send users straight to our /auth/action page, never Firebase's hosted page
+  };
+  if (email) body.email = email;
+  if (idToken) body.idToken = idToken;
+
+  const res = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/accounts:sendOobCode`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    const code = errBody?.error?.message || 'UNKNOWN_ERROR';
+    const err = new Error(code);
+    err.identityToolkitCode = code;
+    throw err;
+  }
+  const data = await res.json();
+  
+  // 1. Parse the ugly Firebase link
+  const originalUrl = new URL(data.oobLink);
+  
+  // 2. Extract the query parameters (?mode=...&oobCode=...&apiKey=...)
+  const queryParams = originalUrl.search;
+  
+  // 3. Attach those exact parameters to your FlowBiz React URL
+  // This uses the env.APP_BASE_URL from your worker environment
+  const customLink = `${env.APP_BASE_URL}/auth/action${queryParams}`;
+
+  // 4. Return the custom link to your Resend email template
+  return { oobLink: customLink, email: data.email };
+}
+
+export async function deleteAuthUser(env, uid) {
+  const token = await getGoogleAccessToken(env);
+  const res = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/accounts:delete`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ localId: uid }),
+    }
+  );
+  if (!res.ok) {
+    const errText = await res.text();
+    // A user that's already gone is not a failure from the caller's point
+    // of view — the goal (no orphaned Auth account) is already achieved.
+    if (res.status === 400 && errText.includes('USER_NOT_FOUND')) return;
+    throw new Error(`Failed to delete Firebase Auth user ${uid}: ${errText}`);
+  }
+}
 ````
 
 ## File: src/components/scanner/ScannerModal.jsx
@@ -7600,8 +7356,8 @@ try {
         <Row label="+ Debt repayments (M-Pesa)"  value={summary.totalDebtRepaymentsMpesa} />
         <Row label="− Expenses (M-Pesa)"         value={-summary.totalExpensesMpesa} />
         <Row label="− Refunds (M-Pesa)"          value={-summary.totalRefundsMpesa} />
-        <Row label="− Purchases paid (cash)" value={-cashPurchases} />
-        <Row label="− Supplier debt payments (cash)" value={-cashSupplierPay} />
+        <Row label="− Purchases paid (M-Pesa)" value={-mpesaPurchases} />
+        <Row label="− Supplier debt payments (M-Pesa)" value={-mpesaSupplierPay} />
         <Row label="= Expected M-Pesa"           value={expectedMpesaAtClose} bold />
       </div>
       <div className="card p-4 space-y-2">
@@ -8046,6 +7802,1223 @@ export default function HelpGuide() {
 }
 ````
 
+## File: src/pages/Privacy.jsx
+````javascript
+import { Link } from 'react-router-dom';
+import { ArrowLeft, Shield } from 'lucide-react';
+
+export default function Privacy() {
+  return (
+    <div className="min-h-screen bg-sand text-ink-900 selection:bg-moss-200 py-8 px-4 sm:px-6">
+      <div className="mx-auto max-w-3xl">
+        <Link to="/" className="inline-flex items-center gap-2 text-sm font-semibold text-ink-500 hover:text-ink-800 mb-6 transition-colors">
+          <ArrowLeft className="h-4 w-4" /> Back to App
+        </Link>
+
+        <div className="card p-6 sm:p-10 space-y-8 bg-white border border-ink-100 shadow-sm">
+          <div className="border-b border-ink-100 pb-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-10 w-10 bg-moss-50 text-moss-700 rounded-xl flex items-center justify-center">
+                <Shield className="h-6 w-6" strokeWidth={2} />
+              </div>
+              <h1 className="font-display text-2xl font-bold text-ink-900">
+                Privacy Policy
+              </h1>
+            </div>
+
+            <p className="text-sm text-ink-500">
+              Effective Date: August 20, 2026 · Compliant with Kenya Data Protection Act (KDPA) 2019
+            </p>
+          </div>
+
+          <div className="space-y-8 text-sm text-ink-700 leading-relaxed">
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                1. Introduction
+              </h2>
+
+              <p>
+                FlowBiz is a business management platform designed to help small and
+                medium-sized businesses manage sales, inventory, customers, debts,
+                expenses, quotations, invoices, receipts, and related business
+                operations.
+              </p>
+
+              <p>
+                This Privacy Policy explains what information FlowBiz may process,
+                why that information is processed, how it is stored and protected,
+                and the choices available to individuals whose personal data is
+                processed through the service.
+              </p>
+
+              <p>
+                FlowBiz is committed to handling personal data in accordance with
+                applicable Kenyan data protection laws, including the Data Protection
+                Act, 2019 and applicable regulations and guidance issued by the
+                Office of the Data Protection Commissioner (ODPC).
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                2. Information We Collect
+              </h2>
+
+              <p>
+                The information processed by FlowBiz depends on how the service is
+                used. This may include:
+              </p>
+
+              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+                <li>
+                  <strong>Account Information:</strong> email address, display name,
+                  authentication information, business name, and business profile
+                  information.
+                </li>
+
+                <li>
+                  <strong>Business Information:</strong> business name, business
+                  contact details, address, phone number, email address, tax or
+                  registration information where voluntarily provided, and business
+                  preferences.
+                </li>
+
+                <li>
+                  <strong>Inventory Information:</strong> product names, product
+                  descriptions, prices, quantities, stock levels, categories,
+                  cost information, and stock adjustments.
+                </li>
+
+                <li>
+                  <strong>Transaction Information:</strong> sales, quotations,
+                  invoices, receipts, payment methods, transaction amounts,
+                  discounts, refunds, expenses, and related records.
+                </li>
+
+                <li>
+                  <strong>Customer Information:</strong> customer names, phone
+                  numbers, email addresses, notes, purchase records, outstanding
+                  balances, and other information entered by a business for
+                  customer and debt-management purposes.
+                </li>
+
+                <li>
+                  <strong>Staff Information:</strong> names, email addresses,
+                  assigned roles, permissions, and activity associated with
+                  business workspaces.
+                </li>
+
+                <li>
+                  <strong>Device and Security Information:</strong> browser type,
+                  device category, session information, approximate technical
+                  information, login activity, and information necessary to manage
+                  authorized devices and protect accounts.
+                </li>
+
+                <li>
+                  <strong>Support Information:</strong> information you provide
+                  when contacting FlowBiz for technical support, account assistance,
+                  or privacy-related requests.
+                </li>
+              </ul>
+
+              <p>
+                FlowBiz does not require businesses to enter information that is
+                unnecessary for the operation of their workspace. Businesses are
+                responsible for ensuring that information they enter into FlowBiz
+                is appropriate, accurate, and collected lawfully.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                3. How We Use Information
+              </h2>
+
+              <p>
+                Information processed through FlowBiz may be used for purposes
+                including:
+              </p>
+
+              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+                <li>Creating and managing user accounts and business workspaces.</li>
+                <li>Providing sales, inventory, invoicing, quotation, and debt-management functionality.</li>
+                <li>Synchronizing business information between authorized devices.</li>
+                <li>Maintaining transaction history and business records.</li>
+                <li>Providing account, security, and device-management functionality.</li>
+                <li>Responding to support requests and resolving technical problems.</li>
+                <li>Detecting, preventing, and investigating unauthorized access, fraud, abuse, or security incidents.</li>
+                <li>Maintaining and improving the reliability and functionality of FlowBiz.</li>
+                <li>Complying with applicable legal, regulatory, accounting, or law-enforcement requirements.</li>
+              </ul>
+
+              <p>
+                FlowBiz does not sell customer contact information or use merchant
+                customer records to build advertising profiles.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                4. Data Controller and Data Processor Roles
+              </h2>
+
+              <p>
+                Businesses using FlowBiz generally determine what customer,
+                employee, and operational information they collect and the purposes
+                for which that information is used. In those circumstances, the
+                business is generally the <strong>Data Controller</strong> and
+                FlowBiz acts as a <strong>Data Processor</strong> processing that
+                information on the business's behalf.
+              </p>
+
+              <p>
+                FlowBiz may also act as a Data Controller for information it
+                processes for its own purposes, such as account administration,
+                service security, customer support, billing, legal compliance,
+                and protection of the FlowBiz platform.
+              </p>
+
+              <p>
+                The applicable role depends on the particular processing activity
+                and the purposes for which the information is processed.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                5. Offline-First Storage
+              </h2>
+
+              <p>
+                FlowBiz is designed with an offline-first architecture. Depending
+                on the functionality being used, certain business information may
+                be temporarily stored locally on an authorized device so that the
+                application can continue operating when an internet connection is
+                unavailable.
+              </p>
+
+              <p>
+                Local storage may use browser-managed storage technologies such as
+                IndexedDB. When connectivity becomes available, supported data is
+                synchronized with FlowBiz's cloud infrastructure.
+              </p>
+
+              <p>
+                Users should protect devices used to access FlowBiz with appropriate
+                screen locks, passwords, operating-system security updates, and
+                other security controls because locally stored information may be
+                accessible to anyone who gains unauthorized access to the device.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                6. Data Synchronization and Transmission
+              </h2>
+
+              <p>
+                When FlowBiz synchronizes information with its cloud services,
+                information is transmitted using secure network protocols such as
+                HTTPS and, where applicable, secure real-time communication
+                protocols.
+              </p>
+
+              <p>
+                FlowBiz uses technical and organizational safeguards intended to
+                protect information against unauthorized access, alteration,
+                disclosure, loss, or destruction. However, no internet-connected
+                service or electronic storage system can be guaranteed to be
+                completely secure.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                7. Third-Party Service Providers
+              </h2>
+
+              <p>
+                FlowBiz may rely on trusted technology and infrastructure providers
+                to operate parts of the service. Depending on the features enabled,
+                these providers may support services such as authentication, cloud
+                storage, application hosting, email delivery, payment processing,
+                communications, analytics, or security.
+              </p>
+
+              <p>
+                Such providers may process information only to the extent reasonably
+                necessary to provide their services to FlowBiz and are expected to
+                apply appropriate security and confidentiality measures.
+              </p>
+
+              <p>
+                Where FlowBiz integrates with an external service selected or
+                activated by a business, information shared with that service may
+                also be subject to that provider's own privacy policy and terms.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                8. M-Pesa, Payment and Communication Integrations
+              </h2>
+
+              <p>
+                FlowBiz may support or integrate with payment and communication
+                services, including mobile-money, payment gateway, email, or
+                messaging services.
+              </p>
+
+              <p>
+                Where such integrations are enabled, relevant transaction or
+                contact information may be transmitted to the applicable service
+                provider to complete or support the requested operation.
+              </p>
+
+              <p>
+                FlowBiz does not need to store sensitive payment credentials such
+                as a customer's mobile-money PIN in order to record a payment
+                transaction. Users should never enter payment PINs, passwords, or
+                other authentication secrets into ordinary FlowBiz customer or
+                transaction fields.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                9. Cookies and Local Technologies
+              </h2>
+
+              <p>
+                FlowBiz may use browser storage, session technologies, authentication
+                tokens, and similar technologies that are necessary to keep users
+                signed in, remember application state, support offline operation,
+                maintain security, and provide core functionality.
+              </p>
+
+              <p>
+                Where optional analytics or similar technologies are introduced,
+                FlowBiz will provide appropriate information and controls where
+                required by applicable law.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                10. Data Retention
+              </h2>
+
+              <p>
+                FlowBiz retains information for as long as reasonably necessary to
+                provide the service, maintain legitimate business and security
+                records, resolve disputes, comply with legal obligations, and
+                protect the rights and interests of FlowBiz and its users.
+              </p>
+
+              <p>
+                Business owners are responsible for determining appropriate
+                retention periods for customer and business records under their
+                control, including accounting, tax, debt, and transaction records.
+              </p>
+
+              <p>
+                When information is no longer required for a legitimate purpose,
+                FlowBiz may delete, anonymize, or otherwise securely dispose of it,
+                subject to applicable legal, security, backup, and dispute-related
+                requirements.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                11. Data Subject Rights
+              </h2>
+
+              <p>
+                Under applicable Kenyan data protection law, individuals may have
+                rights concerning their personal data, including the right to be
+                informed about processing, access personal data, object to certain
+                processing, request correction of inaccurate information, and
+                request deletion where legally applicable.
+              </p>
+
+              <p>
+                Where a FlowBiz customer has entered an individual's information
+                into their business workspace, the individual should normally
+                contact that business first because the business may be the Data
+                Controller responsible for that information.
+              </p>
+
+              <p>
+                Requests relating to information for which FlowBiz is the Data
+                Controller may be submitted using the contact details provided
+                below. FlowBiz may need to verify the identity and authority of a
+                person making a request before disclosing or modifying information.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                12. Account Deletion and Data Removal
+              </h2>
+
+              <p>
+                Users may request closure of their FlowBiz account or deletion of
+                personal information associated with the account, subject to
+                applicable legal and operational requirements.
+              </p>
+
+              <p>
+                Deleting an account may not immediately remove every record from
+                backups, security logs, fraud-prevention systems, or records that
+                FlowBiz is legally required to retain. Such information will be
+                retained only for as long as reasonably necessary for the applicable
+                purpose.
+              </p>
+
+              <p>
+                Business owners should also consider exporting any records they
+                need before permanently closing a workspace.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                13. Data Accuracy
+              </h2>
+
+              <p>
+                FlowBiz provides tools for businesses to create, update, and manage
+                their operational records. Businesses are responsible for ensuring
+                that personal information entered into their workspace is accurate,
+                relevant, and kept up to date where necessary.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                14. Data Transfers
+              </h2>
+
+              <p>
+                Some FlowBiz infrastructure or service providers may process or
+                store information outside Kenya. Where personal data is transferred
+                outside Kenya, FlowBiz will seek to apply appropriate safeguards
+                and comply with applicable requirements governing international
+                transfers of personal data.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                15. Security Incidents and Data Breaches
+              </h2>
+
+              <p>
+                FlowBiz maintains reasonable technical and organizational measures
+                designed to identify, prevent, investigate, and respond to security
+                incidents.
+              </p>
+
+              <p>
+                If FlowBiz becomes aware of a personal data breach affecting
+                information processed on behalf of a business, FlowBiz will notify
+                the relevant Data Controller without undue delay and, where
+                reasonably practicable, within the period required by applicable
+                law or contractual arrangements.
+              </p>
+
+              <p>
+                Where FlowBiz is itself the Data Controller for affected information,
+                it will assess the incident and take any notification or remediation
+                steps required by applicable data protection law.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                16. Children's Data
+              </h2>
+
+              <p>
+                FlowBiz is a business management service and is not intended to be
+                directed at children as its primary users.
+              </p>
+
+              <p>
+                Businesses should not knowingly collect or enter children's personal
+                data into FlowBiz unless they have a lawful basis and have complied
+                with applicable requirements governing the processing of children's
+                data.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                17. Changes to This Policy
+              </h2>
+
+              <p>
+                FlowBiz may update this Privacy Policy when its services, technology,
+                legal obligations, or data-processing practices change.
+              </p>
+
+              <p>
+                The effective date displayed at the beginning of this policy will
+                be updated when material changes are made. Users are encouraged to
+                review this page periodically.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                18. Contact Us
+              </h2>
+
+              <p>
+                For privacy questions, data protection requests, security concerns,
+                or requests relating to information for which FlowBiz is the Data
+                Controller, contact:
+              </p>
+
+              <p className="font-medium text-ink-800">
+                support@flowbiz.co.ke
+              </p>
+
+              <p>
+                If you are a customer of a business using FlowBiz and your request
+                concerns information held by that business, you should normally
+                contact the business directly first.
+              </p>
+            </section>
+
+            <section className="space-y-3 border-t border-ink-100 pt-6">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                19. Your Responsibility as a FlowBiz User
+              </h2>
+
+              <p>
+                Businesses using FlowBiz are responsible for using the platform in
+                compliance with applicable privacy, consumer-protection, employment,
+                tax, accounting, and other laws relevant to their operations.
+              </p>
+
+              <p>
+                This includes informing customers and staff where required,
+                collecting information lawfully, limiting collection to information
+                that is reasonably necessary, maintaining appropriate access
+                controls, and protecting devices and account credentials used to
+                access FlowBiz.
+              </p>
+            </section>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+````
+
+## File: src/pages/Terms.jsx
+````javascript
+import { Link } from 'react-router-dom';
+import { ArrowLeft, FileText } from 'lucide-react';
+
+export default function Terms() {
+  return (
+    <div className="min-h-screen bg-sand text-ink-900 selection:bg-moss-200 py-8 px-4 sm:px-6">
+      <div className="mx-auto max-w-3xl">
+        <Link
+          to="/"
+          className="inline-flex items-center gap-2 text-sm font-semibold text-ink-500 hover:text-ink-800 mb-6 transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" /> Back to App
+        </Link>
+
+        <div className="card p-6 sm:p-10 space-y-8 bg-white border border-ink-100 shadow-sm">
+          <div className="border-b border-ink-100 pb-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-10 w-10 bg-moss-50 text-moss-700 rounded-xl flex items-center justify-center">
+                <FileText className="h-6 w-6" strokeWidth={2} />
+              </div>
+
+              <h1 className="font-display text-2xl font-bold text-ink-900">
+                Terms of Service
+              </h1>
+            </div>
+
+            <p className="text-sm text-ink-500">
+              Effective Date: August 22, 2026
+            </p>
+          </div>
+
+          <div className="space-y-8 text-sm text-ink-700 leading-relaxed">
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                1. Acceptance of Terms
+              </h2>
+
+              <p>
+                By creating an account, accessing, or using FlowBiz (the
+                "Service"), you agree to be bound by these Terms of Service
+                ("Terms"), together with our Privacy Policy and any additional
+                terms that apply to specific features or paid services.
+              </p>
+
+              <p>
+                If you do not agree to these Terms, you must not create an
+                account or use the Service.
+              </p>
+
+              <p>
+                If you are using FlowBiz on behalf of a business or organization,
+                you represent that you have the authority to accept these Terms
+                on that organization's behalf.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                2. Description of the Service
+              </h2>
+
+              <p>
+                FlowBiz is a cloud-enabled, offline-first business management
+                and point-of-sale (POS) application designed primarily for
+                small and medium-sized businesses.
+              </p>
+
+              <p>
+                Depending on the plan and features enabled, FlowBiz may provide
+                tools for:
+              </p>
+
+              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+                <li>Sales and point-of-sale transaction recording.</li>
+                <li>Inventory and stock management.</li>
+                <li>Customer and debtor management.</li>
+                <li>Quotation and invoice creation.</li>
+                <li>Receipt generation and sharing.</li>
+                <li>Expense recording and business reporting.</li>
+                <li>Staff accounts, roles, and permissions.</li>
+                <li>Offline transaction recording and synchronization.</li>
+                <li>Payment and communication integrations.</li>
+                <li>Business analytics and operational insights.</li>
+              </ul>
+
+              <p>
+                Features may vary by subscription plan and may be changed,
+                introduced, restricted, or discontinued as FlowBiz evolves.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                3. Eligibility and Account Registration
+              </h2>
+
+              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+                <li>
+                  You must provide accurate and reasonably complete information
+                  when creating and maintaining your account.
+                </li>
+
+                <li>
+                  You are responsible for maintaining the confidentiality of
+                  your account credentials and for activity occurring through
+                  your account.
+                </li>
+
+                <li>
+                  You must notify FlowBiz promptly if you believe your account
+                  has been accessed without authorization.
+                </li>
+
+                <li>
+                  You must not create an account using false identity
+                  information or impersonate another person or business.
+                </li>
+              </ul>
+
+              <p>
+                FlowBiz may require additional information or verification where
+                reasonably necessary for account security, payment processing,
+                fraud prevention, or legal compliance.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                4. Business Owners, Staff, and Permissions
+              </h2>
+
+              <p>
+                A business owner or authorized administrator may invite staff
+                members to access a FlowBiz workspace and may assign roles or
+                permissions available within the Service.
+              </p>
+
+              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+                <li>
+                  Business owners are responsible for determining which staff
+                  members receive access.
+                </li>
+
+                <li>
+                  Business owners are responsible for reviewing and removing
+                  access when a staff member no longer requires it.
+                </li>
+
+                <li>
+                  Business owners are responsible for the actions performed by
+                  authorized staff members within their workspace.
+                </li>
+
+                <li>
+                  Staff members must not share credentials or intentionally
+                  access information beyond the permissions assigned to them.
+                </li>
+              </ul>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                5. Your Business Data and Privacy Responsibilities
+              </h2>
+
+              <p>
+                FlowBiz allows businesses to store information relating to
+                customers, employees, products, transactions, debts, expenses,
+                and other business operations.
+              </p>
+
+              <p>
+                You are responsible for ensuring that you have a lawful basis
+                and any required permissions, notices, consents, or other
+                authorizations necessary to collect and process personal data
+                entered into your FlowBiz workspace.
+              </p>
+
+              <p>
+                Where you determine the purposes and means of processing
+                customer or staff information, you may be the Data Controller
+                for that information, while FlowBiz may act as a Data Processor
+                on your behalf.
+              </p>
+
+              <p>
+                FlowBiz may separately act as a Data Controller for information
+                it processes for its own purposes, including account management,
+                service security, support, billing, fraud prevention, and legal
+                compliance.
+              </p>
+
+              <p>
+                Please review our{' '}
+                <Link
+                  to="/privacy"
+                  className="text-moss-600 hover:underline font-semibold"
+                >
+                  Privacy Policy
+                </Link>{' '}
+                for more information about data processing.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                6. Accuracy of Business Records
+              </h2>
+
+              <p>
+                FlowBiz provides tools for recording and organizing business
+                information. You are responsible for ensuring that information
+                entered into the Service is accurate and that transactions,
+                inventory quantities, prices, expenses, debts, payments,
+                refunds, and other records are reviewed for accuracy.
+              </p>
+
+              <p>
+                FlowBiz does not independently verify the accuracy of every
+                transaction entered by users and is not responsible for losses
+                resulting from incorrect information entered by you or your
+                staff.
+              </p>
+
+              <p>
+                You remain responsible for maintaining appropriate accounting,
+                tax, financial, and statutory records for your business.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                7. Offline-First Functionality
+              </h2>
+
+              <p>
+                FlowBiz is designed to support offline-first operation. Certain
+                features may continue to function when an internet connection
+                is unavailable, with supported information stored temporarily
+                on the device and synchronized when connectivity is restored.
+              </p>
+
+              <p>
+                Offline functionality does not guarantee that every feature will
+                remain available without an internet connection. Certain
+                operations, integrations, authentication activities, messaging
+                functions, payment confirmations, and synchronization processes
+                may require connectivity.
+              </p>
+
+              <p>
+                Users are responsible for maintaining secure devices and should
+                avoid using compromised or publicly accessible devices to access
+                sensitive business information.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                8. Synchronization and Connectivity
+              </h2>
+
+              <p>
+                When a device reconnects to the internet, FlowBiz may synchronize
+                locally stored information with its cloud services.
+              </p>
+
+              <p>
+                Synchronization may be affected by network availability,
+                device storage, browser limitations, software errors, or other
+                technical conditions.
+              </p>
+
+              <p>
+                Users should allow synchronization to complete where reasonably
+                possible and should not intentionally interfere with the
+                synchronization process.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                9. Subscriptions and Payments
+              </h2>
+
+              <p>
+                FlowBiz may offer free and paid subscription plans. The features,
+                limits, pricing, and duration applicable to each plan will be
+                presented at the time of purchase or upgrade.
+              </p>
+
+              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+                <li>
+                  <strong>FlowBiz Pro:</strong> Paid plans may unlock additional
+                  functionality such as WhatsApp document sharing, PDF
+                  generation, additional staff functionality, advanced
+                  analytics, and other Pro features.
+                </li>
+
+                <li>
+                  <strong>Prepaid Billing:</strong> Where applicable, paid
+                  subscriptions are purchased for a defined prepaid period.
+                </li>
+
+                <li>
+                  <strong>No Automatic Renewal:</strong> Unless explicitly
+                  stated otherwise at the time of purchase, FlowBiz does not
+                  automatically charge your payment method when a subscription
+                  period expires.
+                </li>
+
+                <li>
+                  <strong>Payment Processing:</strong> Payments may be processed
+                  through third-party payment providers such as Paystack. Your
+                  use of such payment services may also be subject to the
+                  provider's terms and policies.
+                </li>
+              </ul>
+
+              <p>
+                FlowBiz may change subscription pricing or introduce new plans
+                in the future. Changes will not retroactively alter a prepaid
+                subscription period that has already been purchased.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                10. Refunds
+              </h2>
+
+              <p>
+                Unless otherwise required by applicable law or expressly stated
+                at the time of purchase, FlowBiz subscriptions are generally
+                non-refundable after activation.
+              </p>
+
+              <p>
+                We generally do not provide prorated refunds for partially
+                unused subscription periods.
+              </p>
+
+              <p>
+                If a payment was made in error, duplicated, or affected by a
+                technical problem, you may contact support so that the
+                transaction can be reviewed.
+              </p>
+
+              <p>
+                Nothing in this section limits any mandatory consumer or
+                statutory rights that cannot legally be excluded.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                11. Third-Party Integrations
+              </h2>
+
+              <p>
+                FlowBiz may provide integrations or links to third-party
+                services, including payment providers, mobile-money services,
+                email providers, messaging platforms, hosting infrastructure,
+                and other external services.
+              </p>
+
+              <p>
+                Third-party services operate independently from FlowBiz and may
+                have their own terms, privacy policies, availability requirements,
+                fees, and technical limitations.
+              </p>
+
+              <p>
+                FlowBiz is not responsible for failures, delays, outages,
+                incorrect responses, policy changes, or other issues caused by
+                third-party services.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                12. Acceptable Use
+              </h2>
+
+              <p>
+                You agree not to use FlowBiz to:
+              </p>
+
+              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+                <li>
+                  Engage in illegal, fraudulent, deceptive, or abusive
+                  activities.
+                </li>
+
+                <li>
+                  Store or transmit information that you do not have the legal
+                  right to process.
+                </li>
+
+                <li>
+                  Send unauthorized promotional messages, spam, or abusive
+                  communications through FlowBiz integrations.
+                </li>
+
+                <li>
+                  Attempt to gain unauthorized access to another user's account,
+                  workspace, device, or business information.
+                </li>
+
+                <li>
+                  Attempt to bypass subscription restrictions, usage limits,
+                  authentication controls, or security mechanisms.
+                </li>
+
+                <li>
+                  Reverse engineer, decompile, or otherwise attempt to extract
+                  the source code or underlying technology of the Service except
+                  where permitted by applicable law.
+                </li>
+
+                <li>
+                  Introduce malware, malicious code, or other harmful material
+                  into the Service.
+                </li>
+
+                <li>
+                  Use automated methods to abuse, overload, scrape, or interfere
+                  with the Service or its infrastructure.
+                </li>
+              </ul>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                13. Intellectual Property
+              </h2>
+
+              <p>
+                FlowBiz and its underlying software, interface, branding,
+                logos, designs, documentation, features, and related intellectual
+                property are owned by or licensed to FlowBiz and are protected
+                by applicable intellectual property laws.
+              </p>
+
+              <p>
+                Your subscription gives you a limited, non-exclusive,
+                non-transferable right to access and use the Service for your
+                legitimate business operations during the applicable subscription
+                period.
+              </p>
+
+              <p>
+                You retain ownership of business information and content that
+                you lawfully submit to FlowBiz, subject to the rights necessary
+                for FlowBiz to operate the Service.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                14. Service Availability and Changes
+              </h2>
+
+              <p>
+                FlowBiz is provided on an "as available" basis. We aim to keep
+                the Service reliable but do not guarantee uninterrupted or
+                error-free operation.
+              </p>
+
+              <p>
+                Service availability may be affected by maintenance, software
+                updates, infrastructure failures, internet connectivity,
+                third-party services, security incidents, or circumstances
+                beyond our reasonable control.
+              </p>
+
+              <p>
+                We may modify, improve, suspend, or discontinue features of the
+                Service when reasonably necessary for security, technical,
+                business, or legal reasons.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                15. Data Backups and Export
+              </h2>
+
+              <p>
+                FlowBiz uses cloud synchronization and other technical measures
+                to support the availability of business information. However,
+                users should not treat FlowBiz as their only backup system for
+                legally or commercially important records.
+              </p>
+
+              <p>
+                Where export functionality is provided, users are responsible
+                for periodically exporting and securely retaining records they
+                are required to keep for accounting, tax, regulatory, or
+                business-continuity purposes.
+              </p>
+
+              <p>
+                FlowBiz does not guarantee recovery of every record in every
+                circumstance, including circumstances involving unauthorized
+                access, device failure, corruption, synchronization conflicts,
+                accidental deletion, or events beyond our reasonable control.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                16. Disclaimers
+              </h2>
+
+              <p>
+                <strong>Not Professional Advice:</strong> FlowBiz is a business
+                management and record-keeping tool. It is not a substitute for
+                professional accounting, tax, financial, legal, or business
+                advice.
+              </p>
+
+              <p>
+                <strong>Tax and Regulatory Compliance:</strong> FlowBiz does not
+                guarantee compliance with KRA requirements, eTIMS, VAT
+                requirements, accounting standards, or any other regulatory
+                requirement unless a specific compliance feature is expressly
+                identified and supported by FlowBiz.
+              </p>
+
+              <p>
+                <strong>Payment Information:</strong> Recording a payment in
+                FlowBiz does not by itself guarantee that money was successfully
+                transferred, received, settled, or reversed by the relevant
+                payment provider.
+              </p>
+
+              <p>
+                <strong>As-Is Basis:</strong> To the maximum extent permitted by
+                applicable law, the Service is provided "as is" and "as
+                available" without warranties that the Service will always be
+                uninterrupted, error-free, completely secure, or suitable for
+                every particular business requirement.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                17. Limitation of Liability
+              </h2>
+
+              <p>
+                To the maximum extent permitted by Kenyan law, FlowBiz and its
+                owners, operators, developers, and service providers will not be
+                liable for indirect, incidental, special, consequential, or
+                exemplary losses arising from the use of, or inability to use,
+                the Service.
+              </p>
+
+              <p>
+                This may include losses relating to business interruption, lost
+                profits, lost opportunities, loss of anticipated savings, or
+                loss of data, except where such liability cannot legally be
+                excluded or limited.
+              </p>
+
+              <p>
+                Nothing in these Terms is intended to exclude liability that
+                cannot lawfully be excluded under applicable Kenyan law.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                18. Suspension and Termination
+              </h2>
+
+              <p>
+                You may stop using FlowBiz and request closure of your account
+                at any time.
+              </p>
+
+              <p>
+                FlowBiz may temporarily suspend or terminate access where
+                reasonably necessary because of:
+              </p>
+
+              <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+                <li>Violation of these Terms.</li>
+                <li>Fraudulent, abusive, or unlawful activity.</li>
+                <li>Security risks or suspected unauthorized access.</li>
+                <li>Non-payment of applicable fees.</li>
+                <li>Legal or regulatory requirements.</li>
+                <li>Conduct that materially threatens the Service or other users.</li>
+              </ul>
+
+              <p>
+                Where reasonably practicable, FlowBiz may provide notice before
+                taking termination action. Immediate suspension may be necessary
+                where delay would create a security, legal, or operational risk.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                19. Effect of Termination
+              </h2>
+
+              <p>
+                Following termination, your right to access paid or restricted
+                features may end. Certain information may continue to be
+                retained where required for legal, security, accounting, fraud
+                prevention, dispute resolution, or other legitimate purposes.
+              </p>
+
+              <p>
+                Where available, users should export important business records
+                before terminating their account.
+              </p>
+
+              <p>
+                Provisions relating to intellectual property, acceptable use,
+                disclaimers, limitation of liability, governing law, and any
+                obligations that by their nature should survive termination will
+                continue to apply after termination.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                20. Changes to These Terms
+              </h2>
+
+              <p>
+                We may update these Terms from time to time to reflect changes
+                to the Service, business practices, technology, or applicable
+                law.
+              </p>
+
+              <p>
+                The updated Terms will be made available through FlowBiz and the
+                effective date will be updated where appropriate. Continued use
+                of the Service after the effective date of material changes
+                constitutes acceptance of the updated Terms, to the extent
+                permitted by applicable law.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                21. Governing Law and Disputes
+              </h2>
+
+              <p>
+                These Terms are governed by and construed in accordance with the
+                laws of the Republic of Kenya.
+              </p>
+
+              <p>
+                The parties will seek to resolve disputes relating to the Service
+                or these Terms through good-faith communication before pursuing
+                formal proceedings where reasonably practicable.
+              </p>
+
+              <p>
+                Subject to any mandatory legal rights or dispute-resolution
+                requirements, disputes that cannot be resolved informally will
+                be subject to the jurisdiction of the courts of Kenya.
+              </p>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                22. Contact Us
+              </h2>
+
+              <p>
+                If you have questions about these Terms, your account, billing,
+                or the FlowBiz Service, contact:
+              </p>
+
+              <p className="font-medium text-ink-800">
+                support@flowbiz.co.ke
+              </p>
+            </section>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+````
+
 ## File: src/utils/businessReset.js
 ````javascript
 // src/utils/businessReset.js
@@ -8470,6 +9443,42 @@ test('refunding a repaid credit sale reverses revenue, cogs, profit and receipts
 });
 ````
 
+## File: src/utils/offlineWrite.js
+````javascript
+// src/utils/offlineWrite.js — full file (small, and every call site depends on this exact contract)
+export function raceWithTimeout(promise, timeoutMs = 4000) {
+  timeoutMs = Math.min(timeoutMs, 1500); 
+  return new Promise((resolve) => {
+    // Already offline? There's no point waiting out the full timeout to
+    // "discover" that — resolve as queued immediately instead of padding
+    // every offline action with a fixed ~4s stall.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      resolve({ queuedOffline: true });
+      promise.catch(() => {}); // still observed, just not blocking anything
+      return;
+    }
+
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; resolve({ queuedOffline: true }); }
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ queuedOffline: false, value });
+      },
+      (err) => {
+        clearTimeout(timer);
+        if (!settled) { settled = true; resolve({ queuedOffline: false, error: err }); }
+      }
+    );
+  });
+}
+````
+
 ## File: src/utils/products.js
 ````javascript
 import { collection, doc, writeBatch, updateDoc, deleteField, serverTimestamp, getDoc, setDoc } from 'firebase/firestore';
@@ -8593,6 +9602,68 @@ export async function restoreProduct(productId, barcode, businessId) {
   await updateDoc(productRef, { deleted: false, deletedAt: deleteField() });
   return { barcodeCleared: false };
 }
+````
+
+## File: src/main.jsx
+````javascript
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import './index.css';
+import App from './App.jsx';
+import toast from 'react-hot-toast';
+import { registerSW } from 'virtual:pwa-register';
+import { enterDemoMode, exitDemoMode } from './demo/demoMode';
+import { seedDemoDataIfNeeded } from './demo/seedData';
+
+// `import.meta.env.MODE` is 'demo' only when started via `npm run dev:demo`
+// (vite --mode demo). The actual Firebase-vs-local-storage routing is
+// decided at build time by vite.config.js's module aliasing — this block
+// just does the two things that still need to happen at runtime once we
+// know we're in Demo Mode:
+//
+//  1. Seed realistic sample data on first load (no-ops on later loads —
+//     see seedDemoDataIfNeeded's own localStorage check).
+//  2. Flip the flag in src/demo/demoMode.js, so the parts of the UI that
+//     need to know "are we in Demo Mode?" for display purposes only (the
+//     Demo badge in TopHeader, choosing which Business Reset to run in
+//     Settings) read it correctly. This flag has NO bearing on whether
+//     Firebase is actually used — that's the aliasing above — it's purely
+//     cosmetic/UI state.
+//
+// The `else` branch matters too: without it, a browser that previously ran
+// `npm run dev:demo` would keep the demo flag set to true even after
+// switching back to `npm run dev`, incorrectly showing the Demo badge (and
+// routing Settings' Business Reset to the wrong implementation) in
+// Production Mode.
+if (import.meta.env.MODE === 'demo') {
+  enterDemoMode();
+  seedDemoDataIfNeeded();
+} else {
+  exitDemoMode();
+}
+
+if (import.meta.env.MODE !== 'demo') {
+  const updateSW = registerSW({
+    onRegisteredSW(swUrl, registration) {
+      if (!registration) return;
+      setInterval(() => {
+        if (document.visibilityState === 'visible') registration.update().catch(() => {});
+      }, 60 * 1000);
+    },
+ onNeedRefresh() {
+  updateSW(true);
+},
+    onOfflineReady() {},
+  });
+}
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
+  </StrictMode>
+);
 ````
 
 ## File: firebase.json
@@ -10487,110 +11558,6 @@ export default function JoinStaff() {
 }
 ````
 
-## File: src/pages/Login.jsx
-````javascript
-import { useEffect, useState } from 'react';
-import { useNavigate, useLocation, Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { useAuth } from '../contexts/AuthContext';
-export default function Login() {
-  const { login, firebaseUser } = useAuth();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const [email, setEmail]     = useState('');
-  const [password, setPassword] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError]     = useState(null);
-const LOCKOUT_SCHEDULE = [60, 300, 900, 1800, 3600]; // 1m → 5m → 15m → 30m → 1h, then stays at 1h
-const LOCKOUT_KEY = 'flowbiz_login_lockout';
-
-function readLockout() {
-  try { return JSON.parse(localStorage.getItem(LOCKOUT_KEY) || 'null'); } catch { return null; }
-}
-function writeLockout(state) {
-  try { localStorage.setItem(LOCKOUT_KEY, JSON.stringify(state)); } catch {}
-}
-  useEffect(() => {
-    if (firebaseUser) navigate(location.state?.from?.pathname || '/', { replace: true });
-  }, [firebaseUser, navigate, location]);
-
-const [lockoutSeconds, setLockoutSeconds] = useState(0);
-
-useEffect(() => {
-  const saved = readLockout();
-  if (saved?.until) {
-    const remaining = Math.ceil((saved.until - Date.now()) / 1000);
-    if (remaining > 0) setLockoutSeconds(remaining);
-  }
-}, []);
-
-useEffect(() => {
-  if (lockoutSeconds <= 0) return;
-  const t = setTimeout(() => setLockoutSeconds((s) => s - 1), 1000);
-  return () => clearTimeout(t);
-}, [lockoutSeconds]);
-
-  const handle = async e => {
-    e.preventDefault(); setError(null); setSubmitting(true);
-try {
-  await login(email.trim(), password);
-  toast.success('Welcome back!');
-}
-catch (err) {
-  if (
-    err.code === 'auth/invalid-credential' ||
-    err.code === 'auth/wrong-password' ||
-     err.code === 'auth/user-not-found' ||
-   err.code === 'auth/invalid-email'
-  ) {
-    setError('Incorrect email or password.');
- } else if (err.code === 'auth/too-many-requests') {
-  const saved = readLockout();
-  const level = Math.min((saved?.level ?? -1) + 1, LOCKOUT_SCHEDULE.length - 1);
-  const seconds = LOCKOUT_SCHEDULE[level];
-  writeLockout({ level, until: Date.now() + seconds * 1000 });
-  setLockoutSeconds(seconds);
-  setError('Too many attempts. Please wait before trying again.');
-} else if (err.code === 'auth/user-disabled') {
-   setError('This account has been disabled. Please contact your business owner.');
-   
-  } else {
-    setError('Something went wrong signing in. Please try again.');
-  }
-}
-finally {
-  setSubmitting(false);
-}
-  };
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div><h1 className="font-display text-2xl font-bold text-white">FlowBiz</h1><p className="text-sm text-ink-400">Business Manager</p></div>
-        </div>
-        <form onSubmit={handle} className="card space-y-4 p-6">
-          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-          <div><label className="label">Email</label><input type="email" required className="input" placeholder="owner@yourbusiness.co.ke" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" /></div>
-          <div>
-            <div className="flex items-center justify-between">
-              <label className="label !mb-0">Password</label>
-              <Link to="/forgot-password" className="text-xs font-semibold text-moss-400 hover:underline mb-1.5">Forgot password?</Link>
-            </div>
-            <input type="password" required className="input" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" />
-          </div>
-
-<button type="submit" className="btn-primary w-full" disabled={submitting || lockoutSeconds > 0}>
-  {lockoutSeconds > 0 ? `Try again in ${lockoutSeconds}s` : submitting ? 'Signing in…' : 'Sign in'}
-</button>        </form>
-        <p className="text-center text-sm text-ink-400">New to FlowBiz? <Link to="/setup" className="font-semibold text-moss-400 hover:underline">Create a business</Link></p>
-      </div>
-    </div>
-  );
-}
-````
-
 ## File: src/utils/whatsapp.js
 ````javascript
 // src/utils/whatsapp.js
@@ -11457,179 +12424,105 @@ export default function AdvancedAnalytics() {
 }
 ````
 
-## File: src/pages/Suppliers.jsx
+## File: src/pages/Login.jsx
 ````javascript
-import { useMemo, useState } from 'react';
-import { addDoc, updateDoc, deleteDoc, doc, writeBatch, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Pencil, Trash2, Banknote, Smartphone } from 'lucide-react';
-import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import { formatKES } from '../utils/currency';
-import { computeSupplierBalances } from '../utils/financials';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
+export default function Login() {
+  const { login, firebaseUser } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [email, setEmail]     = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError]     = useState(null);
+const LOCKOUT_SCHEDULE = [60, 300, 900, 1800, 3600]; // 1m → 5m → 15m → 30m → 1h, then stays at 1h
+const LOCKOUT_KEY = 'flowbiz_login_lockout';
 
-export default function Suppliers() {
-  const { profile, businessId } = useAuth();
-  const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const purchQ  = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
-  const paymQ   = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
-const { data: suppliers, loading, refetch } = useFirestoreCollection(suppQ);
-  const { data: purchases }          = useFirestoreCollection(purchQ);
-  const { data: spayments }          = useFirestoreCollection(paymQ);
-  
+function readLockout() {
+  try { return JSON.parse(localStorage.getItem(LOCKOUT_KEY) || 'null'); } catch { return null; }
+}
+function writeLockout(state) {
+  try { localStorage.setItem(LOCKOUT_KEY, JSON.stringify(state)); } catch {}
+}
+  useEffect(() => {
+    if (firebaseUser) navigate(location.state?.from?.pathname || '/', { replace: true });
+  }, [firebaseUser, navigate, location]);
 
-  const [modal, setModal]       = useState(false);
-  const [editing, setEditing]   = useState(null);
-  const [pendDel, setPendDel]   = useState(null);
-  const [payModal, setPayModal] = useState(false);
-  const [selSupp, setSelSupp]   = useState(null);
-  const [payAmt, setPayAmt]     = useState('');
-  const [payMethod, setPayMethod] = useState('Cash');
-  const [payCode, setPayCode]   = useState('');
-  const [paying, setPaying]     = useState(false);
+const [lockoutSeconds, setLockoutSeconds] = useState(0);
 
-  const owedList = useMemo(
-    () => computeSupplierBalances(purchases, spayments, suppliers),
-    [purchases, spayments, suppliers]
-  );
-  const owedMap = useMemo(
-    () => Object.fromEntries(owedList.map((o) => [o.supplierId, o.balance])),
-    [owedList]
-  );
-  const totalOwed = owedList.reduce((a, o) => a + o.balance, 0);
+useEffect(() => {
+  const saved = readLockout();
+  if (saved?.until) {
+    const remaining = Math.ceil((saved.until - Date.now()) / 1000);
+    if (remaining > 0) setLockoutSeconds(remaining);
+  }
+}, []);
 
-const [deleting, setDeleting] = useState(false);
+useEffect(() => {
+  if (lockoutSeconds <= 0) return;
+  const t = setTimeout(() => setLockoutSeconds((s) => s - 1), 1000);
+  return () => clearTimeout(t);
+}, [lockoutSeconds]);
 
-  const handleSave = async data => {
-    const write = editing
-      ? updateDoc(doc(db,'suppliers',editing.id), data)
-      : addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
-
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
-    await refetch();
-    setModal(false); setEditing(null);
-  };
-
-const handleDel = async () => {
-    const stillExists = suppliers.some((s) => s.id === pendDel.id);
-    if (!stillExists) {
-      toast.success('Already removed.');
-      await refetch();
-      setPendDel(null);
-      return;
-    }
-    const balance = owedMap[pendDel.id] || 0;
-    if (balance > 0.005) {
-      toast.error(`Can't remove "${pendDel.name}" — they still have an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
-      setPendDel(null);
-      return;
-    }
-    setDeleting(true);
-    const { queuedOffline, error } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
-    setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
-    setPendDel(null);
-    await refetch();
-  };
-
-  const handlePay = async e => {
-    e.preventDefault();
-    const amount = Number(payAmt);
-    const balance = owedMap[selSupp?.id]||0;
-    if (amount<=0) { toast.error('Enter a positive amount.'); return; }
-    if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatKES(balance)}.`); return; }
-    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
-    setPaying(true);
-    const batch = writeBatch(db);
-    const expRef = doc(collection(db,'expenses'));
-    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null,
-     recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:new Date() }, businessId));
-    const payRef = doc(collection(db,'supplierPayments'));
-    batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:new Date(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
-
-    const commit = batch.commit();
-    const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
-    setPaying(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
-    if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
-    setPayModal(false); setPayAmt(''); setPayCode('');
-  };
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Supplier added');
-    await refetch();
+  const handle = async e => {
+    e.preventDefault(); setError(null); setSubmitting(true);
+try {
+  await login(email.trim(), password);
+  toast.success('Welcome back!');
+}
+catch (err) {
+  if (
+    err.code === 'auth/invalid-credential' ||
+    err.code === 'auth/wrong-password' ||
+     err.code === 'auth/user-not-found' ||
+   err.code === 'auth/invalid-email'
+  ) {
+    setError('Incorrect email or password.');
+ } else if (err.code === 'auth/too-many-requests') {
+  const saved = readLockout();
+  const level = Math.min((saved?.level ?? -1) + 1, LOCKOUT_SCHEDULE.length - 1);
+  const seconds = LOCKOUT_SCHEDULE[level];
+  writeLockout({ level, until: Date.now() + seconds * 1000 });
+  setLockoutSeconds(seconds);
+  setError('Too many attempts. Please wait before trying again.');
+} else if (err.code === 'auth/user-disabled') {
+   setError('This account has been disabled. Please contact your business owner.');
+   
+  } else {
+    setError('Something went wrong signing in. Please try again.');
+  }
+}
+finally {
+  setSubmitting(false);
+}
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Suppliers</h1><p className="text-sm text-ink-400">Total owed: <span className="font-semibold text-rust-600">{formatKES(totalOwed)}</span></p></div>
-        <button className="btn-primary" onClick={()=>{setEditing(null);setModal(true);}}>+ Add supplier</button>
-      </div>
-      {loading?<LoadingSpinner />:suppliers.length===0?<EmptyState title="No suppliers yet" description="Add suppliers to track restocking and balances." />:(
-        <div className="space-y-3">
-          {suppliers.map(s=>{
-            const balance = owedMap[s.id]||0;
-            return (
-              <div key={s.id} className="card flex flex-wrap items-center justify-between gap-3 p-4">
-                <div><p className="font-semibold text-ink-800">{s.name}</p><p className="text-xs text-ink-400">{s.contactPerson&&`${s.contactPerson} · `}{s.phone||'No phone'}</p></div>
-                <div className="flex items-center gap-3">
-                  <div className="text-right"><p className="text-xs text-ink-400">Outstanding</p><p className={`font-semibold ${balance>0?'text-rust-600':'text-moss-600'}`}>{formatKES(balance)}</p></div>
-                  {balance>0&&<button className="btn-primary !text-xs !px-3 !py-1.5 !min-h-0" onClick={()=>{setSelSupp(s);setPayModal(true);}}>Pay</button>}
-                  <button className="rounded-lg p-2 text-ink-400 hover:bg-ink-100" onClick={()=>{setEditing(s);setModal(true);}}><Pencil className="h-4 w-4" strokeWidth={1.75}/></button>
-                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50" onClick={()=>setPendDel(s)}><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
-                </div>
-              </div>
-            );
-          })}
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="flex flex-col items-center text-center gap-3">
+          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
+          <div><h1 className="font-display text-2xl font-bold text-white">FlowBiz</h1><p className="text-sm text-ink-400">Business Manager</p></div>
         </div>
-      )}
-      <SupplierFormModal open={modal} onClose={()=>{setModal(false);setEditing(null);}} onSave={handleSave} initialSupplier={editing} />
-<ConfirmDialog
-        open={!!pendDel}
-        title="Remove supplier?"
-        message={(owedMap[pendDel?.id]||0) > 0.005
-          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)} — pay it off first.`
-          : `"${pendDel?.name}" will be removed. Purchase records stay intact.`}
-        confirmLabel={deleting ? 'Removing…' : 'Remove'}
-        confirmDisabled={deleting}
-        danger
-        onConfirm={handleDel}
-        onCancel={()=>{ if (!deleting) setPendDel(null); }}
-      />      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
-        <form onSubmit={handlePay} className="space-y-3">
-          <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(owedMap[selSupp?.id]||0)}</span></div>
-          <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
-          <div><label className="label">Method</label>
-            <div className="grid grid-cols-2 gap-2">
-              {['Cash','M-Pesa'].map(m=>(
-                <button key={m} type="button" onClick={()=>setPayMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${payMethod===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
-                  {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
-                </button>
-              ))}
+        <form onSubmit={handle} className="card space-y-4 p-6">
+          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
+          <div><label className="label">Email</label><input type="email" required className="input" placeholder="owner@yourbusiness.co.ke" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" /></div>
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="label !mb-0">Password</label>
+              <Link to="/forgot-password" className="text-xs font-semibold text-moss-400 hover:underline mb-1.5">Forgot password?</Link>
             </div>
+            <input type="password" required className="input" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" />
           </div>
-          {payMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={payCode} onChange={e=>setPayCode(e.target.value.toUpperCase())} /></div>}
-          <div className="flex justify-end gap-2 pt-1"><button type="button" className="btn-secondary" onClick={()=>setPayModal(false)}>Cancel</button><button type="submit" className="btn-primary" disabled={paying}>{paying?'Recording…':'Record payment'}</button></div>
-        </form>
-      </Modal>
+
+<button type="submit" className="btn-primary w-full" disabled={submitting || lockoutSeconds > 0}>
+  {lockoutSeconds > 0 ? `Try again in ${lockoutSeconds}s` : submitting ? 'Signing in…' : 'Sign in'}
+</button>        </form>
+        <p className="text-center text-sm text-ink-400">New to FlowBiz? <Link to="/setup" className="font-semibold text-moss-400 hover:underline">Create a business</Link></p>
+      </div>
     </div>
   );
 }
@@ -12304,193 +13197,6 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
 }
 ````
 
-## File: src/pages/Products.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { Pencil, Trash2, TrendingUp } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function Products() {
-  const { businessId } = useAuth();
-  const productsQ = useMemo(
-    () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
-    [businessId]
-  );
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const { data: products, loading, error } = useFirestoreCollection(productsQ);
-const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ); 
-  const [search, setSearch] = useState('');
-  const [modal, setModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [editing, setEditing] = useState(null);
-  const [pendingDel, setPendingDel] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [scanFoundProduct, setScanFoundProduct] = useState(null);
-  const [deleting, setDeleting] = useState(false);
-
-
-  const filtered = products.filter(
-    (p) =>
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.category.toLowerCase().includes(search.toLowerCase()) ||
-      (p.barcode && p.barcode.includes(search.trim())) ||
-      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
-  );
-  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
-
-  const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
-
-const handleSave = async (data) => {
-    try {
-      if (editing) {
-        const { queuedOffline } = await updateProduct(editing.id, data, editing.barcode, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
-      } else {
-        const { queuedOffline } = await createProduct(data, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
-      }
-      closeFormModal();
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-  };
-  // FIX (stuck "Saving…" bug — same pattern as Purchases.jsx): throw on
-  // error instead of returning, so SupplierFormModal's catch/finally can
-  // reset its "Saving…" button instead of leaving the form frozen.
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-if (!queuedOffline) { setNewSupplierId(ref.id); await refetchSuppliers(); } 
-   setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
-const handleDel = async () => {
-    setDeleting(true);
-    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id, pendingDel.barcode, businessId), 4000);
-    setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
-    setPendingDel(null);
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setScanFoundProduct(found);
-    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
-  };
-
-  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
-
-  return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
-        <div className="flex gap-2">
-          <Link to="/inventory-intelligence" className="btn-outline">
-            <TrendingUp className="h-4 w-4" /> Intelligence
-          </Link>
-          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
-        </div>
-      </div>
-      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      <ErrorBanner message={error} />
-      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
-        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
-      ) : (
-        <>
-          <div className="space-y-2.5 sm:hidden">
-            {filtered.map((p) => (
-              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
-                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
-                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
-                  </div>
-                </div>
-              <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
-                <div className="space-x-3">
-                  <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
-                  <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
-                </div>
-                <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
-              </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="hidden sm:block card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {filtered.map((p) => (
-                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
-                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
-                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
-                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
-                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
-                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
-                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
-          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
-        </div>
-      </Modal>
-
-<ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-<ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    </div>
-  );
-}
-````
-
 ## File: src/pages/StockTake.jsx
 ````javascript
 import { useMemo, useRef, useState } from 'react';
@@ -12946,6 +13652,184 @@ export default function StockTake() {
 }
 ````
 
+## File: src/pages/Suppliers.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { addDoc, updateDoc, deleteDoc, doc, writeBatch, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Pencil, Trash2, Banknote, Smartphone } from 'lucide-react';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import { formatKES } from '../utils/currency';
+import { computeSupplierBalances } from '../utils/financials';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Suppliers() {
+  const { profile, businessId } = useAuth();
+  const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const purchQ  = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
+  const paymQ   = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
+const { data: suppliers, loading, refetch } = useFirestoreCollection(suppQ);
+  const { data: purchases }          = useFirestoreCollection(purchQ);
+  const { data: spayments }          = useFirestoreCollection(paymQ);
+  
+
+  const [modal, setModal]       = useState(false);
+  const [editing, setEditing]   = useState(null);
+  const [pendDel, setPendDel]   = useState(null);
+  const [payModal, setPayModal] = useState(false);
+  const [selSupp, setSelSupp]   = useState(null);
+  const [payAmt, setPayAmt]     = useState('');
+  const [payMethod, setPayMethod] = useState('Cash');
+  const [payCode, setPayCode]   = useState('');
+  const [paying, setPaying]     = useState(false);
+
+  const owedList = useMemo(
+    () => computeSupplierBalances(purchases, spayments, suppliers),
+    [purchases, spayments, suppliers]
+  );
+  const owedMap = useMemo(
+    () => Object.fromEntries(owedList.map((o) => [o.supplierId, o.balance])),
+    [owedList]
+  );
+  const totalOwed = owedList.reduce((a, o) => a + o.balance, 0);
+
+const [deleting, setDeleting] = useState(false);
+
+  const handleSave = async data => {
+    const write = editing
+      ? updateDoc(doc(db,'suppliers',editing.id), data)
+      : addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
+
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
+    await refetch();
+    setModal(false); setEditing(null);
+  };
+
+const handleDel = async () => {
+    const stillExists = suppliers.some((s) => s.id === pendDel.id);
+    if (!stillExists) {
+      toast.success('Already removed.');
+      await refetch();
+      setPendDel(null);
+      return;
+    }
+    const balance = owedMap[pendDel.id] || 0;
+    if (balance > 0.005) {
+      toast.error(`Can't remove "${pendDel.name}" — they still have an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
+      setPendDel(null);
+      return;
+    }
+    setDeleting(true);
+    const { queuedOffline, error } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
+    setDeleting(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
+    setPendDel(null);
+    await refetch();
+  };
+
+  const handlePay = async e => {
+    e.preventDefault();
+    const amount = Number(payAmt);
+    const balance = owedMap[selSupp?.id]||0;
+    if (amount<=0) { toast.error('Enter a positive amount.'); return; }
+    if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatKES(balance)}.`); return; }
+    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
+    setPaying(true);
+    const batch = writeBatch(db);
+    const expRef = doc(collection(db,'expenses'));
+    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null,
+     recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:new Date() }, businessId));
+    const payRef = doc(collection(db,'supplierPayments'));
+    batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:new Date(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
+
+    const commit = batch.commit();
+    const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+    setPaying(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
+    if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+    setPayModal(false); setPayAmt(''); setPayCode('');
+  };
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Supplier added');
+    await refetch();
+  };
+
+  return (
+    <div className="mx-auto max-w-4xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Suppliers</h1><p className="text-sm text-ink-400">Total owed: <span className="font-semibold text-rust-600">{formatKES(totalOwed)}</span></p></div>
+        <button className="btn-primary" onClick={()=>{setEditing(null);setModal(true);}}>+ Add supplier</button>
+      </div>
+      {loading?<LoadingSpinner />:suppliers.length===0?<EmptyState title="No suppliers yet" description="Add suppliers to track restocking and balances." />:(
+        <div className="space-y-3">
+          {suppliers.map(s=>{
+            const balance = owedMap[s.id]||0;
+            return (
+              <div key={s.id} className="card flex flex-wrap items-center justify-between gap-3 p-4">
+                <div><p className="font-semibold text-ink-800">{s.name}</p><p className="text-xs text-ink-400">{s.contactPerson&&`${s.contactPerson} · `}{s.phone||'No phone'}</p></div>
+                <div className="flex items-center gap-3">
+                  <div className="text-right"><p className="text-xs text-ink-400">Outstanding</p><p className={`font-semibold ${balance>0?'text-rust-600':'text-moss-600'}`}>{formatKES(balance)}</p></div>
+                  {balance>0&&<button className="btn-primary !text-xs !px-3 !py-1.5 !min-h-0" onClick={()=>{setSelSupp(s);setPayModal(true);}}>Pay</button>}
+                  <button className="rounded-lg p-2 text-ink-400 hover:bg-ink-100" onClick={()=>{setEditing(s);setModal(true);}}><Pencil className="h-4 w-4" strokeWidth={1.75}/></button>
+                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50" onClick={()=>setPendDel(s)}><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <SupplierFormModal open={modal} onClose={()=>{setModal(false);setEditing(null);}} onSave={handleSave} initialSupplier={editing} />
+<ConfirmDialog
+        open={!!pendDel}
+        title="Remove supplier?"
+        message={(owedMap[pendDel?.id]||0) > 0.005
+          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)} — pay it off first.`
+          : `"${pendDel?.name}" will be removed. Purchase records stay intact.`}
+        confirmLabel={deleting ? 'Removing…' : 'Remove'}
+        confirmDisabled={deleting}
+        danger
+        onConfirm={handleDel}
+        onCancel={()=>{ if (!deleting) setPendDel(null); }}
+      />      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
+        <form onSubmit={handlePay} className="space-y-3">
+          <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(owedMap[selSupp?.id]||0)}</span></div>
+          <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
+          <div><label className="label">Method</label>
+            <div className="grid grid-cols-2 gap-2">
+              {['Cash','M-Pesa'].map(m=>(
+                <button key={m} type="button" onClick={()=>setPayMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${payMethod===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
+                  {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
+                </button>
+              ))}
+            </div>
+          </div>
+          {payMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={payCode} onChange={e=>setPayCode(e.target.value.toUpperCase())} /></div>}
+          <div className="flex justify-end gap-2 pt-1"><button type="button" className="btn-secondary" onClick={()=>setPayModal(false)}>Cancel</button><button type="submit" className="btn-primary" disabled={paying}>{paying?'Recording…':'Record payment'}</button></div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+````
+
 ## File: src/utils/documentService.js
 ````javascript
 import { jsPDF } from 'jspdf';
@@ -13281,489 +14165,192 @@ export function sendWhatsAppDocument(sale, settings, phone, documentUrl) {
 }
 ````
 
-## File: src/pages/Counter.jsx
+## File: src/pages/Products.jsx
 ````javascript
-import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
+import { useMemo, useState } from 'react';
+import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Trash2 } from 'lucide-react';
-import { db } from '../firebase';
+import { Pencil, Trash2, TrendingUp } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useDailySession } from '../hooks/useDailySession';
 import { useHardwareScanner } from '../hooks/useHardwareScanner';
 import { findProductByCode } from '../utils/scannerService';
-import { createProduct } from '../utils/products';
+import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import Modal from '../components/common/Modal';
-import ProductGrid from '../components/pos/ProductGrid';
-import CartList from '../components/pos/CartList';
-import CartCheckoutModal from '../components/pos/CartCheckoutModal';
-import SaleCompleteModal from '../components/pos/SaleCompleteModal';
-import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
 import ProductFormModal from '../components/products/ProductFormModal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
 import ScannerModal from '../components/scanner/ScannerModal';
 import ScanFab from '../components/scanner/ScanFab';
-import { formatKES, roundMoney } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
+import { formatKES } from '../utils/currency';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
 
-// Builds one line item for the cart doc from a cart row. Rounds every
-// money figure through roundMoney() so summing several lines (and their
-// quantity × price multiplication) never leaves floating-point noise in
-// what gets shown or written to Firestore.
-function toLineItem(cartRow) {
-  const quantity = Number(cartRow.quantity) || 0;
-  const unitPrice = Number(cartRow.unitPrice) || 0;
-  const costPrice = Number(cartRow.costPrice) || 0;
-  const lineTotal = roundMoney(quantity * unitPrice);
-  const lineCost = roundMoney(quantity * costPrice);
-  return {
-    productId: cartRow.productId,
-    productName: cartRow.productName,
-    quantity,
-    unitPrice,
-    costPrice,
-    lineTotal,
-    lineCost,
-    lineProfit: roundMoney(lineTotal - lineCost),
-    barcode: cartRow.barcode || null,
-  };
-}
-
-function summarizeProductName(lineItems) {
-  if (lineItems.length === 1) return lineItems[0].productName;
-  return `${lineItems[0].productName} +${lineItems.length - 1} more`;
-}
-
-export default function Counter() {
-  const { profile, isAdmin, businessId } = useAuth();
-  const location = useLocation();
-  const navigate = useNavigate();
-  
-  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const salesQ     = useMemo(() => businessId ? tenantQuery('sales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
-  const creditSalesQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
+export default function Products() {
+  const { businessId } = useAuth();
+  const productsQ = useMemo(
+    () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
+    [businessId]
+  );
   const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-
-  const { data: products,  loading: prodLoading }  = useFirestoreCollection(productsQ);
-  const { data: customers }                         = useFirestoreCollection(customersQ);
-  const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
-  const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
-  const { data: suppliers }                         = useFirestoreCollection(suppliersQ);
-  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
-
-  const [search, setSearch]           = useState('');
-
-  // Cart: client-side only ("current sale") state — nothing is written to
-  // Firestore until checkout is confirmed in CartCheckoutModal. One row
-  // per distinct product; scanning/adding the same product again bumps
-  // its quantity instead of creating a duplicate row.
-  const [cart, setCart]               = useState([]);
-  const [checkoutOpen, setCheckoutOpen] = useState(false);
-
-  const [completedSale, setCompletedSale] = useState(null);
-  const [pendingVoid, setPendingVoid] = useState(null);
-  const [prodModal, setProdModal]     = useState(false);
+  const { data: products, loading, error } = useFirestoreCollection(productsQ);
+const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
+  const [search, setSearch] = useState('');
+  const [modal, setModal] = useState(false);
   const [supplierModal, setSupplierModal] = useState(false);
   const [newSupplierId, setNewSupplierId] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [pendingDel, setPendingDel] = useState(null);
   const [prefillBarcode, setPrefillBarcode] = useState(null);
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [notFoundCode, setNotFoundCode] = useState(null);
-  const [voiding, setVoiding] = useState(false);
+  const [scanFoundProduct, setScanFoundProduct] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => {
-    if (location.state?.autoScan && session && !isClosed) {
-      setScannerOpen(true);
-      navigate(location.pathname, { replace: true, state: {} });
-    }
-  }, [location, navigate, session, isClosed]);
 
-  const filtered = products.filter(p =>
-    p.name.toLowerCase().includes(search.toLowerCase()) ||
-    (p.barcode && p.barcode.includes(search.trim())) ||
-    (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  const filtered = products.filter(
+    (p) =>
+      p.name.toLowerCase().includes(search.toLowerCase()) ||
+      p.category.toLowerCase().includes(search.toLowerCase()) ||
+      (p.barcode && p.barcode.includes(search.trim())) ||
+      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
   );
+  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
 
-  // Live productId -> quantity map, used to badge cards already in the
-  // cart (see ProductGrid) so tapping/scanning a product gives lasting
-  // visual confirmation, not just a toast that disappears.
-  const cartQuantities = useMemo(
-    () => Object.fromEntries(cart.map((item) => [item.productId, item.quantity])),
-    [cart]
-  );
+  const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
 
-  const mergedSales = useMemo(() => {
-    const list = [];
-    sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
-    creditSales.forEach(cs => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
-    return list.sort((a, b) => {
-      const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
-      const bTime = b.soldAt?.toMillis?.() ?? b.soldAt?.toDate?.()?.getTime?.() ?? new Date(b.soldAt || 0).getTime();
-      return bTime - aTime;
-    }).slice(0, 100);
-  }, [sales, creditSales]);
-
-  // ── Cart operations ──────────────────────────────────────────────────
-
-  const addToCart = (product, qty = 1) => {
-    if (!product) return;
-    if ((product.stock || 0) <= 0) { toast.error(`${product.name} is out of stock.`); return; }
-    setCart(prev => {
-      const idx = prev.findIndex(item => item.productId === product.id);
-      if (idx >= 0) {
-        const nextQty = (Number(prev[idx].quantity) || 0) + qty;
-        if (nextQty > product.stock) {
-          toast.error(`Only ${product.stock} of ${product.name} in stock.`);
-          return prev;
-        }
-        const next = [...prev];
-        next[idx] = { ...next[idx], quantity: nextQty };
-        return next;
-      }
-      if (qty > product.stock) {
-        toast.error(`Only ${product.stock} of ${product.name} in stock.`);
-        return prev;
-      }
-      return [...prev, {
-        productId: product.id,
-        productName: product.name,
-        quantity: qty,
-        unitPrice: product.sellingPrice,
-        costPrice: product.costPrice,
-        barcode: product.barcode || null,
-      }];
-    });
-  };
-
-  const updateCartQuantity = (productId, rawQty) => {
-    const product = products.find(p => p.id === productId);
-    let qty = parseInt(rawQty, 10);
-    if (!Number.isFinite(qty) || qty < 1) qty = 1;
-    if (product && qty > product.stock) {
-      toast.error(`Only ${product.stock} of ${product.name} in stock.`);
-      qty = product.stock;
-    }
-    if (qty < 1) return; // nothing in stock — leave the row as-is rather than a 0/invalid quantity
-    setCart(prev => prev.map(item => item.productId === productId ? { ...item, quantity: qty } : item));
-  };
-
-  const updateCartPrice = (productId, rawPrice) => {
-    let price = Number(rawPrice);
-    if (!Number.isFinite(price) || price < 0) price = 0;
-    setCart(prev => prev.map(item => item.productId === productId ? { ...item, unitPrice: price } : item));
-  };
-
-  const removeCartItem = (productId) => setCart(prev => prev.filter(item => item.productId !== productId));
-  const clearCart = () => setCart([]);
-
-  const cartTotal = useMemo(
-    () => roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0)),
-    [cart]
-  );
-
-  // Re-validates the cart against the LIVE product list right before
-  // building the write — stock may have moved since items were added
-  // (another cashier selling the same product, a stock take, etc).
-  function validateCartAgainstStock() {
-    for (const row of cart) {
-      const product = products.find(p => p.id === row.productId);
-      if (!product) throw new Error(`${row.productName} is no longer available.`);
-      if ((Number(row.quantity) || 0) > product.stock) {
-        throw new Error(`Only ${product.stock} of ${row.productName} left in stock.`);
-      }
-    }
-  }
-
-  // FIX: same writeBatch + increment() pattern the app already uses
-  // everywhere else for offline-first sales (see CR-8 in the README) —
-  // one sale doc now carries every product in the cart as `items`, with
-  // one stock decrement per line item in the same batch. Aggregate
-  // fields (totalAmount, quantity, productName, costOfGoodsSold, profit)
-  // are still written at the top level so every existing consumer that
-  // only reads those fields — Dashboard's activity feed, this page's own
-  // sales log, useFinancials — keeps working unchanged.
-  const handleCartSale = ({ paymentMethod, mpesaCode }) => {
-    validateCartAgainstStock();
-    const lineItems = cart.map(toLineItem);
-    const totalAmount = roundMoney(lineItems.reduce((s, i) => s + i.lineTotal, 0));
-    const costOfGoodsSold = roundMoney(lineItems.reduce((s, i) => s + i.lineCost, 0));
-    const profit = roundMoney(totalAmount - costOfGoodsSold);
-    const quantity = lineItems.reduce((s, i) => s + i.quantity, 0);
-
-    const saleRef = doc(collection(db, 'sales'));
-    const saleData = withBusiness({
-      items: lineItems,
-      productName: summarizeProductName(lineItems),
-      quantity,
-      totalAmount,
-      costOfGoodsSold,
-      profit,
-      // Legacy single-product compatibility: only meaningful when the
-      // cart has exactly one distinct product, mirroring exactly what
-      // the previous single-item sale flow wrote.
-      ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
-      paymentMethod, mpesaCode: mpesaCode || null,
-      soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: new Date(), isCredit: false, isVoided: false,
-    }, businessId);
-
-    const batch = writeBatch(db);
-    lineItems.forEach((item) => {
-      batch.update(doc(db, 'products', item.productId), { stock: increment(-item.quantity), updatedAt: serverTimestamp() });
-    });
-    batch.set(saleRef, saleData);
-
-    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
-  };
-
-  const handleCartCredit = ({ customerId, customerName, customerPhone }) => {
-    validateCartAgainstStock();
-    const lineItems = cart.map(toLineItem);
-    const totalAmount = roundMoney(lineItems.reduce((s, i) => s + i.lineTotal, 0));
-    const costOfGoodsSold = roundMoney(lineItems.reduce((s, i) => s + i.lineCost, 0));
-    const quantity = lineItems.reduce((s, i) => s + i.quantity, 0);
-
-    const creditRef = doc(collection(db, 'creditSales'));
-    const creditData = withBusiness({
-      customerId, customerName, customerPhone: customerPhone || '',
-      items: lineItems,
-      productName: summarizeProductName(lineItems),
-      quantity,
-      totalAmount,
-      costOfGoodsSold,
-      ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
-      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
-      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true,
-    }, businessId);
-
-    const batch = writeBatch(db);
-    lineItems.forEach((item) => {
-      batch.update(doc(db, 'products', item.productId), { stock: increment(-item.quantity), updatedAt: serverTimestamp() });
-    });
-    batch.set(creditRef, creditData);
-
-    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
-  };
-
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
-    return { id:ref.id, name, phone };
-  };
-
-  const handleCheckoutClose = (record) => {
-    setCheckoutOpen(false);
-    if (record && record.id) {
-      setCompletedSale(record);
-      clearCart();
-    }
-    // record === null → cashier backed out of checkout; cart is left intact.
-  };
-
-  // Voiding restores stock for every line item on the sale (falls back to
-  // the single productId/quantity shape for pre-cart, legacy sale docs).
-  const handleVoid = async () => {
-    const sale = pendingVoid;
-    setVoiding(true);
+const handleSave = async (data) => {
     try {
-      const lineItems = Array.isArray(sale.items) && sale.items.length > 0
-        ? sale.items
-        : [{ productId: sale.productId, quantity: sale.quantity }];
-
-      const targets = lineItems.filter((item) => item.productId);
-      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
-
-      const batch = writeBatch(db);
-      let anyProductMissing = false;
-      targets.forEach((item, idx) => {
-        if (snaps[idx].exists()) {
-          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
-        } else {
-          anyProductMissing = true;
-        }
-      });
-
-      batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
-
-      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
-      if (error) throw error;
-
-      toast.success(queuedOffline ? 'Sale voided offline.' : (anyProductMissing ? 'Sale voided (some products were deleted, stock not restored for those).' : 'Sale voided and stock restored.'));
+      if (editing) {
+        const { queuedOffline } = await updateProduct(editing.id, data, editing.barcode, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
+      } else {
+        const { queuedOffline } = await createProduct(data, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      }
+      closeFormModal();
     } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setVoiding(false); setPendingVoid(null); }
+  };
+  // FIX (stuck "Saving…" bug — same pattern as Purchases.jsx): throw on
+  // error instead of returning, so SupplierFormModal's catch/finally can
+  // reset its "Saving…" button instead of leaving the form frozen.
+const handleSupplierSave = async (supplierData) => {
+  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+  if (!queuedOffline) {
+    setNewSupplierId(ref.id);
+    await refetchSuppliers();
+  }
+  setSupplierModal(false);
+  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+};
+const handleDel = async () => {
+    setDeleting(true);
+    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id, pendingDel.barcode, businessId), 4000);
+    setDeleting(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
+    setPendingDel(null);
   };
 
-  const handleProductSave = async (data) => {
-    try {
-      const { id, queuedOffline } = await createProduct(data, businessId);
-      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
-      // If this product was created to resolve a scanned/typed barcode
-      // that didn't match anything, add it straight to the cart so the
-      // scanning flow isn't interrupted any more than necessary.
-      if (prefillBarcode !== null && !queuedOffline) {
-        addToCart({ id, name: data.name, sellingPrice: data.sellingPrice, costPrice: data.costPrice, stock: data.stock ?? 0, barcode: data.barcode || null }, 1);
-      }
-      setProdModal(false);
-      setPrefillBarcode(null);
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err));
-      throw err;
-    }
-  };
-
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    // FIX (supplier save getting stuck): returning here instead of
-    // throwing left SupplierFormModal's own try/catch never firing, so
-    // its "Saving…" button never reset and the form looked frozen with
-    // no visible way to retry after a failure — the error toast still
-    // fired, but nothing in the UI signalled the form could be tried
-    // again. Throwing lets SupplierFormModal's catch/finally reset it.
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
-
-  // Scanning adds straight to the cart and keeps going — no confirmation
-  // step per scan, and scanning the same product again just bumps its
-  // quantity (handled inside addToCart).
   const handleScanDetected = (code) => {
     setScannerOpen(false);
     const found = findProductByCode(products, code);
-    if (found) {
-      addToCart(found, 1);
-      toast.success(`${found.name} added to cart`, { duration: 1200 });
-    } else {
-      setNotFoundCode(code);
-    }
+    if (found) setScanFoundProduct(found);
+    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
   };
 
-  useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale && !checkoutOpen,
-  });
-
-  if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
-  if (isClosed) return (
-    <div className="mx-auto max-w-sm pt-8 space-y-4 text-center">
-      <EmptyState title="Today's session is closed" description="Sales are locked. An owner can reopen to continue trading." />
-      {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>}
-    </div>
-  );
-  if (!session) return <OpenSessionPrompt onOpen={floats => openSession({ ...floats, openedBy:profile.uid })} />;
+  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Scan, search, or tap a product to add it to the cart.</p></div>
-      </div>
-
-      {/* FIX (cart visibility): pinned to the top and sticky as the page
-          scrolls, so after adding something the cart is never "far down"
-          below a long product list. Renders nothing when the cart is
-          empty — no placeholder clutter until there's something to show. */}
-      <div className="sticky top-2 z-20">
-        <CartList
-          cart={cart}
-          onUpdateQuantity={updateCartQuantity}
-          onUpdatePrice={updateCartPrice}
-          onRemove={removeCartItem}
-          onClear={clearCart}
-          onCheckout={() => setCheckoutOpen(true)}
-        />
-      </div>
-
-      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
-      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
-        <ProductGrid products={filtered} onSelect={(product) => addToCart(product, 1)} isAdmin={false} cartQuantities={cartQuantities} />}
-
-
-      {isAdmin && (
-        <div className="mt-4">
-          <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Sales log (last 100)</h2>
-          {salesLoading || creditLoading ? <LoadingSpinner /> : mergedSales.length === 0 ? <EmptyState title="No sales recorded" /> : (
-            <div className="card divide-y divide-ink-100">
-              {mergedSales.map(s=>(
-                <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided?'opacity-40 line-through':''}`}>
-                  <div>
-                    <p className="font-medium text-ink-700">
-                      {s.quantity} × {s.productName} — {formatKES(s.totalAmount)}
-                      {Array.isArray(s.items) && s.items.length > 1 && (
-                        <span className="badge bg-ink-100 text-ink-500 ml-2 align-middle">{s.items.length} products</span>
-                      )}
-                    </p>
-                    <p className="text-xs text-ink-400">
-                      {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
-                      {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
-                    </p>
-                  </div>
-                  {!s.isVoided && !s.isCredit && isAdmin && (
-                    <button onClick={()=>setPendingVoid(s)} className="p-1 text-rust-400 hover:text-rust-600 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Void sale"><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
-                  )}
-                  {s.isCredit && isAdmin && (
-                    <Link to={`/customers/${s.customerId}`} className="btn-outline !py-1 !px-2.5 !min-h-0 text-xs text-ink-500 hover:text-ink-700">View Customer</Link>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+    <div className="mx-auto max-w-5xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
+        <div className="flex gap-2">
+          <Link to="/inventory-intelligence" className="btn-outline">
+            <TrendingUp className="h-4 w-4" /> Intelligence
+          </Link>
+          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
         </div>
+      </div>
+      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <ErrorBanner message={error} />
+      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
+        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
+      ) : (
+        <>
+          <div className="space-y-2.5 sm:hidden">
+            {filtered.map((p) => (
+              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
+                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
+                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
+                  </div>
+                </div>
+              <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
+                <div className="space-x-3">
+                  <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
+                  <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
+                </div>
+                <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
+              </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden sm:block card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
+                </thead>
+                <tbody className="divide-y divide-ink-100">
+                  {filtered.map((p) => (
+                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
+                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
+                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
+                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
+                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
+                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
+                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1">
+                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
       )}
 
       <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
 
-      <Modal open={!!notFoundCode} onClose={()=>setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
+      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
         <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={()=>setNotFoundCode(null)}>Cancel</button>
-          {isAdmin ? (
-            <button className="btn-primary" onClick={()=>{ setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
-          ) : (
-            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
-          )}
+          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
+          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
         </div>
       </Modal>
 
-      <CartCheckoutModal
-        open={checkoutOpen}
-        cart={cart}
-        total={cartTotal}
-        customers={customers}
-        onClose={handleCheckoutClose}
-        onConfirmSale={handleCartSale}
-        onConfirmCredit={handleCartCredit}
-        onCreateCustomer={handleCreateCustomer}
-      />
-      <SaleCompleteModal
-        open={!!completedSale}
-        sale={completedSale}
-        onClose={() => setCompletedSale(null)}
-      />
-
-      <ProductFormModal
-        open={prodModal}
-        onClose={()=>{setProdModal(false);setPrefillBarcode(null);}}
-        onSave={handleProductSave}
-        suppliers={suppliers}
-        initialProduct={null}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-      />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-      <ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" will be restored${Array.isArray(pendingVoid?.items) && pendingVoid.items.length > 1 ? ` for all ${pendingVoid.items.length} products in this sale` : ` (×${pendingVoid?.quantity})`}.`} confirmLabel={voiding ? "Voiding..." : "Void sale"} confirmDisabled={voiding} danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />
-    </div>
+<ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+<ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    </div>
   );
 }
 ````
@@ -13799,7 +14386,7 @@ export default function Purchases() {
   const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
   const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt','desc'), limit(50)) : null, [businessId]);
   const { data: products }  = useFirestoreCollection(productsQ);
-  const { data: suppliers } = useFirestoreCollection(suppliersQ);
+const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
   const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
   const [form, setForm] = useState(empty);
   const [busy, setBusy] = useState(false);
@@ -13884,14 +14471,17 @@ try {
   // fired and its "Saving…" button never reset — the form just looked
   // frozen after a failed save, with no obvious way to try again.
   // Throwing here lets SupplierFormModal's catch/finally reset it.
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
+ const handleSupplierSave = async (supplierData) => {
+  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+  if (!queuedOffline) {
+    setNewSupplierId(ref.id);
+    await refetchSuppliers();
+  }
+  setSupplierModal(false);
+  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+};
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
@@ -14159,6 +14749,489 @@ try {
         </form>
         <p className="text-center text-sm text-ink-400">Already have an account? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link></p>
       </div>
+    </div>
+  );
+}
+````
+
+## File: src/pages/Counter.jsx
+````javascript
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Trash2 } from 'lucide-react';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useDailySession } from '../hooks/useDailySession';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import ProductGrid from '../components/pos/ProductGrid';
+import CartList from '../components/pos/CartList';
+import CartCheckoutModal from '../components/pos/CartCheckoutModal';
+import SaleCompleteModal from '../components/pos/SaleCompleteModal';
+import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES, roundMoney } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+// Builds one line item for the cart doc from a cart row. Rounds every
+// money figure through roundMoney() so summing several lines (and their
+// quantity × price multiplication) never leaves floating-point noise in
+// what gets shown or written to Firestore.
+function toLineItem(cartRow) {
+  const quantity = Number(cartRow.quantity) || 0;
+  const unitPrice = Number(cartRow.unitPrice) || 0;
+  const costPrice = Number(cartRow.costPrice) || 0;
+  const lineTotal = roundMoney(quantity * unitPrice);
+  const lineCost = roundMoney(quantity * costPrice);
+  return {
+    productId: cartRow.productId,
+    productName: cartRow.productName,
+    quantity,
+    unitPrice,
+    costPrice,
+    lineTotal,
+    lineCost,
+    lineProfit: roundMoney(lineTotal - lineCost),
+    barcode: cartRow.barcode || null,
+  };
+}
+
+function summarizeProductName(lineItems) {
+  if (lineItems.length === 1) return lineItems[0].productName;
+  return `${lineItems[0].productName} +${lineItems.length - 1} more`;
+}
+
+export default function Counter() {
+  const { profile, isAdmin, businessId } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  
+  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  const salesQ     = useMemo(() => businessId ? tenantQuery('sales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
+  const creditSalesQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+
+  const { data: products,  loading: prodLoading }  = useFirestoreCollection(productsQ);
+  const { data: customers }                         = useFirestoreCollection(customersQ);
+  const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
+  const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
+const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
+
+  const [search, setSearch]           = useState('');
+
+  // Cart: client-side only ("current sale") state — nothing is written to
+  // Firestore until checkout is confirmed in CartCheckoutModal. One row
+  // per distinct product; scanning/adding the same product again bumps
+  // its quantity instead of creating a duplicate row.
+  const [cart, setCart]               = useState([]);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+
+  const [completedSale, setCompletedSale] = useState(null);
+  const [pendingVoid, setPendingVoid] = useState(null);
+  const [prodModal, setProdModal]     = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [notFoundCode, setNotFoundCode] = useState(null);
+  const [voiding, setVoiding] = useState(false);
+
+  useEffect(() => {
+    if (location.state?.autoScan && session && !isClosed) {
+      setScannerOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location, navigate, session, isClosed]);
+
+  const filtered = products.filter(p =>
+    p.name.toLowerCase().includes(search.toLowerCase()) ||
+    (p.barcode && p.barcode.includes(search.trim())) ||
+    (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  // Live productId -> quantity map, used to badge cards already in the
+  // cart (see ProductGrid) so tapping/scanning a product gives lasting
+  // visual confirmation, not just a toast that disappears.
+  const cartQuantities = useMemo(
+    () => Object.fromEntries(cart.map((item) => [item.productId, item.quantity])),
+    [cart]
+  );
+
+  const mergedSales = useMemo(() => {
+    const list = [];
+    sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
+    creditSales.forEach(cs => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
+    return list.sort((a, b) => {
+      const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
+      const bTime = b.soldAt?.toMillis?.() ?? b.soldAt?.toDate?.()?.getTime?.() ?? new Date(b.soldAt || 0).getTime();
+      return bTime - aTime;
+    }).slice(0, 100);
+  }, [sales, creditSales]);
+
+  // ── Cart operations ──────────────────────────────────────────────────
+
+  const addToCart = (product, qty = 1) => {
+    if (!product) return;
+    if ((product.stock || 0) <= 0) { toast.error(`${product.name} is out of stock.`); return; }
+    setCart(prev => {
+      const idx = prev.findIndex(item => item.productId === product.id);
+      if (idx >= 0) {
+        const nextQty = (Number(prev[idx].quantity) || 0) + qty;
+        if (nextQty > product.stock) {
+          toast.error(`Only ${product.stock} of ${product.name} in stock.`);
+          return prev;
+        }
+        const next = [...prev];
+        next[idx] = { ...next[idx], quantity: nextQty };
+        return next;
+      }
+      if (qty > product.stock) {
+        toast.error(`Only ${product.stock} of ${product.name} in stock.`);
+        return prev;
+      }
+      return [...prev, {
+        productId: product.id,
+        productName: product.name,
+        quantity: qty,
+        unitPrice: product.sellingPrice,
+        costPrice: product.costPrice,
+        barcode: product.barcode || null,
+      }];
+    });
+  };
+
+  const updateCartQuantity = (productId, rawQty) => {
+    const product = products.find(p => p.id === productId);
+    let qty = parseInt(rawQty, 10);
+    if (!Number.isFinite(qty) || qty < 1) qty = 1;
+    if (product && qty > product.stock) {
+      toast.error(`Only ${product.stock} of ${product.name} in stock.`);
+      qty = product.stock;
+    }
+    if (qty < 1) return; // nothing in stock — leave the row as-is rather than a 0/invalid quantity
+    setCart(prev => prev.map(item => item.productId === productId ? { ...item, quantity: qty } : item));
+  };
+
+  const updateCartPrice = (productId, rawPrice) => {
+    let price = Number(rawPrice);
+    if (!Number.isFinite(price) || price < 0) price = 0;
+    setCart(prev => prev.map(item => item.productId === productId ? { ...item, unitPrice: price } : item));
+  };
+
+  const removeCartItem = (productId) => setCart(prev => prev.filter(item => item.productId !== productId));
+  const clearCart = () => setCart([]);
+
+  const cartTotal = useMemo(
+    () => roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0)),
+    [cart]
+  );
+
+  // Re-validates the cart against the LIVE product list right before
+  // building the write — stock may have moved since items were added
+  // (another cashier selling the same product, a stock take, etc).
+  function validateCartAgainstStock() {
+    for (const row of cart) {
+      const product = products.find(p => p.id === row.productId);
+      if (!product) throw new Error(`${row.productName} is no longer available.`);
+      if ((Number(row.quantity) || 0) > product.stock) {
+        throw new Error(`Only ${product.stock} of ${row.productName} left in stock.`);
+      }
+    }
+  }
+
+  // FIX: same writeBatch + increment() pattern the app already uses
+  // everywhere else for offline-first sales (see CR-8 in the README) —
+  // one sale doc now carries every product in the cart as `items`, with
+  // one stock decrement per line item in the same batch. Aggregate
+  // fields (totalAmount, quantity, productName, costOfGoodsSold, profit)
+  // are still written at the top level so every existing consumer that
+  // only reads those fields — Dashboard's activity feed, this page's own
+  // sales log, useFinancials — keeps working unchanged.
+  const handleCartSale = ({ paymentMethod, mpesaCode }) => {
+    validateCartAgainstStock();
+    const lineItems = cart.map(toLineItem);
+    const totalAmount = roundMoney(lineItems.reduce((s, i) => s + i.lineTotal, 0));
+    const costOfGoodsSold = roundMoney(lineItems.reduce((s, i) => s + i.lineCost, 0));
+    const profit = roundMoney(totalAmount - costOfGoodsSold);
+    const quantity = lineItems.reduce((s, i) => s + i.quantity, 0);
+
+    const saleRef = doc(collection(db, 'sales'));
+    const saleData = withBusiness({
+      items: lineItems,
+      productName: summarizeProductName(lineItems),
+      quantity,
+      totalAmount,
+      costOfGoodsSold,
+      profit,
+      // Legacy single-product compatibility: only meaningful when the
+      // cart has exactly one distinct product, mirroring exactly what
+      // the previous single-item sale flow wrote.
+      ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
+      paymentMethod, mpesaCode: mpesaCode || null,
+      soldBy: profile.uid, soldByName: profile.displayName,
+      soldAt: new Date(), isCredit: false, isVoided: false,
+    }, businessId);
+
+    const batch = writeBatch(db);
+    lineItems.forEach((item) => {
+      batch.update(doc(db, 'products', item.productId), { stock: increment(-item.quantity), updatedAt: serverTimestamp() });
+    });
+    batch.set(saleRef, saleData);
+
+    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleCartCredit = ({ customerId, customerName, customerPhone }) => {
+    validateCartAgainstStock();
+    const lineItems = cart.map(toLineItem);
+    const totalAmount = roundMoney(lineItems.reduce((s, i) => s + i.lineTotal, 0));
+    const costOfGoodsSold = roundMoney(lineItems.reduce((s, i) => s + i.lineCost, 0));
+    const quantity = lineItems.reduce((s, i) => s + i.quantity, 0);
+
+    const creditRef = doc(collection(db, 'creditSales'));
+    const creditData = withBusiness({
+      customerId, customerName, customerPhone: customerPhone || '',
+      items: lineItems,
+      productName: summarizeProductName(lineItems),
+      quantity,
+      totalAmount,
+      costOfGoodsSold,
+      ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
+      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
+      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
+      isCredit: true,
+    }, businessId);
+
+    const batch = writeBatch(db);
+    lineItems.forEach((item) => {
+      batch.update(doc(db, 'products', item.productId), { stock: increment(-item.quantity), updatedAt: serverTimestamp() });
+    });
+    batch.set(creditRef, creditData);
+
+    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
+    return { id:ref.id, name, phone };
+  };
+
+  const handleCheckoutClose = (record) => {
+    setCheckoutOpen(false);
+    if (record && record.id) {
+      setCompletedSale(record);
+      clearCart();
+    }
+    // record === null → cashier backed out of checkout; cart is left intact.
+  };
+
+  // Voiding restores stock for every line item on the sale (falls back to
+  // the single productId/quantity shape for pre-cart, legacy sale docs).
+  const handleVoid = async () => {
+    const sale = pendingVoid;
+    setVoiding(true);
+    try {
+      const lineItems = Array.isArray(sale.items) && sale.items.length > 0
+        ? sale.items
+        : [{ productId: sale.productId, quantity: sale.quantity }];
+
+      const targets = lineItems.filter((item) => item.productId);
+      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
+
+      const batch = writeBatch(db);
+      let anyProductMissing = false;
+      targets.forEach((item, idx) => {
+        if (snaps[idx].exists()) {
+          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
+        } else {
+          anyProductMissing = true;
+        }
+      });
+
+      batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
+
+      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+      if (error) throw error;
+
+      toast.success(queuedOffline ? 'Sale voided offline.' : (anyProductMissing ? 'Sale voided (some products were deleted, stock not restored for those).' : 'Sale voided and stock restored.'));
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setVoiding(false); setPendingVoid(null); }
+  };
+
+  const handleProductSave = async (data) => {
+    try {
+      const { id, queuedOffline } = await createProduct(data, businessId);
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      // If this product was created to resolve a scanned/typed barcode
+      // that didn't match anything, add it straight to the cart so the
+      // scanning flow isn't interrupted any more than necessary.
+      if (prefillBarcode !== null && !queuedOffline) {
+        addToCart({ id, name: data.name, sellingPrice: data.sellingPrice, costPrice: data.costPrice, stock: data.stock ?? 0, barcode: data.barcode || null }, 1);
+      }
+      setProdModal(false);
+      setPrefillBarcode(null);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+      throw err;
+    }
+  };
+  
+const handleSupplierSave = async (supplierData) => {
+  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+  if (!queuedOffline) {
+    setNewSupplierId(ref.id);
+    await refetchSuppliers();
+  }
+  setSupplierModal(false);
+  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+};
+
+  // Scanning adds straight to the cart and keeps going — no confirmation
+  // step per scan, and scanning the same product again just bumps its
+  // quantity (handled inside addToCart).
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) {
+      addToCart(found, 1);
+      toast.success(`${found.name} added to cart`, { duration: 1200 });
+    } else {
+      setNotFoundCode(code);
+    }
+  };
+
+  useHardwareScanner(handleScanDetected, {
+    enabled: !!session && !isClosed && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale && !checkoutOpen,
+  });
+
+  if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
+  if (isClosed) return (
+    <div className="mx-auto max-w-sm pt-8 space-y-4 text-center">
+      <EmptyState title="Today's session is closed" description="Sales are locked. An owner can reopen to continue trading." />
+      {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>}
+    </div>
+  );
+  if (!session) return <OpenSessionPrompt onOpen={floats => openSession({ ...floats, openedBy:profile.uid })} />;
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Scan, search, or tap a product to add it to the cart.</p></div>
+      </div>
+
+      {/* FIX (cart visibility): pinned to the top and sticky as the page
+          scrolls, so after adding something the cart is never "far down"
+          below a long product list. Renders nothing when the cart is
+          empty — no placeholder clutter until there's something to show. */}
+      <div className="sticky top-2 z-20">
+        <CartList
+          cart={cart}
+          onUpdateQuantity={updateCartQuantity}
+          onUpdatePrice={updateCartPrice}
+          onRemove={removeCartItem}
+          onClear={clearCart}
+          onCheckout={() => setCheckoutOpen(true)}
+        />
+      </div>
+
+      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
+      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
+        <ProductGrid products={filtered} onSelect={(product) => addToCart(product, 1)} isAdmin={false} cartQuantities={cartQuantities} />}
+
+
+      {isAdmin && (
+        <div className="mt-4">
+          <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Sales log (last 100)</h2>
+          {salesLoading || creditLoading ? <LoadingSpinner /> : mergedSales.length === 0 ? <EmptyState title="No sales recorded" /> : (
+            <div className="card divide-y divide-ink-100">
+              {mergedSales.map(s=>(
+                <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided?'opacity-40 line-through':''}`}>
+                  <div>
+                    <p className="font-medium text-ink-700">
+                      {s.quantity} × {s.productName} — {formatKES(s.totalAmount)}
+                      {Array.isArray(s.items) && s.items.length > 1 && (
+                        <span className="badge bg-ink-100 text-ink-500 ml-2 align-middle">{s.items.length} products</span>
+                      )}
+                    </p>
+                    <p className="text-xs text-ink-400">
+                      {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
+                      {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
+                    </p>
+                  </div>
+                  {!s.isVoided && !s.isCredit && isAdmin && (
+                    <button onClick={()=>setPendingVoid(s)} className="p-1 text-rust-400 hover:text-rust-600 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Void sale"><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
+                  )}
+                  {s.isCredit && isAdmin && (
+                    <Link to={`/customers/${s.customerId}`} className="btn-outline !py-1 !px-2.5 !min-h-0 text-xs text-ink-500 hover:text-ink-700">View Customer</Link>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!notFoundCode} onClose={()=>setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={()=>setNotFoundCode(null)}>Cancel</button>
+          {isAdmin ? (
+            <button className="btn-primary" onClick={()=>{ setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
+          ) : (
+            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
+          )}
+        </div>
+      </Modal>
+
+      <CartCheckoutModal
+        open={checkoutOpen}
+        cart={cart}
+        total={cartTotal}
+        customers={customers}
+        onClose={handleCheckoutClose}
+        onConfirmSale={handleCartSale}
+        onConfirmCredit={handleCartCredit}
+        onCreateCustomer={handleCreateCustomer}
+      />
+      <SaleCompleteModal
+        open={!!completedSale}
+        sale={completedSale}
+        onClose={() => setCompletedSale(null)}
+      />
+
+      <ProductFormModal
+        open={prodModal}
+        onClose={()=>{setProdModal(false);setPrefillBarcode(null);}}
+        onSave={handleProductSave}
+        suppliers={suppliers}
+        initialProduct={null}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+      />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+      <ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" will be restored${Array.isArray(pendingVoid?.items) && pendingVoid.items.length > 1 ? ` for all ${pendingVoid.items.length} products in this sale` : ` (×${pendingVoid?.quantity})`}.`} confirmLabel={voiding ? "Voiding..." : "Void sale"} confirmDisabled={voiding} danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />
     </div>
   );
 }
@@ -14472,404 +15545,6 @@ export default function CustomerDetail() {
 }
 ````
 
-## File: src/contexts/AuthContext.jsx
-````javascript
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
-import {
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signOut as fbSignOut,
-  sendEmailVerification,
-  reload,
-} from 'firebase/auth';
-import {
-  doc,
-  onSnapshot,
-  deleteDoc,
-  updateDoc,
-  collection,
-  addDoc,
-  setDoc,
-  serverTimestamp,
-  query,
-  where,
-  getDocs,
-  getDoc,
-} from 'firebase/firestore';
-import { auth, db } from '../firebase';
-import { raceWithTimeout } from '../utils/offlineWrite';
-
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-const AuthContext = createContext(null);
-
-function getDeviceId() {
-  let id = localStorage.getItem('flowbiz_device_id');
-  if (!id) {
-    id = `dev_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-    localStorage.setItem('flowbiz_device_id', id);
-  }
-  return id;
-}
-function getSessionDocId(uid) {
-  return `${getDeviceId()}__${uid}`;
-}
-
-// src/contexts/AuthContext.jsx — replace guessDeviceLabel()
-function guessDeviceLabel() {
-  const ua = navigator.userAgent || '';
-  let os = 'Unknown device';
-  if (/Android/i.test(ua)) os = 'Android';
-  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
-  else if (/Windows/i.test(ua)) os = 'Windows';
-  else if (/Macintosh/i.test(ua)) os = 'Mac';
-  else if (/Linux/i.test(ua)) os = 'Linux';
-
-  let browser = '';
-  if (/Edg\//i.test(ua)) browser = 'Edge';
-  else if (/OPR\//i.test(ua)) browser = 'Opera';
-  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
-  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
-  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
-
-  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches;
-  if (isStandalone) return browser ? `${os} app (${browser})` : `${os} app`;
-  return browser ? `${browser} on ${os}` : os;
-}
-
-export function AuthProvider({ children }) {
-  const [firebaseUser, setFirebaseUser] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [subscription, setSubscription] = useState({ plan: 'free', status: 'active' });
-  const [loading, setLoading] = useState(true);
-  const [authError, setAuthError] = useState(null);
-  const [accountRemoved, setAccountRemoved] = useState(false);
-  const [sessionRevoked, setSessionRevoked] = useState(false);
-  const [emailVerified, setEmailVerified] = useState(false);
-
-  const profileUnsubRef = useRef(null);
-  const sessionUnsubRef = useRef(null);
-  const businessUnsubRef = useRef(null);
-  const sessionRegisteredRef = useRef(null); // `${uid}:${businessId}` already registered this auth session
-
-  const stopListeners = useCallback(() => {
-    profileUnsubRef.current?.();
-    profileUnsubRef.current = null;
-    sessionUnsubRef.current?.();
-    sessionUnsubRef.current = null;
-    businessUnsubRef.current?.();
-    businessUnsubRef.current = null;
-    sessionRegisteredRef.current = null;
-  }, []);
-
-const registerSession = useCallback(async (uid, businessId, userName) => {
-  const key = `${uid}:${businessId}`;
-  if (sessionRegisteredRef.current === key) return;
-  sessionRegisteredRef.current = key;
-
-  let sessionId = getSessionDocId(uid);
-  let ref = doc(db, 'sessions', sessionId);
-  let currentSnap = await getDoc(ref);
-
-  // A revoked session can never legally un-revoke itself (that's the
-  // security rule working as intended — self-updates can't touch
-  // `revoked`). A fresh sign-in is a legitimate new session, so start a
-  // new record instead of endlessly retrying a write the rules forbid.
-  if (currentSnap.exists() && currentSnap.data().revoked === true) {
-    sessionId = `${sessionId}__${Date.now().toString(36)}`;
-    ref = doc(db, 'sessions', sessionId);
-    currentSnap = await getDoc(ref);
-  }
-
-  const baseFields = {
-    uid, businessId,
-    lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
-    deviceLabel: guessDeviceLabel(),
-    userAgent: navigator.userAgent,
-    lastActiveAt: serverTimestamp(),
-  };
-
-  if (!currentSnap.exists()) {
-    await setDoc(ref, { ...baseFields, createdAt: serverTimestamp(), revoked: false });
-  } else {
-    // Never include `revoked` here — self-updates aren't allowed to
-    // touch it, and it's already false if we got this far.
-    await updateDoc(ref, baseFields).catch(() => {});
-  }
-
-  activeSessionIdRef.current = sessionId;
-  setActiveSessionId(sessionId);
-
-  sessionUnsubRef.current?.();
-  sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
-    if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
-      setSessionRevoked(true);
-      fbSignOut(auth);
-    }
-  });
-}, []);
-
-  // Background heartbeat to keep the "last seen" time accurate for active devices
-useEffect(() => {
-    if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
-        updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
-      }
-    }, 15 * 60 * 1000); // 15 mins
-    return () => clearInterval(interval);
-  }, [firebaseUser, profile?.businessId, sessionRevoked]);
-
-  // FIX: Used a named function 'doLoad' to resolve the recursive ESLint error
-const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
-  stopListeners();
-  setAuthError(null);
-  setAccountRemoved(false);
-  setSessionRevoked(false);
-
-  if (!user) {
-    setProfile(null);
-    setSubscription({ plan: 'free', status: 'active' });
-    setEmailVerified(false);
-    setLoading(false);
-    return;
-  }
-
-  setEmailVerified(!!user.emailVerified);
-  setLoading(true);
-
-  // FIX: force-refresh the ID token before attaching the Firestore
-  // listener. Right after sign-in / verification / password reset, the
-  // Firestore SDK's connection can still be using a stale token for a
-  // moment — this closes that gap instead of just hoping it resolves.
-  user.getIdToken(true).catch(() => {}).then(() => {
-    const userRef = doc(db, 'users', user.uid);
-
-    profileUnsubRef.current = onSnapshot(
-      userRef,
-      (snap) => {
-if (!snap.exists()) {
-  (async () => {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
-      if (auth.currentUser?.uid !== user.uid) return;
-      try {
-        const recheck = await getDoc(userRef);
-        if (recheck.exists()) return; // listener will pick it up
-      } catch (err) {
-        if (attempt === 3) {
-          setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
-          setProfile(null);
-          setLoading(false);
-          return;
-        }
-      }
-    }
-    setAccountRemoved(true);
-    setProfile(null);
-    setLoading(false);
-  })();
-  return;
-}
-        setAccountRemoved(false);
-        const data = { uid: user.uid, ...snap.data() };
-        setProfile(data);
-        setLoading(false);
-
-if (data.businessId && data.active !== false) {
-  registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
-          businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
-            if (bizSnap.exists()) {
-              setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
-            }
-          });
-        }
-      },
-      (err) => {
-        // FIX: more retries, longer backoff — gives slower connections
-        // (mobile networks) a real chance to catch up instead of
-        // dumping the user on an error screen after ~4s.
-        if (err.code === 'permission-denied' && retryCount < 6) {
-          const delay = Math.min(1000 * 2 ** retryCount, 8000);
-          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying (attempt ${retryCount + 1})`);
-          setTimeout(() => {
-            if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
-          }, delay);
-          return;
-        }
-        console.error(`[FlowBiz] onSnapshot(users/${user.uid}) failed:`, err.code || err.name, err.message);
-        setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
-        setProfile(null);
-        setLoading(false);
-      }
-    );
-  });
-}, [registerSession, stopListeners]);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      setFirebaseUser(user);
-      loadProfile(user);
-    });
-    return () => { unsub(); stopListeners(); };
-  }, [loadProfile, stopListeners]);
-
-  const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
-  const logout = () => { stopListeners(); return fbSignOut(auth); };
-  
-const resendVerificationEmail = async () => {
-  if (!auth.currentUser) throw new Error('Not signed in.');
-  const idToken = await auth.currentUser.getIdToken(true);
-  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-  });
-  if (!response.ok) {
-    let message = 'Could not send the verification email.';
-    try { const body = await response.json(); message = body?.error || message; } catch {}
-    throw new Error(message);
-  }
-};
-
-  const refreshEmailVerification = useCallback(async () => {
-    if (!auth.currentUser) return false;
-    try {
-      await reload(auth.currentUser);
-    } catch (err) {
-      console.error('[FlowBiz] refreshEmailVerification: reload() failed:', err.code || err.name, err.message);
-      return auth.currentUser?.emailVerified ?? false;
-    }
-    const verified = !!auth.currentUser.emailVerified;
-    setEmailVerified(verified);
-    return verified;
-  }, []);
-
-  const createStaffInvite = async ({ displayName, role = 'cashier' }) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can invite staff.');
-    if (!['owner', 'cashier'].includes(role)) throw new Error('Invalid role.');
-    const trimmed = (displayName || '').trim();
-    if (!trimmed) throw new Error('Enter a name.');
-   const write = addDoc(collection(db, 'staffInvites'), {
-     businessId: profile.businessId,
-     displayName: trimmed,
-     role,
-     createdBy: profile.uid,
-     createdByName: profile.displayName,
-     createdAt: serverTimestamp(),
-     claimed: false,
-     linkedUid: null,
-   });
-   const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
-   if (error) throw error;
-   if (queuedOffline) return { id: null, queuedOffline: true };
-   return { id: value.id };
-  };
-
-  const cancelStaffInvite = async (inviteId) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can cancel an invite.');
-    await deleteDoc(doc(db, 'staffInvites', inviteId));
-  };
-
-  const revokeSessionsForStaffMember = useCallback(async (uid) => {
-    if (!profile?.businessId) return;
-    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', uid), where('businessId', '==', profile.businessId)));
-    await Promise.all(
-      snap.docs.filter((d) => d.data().revoked !== true).map((d) => updateDoc(doc(db, 'sessions', d.id), { revoked: true }))
-    );
-  }, [profile]);
-
-  const removeStaffAccount = async (uid) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can remove staff accounts.');
-    if (uid === profile.uid) throw new Error("You can't remove your own account here.");
-    if (!auth.currentUser) throw new Error('Your session has expired. Please sign in again.');
-
-    const idToken = await auth.currentUser.getIdToken(true);
-    await revokeSessionsForStaffMember(uid);
-
-    let response;
-    try {
-      response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-        body: JSON.stringify({ targetUid: uid }),
-      });
-    } catch (networkErr) {
-      throw new Error(`Failed to reach the API server. Check your connection.`);
-    }
-
-    let result = null;
-    try { result = await response.json(); } catch { }
-    if (!response.ok) throw new Error(result?.error || result?.message || `Failed to delete the staff account (${response.status}).`);
-
-    let retries = 3;
-    while (retries > 0) {
-      try {
-        await deleteDoc(doc(db, 'users', uid));
-        break;
-      } catch (e) {
-        retries--;
-        if (retries === 0) throw new Error("Staff Auth removed, but profile UI deletion timed out. Refresh the page.");
-        await new Promise(r => setTimeout(r, 1000));
-      }
-    }
-  };
-
-  const toggleMemberActive = async (uid, active) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can do this.');
-    await updateDoc(doc(db, 'users', uid), { active });
-    if (active === false) await revokeSessionsForStaffMember(uid);
-  };
-
-  const revokeSession = async (sessionId) => {
-    await updateDoc(doc(db, 'sessions', sessionId), { revoked: true });
-  };
-
-  const listMySessions = async () => {
-    if (!profile) return [];
-    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', profile.uid)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  };
-
-  const listBusinessSessions = async () => {
-    if (!profile?.businessId) return [];
-    const snap = await getDocs(query(collection(db, 'sessions'), where('businessId', '==', profile.businessId)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  };
-
-  const isOwner = profile?.role === 'owner';
-  
-  // FIX: Explicitly convert Timestamp to milliseconds to satisfy strict linters
-  const expiresMs = subscription?.expiresAt?.toMillis 
-    ? subscription.expiresAt.toMillis() 
-    : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
-
-  const isPro = subscription?.plan === 'pro' && 
-                subscription?.status === 'active' &&
-                (!subscription.expiresAt || expiresMs > Date.now());
-
-  return (
-    <AuthContext.Provider
-      value={{
-        firebaseUser, profile, subscription, isPro, loading, authError, accountRemoved, sessionRevoked,
-        businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
-        isActive: profile?.active !== false, emailVerified,
-        login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
-toggleMemberActive, revokeSession, listMySessions, listBusinessSessions,
-        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),        reloadProfile: async () => loadProfile(auth.currentUser),
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
-  return ctx;
-}
-````
-
 ## File: src/pages/Dashboard.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -14921,8 +15596,7 @@ export default function Dashboard() {
   const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
   const { data: products } = useFirestoreCollection(productsQuery);
   const { data: customers } = useFirestoreCollection(customersQuery);
-  const { data: suppliers } = useFirestoreCollection(suppliersQuery);
-
+const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQuery);
   const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
   const [activeProduct, setActiveProduct] = useState(null);
   const [completedSale, setCompletedSale] = useState(null);
@@ -15049,14 +15723,17 @@ const handleProductSave = async (data) => {
   // throw on error instead of returning, so SupplierFormModal's
   // catch/finally can reset its "Saving…" button instead of leaving the
   // form frozen after a failed save.
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
+const handleSupplierSave = async (supplierData) => {
+  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+  if (!queuedOffline) {
+    setNewSupplierId(ref.id);
+    await refetchSuppliers();
+  }
+  setSupplierModal(false);
+  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+};
 
   const handleScanDetected = (code) => {
     setScannerOpen(false);
@@ -15790,6 +16467,404 @@ function Row({ label, value, tone = '', mono = false }) {
 }
 ````
 
+## File: src/contexts/AuthContext.jsx
+````javascript
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut as fbSignOut,
+  sendEmailVerification,
+  reload,
+} from 'firebase/auth';
+import {
+  doc,
+  onSnapshot,
+  deleteDoc,
+  updateDoc,
+  collection,
+  addDoc,
+  setDoc,
+  serverTimestamp,
+  query,
+  where,
+  getDocs,
+  getDoc,
+} from 'firebase/firestore';
+import { auth, db } from '../firebase';
+import { raceWithTimeout } from '../utils/offlineWrite';
+
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+const AuthContext = createContext(null);
+
+function getDeviceId() {
+  let id = localStorage.getItem('flowbiz_device_id');
+  if (!id) {
+    id = `dev_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem('flowbiz_device_id', id);
+  }
+  return id;
+}
+function getSessionDocId(uid) {
+  return `${getDeviceId()}__${uid}`;
+}
+
+// src/contexts/AuthContext.jsx — replace guessDeviceLabel()
+function guessDeviceLabel() {
+  const ua = navigator.userAgent || '';
+  let os = 'Unknown device';
+  if (/Android/i.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+  else if (/Windows/i.test(ua)) os = 'Windows';
+  else if (/Macintosh/i.test(ua)) os = 'Mac';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+
+  let browser = '';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/OPR\//i.test(ua)) browser = 'Opera';
+  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
+
+  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches;
+  if (isStandalone) return browser ? `${os} app (${browser})` : `${os} app`;
+  return browser ? `${browser} on ${os}` : os;
+}
+
+export function AuthProvider({ children }) {
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [subscription, setSubscription] = useState({ plan: 'free', status: 'active' });
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
+  const [accountRemoved, setAccountRemoved] = useState(false);
+  const [sessionRevoked, setSessionRevoked] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(false);
+
+  const profileUnsubRef = useRef(null);
+  const sessionUnsubRef = useRef(null);
+  const businessUnsubRef = useRef(null);
+  const sessionRegisteredRef = useRef(null); // `${uid}:${businessId}` already registered this auth session
+
+  const stopListeners = useCallback(() => {
+    profileUnsubRef.current?.();
+    profileUnsubRef.current = null;
+    sessionUnsubRef.current?.();
+    sessionUnsubRef.current = null;
+    businessUnsubRef.current?.();
+    businessUnsubRef.current = null;
+    sessionRegisteredRef.current = null;
+  }, []);
+
+const registerSession = useCallback(async (uid, businessId, userName) => {
+  const key = `${uid}:${businessId}`;
+  if (sessionRegisteredRef.current === key) return;
+  sessionRegisteredRef.current = key;
+
+  let sessionId = getSessionDocId(uid);
+  let ref = doc(db, 'sessions', sessionId);
+  let currentSnap = await getDoc(ref);
+
+  // A revoked session can never legally un-revoke itself (that's the
+  // security rule working as intended — self-updates can't touch
+  // `revoked`). A fresh sign-in is a legitimate new session, so start a
+  // new record instead of endlessly retrying a write the rules forbid.
+  if (currentSnap.exists() && currentSnap.data().revoked === true) {
+    sessionId = `${sessionId}__${Date.now().toString(36)}`;
+    ref = doc(db, 'sessions', sessionId);
+    currentSnap = await getDoc(ref);
+  }
+
+  const baseFields = {
+    uid, businessId,
+    lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
+    deviceLabel: guessDeviceLabel(),
+    userAgent: navigator.userAgent,
+    lastActiveAt: serverTimestamp(),
+  };
+
+  if (!currentSnap.exists()) {
+    await setDoc(ref, { ...baseFields, createdAt: serverTimestamp(), revoked: false });
+  } else {
+    // Never include `revoked` here — self-updates aren't allowed to
+    // touch it, and it's already false if we got this far.
+    await updateDoc(ref, baseFields).catch(() => {});
+  }
+
+  activeSessionIdRef.current = sessionId;
+  setActiveSessionId(sessionId);
+
+  sessionUnsubRef.current?.();
+  sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
+    if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
+      setSessionRevoked(true);
+      fbSignOut(auth);
+    }
+  });
+}, []);
+
+  // Background heartbeat to keep the "last seen" time accurate for active devices
+useEffect(() => {
+    if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
+        updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
+      }
+    }, 15 * 60 * 1000); // 15 mins
+    return () => clearInterval(interval);
+  }, [firebaseUser, profile?.businessId, sessionRevoked]);
+
+  // FIX: Used a named function 'doLoad' to resolve the recursive ESLint error
+const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
+  stopListeners();
+  setAuthError(null);
+  setAccountRemoved(false);
+  setSessionRevoked(false);
+
+  if (!user) {
+    setProfile(null);
+    setSubscription({ plan: 'free', status: 'active' });
+    setEmailVerified(false);
+    setLoading(false);
+    return;
+  }
+
+  setEmailVerified(!!user.emailVerified);
+  setLoading(true);
+
+  // FIX: force-refresh the ID token before attaching the Firestore
+  // listener. Right after sign-in / verification / password reset, the
+  // Firestore SDK's connection can still be using a stale token for a
+  // moment — this closes that gap instead of just hoping it resolves.
+  user.getIdToken(true).catch(() => {}).then(() => {
+    const userRef = doc(db, 'users', user.uid);
+
+    profileUnsubRef.current = onSnapshot(
+      userRef,
+      (snap) => {
+if (!snap.exists()) {
+  (async () => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      if (auth.currentUser?.uid !== user.uid) return;
+      try {
+        const recheck = await getDoc(userRef);
+        if (recheck.exists()) return; // listener will pick it up
+      } catch (err) {
+        if (attempt === 3) {
+          setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
+          setProfile(null);
+          setLoading(false);
+          return;
+        }
+      }
+    }
+    setAccountRemoved(true);
+    setProfile(null);
+    setLoading(false);
+  })();
+  return;
+}
+        setAccountRemoved(false);
+        const data = { uid: user.uid, ...snap.data() };
+        setProfile(data);
+        setLoading(false);
+
+if (data.businessId && data.active !== false) {
+  registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
+          businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
+            if (bizSnap.exists()) {
+              setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
+            }
+          });
+        }
+      },
+      (err) => {
+        // FIX: more retries, longer backoff — gives slower connections
+        // (mobile networks) a real chance to catch up instead of
+        // dumping the user on an error screen after ~4s.
+        if (err.code === 'permission-denied' && retryCount < 6) {
+          const delay = Math.min(1000 * 2 ** retryCount, 8000);
+          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying (attempt ${retryCount + 1})`);
+          setTimeout(() => {
+            if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
+          }, delay);
+          return;
+        }
+        console.error(`[FlowBiz] onSnapshot(users/${user.uid}) failed:`, err.code || err.name, err.message);
+        setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
+        setProfile(null);
+        setLoading(false);
+      }
+    );
+  });
+}, [registerSession, stopListeners]);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      loadProfile(user);
+    });
+    return () => { unsub(); stopListeners(); };
+  }, [loadProfile, stopListeners]);
+
+  const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
+  const logout = () => { stopListeners(); return fbSignOut(auth); };
+  
+const resendVerificationEmail = async () => {
+  if (!auth.currentUser) throw new Error('Not signed in.');
+  const idToken = await auth.currentUser.getIdToken(true);
+  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+  });
+  if (!response.ok) {
+    let message = 'Could not send the verification email.';
+    try { const body = await response.json(); message = body?.error || message; } catch {}
+    throw new Error(message);
+  }
+};
+
+  const refreshEmailVerification = useCallback(async () => {
+    if (!auth.currentUser) return false;
+    try {
+      await reload(auth.currentUser);
+    } catch (err) {
+      console.error('[FlowBiz] refreshEmailVerification: reload() failed:', err.code || err.name, err.message);
+      return auth.currentUser?.emailVerified ?? false;
+    }
+    const verified = !!auth.currentUser.emailVerified;
+    setEmailVerified(verified);
+    return verified;
+  }, []);
+
+  const createStaffInvite = async ({ displayName, role = 'cashier' }) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can invite staff.');
+    if (!['owner', 'cashier'].includes(role)) throw new Error('Invalid role.');
+    const trimmed = (displayName || '').trim();
+    if (!trimmed) throw new Error('Enter a name.');
+   const write = addDoc(collection(db, 'staffInvites'), {
+     businessId: profile.businessId,
+     displayName: trimmed,
+     role,
+     createdBy: profile.uid,
+     createdByName: profile.displayName,
+     createdAt: serverTimestamp(),
+     claimed: false,
+     linkedUid: null,
+   });
+   const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
+   if (error) throw error;
+   if (queuedOffline) return { id: null, queuedOffline: true };
+   return { id: value.id };
+  };
+
+  const cancelStaffInvite = async (inviteId) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can cancel an invite.');
+    await deleteDoc(doc(db, 'staffInvites', inviteId));
+  };
+
+  const revokeSessionsForStaffMember = useCallback(async (uid) => {
+    if (!profile?.businessId) return;
+    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', uid), where('businessId', '==', profile.businessId)));
+    await Promise.all(
+      snap.docs.filter((d) => d.data().revoked !== true).map((d) => updateDoc(doc(db, 'sessions', d.id), { revoked: true }))
+    );
+  }, [profile]);
+
+  const removeStaffAccount = async (uid) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can remove staff accounts.');
+    if (uid === profile.uid) throw new Error("You can't remove your own account here.");
+    if (!auth.currentUser) throw new Error('Your session has expired. Please sign in again.');
+
+    const idToken = await auth.currentUser.getIdToken(true);
+    await revokeSessionsForStaffMember(uid);
+
+    let response;
+    try {
+      response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({ targetUid: uid }),
+      });
+    } catch (networkErr) {
+      throw new Error(`Failed to reach the API server. Check your connection.`);
+    }
+
+    let result = null;
+    try { result = await response.json(); } catch { }
+    if (!response.ok) throw new Error(result?.error || result?.message || `Failed to delete the staff account (${response.status}).`);
+
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await deleteDoc(doc(db, 'users', uid));
+        break;
+      } catch (e) {
+        retries--;
+        if (retries === 0) throw new Error("Staff Auth removed, but profile UI deletion timed out. Refresh the page.");
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+  };
+
+  const toggleMemberActive = async (uid, active) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can do this.');
+    await updateDoc(doc(db, 'users', uid), { active });
+    if (active === false) await revokeSessionsForStaffMember(uid);
+  };
+
+  const revokeSession = async (sessionId) => {
+    await updateDoc(doc(db, 'sessions', sessionId), { revoked: true });
+  };
+
+  const listMySessions = async () => {
+    if (!profile) return [];
+    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', profile.uid)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  };
+
+  const listBusinessSessions = async () => {
+    if (!profile?.businessId) return [];
+    const snap = await getDocs(query(collection(db, 'sessions'), where('businessId', '==', profile.businessId)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  };
+
+  const isOwner = profile?.role === 'owner';
+  
+  // FIX: Explicitly convert Timestamp to milliseconds to satisfy strict linters
+  const expiresMs = subscription?.expiresAt?.toMillis 
+    ? subscription.expiresAt.toMillis() 
+    : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
+
+  const isPro = subscription?.plan === 'pro' && 
+                subscription?.status === 'active' &&
+                (!subscription.expiresAt || expiresMs > Date.now());
+
+  return (
+    <AuthContext.Provider
+      value={{
+        firebaseUser, profile, subscription, isPro, loading, authError, accountRemoved, sessionRevoked,
+        businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
+        isActive: profile?.active !== false, emailVerified,
+        login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
+toggleMemberActive, revokeSession, listMySessions, listBusinessSessions,
+        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),        reloadProfile: async () => loadProfile(auth.currentUser),
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  return ctx;
+}
+````
+
 ## File: src/router/AppRouter.jsx
 ````javascript
 import { lazy, Suspense, useEffect } from 'react';
@@ -16124,16 +17199,7 @@ function Shell({ children }) {
   );
 }
 
-// FIX (click-to-confirm): applyActionCode used to fire automatically the
-// instant this page loaded, with no user interaction. Verification
-// oobCodes are single-use — some email providers and corporate security
-// scanners (Outlook Safe Links, some antivirus/email-gateway link
-// scanners, Gmail link prefetching) silently VISIT the link themselves
-// to check it's safe, before the real person ever clicks it. That
-// silently burns the one-time code, so the actual user then lands on an
-// already-used code through no fault of their own. Requiring an explicit
-// "Verify my email" click before calling applyActionCode means only a
-// real person's deliberate action can ever consume the code.
+
 function VerifyEmailPanel({ mode, oobCode }) {
   const [status, setStatus] = useState('ready'); // ready -> working -> success | error
   const [message, setMessage] = useState('');
@@ -16191,30 +17257,32 @@ function VerifyEmailPanel({ mode, oobCode }) {
 
       if (auth.currentUser) {
         try {
+          // 1. Reload user and force token refresh to propagate verified status instantly
           await reload(auth.currentUser);
+          await auth.currentUser.getIdToken(true);
+          
+          // 2. Teleport straight into the dashboard cleanly
+          window.location.assign('/'); 
+          return;
         } catch {
-          // Non-fatal
+          // Non-fatal fallback
         }
+      } else {
+        window.location.assign('/login');
+        return;
       }
 
-      setStatus('success');
-      setMessage('Your email has been verified.');
     } catch (err) {
       const code = err.code || '';
 
-      // If this exact code was already consumed (e.g. by a link-scanning
-      // bot before the person clicked "Verify my email" above) but the
-      // account turns out to already be verified, treat it as success —
-      // it genuinely is one — rather than showing an error for something
-      // that already succeeded.
-      if (code === 'auth/invalid-action-code' && auth.currentUser) {
+      // If already verified or expired-code race condition, check currentUser status directly
+      if ((code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') && auth.currentUser) {
         try {
           await reload(auth.currentUser);
-
+          await auth.currentUser.getIdToken(true);
           if (auth.currentUser.emailVerified) {
-            setStatus('success');
-            setMessage('Your email has been verified.');
-            return;
+             window.location.assign('/'); 
+             return;
           }
         } catch {
           // Fall through to error below
@@ -16222,7 +17290,6 @@ function VerifyEmailPanel({ mode, oobCode }) {
       }
 
       setStatus('error');
-
       setMessage(
         code === 'auth/expired-action-code'
           ? 'This verification link has expired. Please request a new one below.'
@@ -16261,27 +17328,6 @@ function VerifyEmailPanel({ mode, oobCode }) {
         </>
       )}
 
-      {status === 'success' && (
-        <>
-          <CheckCircle2
-            className="h-12 w-12 text-moss-600"
-            strokeWidth={1.5}
-          />
-
-          <h1 className="font-display text-lg font-bold text-ink-900">
-            Email verified
-          </h1>
-
-          <p className="text-sm text-ink-500">
-            {message} You can continue to FlowBiz now.
-          </p>
-
-          <Link to="/" className="btn-primary w-full">
-            Continue to FlowBiz
-          </Link>
-        </>
-      )}
-
       {status === 'error' && (
         <>
           <h1 className="font-display text-lg font-bold text-ink-900">
@@ -16316,12 +17362,6 @@ function VerifyEmailPanel({ mode, oobCode }) {
   );
 }
 
-// FIX (click-to-confirm, reset password): same reasoning as
-// VerifyEmailPanel above — verifyPasswordResetCode used to fire
-// automatically on mount, so a link-scanner visiting the URL before the
-// person clicked it could burn the one-time code and leave the real
-// person looking at a false "expired or already used" error. Now nothing
-// touches the oobCode until the person explicitly clicks "Continue".
 function ResetPasswordPanel({ oobCode }) {
   const [status, setStatus] = useState('ready'); // ready -> checking -> form -> success | error
   const [message, setMessage] = useState('');
@@ -16502,7 +17542,7 @@ function ResetPasswordPanel({ oobCode }) {
       {status === 'success' && (
         <>
           <CheckCircle2
-            className="h-12 w-12 text-moss-600"
+            className="h-12 w-12 text-moss-600 mx-auto"
             strokeWidth={1.5}
           />
 
@@ -16526,7 +17566,7 @@ function ResetPasswordPanel({ oobCode }) {
       {status === 'error' && (
         <>
           <AlertCircle
-            className="h-12 w-12 text-rust-500"
+            className="h-12 w-12 text-rust-500 mx-auto"
             strokeWidth={1.5}
           />
 

@@ -114,8 +114,8 @@ try {
         <Row label="+ Debt repayments (M-Pesa)"  value={summary.totalDebtRepaymentsMpesa} />
         <Row label="− Expenses (M-Pesa)"         value={-summary.totalExpensesMpesa} />
         <Row label="− Refunds (M-Pesa)"          value={-summary.totalRefundsMpesa} />
-        <Row label="− Purchases paid (cash)" value={-cashPurchases} />
-        <Row label="− Supplier debt payments (cash)" value={-cashSupplierPay} />
+        <Row label="− Purchases paid (M-Pesa)" value={-mpesaPurchases} />
+        <Row label="− Supplier debt payments (M-Pesa)" value={-mpesaSupplierPay} />
         <Row label="= Expected M-Pesa"           value={expectedMpesaAtClose} bold />
       </div>
       <div className="card p-4 space-y-2">
