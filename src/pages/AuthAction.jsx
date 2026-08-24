@@ -1,4 +1,3 @@
-// src/pages/AuthAction.jsx
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import {
@@ -10,6 +9,7 @@ import {
 import toast from 'react-hot-toast';
 import { auth } from '../firebase';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
@@ -246,7 +246,7 @@ function VerifyEmailPanel({ mode, oobCode }) {
     <Shell>
       {status === 'ready' && (
         <>
-          <h1 className="font-display text-lg font-bold text-ink-900">Verify your email</h1>
+          <h1 className="font-display text-lg font-bold text-ink-900">Verify your email 1234</h1>
           <p className="text-sm text-ink-500">Click below to confirm your email address and activate your FlowBiz account.</p>
           <button className="btn-primary w-full" onClick={handleConfirm}>Verify my email</button>
         </>

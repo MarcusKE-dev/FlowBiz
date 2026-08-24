@@ -11,12 +11,16 @@ import { isDemoMode } from '../demo/demoMode';
 import { resetDemoData } from '../demo/seedData';
 import { formatDateTime } from '../utils/dateRanges';
 import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal'; 
 import { raceWithTimeout } from '../utils/offlineWrite';
+import { buildExportZip } from '../utils/dataExport';
+import { readExportZip, checkExistingData, importBusinessData } from '../utils/dataImport';
 
 const RESET_CONFIRM_PHRASE = 'RESET';
+const DELETE_ACCOUNT_CONFIRM_PHRASE = 'DELETE';
 
 export default function Settings() {
-  const { profile, businessId, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro } = useAuth();
+  const { profile, businessId, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, deleteOwnAccount } = useAuth();
   const demo = isDemoMode();
   const [loading, setLoading]     = useState(true);
   
@@ -36,7 +40,81 @@ export default function Settings() {
 
   const [sessions, setSessions] = useState([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
+  const [deleteAccountPassword, setDeleteAccountPassword] = useState('');
+  const [deleteAccountConfirmText, setDeleteAccountConfirmText] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [otherOwnersCount, setOtherOwnersCount] = useState(null);
+const [exporting, setExporting] = useState(false);
+const [exportProgress, setExportProgress] = useState(null);
 
+const fileInputRef = useRef(null);
+const [checkingImport, setCheckingImport] = useState(false);
+const [importing, setImporting] = useState(false);
+const [importProgress, setImportProgress] = useState(null);
+const [pendingImport, setPendingImport] = useState(null); // { manifest, nonEmptyCollections, fileName }
+const [importConfirmChecked, setImportConfirmChecked] = useState(false);
+
+
+const handleImportFileSelected = async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = ''; // allow re-selecting the same file later
+  if (!file) return;
+  setCheckingImport(true);
+  try {
+    const manifest = await readExportZip(file);
+    const nonEmptyCollections = await checkExistingData(businessId, manifest);
+    setPendingImport({ manifest, nonEmptyCollections, fileName: file.name });
+    setImportConfirmChecked(false);
+  } catch (err) {
+    toast.error(err.message);
+  } finally {
+    setCheckingImport(false);
+  }
+};
+
+const handleConfirmImport = async () => {
+  if (!pendingImport) return;
+  setImporting(true);
+  setImportProgress(null);
+  try {
+    const results = await importBusinessData(businessId, pendingImport.manifest, {
+      onProgress: (name, i, total) => setImportProgress(`${name} (${i + 1}/${total})`),
+    });
+    const totalDocs = Object.values(results).reduce((a, b) => a + b, 0);
+    toast.success(`Import complete — ${totalDocs} record(s) restored.`);
+    setPendingImport(null);
+  } catch (err) {
+    toast.error(`Import failed: ${err.message}`);
+  } finally {
+    setImporting(false);
+    setImportProgress(null);
+  }
+};
+
+const handleExport = async () => {
+  setExporting(true);
+  setExportProgress(null);
+  try {
+    const blob = await buildExportZip(businessId, {
+      onProgress: (name, i, total) => setExportProgress(`${name} (${i + 1}/${total})`),
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `flowbiz-export-${businessId}-${new Date().toISOString().slice(0, 10)}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    toast.success('Export downloaded.');
+  } catch (err) {
+    toast.error(`Export failed: ${err.message}`);
+  } finally {
+    setExporting(false);
+    setExportProgress(null);
+  }
+};
   const deviceGroups = useMemo(() => {
     const groups = new Map();
     for (const s of sessions) {
@@ -147,7 +225,7 @@ export default function Settings() {
         try {
           const compressed = await compressImage(logoFile, 480, 0.75);
           if (compressed.size > 700 * 1024) {
-            toast.error('Logo is still too large after compression — try a simpler image.');
+            toast.error('Logo is still too large after compression, try a simpler image.');
           } else {
             finalLogoUrl = await blobToDataUrl(compressed);
           }
@@ -168,7 +246,7 @@ export default function Settings() {
       if (error) throw error;
 
       setLogoUrl(finalLogoUrl);
-      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Business information saved');
+      toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Business information saved');
       setLogoFile(null);
     } catch (err) { 
       toast.error(err.message); 
@@ -184,7 +262,7 @@ export default function Settings() {
     const { queuedOffline, error } = await raceWithTimeout(write, 4000);
     setSavingPermissions(false);
     if (error) { toast.error(error.message); return; }
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Permissions saved');
+    toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Permissions saved');
   };
 
   const handleReset = async () => {
@@ -205,6 +283,31 @@ export default function Settings() {
     }
   };
 
+  const openDeleteAccount = async () => {
+    setDeleteAccountPassword('');
+    setDeleteAccountConfirmText('');
+    setOtherOwnersCount(null);
+    setDeleteAccountOpen(true);
+    try {
+      const snap = await getDocs(query(collection(db, 'users'), where('businessId', '==', businessId), where('role', '==', 'owner')));
+      const others = snap.docs.filter((d) => d.id !== profile.uid && d.data().active !== false);
+      setOtherOwnersCount(others.length);
+    } catch {
+      setOtherOwnersCount(0); // fail toward showing the more serious warning
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeletingAccount(true);
+    try {
+      await deleteOwnAccount({ password: deleteAccountPassword });
+      toast.success('Your account has been removed.');
+    } catch (err) {
+      toast.error(err.message);
+      setDeletingAccount(false);
+    }
+  };
+
   const handleRevokeGroup = async (group) => {
     try {
       await Promise.all(group.ids.map((id) => revokeSession(id)));
@@ -219,7 +322,7 @@ export default function Settings() {
       const { barcodeCleared } = await restoreProduct(productId, target?.barcode, businessId);
       setArchived(a => a.filter(p => p.id !== productId));
       toast.success(barcodeCleared
-        ? 'Product restored — its old barcode is now used by another product, so it was cleared. Add a new one from Products if needed.'
+        ? 'Product restored, its old barcode is now used by another product, so it was cleared. Add a new one from Products if needed.'
         : 'Product restored');
     } catch (err) { toast.error(err.message); }
   };
@@ -373,6 +476,59 @@ export default function Settings() {
         <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
       </div>
 
+<div className="card p-5 space-y-3">
+  <h2 className="font-display text-base font-bold text-ink-800">Backup & Restore</h2>
+  <p className="text-sm text-ink-500">
+    Download everything this business has stored as a .zip (CSVs plus a FlowBiz backup file), or restore a previous FlowBiz export back into this business.
+  </p>
+  <div className="grid grid-cols-2 gap-2">
+    <button type="button" className="btn-outline" onClick={handleExport} disabled={exporting || importing || checkingImport}>
+      {exporting ? (exportProgress || 'Preparing…') : 'Export (.zip)'}
+    </button>
+    <button type="button" className="btn-outline" onClick={() => fileInputRef.current?.click()} disabled={exporting || importing || checkingImport}>
+      {checkingImport ? 'Reading file…' : 'Import (.zip)'}
+    </button>
+  </div>
+  <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleImportFileSelected} />
+</div>
+
+<Modal open={!!pendingImport} onClose={() => { if (!importing) setPendingImport(null); }} title="Import this backup?">
+  <div className="space-y-4">
+    <p className="text-sm text-ink-600">
+      <span className="font-mono text-xs">{pendingImport?.fileName}</span> contains:
+    </p>
+    <div className="max-h-40 overflow-y-auto rounded-lg border border-ink-100 divide-y divide-ink-100">
+      {pendingImport && Object.entries(pendingImport.manifest.collections)
+        .filter(([, docs]) => docs.length > 0)
+        .map(([name, docs]) => (
+          <div key={name} className="flex justify-between px-3 py-1.5 text-xs">
+            <span className="text-ink-500">{name}</span>
+            <span className="font-semibold text-ink-800">{docs.length}</span>
+          </div>
+        ))}
+    </div>
+
+    {pendingImport?.nonEmptyCollections.length > 0 && (
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+        This business already has data in: {pendingImport.nonEmptyCollections.join(', ')}. Importing will add these records alongside what's already there — any record that shares the exact same ID as one you already have will be overwritten.
+      </div>
+    )}
+
+    <label className="flex items-start gap-2 text-sm text-ink-600">
+      <input type="checkbox" checked={importConfirmChecked} onChange={(e) => setImportConfirmChecked(e.target.checked)} disabled={importing} className="mt-0.5" />
+      I understand and want to proceed with this import.
+    </label>
+
+    {importing && <p className="text-xs text-ink-400">{importProgress || 'Starting…'}</p>}
+
+    <div className="flex gap-2">
+      <button type="button" className="btn-secondary flex-1" onClick={() => setPendingImport(null)} disabled={importing}>Cancel</button>
+      <button type="button" className="btn-primary flex-1" onClick={handleConfirmImport} disabled={!importConfirmChecked || importing}>
+        {importing ? 'Importing…' : 'Import'}
+      </button>
+    </div>
+  </div>
+</Modal>
       <div className="card space-y-3 border-rust-200 p-5">
         <div>
           <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
@@ -384,6 +540,19 @@ export default function Settings() {
         </div>
         <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
           {demo ? 'Demo Reset' : 'Business Reset'}
+        </button>
+      </div>
+
+      {/* Inserted "Delete My Account" block here */}
+      <div className="card space-y-3 border-rust-200 p-5">
+        <div>
+          <h2 className="font-display text-base font-bold text-rust-700">Delete My Account</h2>
+          <p className="mt-1 text-sm text-ink-500">
+            Removes your own FlowBiz sign-in permanently. What happens to the business depends on whether other owners exist. Export your data first if you're the only owner.
+          </p>
+        </div>
+        <button type="button" className="btn-danger w-full" onClick={openDeleteAccount}>
+          Delete my account
         </button>
       </div>
 
@@ -415,6 +584,45 @@ export default function Settings() {
         onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
         onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
       />
+
+      {/* Inserted "Delete My Account" Modal here */}
+      <Modal open={deleteAccountOpen} onClose={() => { if (!deletingAccount) setDeleteAccountOpen(false); }} title="Delete your account">
+        <div className="space-y-4">
+          {otherOwnersCount === null ? (
+            <p className="text-sm text-ink-400">Checking your business…</p>
+          ) : otherOwnersCount > 0 ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+              Another owner is on this account. The business and all its data stay intact, and they'll take over as the business's main contact. Only your own sign-in will be removed.
+            </div>
+          ) : (
+            <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2.5 text-sm text-rust-700">
+              <strong>You're the only owner.</strong> Deleting your account permanently erases every product, sale, customer, and record this business has. This cannot be undone.
+            </div>
+          )}
+
+          <div>
+            <label className="label">Confirm your password</label>
+            <input type="password" className="input" value={deleteAccountPassword} onChange={(e) => setDeleteAccountPassword(e.target.value)} autoComplete="current-password" disabled={deletingAccount} />
+          </div>
+
+          <div>
+            <label className="label">Type <span className="font-mono font-bold">{DELETE_ACCOUNT_CONFIRM_PHRASE}</span> to confirm</label>
+            <input className="input" value={deleteAccountConfirmText} onChange={(e) => setDeleteAccountConfirmText(e.target.value)} disabled={deletingAccount} />
+          </div>
+
+          <div className="flex gap-2">
+            <button type="button" className="btn-secondary flex-1" onClick={() => setDeleteAccountOpen(false)} disabled={deletingAccount}>Cancel</button>
+            <button
+              type="button"
+              className="btn-danger flex-1"
+              disabled={deletingAccount || deleteAccountConfirmText !== DELETE_ACCOUNT_CONFIRM_PHRASE || !deleteAccountPassword || otherOwnersCount === null}
+              onClick={handleDeleteAccount}
+            >
+              {deletingAccount ? 'Deleting…' : 'Delete my account'}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

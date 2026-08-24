@@ -50,7 +50,14 @@ export async function handleDeleteStaff(request, env) {
     return errorResponse('That account does not belong to your business.', 403);
   }
 
-  // Step 4 — the actual fix.
+  // The account that originally created the business can only ever be
+  // removed by itself (via "Delete my account" in Settings) — never by
+  // another owner through this staff-removal flow.
+  const business = await getDocument(env, 'businesses', callerProfile.businessId);
+  if (business && business.createdBy === targetUid) {
+    return errorResponse("The account that created this business can't be removed this way. That person can delete their own account from Settings.", 403);
+  }
+
   await deleteAuthUser(env, targetUid);
 
   return json({ success: true });

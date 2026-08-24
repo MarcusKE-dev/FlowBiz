@@ -89,3 +89,12 @@ export async function createDocument(env, collection, docId, data) {
   if (!res.ok) throw new Error(`Firestore create failed (${collection}/${docId}): ${await res.text()}`);
   return res.json();
 }
+export async function deleteDocument(env, collection, docId) {
+  const token = await getGoogleAccessToken(env);
+  const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}/${collection}/${docId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return; 
+  if (!res.ok) throw new Error(`Firestore delete failed (${collection}/${docId}): ${await res.text()}`);
+}

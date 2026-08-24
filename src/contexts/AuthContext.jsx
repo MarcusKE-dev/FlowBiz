@@ -1,10 +1,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import {
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signOut as fbSignOut,
-  sendEmailVerification,
-  reload,
+  onAuthStateChanged, signInWithEmailAndPassword, signOut as fbSignOut, sendEmailVerification, reload,
+  deleteUser, EmailAuthProvider, reauthenticateWithCredential,
 } from 'firebase/auth';
 import {
   doc,
@@ -119,9 +116,6 @@ const registerSession = useCallback(async (uid, businessId, userName) => {
     // touch it, and it's already false if we got this far.
     await updateDoc(ref, baseFields).catch(() => {});
   }
-
-  activeSessionIdRef.current = sessionId;
-  setActiveSessionId(sessionId);
 
   sessionUnsubRef.current?.();
   sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
@@ -325,16 +319,12 @@ const resendVerificationEmail = async () => {
     try { result = await response.json(); } catch { }
     if (!response.ok) throw new Error(result?.error || result?.message || `Failed to delete the staff account (${response.status}).`);
 
-    let retries = 3;
-    while (retries > 0) {
-      try {
-        await deleteDoc(doc(db, 'users', uid));
-        break;
-      } catch (e) {
-        retries--;
-        if (retries === 0) throw new Error("Staff Auth removed, but profile UI deletion timed out. Refresh the page.");
-        await new Promise(r => setTimeout(r, 1000));
-      }
+    const { queuedOffline, error: deleteError } = await raceWithTimeout(deleteDoc(doc(db, 'users', uid)), 4000);
+    if (deleteError) {
+      throw new Error(`Staff sign-in was removed, but their profile record couldn't be deleted (${deleteError.message}). It should clear automatically once back online — try again if it doesn't.`);
+    }
+    if (queuedOffline) {
+      throw new Error("Staff sign-in was removed, but you're offline — their profile record will finish deleting once you're back online.");
     }
   };
 
@@ -344,6 +334,81 @@ const resendVerificationEmail = async () => {
     if (active === false) await revokeSessionsForStaffMember(uid);
   };
 
+      const deleteOwnAccount = async ({ password }) => {
+    if (!profile || !auth.currentUser) throw new Error('You need to be signed in to do this.');
+
+    // Re-authenticate up front — this is irreversible, so it shouldn't
+    // risk failing on the very last step (deleting the login) because the
+    // session had gone stale. Also doubles as the "are you sure" check.
+    try {
+      const credential = EmailAuthProvider.credential(auth.currentUser.email, password);
+      await reauthenticateWithCredential(auth.currentUser, credential);
+    } catch (err) {
+      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        throw new Error('That password is incorrect.');
+      }
+      throw new Error('Could not verify your password. Please try again.');
+    }
+
+    let mode = 'self-only';
+
+    if (profile.role === 'owner') {
+      const othersSnap = await getDocs(query(
+        collection(db, 'users'),
+        where('businessId', '==', profile.businessId),
+        where('role', '==', 'owner')
+      ));
+      // Only counting ACTIVE other owners on purpose — a deactivated owner
+      // can't currently manage the business either, so their presence
+      // shouldn't be what decides "does this business still have someone
+      // running it."
+      const otherOwners = othersSnap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((u) => u.id !== profile.uid && u.active !== false);
+
+      if (otherOwners.length > 0) {
+        const bizSnap = await getDoc(doc(db, 'businesses', profile.businessId));
+        const business = bizSnap.exists() ? bizSnap.data() : null;
+        if (business && business.createdBy === profile.uid) {
+          const oldest = [...otherOwners].sort((a, b) => {
+            const at = a.createdAt?.toMillis?.() ?? 0;
+            const bt = b.createdAt?.toMillis?.() ?? 0;
+            return at - bt;
+          })[0];
+          await updateDoc(doc(db, 'businesses', profile.businessId), { createdBy: oldest.id });
+        }
+      } else {
+        // Sole remaining owner — wipe the business's data first. If this
+        // throws, we stop right here: nothing about the account or
+        // business record gets touched while data might still be sitting
+        // there.
+      mode = 'full-wipe';
+const { resetBusinessData } = await import('../utils/businessReset');
+await resetBusinessData(profile.businessId, profile.uid);
+      }
+    }
+
+    const idToken = await auth.currentUser.getIdToken(true);
+    const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-own-profile`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ mode }),
+    });
+    let result = null;
+    try { result = await response.json(); } catch { }
+    if (!response.ok) {
+      throw new Error(result?.error || `Could not finish removing your account (${response.status}).`);
+    }
+
+    try {
+      await deleteUser(auth.currentUser);
+    } catch (err) {
+      if (err.code === 'auth/requires-recent-login') {
+        throw new Error("Your business data was handled, but we couldn't remove your sign-in for security reasons — please sign out and back in, then try 'Delete my account' again.");
+      }
+      throw new Error("Your business data was handled, but removing your sign-in failed. Please try again — it's safe to retry.");
+    }
+  };
   const revokeSession = async (sessionId) => {
     await updateDoc(doc(db, 'sessions', sessionId), { revoked: true });
   };
@@ -378,7 +443,7 @@ const resendVerificationEmail = async () => {
         businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
         isActive: profile?.active !== false, emailVerified,
         login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
-toggleMemberActive, revokeSession, listMySessions, listBusinessSessions,
+toggleMemberActive, revokeSession, listMySessions, listBusinessSessions, deleteOwnAccount,
         currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),        reloadProfile: async () => loadProfile(auth.currentUser),
       }}
     >

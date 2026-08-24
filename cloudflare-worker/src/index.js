@@ -22,6 +22,7 @@ import { handlePublicDocument } from './routes/publicDocument.js';
 import { handleProPrice } from './routes/proPrice.js';
 import { handleSendVerificationEmail } from './routes/sendVerificationEmail.js';
 import { handleSendPasswordReset } from './routes/sendPasswordResetEmail.js';
+import { handleDeleteOwnProfile } from './routes/deleteOwnProfile.js';
 function getAllowedOrigins(env) {
   return (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
@@ -77,6 +78,8 @@ export default {
         response = await handlePaystackInitialize(request, env);
       } else if (url.pathname === '/api/pro/price' && request.method === 'GET') {
         response = await handleProPrice();
+              } else if (url.pathname === '/api/auth/delete-own-profile' && request.method === 'POST') {
+        response = await handleDeleteOwnProfile(request, env);
       } else {
         response = errorResponse('Not found.', 404);
       }

@@ -50,6 +50,7 @@ cloudflare-worker/
       resend.js
       response.js
     routes/
+      deleteOwnProfile.js
       deleteStaff.js
       paystackInitialize.js
       paystackWebhook.js
@@ -183,6 +184,8 @@ src/
     csvExport.js
     currency.js
     customers.js
+    dataExport.js
+    dataImport.js
     dateRanges.js
     documentService.js
     documentSharing.js
@@ -218,6 +221,53 @@ vite.config.js
 ````
 
 # Files
+
+## File: cloudflare-worker/src/routes/deleteOwnProfile.js
+````javascript
+import { json, errorResponse } from '../lib/response.js';
+import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
+import { getDocument, deleteDocument } from '../lib/firestore.js';
+
+export async function handleDeleteOwnProfile(request, env) {
+  const authHeader = request.headers.get('Authorization') || '';
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!idToken) return errorResponse('Missing Authorization header.', 401);
+
+  let caller;
+  try {
+    caller = await verifyFirebaseIdToken(idToken, env.FIREBASE_PROJECT_ID);
+  } catch (err) {
+    return errorResponse(`Invalid session: ${err.message}`, 401);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON body.', 400);
+  }
+  const mode = body?.mode;
+  if (mode !== 'full-wipe' && mode !== 'self-only') {
+    return errorResponse('mode must be "full-wipe" or "self-only".', 400);
+  }
+
+  const callerProfile = await getDocument(env, 'users', caller.uid);
+  if (!callerProfile) {
+    // Profile's already gone — nothing left to clean up.
+    return json({ success: true });
+  }
+
+  if (mode === 'full-wipe') {
+    if (!callerProfile.businessId) return errorResponse('No business associated with this account.', 400);
+    await deleteDocument(env, 'businessSettings', callerProfile.businessId);
+    await deleteDocument(env, 'businesses', callerProfile.businessId);
+  }
+
+  await deleteDocument(env, 'users', caller.uid);
+
+  return json({ success: true });
+}
+````
 
 ## File: cloudflare-worker/src/routes/publicDocument.js
 ````javascript
@@ -629,6 +679,204 @@ export async function handlePublicDocument(request, env, token) {
 }
 ````
 
+## File: src/utils/dataExport.js
+````javascript
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../firebase';
+
+export const EXPORT_COLLECTIONS = [
+  'products', 'sales', 'creditSales', 'customers', 'suppliers', 'expenses',
+  'purchases', 'dailySessions', 'repayments', 'supplierPayments',
+  'stockAdjustments', 'refunds', 'debtPaymentReceipts', 'staffInvites',
+];
+
+function timestampToIso(value) {
+  if (value && typeof value.toDate === 'function') return value.toDate().toISOString();
+  if (value instanceof Date) return value.toISOString();
+  return value;
+}
+
+function flattenForCsv(docData) {
+  const flat = {};
+  Object.entries(docData).forEach(([key, value]) => {
+    if (Array.isArray(value) || (value && typeof value === 'object')) {
+      flat[key] = JSON.stringify(value);
+    } else {
+      flat[key] = value ?? '';
+    }
+  });
+  return flat;
+}
+
+function escapeCsvCell(value) {
+  if (value === null || value === undefined) return '';
+  let str = String(value);
+  if (/^[=+\-@\t\r]/.test(str)) str = "'" + str; // formula-injection guard, same rule csvExport.js already uses
+  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+  return str;
+}
+
+function rowsToCsv(rows) {
+  if (!rows || rows.length === 0) return '';
+  const headers = Array.from(rows.reduce((set, row) => { Object.keys(row).forEach((k) => set.add(k)); return set; }, new Set()));
+  const lines = [headers.join(',')];
+  rows.forEach((row) => lines.push(headers.map((h) => escapeCsvCell(row[h])).join(',')));
+  return lines.join('\n');
+}
+
+export async function exportBusinessData(businessId, { onProgress } = {}) {
+  if (!businessId) throw new Error('exportBusinessData() called with no businessId');
+
+  const manifest = { exportedAt: new Date().toISOString(), businessId, collections: {} };
+  const csvFiles = {};
+
+  for (let i = 0; i < EXPORT_COLLECTIONS.length; i++) {
+    const name = EXPORT_COLLECTIONS[i];
+    onProgress?.(name, i, EXPORT_COLLECTIONS.length);
+
+    const snap = await getDocs(query(collection(db, name), where('businessId', '==', businessId)));
+    const docs = snap.docs.map((d) => {
+      const jsonSafe = {};
+      Object.entries(d.data()).forEach(([k, v]) => { jsonSafe[k] = timestampToIso(v); });
+      return { id: d.id, ...jsonSafe };
+    });
+
+    manifest.collections[name] = docs;
+    csvFiles[name] = rowsToCsv(docs.map((d) => {
+      const { id, ...rest } = d;
+      return { id, ...flattenForCsv(rest) };
+    }));
+  }
+
+  return { manifest, csvFiles };
+}
+
+export async function buildExportZip(businessId, { onProgress } = {}) {
+  const { manifest, csvFiles } = await exportBusinessData(businessId, { onProgress });
+  const JSZip = (await import('jszip')).default;
+  const zip = new JSZip();
+
+  zip.file('flowbiz-export.json', JSON.stringify(manifest, null, 2));
+  const csvFolder = zip.folder('csv');
+  Object.entries(csvFiles).forEach(([name, csv]) => { if (csv) csvFolder.file(`${name}.csv`, csv); });
+
+  return zip.generateAsync({ type: 'blob' });
+}
+````
+
+## File: src/utils/dataImport.js
+````javascript
+import { doc, writeBatch, getDocs, query, collection, where, limit } from 'firebase/firestore';
+import { db } from '../firebase';
+
+// Ordered so anything another collection references (customers,
+// suppliers, products) is written before the records that reference it.
+export const IMPORT_COLLECTIONS = [
+  'customers', 'suppliers', 'products', 'sales', 'creditSales', 'purchases',
+  'expenses', 'dailySessions', 'repayments', 'supplierPayments',
+  'stockAdjustments', 'refunds', 'debtPaymentReceipts',
+];
+
+function isoToDate(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return value;
+}
+
+function reviveDoc(data) {
+  const revived = {};
+  Object.entries(data).forEach(([k, v]) => { revived[k] = isoToDate(v); });
+  return revived;
+}
+
+export async function readExportZip(file) {
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(file);
+  const manifestFile = zip.file('flowbiz-export.json');
+  if (!manifestFile) throw new Error("That doesn't look like a FlowBiz export — flowbiz-export.json wasn't found in the zip.");
+  const text = await manifestFile.async('string');
+  let manifest;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    throw new Error('flowbiz-export.json is not valid — the file may be corrupted.');
+  }
+  if (!manifest.collections || typeof manifest.collections !== 'object') {
+    throw new Error("That doesn't look like a FlowBiz export — missing expected data.");
+  }
+  return manifest;
+}
+
+// Which of the collections about to be imported already have ANY
+// document for this business — used to warn before merging into
+// non-empty data, since a document sharing the exact same ID as one you
+// already have will be silently overwritten.
+export async function checkExistingData(businessId, manifest) {
+  const nonEmpty = [];
+  for (const name of IMPORT_COLLECTIONS) {
+    if (!manifest.collections[name]?.length) continue;
+    const snap = await getDocs(query(collection(db, name), where('businessId', '==', businessId), limit(1)));
+    if (!snap.empty) nonEmpty.push(name);
+  }
+  return nonEmpty;
+}
+
+function resolveTargetId(name, originalId, businessId) {
+  if (name === 'dailySessions') {
+    const dateMatch = originalId.match(/(\d{4}-\d{2}-\d{2})$/);
+    if (dateMatch) return `${businessId}_${dateMatch[1]}`;
+  }
+  return originalId;
+}
+
+export async function importBusinessData(businessId, manifest, { onProgress } = {}) {
+  if (!businessId) throw new Error('importBusinessData() called with no businessId');
+
+  const results = {};
+  const barcodeEntries = [];
+
+  for (let i = 0; i < IMPORT_COLLECTIONS.length; i++) {
+    const name = IMPORT_COLLECTIONS[i];
+    const docs = manifest.collections[name] || [];
+    onProgress?.(name, i, IMPORT_COLLECTIONS.length);
+    if (docs.length === 0) { results[name] = 0; continue; }
+
+    let written = 0;
+    for (let start = 0; start < docs.length; start += 400) {
+      const chunk = docs.slice(start, start + 400);
+      const batch = writeBatch(db);
+      chunk.forEach((d) => {
+        const { id, ...rest } = d;
+        if (!id) return;
+        const revived = reviveDoc(rest);
+        revived.businessId = businessId;
+        const targetId = resolveTargetId(name, id, businessId);
+        batch.set(doc(db, name, targetId), revived);
+        if (name === 'products' && revived.barcode) {
+          barcodeEntries.push({ businessId, barcode: revived.barcode, productId: targetId });
+        }
+      });
+      await batch.commit();
+      written += chunk.length;
+    }
+    results[name] = written;
+  }
+
+  for (let start = 0; start < barcodeEntries.length; start += 400) {
+    const chunk = barcodeEntries.slice(start, start + 400);
+    const batch = writeBatch(db);
+    chunk.forEach((entry) => {
+      batch.set(doc(db, 'barcodeIndex', `${businessId}__${entry.barcode}`), entry);
+    });
+    await batch.commit();
+  }
+
+  return results;
+}
+````
+
 ## File: .kilo/kilo.json
 ````json
 {
@@ -913,6 +1161,15 @@ export async function createDocument(env, collection, docId, data) {
   if (!res.ok) throw new Error(`Firestore create failed (${collection}/${docId}): ${await res.text()}`);
   return res.json();
 }
+export async function deleteDocument(env, collection, docId) {
+  const token = await getGoogleAccessToken(env);
+  const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}/${collection}/${docId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return; 
+  if (!res.ok) throw new Error(`Firestore delete failed (${collection}/${docId}): ${await res.text()}`);
+}
 ````
 
 ## File: cloudflare-worker/src/lib/googleAuth.js
@@ -1156,7 +1413,14 @@ export async function handleDeleteStaff(request, env) {
     return errorResponse('That account does not belong to your business.', 403);
   }
 
-  // Step 4 — the actual fix.
+  // The account that originally created the business can only ever be
+  // removed by itself (via "Delete my account" in Settings) — never by
+  // another owner through this staff-removal flow.
+  const business = await getDocument(env, 'businesses', callerProfile.businessId);
+  if (business && business.createdBy === targetUid) {
+    return errorResponse("The account that created this business can't be removed this way. That person can delete their own account from Settings.", 403);
+  }
+
   await deleteAuthUser(env, targetUid);
 
   return json({ success: true });
@@ -6911,6 +7175,7 @@ Fixed:
     "react-dom": "^19.2.7",
     "react-hot-toast": "^2.4.1",
     "react-icons": "^5.7.0",
+    "jszip": "^3.10.1",
     "react-router-dom": "^6.30.0"
   },
   "devDependencies": {
@@ -7235,151 +7500,6 @@ export async function verifyPasswordResetCode() {
 
 export async function confirmPasswordReset() {
   return Promise.resolve();
-}
-````
-
-## File: src/pages/CloseDay.jsx
-````javascript
-// HP-7 FIX: chunk deletions to avoid 500-op batch limit; replace window.location.reload() with React state
-import { useMemo, useState } from 'react';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { useDailySession } from '../hooks/useDailySession';
-import { useFinancialsForRange } from '../hooks/useFinancials';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import { formatKES } from '../utils/currency';
-import { startOfDay, endOfDay } from '../utils/dateRanges';
-import { computeExpectedTillBalances } from '../utils/financials';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function CloseDay() {
-  const { profile } = useAuth();
-  const { session, loading:sessLoad, sessionId, isClosed, reopenSession } = useDailySession();
-  const today = useMemo(() => ({ start:startOfDay(), end:endOfDay() }), []);
-const { loading:finLoad, error:finErr, summary, purchases, supplierPayments } = useFinancialsForRange(today.start, today.end);
-
-const cashPurchases   = purchases.filter(p => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash').reduce((s,p)=>s+(p.totalCost||0),0);
-const mpesaPurchases  = purchases.filter(p => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa').reduce((s,p)=>s+(p.totalCost||0),0);
-const cashSupplierPay = supplierPayments.filter(p=>p.method==='Cash').reduce((s,p)=>s+(p.amount||0),0);
-const mpesaSupplierPay= supplierPayments.filter(p=>p.method==='M-Pesa').reduce((s,p)=>s+(p.amount||0),0);  const [cash,      setCash]      = useState('');
-  const [mpesa,     setMpesa]     = useState('');
-  const [submitting,setSubmit]    = useState(false);
-
-  if (sessLoad || finLoad) return <LoadingSpinner />;
-  if (!session) return <EmptyState title="No session open today" description="The counter hasn't been opened yet today." />;
-
-  const { expectedCashAtClose, expectedMpesaAtClose } = computeExpectedTillBalances({
-    openingCashFloat:         session.openingCashFloat,
-    openingMpesaFloat:        session.openingMpesaFloat,
-    totalCashSales:           summary.totalCashSales,
-    totalMpesaSales:          summary.totalMpesaSales,
-    totalDebtRepaymentsCash:  summary.totalDebtRepaymentsCash,
-    totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
-    totalExpensesCash:        summary.totalExpensesCash,
-    totalExpensesMpesa:       summary.totalExpensesMpesa,
-    totalCashOutflows:        summary.totalCashOutflows,
-    totalMpesaOutflows:       summary.totalMpesaOutflows,
-  });
-
-  const cashVar  = (Number(cash) ||0) - expectedCashAtClose;
-  const mpesaVar = (Number(mpesa)||0) - expectedMpesaAtClose;
-
-  const handleClose = async () => {
-    setSubmit(true);
-try {
-      const write = updateDoc(doc(db,'dailySessions',sessionId), {
-        totalCashSales: summary.totalCashSales,
-        totalMpesaSales: summary.totalMpesaSales,
-        totalCreditSales: summary.totalCreditSales,
-        totalDebtRepaymentsCash: summary.totalDebtRepaymentsCash,
-        totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
-        totalExpensesCash: summary.totalExpensesCash,
-        totalExpensesMpesa: summary.totalExpensesMpesa,
-        totalRefundsCash: summary.totalRefundsCash,
-        totalRefundsMpesa: summary.totalRefundsMpesa,
-        expectedCashAtClose, actualCashAtClose:Number(cash)||0,
-        expectedMpesaAtClose, actualMpesaAtClose:Number(mpesa)||0,
-        cashVariance:cashVar, mpesaVariance:mpesaVar,
-        closedAt:serverTimestamp(), closedBy:profile.uid,
-      });
-      const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-      if (error) throw error;
-      toast.success(queuedOffline ? "Day closed offline. It'll sync later!" : 'Day closed. See you tomorrow!');
-    } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setSubmit(false); }
-  };
-
-  if (isClosed) return (
-    <div className="mx-auto max-w-2xl space-y-4">
-      <EmptyState title="Today's session is closed" description="Counting resumes when the counter opens tomorrow." />
-      <div className="card divide-y divide-ink-100">
-        <SRow label="Expected cash"   value={expectedCashAtClose} />
-        <SRow label="Actual cash"     value={session.actualCashAtClose||0} />
-        <SRow label="Cash variance"   value={(session.actualCashAtClose||0)-expectedCashAtClose} variance />
-        <SRow label="Expected M-Pesa" value={expectedMpesaAtClose} />
-        <SRow label="Actual M-Pesa"   value={session.actualMpesaAtClose||0} />
-        <SRow label="M-Pesa variance" value={(session.actualMpesaAtClose||0)-expectedMpesaAtClose} variance />
-      </div>
-      <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>
-    </div>
-  );
-
-  if (finErr) return <ErrorBanner message={`Failed to load figures: ${finErr}`} />;
-
-  return (
-    <div className="mx-auto max-w-2xl space-y-4">
-      <h1 className="font-display text-xl font-bold text-ink-900">Close Day</h1>
-      <div className="card divide-y divide-ink-100">
-        <div className="px-4 py-3 text-sm font-bold text-ink-800">Cash drawer</div>
-        <Row label="Opening float"             value={session.openingCashFloat} />
-        <Row label="+ Cash sales"              value={summary.totalCashSales} />
-        <Row label="+ Debt repayments (cash)"  value={summary.totalDebtRepaymentsCash} />
-        <Row label="− Expenses (cash)"         value={-summary.totalExpensesCash} />
-        <Row label="− Refunds (cash)"          value={-summary.totalRefundsCash} />
-        <Row label="− Purchases paid (cash)" value={-cashPurchases} />
-        <Row label="− Supplier debt payments (cash)" value={-cashSupplierPay} />
-        <Row label="= Expected cash"           value={expectedCashAtClose} bold />
-      </div>
-      <div className="card p-4 space-y-2">
-        <label className="label">Actual cash counted (KES)</label>
-        <input type="number" className="input" value={cash} onChange={e=>setCash(e.target.value)} placeholder="0" />
-        {cash!==''&&<Variance v={cashVar} />}
-      </div>
-      <div className="card divide-y divide-ink-100">
-        <div className="px-4 py-3 text-sm font-bold text-ink-800">M-Pesa till</div>
-        <Row label="Opening balance"             value={session.openingMpesaFloat} />
-        <Row label="+ M-Pesa sales"              value={summary.totalMpesaSales} />
-        <Row label="+ Debt repayments (M-Pesa)"  value={summary.totalDebtRepaymentsMpesa} />
-        <Row label="− Expenses (M-Pesa)"         value={-summary.totalExpensesMpesa} />
-        <Row label="− Refunds (M-Pesa)"          value={-summary.totalRefundsMpesa} />
-        <Row label="− Purchases paid (M-Pesa)" value={-mpesaPurchases} />
-        <Row label="− Supplier debt payments (M-Pesa)" value={-mpesaSupplierPay} />
-        <Row label="= Expected M-Pesa"           value={expectedMpesaAtClose} bold />
-      </div>
-      <div className="card p-4 space-y-2">
-        <label className="label">Actual M-Pesa balance (KES)</label>
-        <input type="number" className="input" value={mpesa} onChange={e=>setMpesa(e.target.value)} placeholder="0" />
-        {mpesa!==''&&<Variance v={mpesaVar} />}
-      </div>
-      <button className="btn-primary w-full" disabled={cash===''||mpesa===''||submitting} onClick={handleClose}>{submitting?'Closing…':'Confirm and close day'}</button>
-    </div>
-  );
-}
-
-function Row({ label, value, bold }) {
-  return <div className={`flex items-center justify-between px-4 py-2.5 text-sm ${bold?'bg-ink-50/60':''}`}><span className={bold?'font-bold text-ink-900':'text-ink-500'}>{label}</span><span className={bold?'font-bold text-ink-900':'text-ink-700'}>{formatKES(value)}</span></div>;
-}
-function SRow({ label, value, variance }) {
-  const tone = variance ? (value===0?'text-moss-700':value<0?'text-rust-600':'text-amber-600') : 'text-ink-700';
-  return <div className="flex items-center justify-between px-4 py-2.5 text-sm"><span className="text-ink-500">{label}</span><span className={`font-semibold ${tone}`}>{formatKES(value)}</span></div>;
-}
-function Variance({ v }) {
-  const tone = v===0?'text-moss-700':v<0?'text-rust-600':'text-amber-600';
-  return <p className={`text-sm font-semibold ${tone}`}>{v===0?'✓ Matches exactly':v<0?`Shortage of ${formatKES(Math.abs(v))}`:`Surplus of ${formatKES(v)}`}</p>;
 }
 ````
 
@@ -9058,68 +9178,68 @@ async function deleteTenantCollection(name, businessId, chunkSize = 400) {
 export async function resetBusinessData(businessId, ownerUid) {
   if (!businessId) throw new Error('resetBusinessData() called with no businessId');
   const results = {};
+  const failures = [];
 
-  // 1. Delete all operational records across all store collections
   for (const name of RESET_COLLECTIONS) {
     try {
       results[name] = await deleteTenantCollection(name, businessId);
     } catch (err) {
-      console.warn(`[Reset] Collection ${name} cleanup skipped:`, err.message);
+      console.error(`[Reset] Collection ${name} cleanup FAILED:`, err);
       results[name] = 0;
+      failures.push(`${name} (${err.message || 'unknown error'})`);
     }
   }
 
-  // 2. MODEL 2: Delete Cashier Accounts completely (Firestore + Auth API)
   try {
     const cashiersSnap = await getDocs(query(
-      collection(db, 'users'),
-      where('businessId', '==', businessId),
-      where('role', '==', 'cashier')
+      collection(db, 'users'), where('businessId', '==', businessId), where('role', '==', 'cashier')
     ));
-
     const idToken = auth.currentUser ? await auth.currentUser.getIdToken(true) : null;
 
     for (const cashierDoc of cashiersSnap.docs) {
       const cashierUid = cashierDoc.id;
-
-      // Delete from Firebase Auth via Cloudflare Worker API
       if (idToken) {
         try {
-          await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
+          const res = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
             body: JSON.stringify({ targetUid: cashierUid }),
           });
+          if (!res.ok) failures.push(`cashier auth delete for ${cashierUid} (status ${res.status})`);
         } catch (authErr) {
-          console.warn(`[Reset] Cashier auth delete error for ${cashierUid}:`, authErr);
+          failures.push(`cashier auth delete for ${cashierUid} (${authErr.message})`);
         }
       }
-
-      // Delete from Firestore users collection
-      const batch = writeBatch(db);
-      batch.delete(doc(db, 'users', cashierUid));
-      await batch.commit();
+      try {
+        const batch = writeBatch(db);
+        batch.delete(doc(db, 'users', cashierUid));
+        await batch.commit();
+      } catch (docErr) {
+        failures.push(`cashier profile delete for ${cashierUid} (${docErr.message})`);
+      }
     }
   } catch (cashierErr) {
-    console.warn('[Reset] Cashier cleanup error:', cashierErr);
+    failures.push(`cashier cleanup (${cashierErr.message})`);
   }
 
-  // 3. Reset business settings cleanly to defaults without deleting the doc
-await setDoc(doc(db, 'businessSettings', businessId), {
-  shopName: 'FlowBiz Store',
-  phone: '',
-  email: '',
-  address: '',
-  logoUrl: '',
-  cashierCanRecordExpenses: true,
-  categories: DEFAULT_CATEGORIES,
-  receiptPaperWidth: 80,
-  resetAt: new Date(),
-  resetBy: ownerUid || null,
-}, { merge: true });
+  try {
+    await setDoc(doc(db, 'businessSettings', businessId), {
+      shopName: 'FlowBiz Store', phone: '', email: '', address: '', logoUrl: '',
+      cashierCanRecordExpenses: true, categories: DEFAULT_CATEGORIES, receiptPaperWidth: 80,
+      resetAt: new Date(), resetBy: ownerUid || null,
+    }, { merge: true });
+    results.businessSettings = 1;
+  } catch (settingsErr) {
+    failures.push(`businessSettings reset (${settingsErr.message})`);
+  }
 
-  results.businessSettings = 1;
   results.performedBy = ownerUid || null;
+
+  if (failures.length > 0) {
+    const err = new Error(`Reset finished, but some data may not have been fully cleared: ${failures.join('; ')}`);
+    err.partialResults = results;
+    throw err;
+  }
 
   return results;
 }
@@ -9717,6 +9837,7 @@ import { handlePublicDocument } from './routes/publicDocument.js';
 import { handleProPrice } from './routes/proPrice.js';
 import { handleSendVerificationEmail } from './routes/sendVerificationEmail.js';
 import { handleSendPasswordReset } from './routes/sendPasswordResetEmail.js';
+import { handleDeleteOwnProfile } from './routes/deleteOwnProfile.js';
 function getAllowedOrigins(env) {
   return (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
@@ -9772,6 +9893,8 @@ export default {
         response = await handlePaystackInitialize(request, env);
       } else if (url.pathname === '/api/pro/price' && request.method === 'GET') {
         response = await handleProPrice();
+              } else if (url.pathname === '/api/auth/delete-own-profile' && request.method === 'POST') {
+        response = await handleDeleteOwnProfile(request, env);
       } else {
         response = errorResponse('Not found.', 404);
       }
@@ -10645,6 +10768,151 @@ export function useCameraScanner({ onDetected, active }) {
   }, [torchOn, torchSupported]);
 
   return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };
+}
+````
+
+## File: src/pages/CloseDay.jsx
+````javascript
+// HP-7 FIX: chunk deletions to avoid 500-op batch limit; replace window.location.reload() with React state
+import { useMemo, useState } from 'react';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { useDailySession } from '../hooks/useDailySession';
+import { useFinancialsForRange } from '../hooks/useFinancials';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner';
+import { formatKES } from '../utils/currency';
+import { startOfDay, endOfDay } from '../utils/dateRanges';
+import { computeExpectedTillBalances } from '../utils/financials';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function CloseDay() {
+  const { profile } = useAuth();
+  const { session, loading:sessLoad, sessionId, isClosed, reopenSession } = useDailySession();
+  const today = useMemo(() => ({ start:startOfDay(), end:endOfDay() }), []);
+const { loading:finLoad, error:finErr, summary, purchases, supplierPayments } = useFinancialsForRange(today.start, today.end);
+
+const cashPurchases   = purchases.filter(p => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash').reduce((s,p)=>s+(p.totalCost||0),0);
+const mpesaPurchases  = purchases.filter(p => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa').reduce((s,p)=>s+(p.totalCost||0),0);
+const cashSupplierPay = supplierPayments.filter(p=>p.method==='Cash').reduce((s,p)=>s+(p.amount||0),0);
+const mpesaSupplierPay= supplierPayments.filter(p=>p.method==='M-Pesa').reduce((s,p)=>s+(p.amount||0),0);  const [cash,      setCash]      = useState('');
+  const [mpesa,     setMpesa]     = useState('');
+  const [submitting,setSubmit]    = useState(false);
+
+  if (sessLoad || finLoad) return <LoadingSpinner />;
+  if (!session) return <EmptyState title="No session open today" description="The counter hasn't been opened yet today." />;
+
+  const { expectedCashAtClose, expectedMpesaAtClose } = computeExpectedTillBalances({
+    openingCashFloat:         session.openingCashFloat,
+    openingMpesaFloat:        session.openingMpesaFloat,
+    totalCashSales:           summary.totalCashSales,
+    totalMpesaSales:          summary.totalMpesaSales,
+    totalDebtRepaymentsCash:  summary.totalDebtRepaymentsCash,
+    totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
+    totalExpensesCash:        summary.totalExpensesCash,
+    totalExpensesMpesa:       summary.totalExpensesMpesa,
+    totalCashOutflows:        summary.totalCashOutflows,
+    totalMpesaOutflows:       summary.totalMpesaOutflows,
+  });
+
+  const cashVar  = (Number(cash) ||0) - expectedCashAtClose;
+  const mpesaVar = (Number(mpesa)||0) - expectedMpesaAtClose;
+
+  const handleClose = async () => {
+    setSubmit(true);
+try {
+      const write = updateDoc(doc(db,'dailySessions',sessionId), {
+        totalCashSales: summary.totalCashSales,
+        totalMpesaSales: summary.totalMpesaSales,
+        totalCreditSales: summary.totalCreditSales,
+        totalDebtRepaymentsCash: summary.totalDebtRepaymentsCash,
+        totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
+        totalExpensesCash: summary.totalExpensesCash,
+        totalExpensesMpesa: summary.totalExpensesMpesa,
+        totalRefundsCash: summary.totalRefundsCash,
+        totalRefundsMpesa: summary.totalRefundsMpesa,
+        expectedCashAtClose, actualCashAtClose:Number(cash)||0,
+        expectedMpesaAtClose, actualMpesaAtClose:Number(mpesa)||0,
+        cashVariance:cashVar, mpesaVariance:mpesaVar,
+        closedAt:serverTimestamp(), closedBy:profile.uid,
+      });
+      const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+      if (error) throw error;
+      toast.success(queuedOffline ? "Day closed offline. It'll sync later!" : 'Day closed. See you tomorrow!');
+    } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setSubmit(false); }
+  };
+
+  if (isClosed) return (
+    <div className="mx-auto max-w-2xl space-y-4">
+      <EmptyState title="Today's session is closed" description="Counting resumes when the counter opens tomorrow." />
+      <div className="card divide-y divide-ink-100">
+        <SRow label="Expected cash"   value={expectedCashAtClose} />
+        <SRow label="Actual cash"     value={session.actualCashAtClose||0} />
+        <SRow label="Cash variance"   value={(session.actualCashAtClose||0)-expectedCashAtClose} variance />
+        <SRow label="Expected M-Pesa" value={expectedMpesaAtClose} />
+        <SRow label="Actual M-Pesa"   value={session.actualMpesaAtClose||0} />
+        <SRow label="M-Pesa variance" value={(session.actualMpesaAtClose||0)-expectedMpesaAtClose} variance />
+      </div>
+      <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>
+    </div>
+  );
+
+  if (finErr) return <ErrorBanner message={`Failed to load figures: ${finErr}`} />;
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-4">
+      <h1 className="font-display text-xl font-bold text-ink-900">Close Day</h1>
+      <div className="card divide-y divide-ink-100">
+        <div className="px-4 py-3 text-sm font-bold text-ink-800">Cash drawer</div>
+        <Row label="Opening float"             value={session.openingCashFloat} />
+        <Row label="+ Cash sales"              value={summary.totalCashSales} />
+        <Row label="+ Debt repayments (cash)"  value={summary.totalDebtRepaymentsCash} />
+        <Row label="− Expenses (cash)"         value={-summary.totalExpensesCash} />
+        <Row label="− Refunds (cash)"          value={-summary.totalRefundsCash} />
+        <Row label="− Purchases paid (cash)" value={-cashPurchases} />
+        <Row label="− Supplier debt payments (cash)" value={-cashSupplierPay} />
+        <Row label="= Expected cash"           value={expectedCashAtClose} bold />
+      </div>
+      <div className="card p-4 space-y-2">
+        <label className="label">Actual cash counted (KES)</label>
+        <input type="number" className="input" value={cash} onChange={e=>setCash(e.target.value)} placeholder="0" />
+        {cash!==''&&<Variance v={cashVar} />}
+      </div>
+      <div className="card divide-y divide-ink-100">
+        <div className="px-4 py-3 text-sm font-bold text-ink-800">M-Pesa till</div>
+        <Row label="Opening balance"             value={session.openingMpesaFloat} />
+        <Row label="+ M-Pesa sales"              value={summary.totalMpesaSales} />
+        <Row label="+ Debt repayments (M-Pesa)"  value={summary.totalDebtRepaymentsMpesa} />
+        <Row label="− Expenses (M-Pesa)"         value={-summary.totalExpensesMpesa} />
+        <Row label="− Refunds (M-Pesa)"          value={-summary.totalRefundsMpesa} />
+        <Row label="− Purchases paid (M-Pesa)" value={-mpesaPurchases} />
+        <Row label="− Supplier debt payments (M-Pesa)" value={-mpesaSupplierPay} />
+        <Row label="= Expected M-Pesa"           value={expectedMpesaAtClose} bold />
+      </div>
+      <div className="card p-4 space-y-2">
+        <label className="label">Actual M-Pesa balance (KES)</label>
+        <input type="number" className="input" value={mpesa} onChange={e=>setMpesa(e.target.value)} placeholder="0" />
+        {mpesa!==''&&<Variance v={mpesaVar} />}
+      </div>
+      <button className="btn-primary w-full" disabled={cash===''||mpesa===''||submitting} onClick={handleClose}>{submitting?'Closing…':'Confirm and close day'}</button>
+    </div>
+  );
+}
+
+function Row({ label, value, bold }) {
+  return <div className={`flex items-center justify-between px-4 py-2.5 text-sm ${bold?'bg-ink-50/60':''}`}><span className={bold?'font-bold text-ink-900':'text-ink-500'}>{label}</span><span className={bold?'font-bold text-ink-900':'text-ink-700'}>{formatKES(value)}</span></div>;
+}
+function SRow({ label, value, variance }) {
+  const tone = variance ? (value===0?'text-moss-700':value<0?'text-rust-600':'text-amber-600') : 'text-ink-700';
+  return <div className="flex items-center justify-between px-4 py-2.5 text-sm"><span className="text-ink-500">{label}</span><span className={`font-semibold ${tone}`}>{formatKES(value)}</span></div>;
+}
+function Variance({ v }) {
+  const tone = v===0?'text-moss-700':v<0?'text-rust-600':'text-amber-600';
+  return <p className={`text-sm font-semibold ${tone}`}>{v===0?'✓ Matches exactly':v<0?`Shortage of ${formatKES(Math.abs(v))}`:`Surplus of ${formatKES(v)}`}</p>;
 }
 ````
 
@@ -14165,6 +14433,314 @@ export function sendWhatsAppDocument(sale, settings, phone, documentUrl) {
 }
 ````
 
+## File: src/pages/CustomerDetail.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { where, orderBy, doc, writeBatch, increment, getDoc, serverTimestamp, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { Receipt, Banknote, Smartphone, Undo2 } from 'lucide-react';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import RepaymentModal from '../components/debtors/RepaymentModal';
+import RefundModal from '../components/debtors/RefundModal';
+import DebtPaymentReceiptModal from '../components/debtors/DebtPaymentReceiptModal';
+import { formatKES } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function CustomerDetail() {
+  const { customerId } = useParams();
+  const { profile, isAdmin, businessId } = useAuth();
+
+  const customerQ   = useMemo(() => businessId ? tenantQuery('customers', businessId, where('__name__','==',customerId)) : null, [customerId, businessId]);
+  const creditQ     = useMemo(() => businessId ? tenantQuery('creditSales', businessId, where('customerId','==',customerId)) : null, [customerId, businessId]);
+  const repaymentsQ = useMemo(() => businessId ? tenantQuery('repayments', businessId, where('customerId','==',customerId), orderBy('paidAt','desc')) : null, [customerId, businessId]);
+
+  const { data: customerData, loading: custLoad } = useFirestoreCollection(customerQ);
+  const { data: creditSales, loading: credLoad, error } = useFirestoreCollection(creditQ);
+  const { data: repayments } = useFirestoreCollection(repaymentsQ);
+  
+  const [repayOpen, setRepayOpen]       = useState(false);
+  const [cancelTarget, setCancelTarget] = useState(null);
+  const [refundTarget, setRefundTarget] = useState(null);
+  const [receiptData, setReceiptData]   = useState(null);
+
+  const customer = customerData[0];
+  const sorted = [...creditSales].sort((a,b) => (b.soldAt?.toMillis?.() ?? 0) - (a.soldAt?.toMillis?.() ?? 0));
+  const totalOwed = creditSales
+    .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded')
+    .reduce((acc,cs) => acc + (Number(cs.remainingBalance) || 0), 0);
+
+  const displayName = customer?.name || creditSales[0]?.customerName || 'Unknown Customer';
+  const displayPhone = customer?.phone || creditSales[0]?.customerPhone || '';
+
+  // A debt payment is a payment against existing debt — it updates the
+  // credit sale(s) it applies to and nothing else. It never creates a new
+  // sale or a second financial transaction (Part 28). If the customer has
+  // more than one open credit sale, a single payment can span several of
+  // them (oldest first, unchanged from the app's existing allocation
+  // rule) — the receipt below reflects the payment at the customer level
+  // (previous total owed → new total owed), with each sale's own
+  // reference number kept for traceability (Part 18/19).
+  const handleRepayment = async ({ amount, method, mpesaCode }) => {
+    const openSales = [...creditSales]
+      .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded' && (Number(cs.remainingBalance) || 0) > 0.005)
+      .sort((a,b) => (a.soldAt?.toMillis?.() ?? 0) - (b.soldAt?.toMillis?.() ?? 0));
+
+    if (!openSales.length) { toast.error('No outstanding balance.'); return; }
+
+    const previousBalance = totalOwed;
+
+    try {
+      const batch = writeBatch(db);
+      let remaining = amount;
+      const paymentReferences = [];
+
+      for (const cs of openSales) {
+        if (remaining <= 0.005) break;
+        const owed    = Number(cs.remainingBalance) || 0;
+        const portion = Math.min(owed, remaining);
+        remaining    -= portion;
+        const newPaid = (Number(cs.amountPaid) || 0) + portion;
+        const newBal  = owed - portion;
+        batch.update(doc(db,'creditSales',cs.id), { amountPaid: newPaid, remainingBalance: newBal, status: newBal <= 0.005 ? 'paid' : 'partial' });
+
+        const repRef = doc(collection(db,'repayments'));
+        // Reuses Firestore's own unique doc id for traceability rather than
+        // introducing a second, parallel counter/ID system (Part 18) —
+        // adapted to this app's existing ID conventions rather than
+        // literally implementing PAY-000381-style sequential numbering.
+        const paymentReference = `PAY-${repRef.id.slice(-6).toUpperCase()}`;
+        paymentReferences.push(paymentReference);
+        batch.set(repRef, {
+          businessId,
+          creditSaleId: cs.id,
+          customerId: cs.customerId,
+          customerName: cs.customerName,
+          productName: cs.productName,
+          amount: portion,
+          method,
+          mpesaCode: mpesaCode || null,
+          paymentReference,
+          paidAt: serverTimestamp(),
+          recordedBy: profile.uid,
+          recordedByName: profile.displayName,
+        });
+      }
+
+      // Persist an immutable snapshot of the receipt itself (Parts 8/9/15
+      // of the WhatsApp/document-sharing spec). A debt payment can span
+      // several credit sales, so there's no single existing Firestore
+      // document that already IS "the receipt" the way a sale or credit
+      // sale doc already represents its own receipt — this is that
+      // missing piece, written in the SAME batch as the repayment(s)
+      // above so it can never exist without them (or vice versa). It's a
+      // read-only summary for sharing, not a new payment/debt system —
+      // the actual debt math above is untouched.
+      const newTotalOwed = Math.max(0, previousBalance - amount);
+      const receiptRef = doc(collection(db, 'debtPaymentReceipts'));
+      batch.set(receiptRef, {
+        businessId,
+        customerId,
+        customerName: displayName,
+        customerPhone: displayPhone,
+        amountPaid: amount,
+        previousBalance,
+        remainingBalance: newTotalOwed,
+        isCleared: newTotalOwed <= 0.005,
+        method,
+        mpesaCode: mpesaCode || null,
+        paymentReferences,
+        paidAt: new Date(),
+        recordedBy: profile.uid,
+        recordedByName: profile.displayName,
+      });
+
+      const commit = batch.commit();
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : `Recorded ${formatKES(amount)} repayment`);
+      if (queuedOffline) commit.catch((err) => toast.error(`A repayment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+
+      setReceiptData({
+        receiptDocId: receiptRef.id,
+        customerId,
+        customerName: displayName,
+        customerPhone: displayPhone,
+        amountPaid: amount,
+        previousBalance,
+        remainingBalance: newTotalOwed,
+        isCleared: newTotalOwed <= 0.005,
+        method,
+        mpesaCode,
+        paidAt: new Date(),
+        paymentReferences,
+      });
+    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
+  };
+
+  // FIX (multi-product cart): a credit sale from Counter.jsx's cart can
+  // carry several products via `items` on one creditSale doc. Cancelling
+  // it now restores stock for every line item (falling back to the
+  // single productId/quantity shape for pre-cart, legacy creditSale docs
+  // — cancelling those still works exactly as before).
+  const handleCancel = async (cs) => {
+    setCancelTarget(null);
+    try {
+      const lineItems = Array.isArray(cs.items) && cs.items.length > 0
+        ? cs.items
+        : [{ productId: cs.productId, quantity: cs.quantity }];
+      const targets = lineItems.filter((item) => item.productId);
+      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
+
+      const batch = writeBatch(db);
+      targets.forEach((item, idx) => {
+        if (snaps[idx].exists()) {
+          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
+        }
+      });
+      batch.update(doc(db,'creditSales',cs.id), {
+        status: 'cancelled', remainingBalance: 0,
+        cancelledAt: serverTimestamp(), cancelledBy: profile.uid,
+      });
+      await batch.commit();
+      toast.success('Credit sale cancelled and stock restored.');
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+  };
+
+  // FIX (multi-product cart): same line-item restoration as handleCancel
+  // above, applied to a refund (a credit sale that had some amount
+  // already paid on it).
+  const handleRefund = async (cs, { method }) => {
+    try {
+      const lineItems = Array.isArray(cs.items) && cs.items.length > 0
+        ? cs.items
+        : [{ productId: cs.productId, quantity: cs.quantity }];
+      const targets = lineItems.filter((item) => item.productId);
+      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
+
+      const batch = writeBatch(db);
+      targets.forEach((item, idx) => {
+        if (snaps[idx].exists()) {
+          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
+        }
+      });
+      batch.update(doc(db,'creditSales',cs.id), {
+        status: 'refunded', remainingBalance: 0,
+        refundedAt: serverTimestamp(), refundedBy: profile.uid,
+      });
+      const refundRef = doc(collection(db,'refunds'));
+      batch.set(refundRef, {
+        businessId,
+        creditSaleId: cs.id, customerId: cs.customerId, customerName: cs.customerName,
+        productName: cs.productName, amount: Number(cs.amountPaid) || 0, method,
+        refundedAt: new Date(), refundedBy: profile.uid, refundedByName: profile.displayName,
+      });
+      await batch.commit();
+      toast.success('Sale refunded and stock restored.');
+      setRefundTarget(null);
+    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
+  };
+
+  if (custLoad || credLoad) return <LoadingSpinner />;
+  if (error) return <ErrorBanner message={`Could not load data. ${error}`} />;
+  if (!customer && creditSales.length === 0) return <EmptyState title="Customer not found" />;
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4">
+      <Link to="/customers" className="text-sm font-semibold text-ink-400 hover:text-ink-700">← Back to Customers</Link>
+      <div className="card flex flex-wrap items-center justify-between gap-3 p-5">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">{displayName}</h1>
+          <p className="text-sm text-ink-400">{displayPhone || 'No phone'}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-xs text-ink-400">Outstanding Debt</p>
+          <p className={`font-display text-xl font-bold ${totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>{formatKES(totalOwed)}</p>
+        </div>
+      </div>
+      <button className="btn-primary w-full sm:w-auto" disabled={totalOwed <= 0} onClick={() => setRepayOpen(true)}>
+        <Receipt className="h-4 w-4" strokeWidth={1.75}/> Record repayment
+      </button>
+
+      {sorted.length > 0 && (
+        <div className="card p-4">
+          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Credit purchases</h2>
+          <div className="divide-y divide-ink-100">
+            {sorted.map(cs => {
+              const reversed = cs.status === 'cancelled' || cs.status === 'refunded';
+              return (
+                <div key={cs.id} className={`flex items-center justify-between gap-2 py-2.5 text-sm ${reversed ? 'opacity-50' : ''}`}>
+                  <div>
+                    <p className="font-medium text-ink-700">{cs.quantity} × {cs.productName}</p>
+                    <p className="text-xs text-ink-400">{formatDateTime(cs.soldAt)}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-right">
+                      <p className={`font-semibold ${reversed ? 'line-through text-ink-400' : 'text-ink-800'}`}>{formatKES(cs.totalAmount)}</p>
+                      <span className={`badge ${cs.status === 'paid' ? 'bg-moss-100 text-moss-700' : cs.status === 'partial' ? 'bg-rust-100 text-rust-700' : 'bg-ink-100 text-ink-500'}`}>{cs.status}</span>
+                    </div>
+                    {isAdmin && !reversed && (
+                      <button
+                        className="rounded-lg p-2 text-ink-400 hover:bg-ink-100"
+                        title={Number(cs.amountPaid) > 0.005 ? 'Refund this sale' : 'Cancel this sale'}
+                        onClick={() => (Number(cs.amountPaid) > 0.005 ? setRefundTarget(cs) : setCancelTarget(cs))}
+                      >
+                        <Undo2 className="h-4 w-4" strokeWidth={1.75}/>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      
+      {repayments.length > 0 && (
+        <div className="card p-4">
+          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Repayment history</h2>
+          <div className="divide-y divide-ink-100">
+            {repayments.map(r => (
+              <div key={r.id} className="flex items-center justify-between py-2.5 text-sm">
+                <div>
+                  <p className="font-medium text-ink-700">{r.method === 'Cash' ? <><Banknote className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>Cash</> : <><Smartphone className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>M-Pesa {r.mpesaCode ? `(${r.mpesaCode})` : ''}</>}</p>
+                  <p className="text-xs text-ink-400">
+                    {formatDateTime(r.paidAt)}{r.paymentReference ? ` · ${r.paymentReference}` : ''}
+                  </p>
+                </div>
+                <span className="font-semibold text-moss-700">{formatKES(r.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <RepaymentModal open={repayOpen} customer={{ name: displayName }} totalOwed={totalOwed} onClose={() => setRepayOpen(false)} onSubmit={handleRepayment} />
+      <RefundModal open={!!refundTarget} creditSale={refundTarget} onClose={() => setRefundTarget(null)} onSubmit={(opts) => handleRefund(refundTarget, opts)} />
+      <DebtPaymentReceiptModal open={!!receiptData} receipt={receiptData} onClose={() => setReceiptData(null)} />
+      <ConfirmDialog
+        open={!!cancelTarget}
+        title="Cancel this credit sale?"
+        message={`"${cancelTarget?.productName}" (×${cancelTarget?.quantity}) will be cancelled and stock restored. Nothing has been paid on this sale yet.`}
+        confirmLabel="Cancel sale"
+        danger
+        onConfirm={() => handleCancel(cancelTarget)}
+        onCancel={() => setCancelTarget(null)}
+      />
+    </div>
+  );
+}
+````
+
 ## File: src/pages/Products.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -14720,8 +15296,8 @@ try {
     navigate('/', { replace: true });
   };
 
-  if (authLoading) {
-    return (
+if (authLoading && !creatingRef.current) {
+      return (
       <div className="flex min-h-screen items-center justify-center bg-ink-950">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
       </div>
@@ -15237,311 +15813,1274 @@ const handleSupplierSave = async (supplierData) => {
 }
 ````
 
-## File: src/pages/CustomerDetail.jsx
+## File: src/pages/Pro.jsx
 ````javascript
-import { useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { where, orderBy, doc, writeBatch, increment, getDoc, serverTimestamp, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Receipt, Banknote, Smartphone, Undo2 } from 'lucide-react';
-import { db } from '../firebase';
+// src/pages/Pro.jsx
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import RepaymentModal from '../components/debtors/RepaymentModal';
-import RefundModal from '../components/debtors/RefundModal';
-import DebtPaymentReceiptModal from '../components/debtors/DebtPaymentReceiptModal';
-import { formatKES } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
-import { raceWithTimeout } from '../utils/offlineWrite';
+import { auth } from '../firebase';
+import toast from 'react-hot-toast';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+import { Check, X, BarChart3, Boxes, FileText, MessageCircle, Users, Sparkles, ArrowLeft } from 'lucide-react';
 
-export default function CustomerDetail() {
-  const { customerId } = useParams();
-  const { profile, isAdmin, businessId } = useAuth();
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
-  const customerQ   = useMemo(() => businessId ? tenantQuery('customers', businessId, where('__name__','==',customerId)) : null, [customerId, businessId]);
-  const creditQ     = useMemo(() => businessId ? tenantQuery('creditSales', businessId, where('customerId','==',customerId)) : null, [customerId, businessId]);
-  const repaymentsQ = useMemo(() => businessId ? tenantQuery('repayments', businessId, where('customerId','==',customerId), orderBy('paidAt','desc')) : null, [customerId, businessId]);
+const FEATURE_CATEGORIES = [
+  { icon: BarChart3, title: 'Advanced Analytics', description: 'Revenue & profit trends, payment mix, day-of-week patterns, expense breakdown, top debtors, and staff performance all in one dashboard.' },
+  { icon: Boxes, title: 'Inventory Intelligence', description: 'Capital Health scoring, ABC value analysis, reorder suggestions, slow-moving stock alerts, and capital-by-supplier breakdowns.' },
+  { icon: FileText, title: 'Professional Documents', description: 'Branded PDF receipts and invoices with your logo, ready to print or download.' },
+  { icon: MessageCircle, title: 'WhatsApp Sharing', description: "Send receipts, invoices, and debt reminders straight to a customer's phone." },
+];
 
-  const { data: customerData, loading: custLoad } = useFirestoreCollection(customerQ);
-  const { data: creditSales, loading: credLoad, error } = useFirestoreCollection(creditQ);
-  const { data: repayments } = useFirestoreCollection(repaymentsQ);
-  
-  const [repayOpen, setRepayOpen]       = useState(false);
-  const [cancelTarget, setCancelTarget] = useState(null);
-  const [refundTarget, setRefundTarget] = useState(null);
-  const [receiptData, setReceiptData]   = useState(null);
+const COMPARISON_ROWS = [
+  { label: 'Products tracked', free: 'Up to 100', pro: 'Unlimited' },
+  { label: 'Staff members', free: '1 owner + 1 staff', pro: 'Unlimited' },
+  { label: 'Sales, credit & expense tracking', free: true, pro: true },
+  { label: 'PDF receipts & invoices', free: true, pro: true },
+  { label: 'Advanced Analytics (trends, staff, day-of-week)', free: false, pro: true },
+  { label: 'Inventory Intelligence & Capital Health', free: false, pro: true },
+  { label: 'Reorder suggestions & ABC value analysis', free: false, pro: true },
+  { label: 'WhatsApp receipt & invoice sharing', free: false, pro: true },
+];
 
-  const customer = customerData[0];
-  const sorted = [...creditSales].sort((a,b) => (b.soldAt?.toMillis?.() ?? 0) - (a.soldAt?.toMillis?.() ?? 0));
-  const totalOwed = creditSales
-    .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded')
-    .reduce((acc,cs) => acc + (Number(cs.remainingBalance) || 0), 0);
+export default function Pro() {
+  const { isPro, subscription } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const [proPrice, setProPrice] = useState(null);
 
-  const displayName = customer?.name || creditSales[0]?.customerName || 'Unknown Customer';
-  const displayPhone = customer?.phone || creditSales[0]?.customerPhone || '';
+  useEffect(() => {
+    fetch(`${FLOWBIZ_API_URL}/api/pro/price`)
+      .then((r) => r.json())
+      .then((data) => setProPrice(data.amountKes))
+      .catch(() => {});
+  }, []);
 
-  // A debt payment is a payment against existing debt — it updates the
-  // credit sale(s) it applies to and nothing else. It never creates a new
-  // sale or a second financial transaction (Part 28). If the customer has
-  // more than one open credit sale, a single payment can span several of
-  // them (oldest first, unchanged from the app's existing allocation
-  // rule) — the receipt below reflects the payment at the customer level
-  // (previous total owed → new total owed), with each sale's own
-  // reference number kept for traceability (Part 18/19).
-  const handleRepayment = async ({ amount, method, mpesaCode }) => {
-    const openSales = [...creditSales]
-      .filter(cs => cs.status !== 'cancelled' && cs.status !== 'refunded' && (Number(cs.remainingBalance) || 0) > 0.005)
-      .sort((a,b) => (a.soldAt?.toMillis?.() ?? 0) - (b.soldAt?.toMillis?.() ?? 0));
-
-    if (!openSales.length) { toast.error('No outstanding balance.'); return; }
-
-    const previousBalance = totalOwed;
-
+  const handleSubscribe = async () => {
+    if (loading) return;
+    setLoading(true);
     try {
-      const batch = writeBatch(db);
-      let remaining = amount;
-      const paymentReferences = [];
 
-      for (const cs of openSales) {
-        if (remaining <= 0.005) break;
-        const owed    = Number(cs.remainingBalance) || 0;
-        const portion = Math.min(owed, remaining);
-        remaining    -= portion;
-        const newPaid = (Number(cs.amountPaid) || 0) + portion;
-        const newBal  = owed - portion;
-        batch.update(doc(db,'creditSales',cs.id), { amountPaid: newPaid, remainingBalance: newBal, status: newBal <= 0.005 ? 'paid' : 'partial' });
-
-        const repRef = doc(collection(db,'repayments'));
-        // Reuses Firestore's own unique doc id for traceability rather than
-        // introducing a second, parallel counter/ID system (Part 18) —
-        // adapted to this app's existing ID conventions rather than
-        // literally implementing PAY-000381-style sequential numbering.
-        const paymentReference = `PAY-${repRef.id.slice(-6).toUpperCase()}`;
-        paymentReferences.push(paymentReference);
-        batch.set(repRef, {
-          businessId,
-          creditSaleId: cs.id,
-          customerId: cs.customerId,
-          customerName: cs.customerName,
-          productName: cs.productName,
-          amount: portion,
-          method,
-          mpesaCode: mpesaCode || null,
-          paymentReference,
-          paidAt: serverTimestamp(),
-          recordedBy: profile.uid,
-          recordedByName: profile.displayName,
+      const idToken = await auth.currentUser.getIdToken();
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/paystack/initialize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      });
+      const data = await response.json();
+      if (data?.access_code && window.PaystackPop) {
+        const popup = new window.PaystackPop();
+        popup.resumeTransaction(data.access_code, {
+          onSuccess: () => toast.success('Payment received activating your subscription…'),
+          onCancel: () => toast('Payment cancelled.'),
         });
+      } else if (data?.authorization_url) {
+        window.location.href = data.authorization_url;
+      } else {
+        toast.error(data?.error || "Couldn't initialize payment. Please try again.");
       }
-
-      // Persist an immutable snapshot of the receipt itself (Parts 8/9/15
-      // of the WhatsApp/document-sharing spec). A debt payment can span
-      // several credit sales, so there's no single existing Firestore
-      // document that already IS "the receipt" the way a sale or credit
-      // sale doc already represents its own receipt — this is that
-      // missing piece, written in the SAME batch as the repayment(s)
-      // above so it can never exist without them (or vice versa). It's a
-      // read-only summary for sharing, not a new payment/debt system —
-      // the actual debt math above is untouched.
-      const newTotalOwed = Math.max(0, previousBalance - amount);
-      const receiptRef = doc(collection(db, 'debtPaymentReceipts'));
-      batch.set(receiptRef, {
-        businessId,
-        customerId,
-        customerName: displayName,
-        customerPhone: displayPhone,
-        amountPaid: amount,
-        previousBalance,
-        remainingBalance: newTotalOwed,
-        isCleared: newTotalOwed <= 0.005,
-        method,
-        mpesaCode: mpesaCode || null,
-        paymentReferences,
-        paidAt: new Date(),
-        recordedBy: profile.uid,
-        recordedByName: profile.displayName,
-      });
-
-      const commit = batch.commit();
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
-      if (error) throw error;
-      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : `Recorded ${formatKES(amount)} repayment`);
-      if (queuedOffline) commit.catch((err) => toast.error(`A repayment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
-
-      setReceiptData({
-        receiptDocId: receiptRef.id,
-        customerId,
-        customerName: displayName,
-        customerPhone: displayPhone,
-        amountPaid: amount,
-        previousBalance,
-        remainingBalance: newTotalOwed,
-        isCleared: newTotalOwed <= 0.005,
-        method,
-        mpesaCode,
-        paidAt: new Date(),
-        paymentReferences,
-      });
-    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, { fallback: 'Unable to load the payment page. Please check your connection and try again.' }));
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // FIX (multi-product cart): a credit sale from Counter.jsx's cart can
-  // carry several products via `items` on one creditSale doc. Cancelling
-  // it now restores stock for every line item (falling back to the
-  // single productId/quantity shape for pre-cart, legacy creditSale docs
-  // — cancelling those still works exactly as before).
-  const handleCancel = async (cs) => {
-    setCancelTarget(null);
-    try {
-      const lineItems = Array.isArray(cs.items) && cs.items.length > 0
-        ? cs.items
-        : [{ productId: cs.productId, quantity: cs.quantity }];
-      const targets = lineItems.filter((item) => item.productId);
-      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
-
-      const batch = writeBatch(db);
-      targets.forEach((item, idx) => {
-        if (snaps[idx].exists()) {
-          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
-        }
-      });
-      batch.update(doc(db,'creditSales',cs.id), {
-        status: 'cancelled', remainingBalance: 0,
-        cancelledAt: serverTimestamp(), cancelledBy: profile.uid,
-      });
-      await batch.commit();
-      toast.success('Credit sale cancelled and stock restored.');
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-  };
-
-  // FIX (multi-product cart): same line-item restoration as handleCancel
-  // above, applied to a refund (a credit sale that had some amount
-  // already paid on it).
-  const handleRefund = async (cs, { method }) => {
-    try {
-      const lineItems = Array.isArray(cs.items) && cs.items.length > 0
-        ? cs.items
-        : [{ productId: cs.productId, quantity: cs.quantity }];
-      const targets = lineItems.filter((item) => item.productId);
-      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
-
-      const batch = writeBatch(db);
-      targets.forEach((item, idx) => {
-        if (snaps[idx].exists()) {
-          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
-        }
-      });
-      batch.update(doc(db,'creditSales',cs.id), {
-        status: 'refunded', remainingBalance: 0,
-        refundedAt: serverTimestamp(), refundedBy: profile.uid,
-      });
-      const refundRef = doc(collection(db,'refunds'));
-      batch.set(refundRef, {
-        businessId,
-        creditSaleId: cs.id, customerId: cs.customerId, customerName: cs.customerName,
-        productName: cs.productName, amount: Number(cs.amountPaid) || 0, method,
-        refundedAt: new Date(), refundedBy: profile.uid, refundedByName: profile.displayName,
-      });
-      await batch.commit();
-      toast.success('Sale refunded and stock restored.');
-      setRefundTarget(null);
-    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
-  };
-
-  if (custLoad || credLoad) return <LoadingSpinner />;
-  if (error) return <ErrorBanner message={`Could not load data. ${error}`} />;
-  if (!customer && creditSales.length === 0) return <EmptyState title="Customer not found" />;
+  const expiresLabel = subscription?.expiresAt
+    ? new Date(subscription.expiresAt.toMillis ? subscription.expiresAt.toMillis() : subscription.expiresAt).toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' })
+    : null;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <Link to="/customers" className="text-sm font-semibold text-ink-400 hover:text-ink-700">← Back to Customers</Link>
-      <div className="card flex flex-wrap items-center justify-between gap-3 p-5">
+    <div className="mx-auto max-w-5xl space-y-8 pb-12">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">{displayName}</h1>
-          <p className="text-sm text-ink-400">{displayPhone || 'No phone'}</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-moss-700">FlowBiz Pro</p>
+          <h1 className="font-display text-2xl font-bold text-ink-900 mt-0.5">Run your shop with sharper insight</h1>
         </div>
-        <div className="text-right">
-          <p className="text-xs text-ink-400">Outstanding Debt</p>
-          <p className={`font-display text-xl font-bold ${totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>{formatKES(totalOwed)}</p>
+        <Link to="/" className="btn-outline text-xs shrink-0">
+          <ArrowLeft className="h-4 w-4" strokeWidth={1.75} /> Dashboard
+        </Link>
+      </div>
+
+      <div className="card overflow-hidden border-moss-200">
+        <div className="bg-gradient-to-br from-moss-700 to-moss-900 px-6 py-10 text-center sm:px-10">
+
+          <h2 className="mt-4 font-display text-4xl font-extrabold text-white">
+            {proPrice != null ? `KSh ${proPrice.toLocaleString('en-KE')}` : '…'}
+            <span className="text-base font-medium text-moss-200"> / 30 days</span>
+          </h2>
+          <p className="mt-3 max-w-md mx-auto text-sm text-moss-100">Manual renewal, no auto-billing, no surprise charges. You're always in control.</p>
+          {isPro ? (
+            <div className="mt-7 flex flex-col items-center gap-3">
+              <span className="badge bg-white text-moss-800 px-4 py-1.5 text-sm font-bold">FlowBiz Pro Active</span>
+              {expiresLabel && <p className="text-xs text-moss-200">Renews / expires on {expiresLabel}</p>}
+              <button onClick={handleSubscribe} disabled={loading} className="btn-outline !border-white/40 !text-white hover:!bg-white/10">
+                {loading ? 'Loading…' : 'Extend subscription'}
+              </button>
+            </div>
+          ) : (
+            <button onClick={handleSubscribe} disabled={loading} className="mt-7 btn-primary !bg-white !text-moss-800 hover:!bg-moss-50 px-8 py-3 text-base">
+              {loading ? (
+                <span className="flex items-center gap-2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-moss-300 border-t-moss-800" />
+                  Loading payment page…
+                </span>
+              ) : `Upgrade to Pro KSh ${proPrice != null ? proPrice.toLocaleString('en-KE') : '…'}`}
+            </button>
+          )}
         </div>
       </div>
-      <button className="btn-primary w-full sm:w-auto" disabled={totalOwed <= 0} onClick={() => setRepayOpen(true)}>
-        <Receipt className="h-4 w-4" strokeWidth={1.75}/> Record repayment
-      </button>
 
-      {sorted.length > 0 && (
-        <div className="card p-4">
-          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Credit purchases</h2>
-          <div className="divide-y divide-ink-100">
-            {sorted.map(cs => {
-              const reversed = cs.status === 'cancelled' || cs.status === 'refunded';
-              return (
-                <div key={cs.id} className={`flex items-center justify-between gap-2 py-2.5 text-sm ${reversed ? 'opacity-50' : ''}`}>
-                  <div>
-                    <p className="font-medium text-ink-700">{cs.quantity} × {cs.productName}</p>
-                    <p className="text-xs text-ink-400">{formatDateTime(cs.soldAt)}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="text-right">
-                      <p className={`font-semibold ${reversed ? 'line-through text-ink-400' : 'text-ink-800'}`}>{formatKES(cs.totalAmount)}</p>
-                      <span className={`badge ${cs.status === 'paid' ? 'bg-moss-100 text-moss-700' : cs.status === 'partial' ? 'bg-rust-100 text-rust-700' : 'bg-ink-100 text-ink-500'}`}>{cs.status}</span>
-                    </div>
-                    {isAdmin && !reversed && (
-                      <button
-                        className="rounded-lg p-2 text-ink-400 hover:bg-ink-100"
-                        title={Number(cs.amountPaid) > 0.005 ? 'Refund this sale' : 'Cancel this sale'}
-                        onClick={() => (Number(cs.amountPaid) > 0.005 ? setRefundTarget(cs) : setCancelTarget(cs))}
-                      >
-                        <Undo2 className="h-4 w-4" strokeWidth={1.75}/>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-      
-      {repayments.length > 0 && (
-        <div className="card p-4">
-          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Repayment history</h2>
-          <div className="divide-y divide-ink-100">
-            {repayments.map(r => (
-              <div key={r.id} className="flex items-center justify-between py-2.5 text-sm">
-                <div>
-                  <p className="font-medium text-ink-700">{r.method === 'Cash' ? <><Banknote className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>Cash</> : <><Smartphone className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>M-Pesa {r.mpesaCode ? `(${r.mpesaCode})` : ''}</>}</p>
-                  <p className="text-xs text-ink-400">
-                    {formatDateTime(r.paidAt)}{r.paymentReference ? ` · ${r.paymentReference}` : ''}
-                  </p>
-                </div>
-                <span className="font-semibold text-moss-700">{formatKES(r.amount)}</span>
+      <div>
+        <h3 className="font-display text-sm font-bold uppercase tracking-wide text-ink-500 mb-3">What's included</h3>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {FEATURE_CATEGORIES.map(({ icon: Icon, title, description }) => (
+            <div key={title} className="card p-5 space-y-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
+                <Icon className="h-5 w-5" strokeWidth={1.75} />
               </div>
-            ))}
+              <h4 className="font-display text-sm font-bold text-ink-900">{title}</h4>
+              <p className="text-xs leading-relaxed text-ink-500">{description}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="font-display text-sm font-bold uppercase tracking-wide text-ink-500 mb-3">Free vs Pro</h3>
+        <div className="card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+                <tr><th className="px-4 py-3">Feature</th><th className="px-4 py-3 text-center">Free</th><th className="px-4 py-3 text-center text-moss-700">Pro</th></tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {COMPARISON_ROWS.map((row) => (
+                  <tr key={row.label}>
+                    <td className="px-4 py-3 font-medium text-ink-700">{row.label}</td>
+                    <td className="px-4 py-3 text-center text-ink-500">
+                      {typeof row.free === 'boolean' ? (row.free ? <Check className="mx-auto h-4 w-4 text-moss-600" strokeWidth={2} /> : <X className="mx-auto h-4 w-4 text-ink-300" strokeWidth={2} />) : row.free}
+                    </td>
+                    <td className="px-4 py-3 text-center font-semibold text-moss-700">
+                      {typeof row.pro === 'boolean' ? (row.pro ? <Check className="mx-auto h-4 w-4 text-moss-600" strokeWidth={2} /> : <X className="mx-auto h-4 w-4 text-ink-300" strokeWidth={2} />) : row.pro}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
-      )}
+      </div>
 
-      <RepaymentModal open={repayOpen} customer={{ name: displayName }} totalOwed={totalOwed} onClose={() => setRepayOpen(false)} onSubmit={handleRepayment} />
-      <RefundModal open={!!refundTarget} creditSale={refundTarget} onClose={() => setRefundTarget(null)} onSubmit={(opts) => handleRefund(refundTarget, opts)} />
-      <DebtPaymentReceiptModal open={!!receiptData} receipt={receiptData} onClose={() => setReceiptData(null)} />
-      <ConfirmDialog
-        open={!!cancelTarget}
-        title="Cancel this credit sale?"
-        message={`"${cancelTarget?.productName}" (×${cancelTarget?.quantity}) will be cancelled and stock restored. Nothing has been paid on this sale yet.`}
-        confirmLabel="Cancel sale"
-        danger
-        onConfirm={() => handleCancel(cancelTarget)}
-        onCancel={() => setCancelTarget(null)}
-      />
+      <div className="flex items-center gap-2 text-xs text-ink-400">
+        
+        Built for Kenyan shops pay in KES via M-Pesa or card, powered by Paystack.
+      </div>
     </div>
   );
+}
+````
+
+## File: src/pages/Settings.jsx
+````javascript
+// src/pages/Settings.jsx
+import { useEffect, useMemo, useState } from 'react';
+import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { resetBusinessData } from '../utils/businessReset';
+import { restoreProduct, permanentlyDeleteProduct } from '../utils/products';
+import { isDemoMode } from '../demo/demoMode';
+import { resetDemoData } from '../demo/seedData';
+import { formatDateTime } from '../utils/dateRanges';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal'; 
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { buildExportZip } from '../utils/dataExport';
+import { readExportZip, checkExistingData, importBusinessData } from '../utils/dataImport';
+
+const RESET_CONFIRM_PHRASE = 'RESET';
+const DELETE_ACCOUNT_CONFIRM_PHRASE = 'DELETE';
+
+export default function Settings() {
+  const { profile, businessId, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, deleteOwnAccount } = useAuth();
+  const demo = isDemoMode();
+  const [loading, setLoading]     = useState(true);
+  
+  const [shopName, setShopName]   = useState('');
+  const [phone, setPhone]         = useState('');
+  const [email, setEmail]         = useState('');
+  const [address, setAddress]     = useState('');
+  const [logoFile, setLogoFile]   = useState(null);
+  const [logoUrl, setLogoUrl]     = useState('');
+  const [cashierExp, setCashierExp] = useState(true);
+  
+  const [saving, setSaving]       = useState(false);
+  const [savingPermissions, setSavingPermissions] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resetting, setResetting] = useState(false);
+
+  const [sessions, setSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
+  const [deleteAccountPassword, setDeleteAccountPassword] = useState('');
+  const [deleteAccountConfirmText, setDeleteAccountConfirmText] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [otherOwnersCount, setOtherOwnersCount] = useState(null);
+const [exporting, setExporting] = useState(false);
+const [exportProgress, setExportProgress] = useState(null);
+
+const fileInputRef = useRef(null);
+const [checkingImport, setCheckingImport] = useState(false);
+const [importing, setImporting] = useState(false);
+const [importProgress, setImportProgress] = useState(null);
+const [pendingImport, setPendingImport] = useState(null); // { manifest, nonEmptyCollections, fileName }
+const [importConfirmChecked, setImportConfirmChecked] = useState(false);
+
+
+const handleImportFileSelected = async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = ''; // allow re-selecting the same file later
+  if (!file) return;
+  setCheckingImport(true);
+  try {
+    const manifest = await readExportZip(file);
+    const nonEmptyCollections = await checkExistingData(businessId, manifest);
+    setPendingImport({ manifest, nonEmptyCollections, fileName: file.name });
+    setImportConfirmChecked(false);
+  } catch (err) {
+    toast.error(err.message);
+  } finally {
+    setCheckingImport(false);
+  }
+};
+
+const handleConfirmImport = async () => {
+  if (!pendingImport) return;
+  setImporting(true);
+  setImportProgress(null);
+  try {
+    const results = await importBusinessData(businessId, pendingImport.manifest, {
+      onProgress: (name, i, total) => setImportProgress(`${name} (${i + 1}/${total})`),
+    });
+    const totalDocs = Object.values(results).reduce((a, b) => a + b, 0);
+    toast.success(`Import complete — ${totalDocs} record(s) restored.`);
+    setPendingImport(null);
+  } catch (err) {
+    toast.error(`Import failed: ${err.message}`);
+  } finally {
+    setImporting(false);
+    setImportProgress(null);
+  }
+};
+
+const handleExport = async () => {
+  setExporting(true);
+  setExportProgress(null);
+  try {
+    const blob = await buildExportZip(businessId, {
+      onProgress: (name, i, total) => setExportProgress(`${name} (${i + 1}/${total})`),
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `flowbiz-export-${businessId}-${new Date().toISOString().slice(0, 10)}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    toast.success('Export downloaded.');
+  } catch (err) {
+    toast.error(`Export failed: ${err.message}`);
+  } finally {
+    setExporting(false);
+    setExportProgress(null);
+  }
+};
+  const deviceGroups = useMemo(() => {
+    const groups = new Map();
+    for (const s of sessions) {
+      const key = `${s.deviceLabel || 'Unknown device'}|${s.userAgent || ''}`;
+      const lastActiveMs = s.lastActiveAt?.toMillis ? s.lastActiveAt.toMillis() : (s.lastActiveAt ? new Date(s.lastActiveAt).getTime() : 0);
+      const existing = groups.get(key);
+      if (!existing) {
+        groups.set(key, { key, deviceLabel: s.deviceLabel, lastUserName: s.lastUserName, lastActiveMs, ids: [s.id], anyActive: s.revoked !== true });
+      } else {
+        existing.ids.push(s.id);
+        if (s.revoked !== true) existing.anyActive = true;
+        if (lastActiveMs > existing.lastActiveMs) {
+          existing.lastActiveMs = lastActiveMs;
+          existing.lastUserName = s.lastUserName;
+        }
+      }
+    }
+    return Array.from(groups.values()).sort((a, b) => b.lastActiveMs - a.lastActiveMs);
+  }, [sessions]);
+
+  const [archived, setArchived] = useState([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+
+  const settingsRef = useMemo(() => (businessId ? doc(db, 'businessSettings', businessId) : null), [businessId]);
+
+  function compressImage(file, maxDimension = 480, quality = 0.75) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas context unavailable.'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (!blob) { reject(new Error('Could not process image.')); return; }
+          resolve(blob);
+        }, 'image/jpeg', quality);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
+      img.src = url;
+    });
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  useEffect(() => {
+    if (!settingsRef) {
+      setLoading(false);
+      return;
+    }
+    getDoc(settingsRef).then((snap) => {
+      if (snap.exists()) { 
+        const d = snap.data(); 
+        setShopName(d.shopName || ''); 
+        setPhone(d.phone || '');
+        setEmail(d.email || '');
+        setAddress(d.address || '');
+        setLogoUrl(d.logoUrl || '');
+        setCashierExp(d.cashierCanRecordExpenses !== false); 
+      }
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [settingsRef]);
+
+  useEffect(() => {
+    if (!businessId) {
+      setSessionsLoading(false);
+      return;
+    }
+    listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
+  }, [businessId, listBusinessSessions]);
+
+  const loadArchived = async () => {
+    if (!businessId) return;
+    setArchivedLoading(true);
+    try {
+      const snap = await getDocs(query(collection(db, 'products'), where('businessId', '==', businessId), where('deleted', '==', true)));
+      setArchived(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } finally {
+      setArchivedLoading(false);
+    }
+  };
+
+  const handleSave = async (e) => {
+    e.preventDefault(); 
+    if (!settingsRef) return;
+    setSaving(true);
+    try {
+      let finalLogoUrl = logoUrl;
+
+      if (logoFile) {
+        try {
+          const compressed = await compressImage(logoFile, 480, 0.75);
+          if (compressed.size > 700 * 1024) {
+            toast.error('Logo is still too large after compression, try a simpler image.');
+          } else {
+            finalLogoUrl = await blobToDataUrl(compressed);
+          }
+        } catch (logoErr) {
+          toast.error(`Logo processing failed, but the rest of your settings will still be saved: ${logoErr.message}`);
+        }
+      }
+
+      const write = setDoc(settingsRef, { 
+        shopName: shopName.trim(), 
+        phone: phone.trim(),
+        email: email.trim(),
+        address: address.trim(),
+        logoUrl: finalLogoUrl,
+      }, { merge: true });
+
+      const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+      if (error) throw error;
+
+      setLogoUrl(finalLogoUrl);
+      toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Business information saved');
+      setLogoFile(null);
+    } catch (err) { 
+      toast.error(err.message); 
+    } finally { 
+      setSaving(false); 
+    }
+  };
+
+  const handleSavePermissions = async () => {
+    if (!settingsRef) return;
+    setSavingPermissions(true);
+    const write = setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    setSavingPermissions(false);
+    if (error) { toast.error(error.message); return; }
+    toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Permissions saved');
+  };
+
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      if (demo) {
+        resetDemoData();
+        toast.success('Demo data reset. Reloading…');
+      } else {
+        await resetBusinessData(businessId, profile?.uid);
+        toast.success('Business data reset. Reloading…');
+      }
+      window.location.href = '/';
+    } catch (err) {
+      toast.error(`Reset failed: ${err.message}`);
+      setResetting(false);
+      setResetDialogOpen(false);
+    }
+  };
+
+  const openDeleteAccount = async () => {
+    setDeleteAccountPassword('');
+    setDeleteAccountConfirmText('');
+    setOtherOwnersCount(null);
+    setDeleteAccountOpen(true);
+    try {
+      const snap = await getDocs(query(collection(db, 'users'), where('businessId', '==', businessId), where('role', '==', 'owner')));
+      const others = snap.docs.filter((d) => d.id !== profile.uid && d.data().active !== false);
+      setOtherOwnersCount(others.length);
+    } catch {
+      setOtherOwnersCount(0); // fail toward showing the more serious warning
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeletingAccount(true);
+    try {
+      await deleteOwnAccount({ password: deleteAccountPassword });
+      toast.success('Your account has been removed.');
+    } catch (err) {
+      toast.error(err.message);
+      setDeletingAccount(false);
+    }
+  };
+
+  const handleRevokeGroup = async (group) => {
+    try {
+      await Promise.all(group.ids.map((id) => revokeSession(id)));
+      setSessions((s) => s.map((x) => (group.ids.includes(x.id) ? { ...x, revoked: true } : x)));
+      toast.success('Device signed out.');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const handleRestore = async (productId) => {
+    const target = archived.find(p => p.id === productId);
+    try {
+      const { barcodeCleared } = await restoreProduct(productId, target?.barcode, businessId);
+      setArchived(a => a.filter(p => p.id !== productId));
+      toast.success(barcodeCleared
+        ? 'Product restored, its old barcode is now used by another product, so it was cleared. Add a new one from Products if needed.'
+        : 'Product restored');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const handlePermanentDelete = async (productId) => {
+    const target = archived.find(p => p.id === productId);
+    try {
+      await permanentlyDeleteProduct(productId, target?.barcode, businessId);
+      setArchived(a => a.filter(p => p.id !== productId));
+      toast.success('Product permanently deleted');
+    } catch (err) { toast.error(err.message); }
+  };
+
+  if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
+
+  return (
+    <div className="mx-auto max-w-xl space-y-5">
+      <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
+
+      <div className="card p-5 space-y-2">
+        <h2 className="font-display text-base font-bold text-ink-800">Account &amp; Security</h2>
+        <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
+        <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
+        <Row label="Business ID" value={businessId || '—'} mono />
+      </div>
+
+      <form onSubmit={handleSave} className="card space-y-4 p-5">
+        <h2 className="font-display text-base font-bold text-ink-800">Business Information</h2>
+        <p className="text-sm text-ink-500 mb-2">This info dynamically populates your customer-facing documents (receipts, invoices).</p>
+        
+        <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
+        
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
+          <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
+        </div>
+
+        <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
+        
+        <div>
+          <label className="label">Business Logo</label>
+          <div className="flex items-center gap-4">
+            {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
+            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files ? e.target.files[0] : null)} />
+          </div>
+        </div>
+
+        <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
+      </form>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Permissions</h2>
+        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-3">
+          <div><p className="text-sm font-semibold text-ink-800">Let cashiers record expenses</p><p className="text-xs text-ink-400">Turn off if only owners should log expenses.</p></div>
+          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-moss-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
+            <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition-transform ${cashierExp?'translate-x-5':''}`} />
+          </button>
+        </div>
+        <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
+          {savingPermissions ? 'Saving…' : 'Save permissions'}
+        </button>
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Team Management</h2>
+        <p className="text-sm text-ink-500">Invite owners or cashiers, and manage pending invites and access.</p>
+        <Link to="/users" className="btn-outline w-full flex items-center justify-center gap-2">Manage users &amp; invites</Link>
+      </div>
+
+      {!demo && (
+        <div className="card p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="font-display text-base font-bold text-ink-800">Logged-in Devices</h2>
+          </div>
+          <p className="text-sm text-ink-500 mb-2">Devices currently or recently associated with your business.</p>
+          {sessionsLoading ? (
+            <p className="text-sm text-ink-400">Loading…</p>
+          ) : deviceGroups.length === 0 ? (
+            <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {deviceGroups.map((group) => {
+                const isCurrent = group.ids.includes(currentSessionId);
+                const isActiveNow = isCurrent || (Date.now() - group.lastActiveMs < 20 * 60 * 1000);
+                const isRevoked = !group.anyActive;
+                return (
+                  <div key={group.key} className="flex items-center justify-between py-3 text-sm">
+                    <div className="min-w-0 pr-3">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <p className="font-semibold text-ink-800 truncate">{group.deviceLabel || 'Unknown device'}</p>
+                        {isCurrent && <span className="badge bg-ink-900 text-white border border-ink-900 shrink-0">This device</span>}
+                        {!isCurrent && isActiveNow && !isRevoked && <span className="badge bg-moss-50 text-moss-700 border border-moss-200 shrink-0">Active</span>}
+                        {!isCurrent && !isActiveNow && !isRevoked && <span className="badge bg-ink-50 text-ink-600 border border-ink-200 shrink-0">Inactive</span>}
+                      </div>
+                      <p className="text-[11px] text-ink-500 truncate">
+                        <span className="font-medium text-ink-700">{group.lastUserName || 'Unknown User'}</span> &middot; {isActiveNow ? 'Last seen: Just now' : `Last seen: ${formatDateTime(group.lastActiveMs)}`}
+                      </p>
+                    </div>
+                    {isRevoked ? (
+                      <span className="badge bg-rust-50 text-rust-600 border border-rust-200 shrink-0">Signed out</span>
+                    ) : (
+                      !isCurrent && <button className="btn-outline !px-3 !py-1.5 !min-h-0 text-xs shrink-0" onClick={() => handleRevokeGroup(group)}>Sign out</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="card p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
+          <div className="flex gap-2">
+            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
+              {archivedOpen ? 'Hide' : 'View archive'}
+            </button>
+          </div>
+        </div>
+        <p className="text-sm text-ink-500">Deleted products are archived here first, never destroyed immediately.</p>
+        {archivedOpen && (
+          archivedLoading ? <p className="text-sm text-ink-400">Loading…</p> : archived.length === 0 ? (
+            <p className="text-sm text-ink-400">Nothing archived.</p>
+          ) : (
+            <div className="divide-y divide-ink-100">
+              {archived.map(p => (
+                <div key={p.id} className="flex items-center justify-between py-2.5 text-sm">
+                  <span className="font-medium text-ink-700">{p.name}</span>
+                  <div className="flex gap-2">
+                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRestore(p.id)}>Restore</button>
+                    <button className="btn-danger !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handlePermanentDelete(p.id)}>Delete forever</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </div>
+
+      <div className="card p-5 space-y-2">
+        <h2 className="font-display text-base font-bold text-ink-800">Subscription</h2>
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
+          <Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>
+        </div>
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Guide</h2>
+        <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
+      </div>
+
+<div className="card p-5 space-y-3">
+  <h2 className="font-display text-base font-bold text-ink-800">Backup & Restore</h2>
+  <p className="text-sm text-ink-500">
+    Download everything this business has stored as a .zip (CSVs plus a FlowBiz backup file), or restore a previous FlowBiz export back into this business.
+  </p>
+  <div className="grid grid-cols-2 gap-2">
+    <button type="button" className="btn-outline" onClick={handleExport} disabled={exporting || importing || checkingImport}>
+      {exporting ? (exportProgress || 'Preparing…') : 'Export (.zip)'}
+    </button>
+    <button type="button" className="btn-outline" onClick={() => fileInputRef.current?.click()} disabled={exporting || importing || checkingImport}>
+      {checkingImport ? 'Reading file…' : 'Import (.zip)'}
+    </button>
+  </div>
+  <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleImportFileSelected} />
+</div>
+
+<Modal open={!!pendingImport} onClose={() => { if (!importing) setPendingImport(null); }} title="Import this backup?">
+  <div className="space-y-4">
+    <p className="text-sm text-ink-600">
+      <span className="font-mono text-xs">{pendingImport?.fileName}</span> contains:
+    </p>
+    <div className="max-h-40 overflow-y-auto rounded-lg border border-ink-100 divide-y divide-ink-100">
+      {pendingImport && Object.entries(pendingImport.manifest.collections)
+        .filter(([, docs]) => docs.length > 0)
+        .map(([name, docs]) => (
+          <div key={name} className="flex justify-between px-3 py-1.5 text-xs">
+            <span className="text-ink-500">{name}</span>
+            <span className="font-semibold text-ink-800">{docs.length}</span>
+          </div>
+        ))}
+    </div>
+
+    {pendingImport?.nonEmptyCollections.length > 0 && (
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+        This business already has data in: {pendingImport.nonEmptyCollections.join(', ')}. Importing will add these records alongside what's already there — any record that shares the exact same ID as one you already have will be overwritten.
+      </div>
+    )}
+
+    <label className="flex items-start gap-2 text-sm text-ink-600">
+      <input type="checkbox" checked={importConfirmChecked} onChange={(e) => setImportConfirmChecked(e.target.checked)} disabled={importing} className="mt-0.5" />
+      I understand and want to proceed with this import.
+    </label>
+
+    {importing && <p className="text-xs text-ink-400">{importProgress || 'Starting…'}</p>}
+
+    <div className="flex gap-2">
+      <button type="button" className="btn-secondary flex-1" onClick={() => setPendingImport(null)} disabled={importing}>Cancel</button>
+      <button type="button" className="btn-primary flex-1" onClick={handleConfirmImport} disabled={!importConfirmChecked || importing}>
+        {importing ? 'Importing…' : 'Import'}
+      </button>
+    </div>
+  </div>
+</Modal>
+      <div className="card space-y-3 border-rust-200 p-5">
+        <div>
+          <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
+          <p className="mt-1 text-sm text-ink-500">
+            {demo
+              ? 'Demo Reset clears all sample data stored in this browser.'
+              : "Business Reset permanently deletes ALL of this business's data and removes cashier staff accounts. The owner account and Pro subscription remain active."}
+          </p>
+        </div>
+        <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
+          {demo ? 'Demo Reset' : 'Business Reset'}
+        </button>
+      </div>
+
+      {/* Inserted "Delete My Account" block here */}
+      <div className="card space-y-3 border-rust-200 p-5">
+        <div>
+          <h2 className="font-display text-base font-bold text-rust-700">Delete My Account</h2>
+          <p className="mt-1 text-sm text-ink-500">
+            Removes your own FlowBiz sign-in permanently. What happens to the business depends on whether other owners exist. Export your data first if you're the only owner.
+          </p>
+        </div>
+        <button type="button" className="btn-danger w-full" onClick={openDeleteAccount}>
+          Delete my account
+        </button>
+      </div>
+
+      <div className="pt-6 pb-2 text-center space-y-3">
+        <div className="flex items-center justify-center gap-4 text-sm font-semibold">
+          <Link to="/privacy" className="text-ink-500 hover:text-ink-800 transition-colors">Privacy Policy</Link>
+          <span className="text-ink-300">&middot;</span>
+          <Link to="/terms" className="text-ink-500 hover:text-ink-800 transition-colors">Terms of Service</Link>
+        </div>
+        <p className="text-xs text-ink-400">FlowBiz ensures all data handling complies with Kenyan Data Protection Act.</p>
+      </div>
+
+      <ConfirmDialog
+        open={resetDialogOpen}
+        title={demo ? 'Reset the demo data?' : 'This will permanently delete all store data & staff'}
+        message={
+          demo ? (
+            <p>All sample data in this browser will be cleared and replaced with the original demo dataset.</p>
+          ) : (
+            <>
+              <p className="mb-2">All products, sales, debt, expenses, and cashier staff will be deleted. Your owner account and Pro plan will remain intact.</p>
+              <label className="label mt-3">Type <span className="font-mono font-bold">{RESET_CONFIRM_PHRASE}</span> to confirm</label>
+              <input className="input" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} autoFocus />
+            </>
+          )
+        }
+        confirmLabel={resetting ? 'Resetting…' : demo ? 'Reset demo data' : 'Delete everything'}
+        danger
+        onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
+        onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
+      />
+
+      {/* Inserted "Delete My Account" Modal here */}
+      <Modal open={deleteAccountOpen} onClose={() => { if (!deletingAccount) setDeleteAccountOpen(false); }} title="Delete your account">
+        <div className="space-y-4">
+          {otherOwnersCount === null ? (
+            <p className="text-sm text-ink-400">Checking your business…</p>
+          ) : otherOwnersCount > 0 ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+              Another owner is on this account. The business and all its data stay intact, and they'll take over as the business's main contact. Only your own sign-in will be removed.
+            </div>
+          ) : (
+            <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2.5 text-sm text-rust-700">
+              <strong>You're the only owner.</strong> Deleting your account permanently erases every product, sale, customer, and record this business has. This cannot be undone.
+            </div>
+          )}
+
+          <div>
+            <label className="label">Confirm your password</label>
+            <input type="password" className="input" value={deleteAccountPassword} onChange={(e) => setDeleteAccountPassword(e.target.value)} autoComplete="current-password" disabled={deletingAccount} />
+          </div>
+
+          <div>
+            <label className="label">Type <span className="font-mono font-bold">{DELETE_ACCOUNT_CONFIRM_PHRASE}</span> to confirm</label>
+            <input className="input" value={deleteAccountConfirmText} onChange={(e) => setDeleteAccountConfirmText(e.target.value)} disabled={deletingAccount} />
+          </div>
+
+          <div className="flex gap-2">
+            <button type="button" className="btn-secondary flex-1" onClick={() => setDeleteAccountOpen(false)} disabled={deletingAccount}>Cancel</button>
+            <button
+              type="button"
+              className="btn-danger flex-1"
+              disabled={deletingAccount || deleteAccountConfirmText !== DELETE_ACCOUNT_CONFIRM_PHRASE || !deleteAccountPassword || otherOwnersCount === null}
+              onClick={handleDeleteAccount}
+            >
+              {deletingAccount ? 'Deleting…' : 'Delete my account'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+function Row({ label, value, tone = '', mono = false }) {
+  return (
+    <div className="flex items-center justify-between py-1 text-sm">
+      <span className="text-ink-500">{label}</span>
+      <span className={`font-semibold ${mono ? 'font-mono text-xs' : ''} ${tone || 'text-ink-800'}`}>{value}</span>
+    </div>
+  );
+}
+````
+
+## File: src/contexts/AuthContext.jsx
+````javascript
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import {
+  onAuthStateChanged, signInWithEmailAndPassword, signOut as fbSignOut, sendEmailVerification, reload,
+  deleteUser, EmailAuthProvider, reauthenticateWithCredential,
+} from 'firebase/auth';
+import {
+  doc,
+  onSnapshot,
+  deleteDoc,
+  updateDoc,
+  collection,
+  addDoc,
+  setDoc,
+  serverTimestamp,
+  query,
+  where,
+  getDocs,
+  getDoc,
+} from 'firebase/firestore';
+import { auth, db } from '../firebase';
+import { raceWithTimeout } from '../utils/offlineWrite';
+
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+const AuthContext = createContext(null);
+
+function getDeviceId() {
+  let id = localStorage.getItem('flowbiz_device_id');
+  if (!id) {
+    id = `dev_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem('flowbiz_device_id', id);
+  }
+  return id;
+}
+function getSessionDocId(uid) {
+  return `${getDeviceId()}__${uid}`;
+}
+
+// src/contexts/AuthContext.jsx — replace guessDeviceLabel()
+function guessDeviceLabel() {
+  const ua = navigator.userAgent || '';
+  let os = 'Unknown device';
+  if (/Android/i.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+  else if (/Windows/i.test(ua)) os = 'Windows';
+  else if (/Macintosh/i.test(ua)) os = 'Mac';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+
+  let browser = '';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/OPR\//i.test(ua)) browser = 'Opera';
+  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
+
+  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches;
+  if (isStandalone) return browser ? `${os} app (${browser})` : `${os} app`;
+  return browser ? `${browser} on ${os}` : os;
+}
+
+export function AuthProvider({ children }) {
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [subscription, setSubscription] = useState({ plan: 'free', status: 'active' });
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
+  const [accountRemoved, setAccountRemoved] = useState(false);
+  const [sessionRevoked, setSessionRevoked] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(false);
+
+  const profileUnsubRef = useRef(null);
+  const sessionUnsubRef = useRef(null);
+  const businessUnsubRef = useRef(null);
+  const sessionRegisteredRef = useRef(null); // `${uid}:${businessId}` already registered this auth session
+
+  const stopListeners = useCallback(() => {
+    profileUnsubRef.current?.();
+    profileUnsubRef.current = null;
+    sessionUnsubRef.current?.();
+    sessionUnsubRef.current = null;
+    businessUnsubRef.current?.();
+    businessUnsubRef.current = null;
+    sessionRegisteredRef.current = null;
+  }, []);
+
+const registerSession = useCallback(async (uid, businessId, userName) => {
+  const key = `${uid}:${businessId}`;
+  if (sessionRegisteredRef.current === key) return;
+  sessionRegisteredRef.current = key;
+
+  let sessionId = getSessionDocId(uid);
+  let ref = doc(db, 'sessions', sessionId);
+  let currentSnap = await getDoc(ref);
+
+  // A revoked session can never legally un-revoke itself (that's the
+  // security rule working as intended — self-updates can't touch
+  // `revoked`). A fresh sign-in is a legitimate new session, so start a
+  // new record instead of endlessly retrying a write the rules forbid.
+  if (currentSnap.exists() && currentSnap.data().revoked === true) {
+    sessionId = `${sessionId}__${Date.now().toString(36)}`;
+    ref = doc(db, 'sessions', sessionId);
+    currentSnap = await getDoc(ref);
+  }
+
+  const baseFields = {
+    uid, businessId,
+    lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
+    deviceLabel: guessDeviceLabel(),
+    userAgent: navigator.userAgent,
+    lastActiveAt: serverTimestamp(),
+  };
+
+  if (!currentSnap.exists()) {
+    await setDoc(ref, { ...baseFields, createdAt: serverTimestamp(), revoked: false });
+  } else {
+    // Never include `revoked` here — self-updates aren't allowed to
+    // touch it, and it's already false if we got this far.
+    await updateDoc(ref, baseFields).catch(() => {});
+  }
+
+  sessionUnsubRef.current?.();
+  sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
+    if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
+      setSessionRevoked(true);
+      fbSignOut(auth);
+    }
+  });
+}, []);
+
+  // Background heartbeat to keep the "last seen" time accurate for active devices
+useEffect(() => {
+    if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
+        updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
+      }
+    }, 15 * 60 * 1000); // 15 mins
+    return () => clearInterval(interval);
+  }, [firebaseUser, profile?.businessId, sessionRevoked]);
+
+  // FIX: Used a named function 'doLoad' to resolve the recursive ESLint error
+const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
+  stopListeners();
+  setAuthError(null);
+  setAccountRemoved(false);
+  setSessionRevoked(false);
+
+  if (!user) {
+    setProfile(null);
+    setSubscription({ plan: 'free', status: 'active' });
+    setEmailVerified(false);
+    setLoading(false);
+    return;
+  }
+
+  setEmailVerified(!!user.emailVerified);
+  setLoading(true);
+
+  // FIX: force-refresh the ID token before attaching the Firestore
+  // listener. Right after sign-in / verification / password reset, the
+  // Firestore SDK's connection can still be using a stale token for a
+  // moment — this closes that gap instead of just hoping it resolves.
+  user.getIdToken(true).catch(() => {}).then(() => {
+    const userRef = doc(db, 'users', user.uid);
+
+    profileUnsubRef.current = onSnapshot(
+      userRef,
+      (snap) => {
+if (!snap.exists()) {
+  (async () => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      if (auth.currentUser?.uid !== user.uid) return;
+      try {
+        const recheck = await getDoc(userRef);
+        if (recheck.exists()) return; // listener will pick it up
+      } catch (err) {
+        if (attempt === 3) {
+          setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
+          setProfile(null);
+          setLoading(false);
+          return;
+        }
+      }
+    }
+    setAccountRemoved(true);
+    setProfile(null);
+    setLoading(false);
+  })();
+  return;
+}
+        setAccountRemoved(false);
+        const data = { uid: user.uid, ...snap.data() };
+        setProfile(data);
+        setLoading(false);
+
+if (data.businessId && data.active !== false) {
+  registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
+          businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
+            if (bizSnap.exists()) {
+              setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
+            }
+          });
+        }
+      },
+      (err) => {
+        // FIX: more retries, longer backoff — gives slower connections
+        // (mobile networks) a real chance to catch up instead of
+        // dumping the user on an error screen after ~4s.
+        if (err.code === 'permission-denied' && retryCount < 6) {
+          const delay = Math.min(1000 * 2 ** retryCount, 8000);
+          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying (attempt ${retryCount + 1})`);
+          setTimeout(() => {
+            if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
+          }, delay);
+          return;
+        }
+        console.error(`[FlowBiz] onSnapshot(users/${user.uid}) failed:`, err.code || err.name, err.message);
+        setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
+        setProfile(null);
+        setLoading(false);
+      }
+    );
+  });
+}, [registerSession, stopListeners]);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      loadProfile(user);
+    });
+    return () => { unsub(); stopListeners(); };
+  }, [loadProfile, stopListeners]);
+
+  const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
+  const logout = () => { stopListeners(); return fbSignOut(auth); };
+  
+const resendVerificationEmail = async () => {
+  if (!auth.currentUser) throw new Error('Not signed in.');
+  const idToken = await auth.currentUser.getIdToken(true);
+  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+  });
+  if (!response.ok) {
+    let message = 'Could not send the verification email.';
+    try { const body = await response.json(); message = body?.error || message; } catch {}
+    throw new Error(message);
+  }
+};
+
+  const refreshEmailVerification = useCallback(async () => {
+    if (!auth.currentUser) return false;
+    try {
+      await reload(auth.currentUser);
+    } catch (err) {
+      console.error('[FlowBiz] refreshEmailVerification: reload() failed:', err.code || err.name, err.message);
+      return auth.currentUser?.emailVerified ?? false;
+    }
+    const verified = !!auth.currentUser.emailVerified;
+    setEmailVerified(verified);
+    return verified;
+  }, []);
+
+  const createStaffInvite = async ({ displayName, role = 'cashier' }) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can invite staff.');
+    if (!['owner', 'cashier'].includes(role)) throw new Error('Invalid role.');
+    const trimmed = (displayName || '').trim();
+    if (!trimmed) throw new Error('Enter a name.');
+   const write = addDoc(collection(db, 'staffInvites'), {
+     businessId: profile.businessId,
+     displayName: trimmed,
+     role,
+     createdBy: profile.uid,
+     createdByName: profile.displayName,
+     createdAt: serverTimestamp(),
+     claimed: false,
+     linkedUid: null,
+   });
+   const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
+   if (error) throw error;
+   if (queuedOffline) return { id: null, queuedOffline: true };
+   return { id: value.id };
+  };
+
+  const cancelStaffInvite = async (inviteId) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can cancel an invite.');
+    await deleteDoc(doc(db, 'staffInvites', inviteId));
+  };
+
+  const revokeSessionsForStaffMember = useCallback(async (uid) => {
+    if (!profile?.businessId) return;
+    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', uid), where('businessId', '==', profile.businessId)));
+    await Promise.all(
+      snap.docs.filter((d) => d.data().revoked !== true).map((d) => updateDoc(doc(db, 'sessions', d.id), { revoked: true }))
+    );
+  }, [profile]);
+
+  const removeStaffAccount = async (uid) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can remove staff accounts.');
+    if (uid === profile.uid) throw new Error("You can't remove your own account here.");
+    if (!auth.currentUser) throw new Error('Your session has expired. Please sign in again.');
+
+    const idToken = await auth.currentUser.getIdToken(true);
+    await revokeSessionsForStaffMember(uid);
+
+    let response;
+    try {
+      response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({ targetUid: uid }),
+      });
+    } catch (networkErr) {
+      throw new Error(`Failed to reach the API server. Check your connection.`);
+    }
+
+    let result = null;
+    try { result = await response.json(); } catch { }
+    if (!response.ok) throw new Error(result?.error || result?.message || `Failed to delete the staff account (${response.status}).`);
+
+    const { queuedOffline, error: deleteError } = await raceWithTimeout(deleteDoc(doc(db, 'users', uid)), 4000);
+    if (deleteError) {
+      throw new Error(`Staff sign-in was removed, but their profile record couldn't be deleted (${deleteError.message}). It should clear automatically once back online — try again if it doesn't.`);
+    }
+    if (queuedOffline) {
+      throw new Error("Staff sign-in was removed, but you're offline — their profile record will finish deleting once you're back online.");
+    }
+  };
+
+  const toggleMemberActive = async (uid, active) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can do this.');
+    await updateDoc(doc(db, 'users', uid), { active });
+    if (active === false) await revokeSessionsForStaffMember(uid);
+  };
+
+      const deleteOwnAccount = async ({ password }) => {
+    if (!profile || !auth.currentUser) throw new Error('You need to be signed in to do this.');
+
+    // Re-authenticate up front — this is irreversible, so it shouldn't
+    // risk failing on the very last step (deleting the login) because the
+    // session had gone stale. Also doubles as the "are you sure" check.
+    try {
+      const credential = EmailAuthProvider.credential(auth.currentUser.email, password);
+      await reauthenticateWithCredential(auth.currentUser, credential);
+    } catch (err) {
+      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        throw new Error('That password is incorrect.');
+      }
+      throw new Error('Could not verify your password. Please try again.');
+    }
+
+    let mode = 'self-only';
+
+    if (profile.role === 'owner') {
+      const othersSnap = await getDocs(query(
+        collection(db, 'users'),
+        where('businessId', '==', profile.businessId),
+        where('role', '==', 'owner')
+      ));
+      // Only counting ACTIVE other owners on purpose — a deactivated owner
+      // can't currently manage the business either, so their presence
+      // shouldn't be what decides "does this business still have someone
+      // running it."
+      const otherOwners = othersSnap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((u) => u.id !== profile.uid && u.active !== false);
+
+      if (otherOwners.length > 0) {
+        const bizSnap = await getDoc(doc(db, 'businesses', profile.businessId));
+        const business = bizSnap.exists() ? bizSnap.data() : null;
+        if (business && business.createdBy === profile.uid) {
+          const oldest = [...otherOwners].sort((a, b) => {
+            const at = a.createdAt?.toMillis?.() ?? 0;
+            const bt = b.createdAt?.toMillis?.() ?? 0;
+            return at - bt;
+          })[0];
+          await updateDoc(doc(db, 'businesses', profile.businessId), { createdBy: oldest.id });
+        }
+      } else {
+        // Sole remaining owner — wipe the business's data first. If this
+        // throws, we stop right here: nothing about the account or
+        // business record gets touched while data might still be sitting
+        // there.
+      mode = 'full-wipe';
+const { resetBusinessData } = await import('../utils/businessReset');
+await resetBusinessData(profile.businessId, profile.uid);
+      }
+    }
+
+    const idToken = await auth.currentUser.getIdToken(true);
+    const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-own-profile`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ mode }),
+    });
+    let result = null;
+    try { result = await response.json(); } catch { }
+    if (!response.ok) {
+      throw new Error(result?.error || `Could not finish removing your account (${response.status}).`);
+    }
+
+    try {
+      await deleteUser(auth.currentUser);
+    } catch (err) {
+      if (err.code === 'auth/requires-recent-login') {
+        throw new Error("Your business data was handled, but we couldn't remove your sign-in for security reasons — please sign out and back in, then try 'Delete my account' again.");
+      }
+      throw new Error("Your business data was handled, but removing your sign-in failed. Please try again — it's safe to retry.");
+    }
+  };
+  const revokeSession = async (sessionId) => {
+    await updateDoc(doc(db, 'sessions', sessionId), { revoked: true });
+  };
+
+  const listMySessions = async () => {
+    if (!profile) return [];
+    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', profile.uid)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  };
+
+  const listBusinessSessions = async () => {
+    if (!profile?.businessId) return [];
+    const snap = await getDocs(query(collection(db, 'sessions'), where('businessId', '==', profile.businessId)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  };
+
+  const isOwner = profile?.role === 'owner';
+  
+  // FIX: Explicitly convert Timestamp to milliseconds to satisfy strict linters
+  const expiresMs = subscription?.expiresAt?.toMillis 
+    ? subscription.expiresAt.toMillis() 
+    : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
+
+  const isPro = subscription?.plan === 'pro' && 
+                subscription?.status === 'active' &&
+                (!subscription.expiresAt || expiresMs > Date.now());
+
+  return (
+    <AuthContext.Provider
+      value={{
+        firebaseUser, profile, subscription, isPro, loading, authError, accountRemoved, sessionRevoked,
+        businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
+        isActive: profile?.active !== false, emailVerified,
+        login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
+toggleMemberActive, revokeSession, listMySessions, listBusinessSessions, deleteOwnAccount,
+        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),        reloadProfile: async () => loadProfile(auth.currentUser),
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  return ctx;
 }
 ````
 
@@ -15867,1004 +17406,6 @@ const handleSupplierSave = async (supplierData) => {
 }
 ````
 
-## File: src/pages/Pro.jsx
-````javascript
-// src/pages/Pro.jsx
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { auth } from '../firebase';
-import toast from 'react-hot-toast';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-import { Check, X, BarChart3, Boxes, FileText, MessageCircle, Users, Sparkles, ArrowLeft } from 'lucide-react';
-
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-
-const FEATURE_CATEGORIES = [
-  { icon: BarChart3, title: 'Advanced Analytics', description: 'Revenue & profit trends, payment mix, day-of-week patterns, expense breakdown, top debtors, and staff performance all in one dashboard.' },
-  { icon: Boxes, title: 'Inventory Intelligence', description: 'Capital Health scoring, ABC value analysis, reorder suggestions, slow-moving stock alerts, and capital-by-supplier breakdowns.' },
-  { icon: FileText, title: 'Professional Documents', description: 'Branded PDF receipts and invoices with your logo, ready to print or download.' },
-  { icon: MessageCircle, title: 'WhatsApp Sharing', description: "Send receipts, invoices, and debt reminders straight to a customer's phone." },
-];
-
-const COMPARISON_ROWS = [
-  { label: 'Products tracked', free: 'Up to 100', pro: 'Unlimited' },
-  { label: 'Staff members', free: '1 owner + 1 staff', pro: 'Unlimited' },
-  { label: 'Sales, credit & expense tracking', free: true, pro: true },
-  { label: 'PDF receipts & invoices', free: true, pro: true },
-  { label: 'Advanced Analytics (trends, staff, day-of-week)', free: false, pro: true },
-  { label: 'Inventory Intelligence & Capital Health', free: false, pro: true },
-  { label: 'Reorder suggestions & ABC value analysis', free: false, pro: true },
-  { label: 'WhatsApp receipt & invoice sharing', free: false, pro: true },
-];
-
-export default function Pro() {
-  const { isPro, subscription } = useAuth();
-  const [loading, setLoading] = useState(false);
-  const [proPrice, setProPrice] = useState(null);
-
-  useEffect(() => {
-    fetch(`${FLOWBIZ_API_URL}/api/pro/price`)
-      .then((r) => r.json())
-      .then((data) => setProPrice(data.amountKes))
-      .catch(() => {});
-  }, []);
-
-  const handleSubscribe = async () => {
-    if (loading) return;
-    setLoading(true);
-    try {
-
-      const idToken = await auth.currentUser.getIdToken();
-      const response = await fetch(`${FLOWBIZ_API_URL}/api/paystack/initialize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-      });
-      const data = await response.json();
-      if (data?.access_code && window.PaystackPop) {
-        const popup = new window.PaystackPop();
-        popup.resumeTransaction(data.access_code, {
-          onSuccess: () => toast.success('Payment received activating your subscription…'),
-          onCancel: () => toast('Payment cancelled.'),
-        });
-      } else if (data?.authorization_url) {
-        window.location.href = data.authorization_url;
-      } else {
-        toast.error(data?.error || "Couldn't initialize payment. Please try again.");
-      }
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, { fallback: 'Unable to load the payment page. Please check your connection and try again.' }));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const expiresLabel = subscription?.expiresAt
-    ? new Date(subscription.expiresAt.toMillis ? subscription.expiresAt.toMillis() : subscription.expiresAt).toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' })
-    : null;
-
-  return (
-    <div className="mx-auto max-w-5xl space-y-8 pb-12">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-moss-700">FlowBiz Pro</p>
-          <h1 className="font-display text-2xl font-bold text-ink-900 mt-0.5">Run your shop with sharper insight</h1>
-        </div>
-        <Link to="/" className="btn-outline text-xs shrink-0">
-          <ArrowLeft className="h-4 w-4" strokeWidth={1.75} /> Dashboard
-        </Link>
-      </div>
-
-      <div className="card overflow-hidden border-moss-200">
-        <div className="bg-gradient-to-br from-moss-700 to-moss-900 px-6 py-10 text-center sm:px-10">
-
-          <h2 className="mt-4 font-display text-4xl font-extrabold text-white">
-            {proPrice != null ? `KSh ${proPrice.toLocaleString('en-KE')}` : '…'}
-            <span className="text-base font-medium text-moss-200"> / 30 days</span>
-          </h2>
-          <p className="mt-3 max-w-md mx-auto text-sm text-moss-100">Manual renewal, no auto-billing, no surprise charges. You're always in control.</p>
-          {isPro ? (
-            <div className="mt-7 flex flex-col items-center gap-3">
-              <span className="badge bg-white text-moss-800 px-4 py-1.5 text-sm font-bold">FlowBiz Pro Active</span>
-              {expiresLabel && <p className="text-xs text-moss-200">Renews / expires on {expiresLabel}</p>}
-              <button onClick={handleSubscribe} disabled={loading} className="btn-outline !border-white/40 !text-white hover:!bg-white/10">
-                {loading ? 'Loading…' : 'Extend subscription'}
-              </button>
-            </div>
-          ) : (
-            <button onClick={handleSubscribe} disabled={loading} className="mt-7 btn-primary !bg-white !text-moss-800 hover:!bg-moss-50 px-8 py-3 text-base">
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-moss-300 border-t-moss-800" />
-                  Loading payment page…
-                </span>
-              ) : `Upgrade to Pro KSh ${proPrice != null ? proPrice.toLocaleString('en-KE') : '…'}`}
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div>
-        <h3 className="font-display text-sm font-bold uppercase tracking-wide text-ink-500 mb-3">What's included</h3>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {FEATURE_CATEGORIES.map(({ icon: Icon, title, description }) => (
-            <div key={title} className="card p-5 space-y-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
-                <Icon className="h-5 w-5" strokeWidth={1.75} />
-              </div>
-              <h4 className="font-display text-sm font-bold text-ink-900">{title}</h4>
-              <p className="text-xs leading-relaxed text-ink-500">{description}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <h3 className="font-display text-sm font-bold uppercase tracking-wide text-ink-500 mb-3">Free vs Pro</h3>
-        <div className="card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                <tr><th className="px-4 py-3">Feature</th><th className="px-4 py-3 text-center">Free</th><th className="px-4 py-3 text-center text-moss-700">Pro</th></tr>
-              </thead>
-              <tbody className="divide-y divide-ink-100">
-                {COMPARISON_ROWS.map((row) => (
-                  <tr key={row.label}>
-                    <td className="px-4 py-3 font-medium text-ink-700">{row.label}</td>
-                    <td className="px-4 py-3 text-center text-ink-500">
-                      {typeof row.free === 'boolean' ? (row.free ? <Check className="mx-auto h-4 w-4 text-moss-600" strokeWidth={2} /> : <X className="mx-auto h-4 w-4 text-ink-300" strokeWidth={2} />) : row.free}
-                    </td>
-                    <td className="px-4 py-3 text-center font-semibold text-moss-700">
-                      {typeof row.pro === 'boolean' ? (row.pro ? <Check className="mx-auto h-4 w-4 text-moss-600" strokeWidth={2} /> : <X className="mx-auto h-4 w-4 text-ink-300" strokeWidth={2} />) : row.pro}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 text-xs text-ink-400">
-        
-        Built for Kenyan shops pay in KES via M-Pesa or card, powered by Paystack.
-      </div>
-    </div>
-  );
-}
-````
-
-## File: src/pages/Settings.jsx
-````javascript
-// src/pages/Settings.jsx
-import { useEffect, useMemo, useState } from 'react';
-import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { resetBusinessData } from '../utils/businessReset';
-import { restoreProduct, permanentlyDeleteProduct } from '../utils/products';
-import { isDemoMode } from '../demo/demoMode';
-import { resetDemoData } from '../demo/seedData';
-import { formatDateTime } from '../utils/dateRanges';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import { raceWithTimeout } from '../utils/offlineWrite';
-
-const RESET_CONFIRM_PHRASE = 'RESET';
-
-export default function Settings() {
-  const { profile, businessId, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro } = useAuth();
-  const demo = isDemoMode();
-  const [loading, setLoading]     = useState(true);
-  
-  const [shopName, setShopName]   = useState('');
-  const [phone, setPhone]         = useState('');
-  const [email, setEmail]         = useState('');
-  const [address, setAddress]     = useState('');
-  const [logoFile, setLogoFile]   = useState(null);
-  const [logoUrl, setLogoUrl]     = useState('');
-  const [cashierExp, setCashierExp] = useState(true);
-  
-  const [saving, setSaving]       = useState(false);
-  const [savingPermissions, setSavingPermissions] = useState(false);
-  const [resetDialogOpen, setResetDialogOpen] = useState(false);
-  const [resetConfirmText, setResetConfirmText] = useState('');
-  const [resetting, setResetting] = useState(false);
-
-  const [sessions, setSessions] = useState([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-
-  const deviceGroups = useMemo(() => {
-    const groups = new Map();
-    for (const s of sessions) {
-      const key = `${s.deviceLabel || 'Unknown device'}|${s.userAgent || ''}`;
-      const lastActiveMs = s.lastActiveAt?.toMillis ? s.lastActiveAt.toMillis() : (s.lastActiveAt ? new Date(s.lastActiveAt).getTime() : 0);
-      const existing = groups.get(key);
-      if (!existing) {
-        groups.set(key, { key, deviceLabel: s.deviceLabel, lastUserName: s.lastUserName, lastActiveMs, ids: [s.id], anyActive: s.revoked !== true });
-      } else {
-        existing.ids.push(s.id);
-        if (s.revoked !== true) existing.anyActive = true;
-        if (lastActiveMs > existing.lastActiveMs) {
-          existing.lastActiveMs = lastActiveMs;
-          existing.lastUserName = s.lastUserName;
-        }
-      }
-    }
-    return Array.from(groups.values()).sort((a, b) => b.lastActiveMs - a.lastActiveMs);
-  }, [sessions]);
-
-  const [archived, setArchived] = useState([]);
-  const [archivedLoading, setArchivedLoading] = useState(false);
-  const [archivedOpen, setArchivedOpen] = useState(false);
-
-  const settingsRef = useMemo(() => (businessId ? doc(db, 'businessSettings', businessId) : null), [businessId]);
-
-  function compressImage(file, maxDimension = 480, quality = 0.75) {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      const url = URL.createObjectURL(file);
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('Canvas context unavailable.'));
-          return;
-        }
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob((blob) => {
-          if (!blob) { reject(new Error('Could not process image.')); return; }
-          resolve(blob);
-        }, 'image/jpeg', quality);
-      };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image file.')); };
-      img.src = url;
-    });
-  }
-
-  function blobToDataUrl(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  useEffect(() => {
-    if (!settingsRef) {
-      setLoading(false);
-      return;
-    }
-    getDoc(settingsRef).then((snap) => {
-      if (snap.exists()) { 
-        const d = snap.data(); 
-        setShopName(d.shopName || ''); 
-        setPhone(d.phone || '');
-        setEmail(d.email || '');
-        setAddress(d.address || '');
-        setLogoUrl(d.logoUrl || '');
-        setCashierExp(d.cashierCanRecordExpenses !== false); 
-      }
-      setLoading(false);
-    }).catch(() => setLoading(false));
-  }, [settingsRef]);
-
-  useEffect(() => {
-    if (!businessId) {
-      setSessionsLoading(false);
-      return;
-    }
-    listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
-  }, [businessId, listBusinessSessions]);
-
-  const loadArchived = async () => {
-    if (!businessId) return;
-    setArchivedLoading(true);
-    try {
-      const snap = await getDocs(query(collection(db, 'products'), where('businessId', '==', businessId), where('deleted', '==', true)));
-      setArchived(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } finally {
-      setArchivedLoading(false);
-    }
-  };
-
-  const handleSave = async (e) => {
-    e.preventDefault(); 
-    if (!settingsRef) return;
-    setSaving(true);
-    try {
-      let finalLogoUrl = logoUrl;
-
-      if (logoFile) {
-        try {
-          const compressed = await compressImage(logoFile, 480, 0.75);
-          if (compressed.size > 700 * 1024) {
-            toast.error('Logo is still too large after compression — try a simpler image.');
-          } else {
-            finalLogoUrl = await blobToDataUrl(compressed);
-          }
-        } catch (logoErr) {
-          toast.error(`Logo processing failed, but the rest of your settings will still be saved: ${logoErr.message}`);
-        }
-      }
-
-      const write = setDoc(settingsRef, { 
-        shopName: shopName.trim(), 
-        phone: phone.trim(),
-        email: email.trim(),
-        address: address.trim(),
-        logoUrl: finalLogoUrl,
-      }, { merge: true });
-
-      const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-      if (error) throw error;
-
-      setLogoUrl(finalLogoUrl);
-      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Business information saved');
-      setLogoFile(null);
-    } catch (err) { 
-      toast.error(err.message); 
-    } finally { 
-      setSaving(false); 
-    }
-  };
-
-  const handleSavePermissions = async () => {
-    if (!settingsRef) return;
-    setSavingPermissions(true);
-    const write = setDoc(settingsRef, { cashierCanRecordExpenses: cashierExp }, { merge: true });
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-    setSavingPermissions(false);
-    if (error) { toast.error(error.message); return; }
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Permissions saved');
-  };
-
-  const handleReset = async () => {
-    setResetting(true);
-    try {
-      if (demo) {
-        resetDemoData();
-        toast.success('Demo data reset. Reloading…');
-      } else {
-        await resetBusinessData(businessId, profile?.uid);
-        toast.success('Business data reset. Reloading…');
-      }
-      window.location.href = '/';
-    } catch (err) {
-      toast.error(`Reset failed: ${err.message}`);
-      setResetting(false);
-      setResetDialogOpen(false);
-    }
-  };
-
-  const handleRevokeGroup = async (group) => {
-    try {
-      await Promise.all(group.ids.map((id) => revokeSession(id)));
-      setSessions((s) => s.map((x) => (group.ids.includes(x.id) ? { ...x, revoked: true } : x)));
-      toast.success('Device signed out.');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handleRestore = async (productId) => {
-    const target = archived.find(p => p.id === productId);
-    try {
-      const { barcodeCleared } = await restoreProduct(productId, target?.barcode, businessId);
-      setArchived(a => a.filter(p => p.id !== productId));
-      toast.success(barcodeCleared
-        ? 'Product restored — its old barcode is now used by another product, so it was cleared. Add a new one from Products if needed.'
-        : 'Product restored');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  const handlePermanentDelete = async (productId) => {
-    const target = archived.find(p => p.id === productId);
-    try {
-      await permanentlyDeleteProduct(productId, target?.barcode, businessId);
-      setArchived(a => a.filter(p => p.id !== productId));
-      toast.success('Product permanently deleted');
-    } catch (err) { toast.error(err.message); }
-  };
-
-  if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
-
-  return (
-    <div className="mx-auto max-w-xl space-y-5">
-      <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
-
-      <div className="card p-5 space-y-2">
-        <h2 className="font-display text-base font-bold text-ink-800">Account &amp; Security</h2>
-        <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
-        <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
-        <Row label="Business ID" value={businessId || '—'} mono />
-      </div>
-
-      <form onSubmit={handleSave} className="card space-y-4 p-5">
-        <h2 className="font-display text-base font-bold text-ink-800">Business Information</h2>
-        <p className="text-sm text-ink-500 mb-2">This info dynamically populates your customer-facing documents (receipts, invoices).</p>
-        
-        <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
-        
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
-          <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
-        </div>
-
-        <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
-        
-        <div>
-          <label className="label">Business Logo</label>
-          <div className="flex items-center gap-4">
-            {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
-            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files ? e.target.files[0] : null)} />
-          </div>
-        </div>
-
-        <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
-      </form>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Permissions</h2>
-        <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-3">
-          <div><p className="text-sm font-semibold text-ink-800">Let cashiers record expenses</p><p className="text-xs text-ink-400">Turn off if only owners should log expenses.</p></div>
-          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-moss-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
-            <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition-transform ${cashierExp?'translate-x-5':''}`} />
-          </button>
-        </div>
-        <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
-          {savingPermissions ? 'Saving…' : 'Save permissions'}
-        </button>
-      </div>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Team Management</h2>
-        <p className="text-sm text-ink-500">Invite owners or cashiers, and manage pending invites and access.</p>
-        <Link to="/users" className="btn-outline w-full flex items-center justify-center gap-2">Manage users &amp; invites</Link>
-      </div>
-
-      {!demo && (
-        <div className="card p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-display text-base font-bold text-ink-800">Logged-in Devices</h2>
-          </div>
-          <p className="text-sm text-ink-500 mb-2">Devices currently or recently associated with your business.</p>
-          {sessionsLoading ? (
-            <p className="text-sm text-ink-400">Loading…</p>
-          ) : deviceGroups.length === 0 ? (
-            <p className="text-sm text-ink-400">No device sessions recorded yet.</p>
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {deviceGroups.map((group) => {
-                const isCurrent = group.ids.includes(currentSessionId);
-                const isActiveNow = isCurrent || (Date.now() - group.lastActiveMs < 20 * 60 * 1000);
-                const isRevoked = !group.anyActive;
-                return (
-                  <div key={group.key} className="flex items-center justify-between py-3 text-sm">
-                    <div className="min-w-0 pr-3">
-                      <div className="flex flex-wrap items-center gap-2 mb-1">
-                        <p className="font-semibold text-ink-800 truncate">{group.deviceLabel || 'Unknown device'}</p>
-                        {isCurrent && <span className="badge bg-ink-900 text-white border border-ink-900 shrink-0">This device</span>}
-                        {!isCurrent && isActiveNow && !isRevoked && <span className="badge bg-moss-50 text-moss-700 border border-moss-200 shrink-0">Active</span>}
-                        {!isCurrent && !isActiveNow && !isRevoked && <span className="badge bg-ink-50 text-ink-600 border border-ink-200 shrink-0">Inactive</span>}
-                      </div>
-                      <p className="text-[11px] text-ink-500 truncate">
-                        <span className="font-medium text-ink-700">{group.lastUserName || 'Unknown User'}</span> &middot; {isActiveNow ? 'Last seen: Just now' : `Last seen: ${formatDateTime(group.lastActiveMs)}`}
-                      </p>
-                    </div>
-                    {isRevoked ? (
-                      <span className="badge bg-rust-50 text-rust-600 border border-rust-200 shrink-0">Signed out</span>
-                    ) : (
-                      !isCurrent && <button className="btn-outline !px-3 !py-1.5 !min-h-0 text-xs shrink-0" onClick={() => handleRevokeGroup(group)}>Sign out</button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="card p-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
-          <div className="flex gap-2">
-            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
-              {archivedOpen ? 'Hide' : 'View archive'}
-            </button>
-          </div>
-        </div>
-        <p className="text-sm text-ink-500">Deleted products are archived here first, never destroyed immediately.</p>
-        {archivedOpen && (
-          archivedLoading ? <p className="text-sm text-ink-400">Loading…</p> : archived.length === 0 ? (
-            <p className="text-sm text-ink-400">Nothing archived.</p>
-          ) : (
-            <div className="divide-y divide-ink-100">
-              {archived.map(p => (
-                <div key={p.id} className="flex items-center justify-between py-2.5 text-sm">
-                  <span className="font-medium text-ink-700">{p.name}</span>
-                  <div className="flex gap-2">
-                    <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handleRestore(p.id)}>Restore</button>
-                    <button className="btn-danger !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => handlePermanentDelete(p.id)}>Delete forever</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )
-        )}
-      </div>
-
-      <div className="card p-5 space-y-2">
-        <h2 className="font-display text-base font-bold text-ink-800">Subscription</h2>
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
-          <Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>
-        </div>
-      </div>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Guide</h2>
-        <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
-      </div>
-
-      <div className="card space-y-3 border-rust-200 p-5">
-        <div>
-          <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
-          <p className="mt-1 text-sm text-ink-500">
-            {demo
-              ? 'Demo Reset clears all sample data stored in this browser.'
-              : "Business Reset permanently deletes ALL of this business's data and removes cashier staff accounts. The owner account and Pro subscription remain active."}
-          </p>
-        </div>
-        <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
-          {demo ? 'Demo Reset' : 'Business Reset'}
-        </button>
-      </div>
-
-      <div className="pt-6 pb-2 text-center space-y-3">
-        <div className="flex items-center justify-center gap-4 text-sm font-semibold">
-          <Link to="/privacy" className="text-ink-500 hover:text-ink-800 transition-colors">Privacy Policy</Link>
-          <span className="text-ink-300">&middot;</span>
-          <Link to="/terms" className="text-ink-500 hover:text-ink-800 transition-colors">Terms of Service</Link>
-        </div>
-        <p className="text-xs text-ink-400">FlowBiz ensures all data handling complies with Kenyan Data Protection Act.</p>
-      </div>
-
-      <ConfirmDialog
-        open={resetDialogOpen}
-        title={demo ? 'Reset the demo data?' : 'This will permanently delete all store data & staff'}
-        message={
-          demo ? (
-            <p>All sample data in this browser will be cleared and replaced with the original demo dataset.</p>
-          ) : (
-            <>
-              <p className="mb-2">All products, sales, debt, expenses, and cashier staff will be deleted. Your owner account and Pro plan will remain intact.</p>
-              <label className="label mt-3">Type <span className="font-mono font-bold">{RESET_CONFIRM_PHRASE}</span> to confirm</label>
-              <input className="input" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} autoFocus />
-            </>
-          )
-        }
-        confirmLabel={resetting ? 'Resetting…' : demo ? 'Reset demo data' : 'Delete everything'}
-        danger
-        onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
-        onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
-      />
-    </div>
-  );
-}
-
-function Row({ label, value, tone = '', mono = false }) {
-  return (
-    <div className="flex items-center justify-between py-1 text-sm">
-      <span className="text-ink-500">{label}</span>
-      <span className={`font-semibold ${mono ? 'font-mono text-xs' : ''} ${tone || 'text-ink-800'}`}>{value}</span>
-    </div>
-  );
-}
-````
-
-## File: src/contexts/AuthContext.jsx
-````javascript
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
-import {
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signOut as fbSignOut,
-  sendEmailVerification,
-  reload,
-} from 'firebase/auth';
-import {
-  doc,
-  onSnapshot,
-  deleteDoc,
-  updateDoc,
-  collection,
-  addDoc,
-  setDoc,
-  serverTimestamp,
-  query,
-  where,
-  getDocs,
-  getDoc,
-} from 'firebase/firestore';
-import { auth, db } from '../firebase';
-import { raceWithTimeout } from '../utils/offlineWrite';
-
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-const AuthContext = createContext(null);
-
-function getDeviceId() {
-  let id = localStorage.getItem('flowbiz_device_id');
-  if (!id) {
-    id = `dev_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-    localStorage.setItem('flowbiz_device_id', id);
-  }
-  return id;
-}
-function getSessionDocId(uid) {
-  return `${getDeviceId()}__${uid}`;
-}
-
-// src/contexts/AuthContext.jsx — replace guessDeviceLabel()
-function guessDeviceLabel() {
-  const ua = navigator.userAgent || '';
-  let os = 'Unknown device';
-  if (/Android/i.test(ua)) os = 'Android';
-  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
-  else if (/Windows/i.test(ua)) os = 'Windows';
-  else if (/Macintosh/i.test(ua)) os = 'Mac';
-  else if (/Linux/i.test(ua)) os = 'Linux';
-
-  let browser = '';
-  if (/Edg\//i.test(ua)) browser = 'Edge';
-  else if (/OPR\//i.test(ua)) browser = 'Opera';
-  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
-  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
-  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
-
-  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches;
-  if (isStandalone) return browser ? `${os} app (${browser})` : `${os} app`;
-  return browser ? `${browser} on ${os}` : os;
-}
-
-export function AuthProvider({ children }) {
-  const [firebaseUser, setFirebaseUser] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [subscription, setSubscription] = useState({ plan: 'free', status: 'active' });
-  const [loading, setLoading] = useState(true);
-  const [authError, setAuthError] = useState(null);
-  const [accountRemoved, setAccountRemoved] = useState(false);
-  const [sessionRevoked, setSessionRevoked] = useState(false);
-  const [emailVerified, setEmailVerified] = useState(false);
-
-  const profileUnsubRef = useRef(null);
-  const sessionUnsubRef = useRef(null);
-  const businessUnsubRef = useRef(null);
-  const sessionRegisteredRef = useRef(null); // `${uid}:${businessId}` already registered this auth session
-
-  const stopListeners = useCallback(() => {
-    profileUnsubRef.current?.();
-    profileUnsubRef.current = null;
-    sessionUnsubRef.current?.();
-    sessionUnsubRef.current = null;
-    businessUnsubRef.current?.();
-    businessUnsubRef.current = null;
-    sessionRegisteredRef.current = null;
-  }, []);
-
-const registerSession = useCallback(async (uid, businessId, userName) => {
-  const key = `${uid}:${businessId}`;
-  if (sessionRegisteredRef.current === key) return;
-  sessionRegisteredRef.current = key;
-
-  let sessionId = getSessionDocId(uid);
-  let ref = doc(db, 'sessions', sessionId);
-  let currentSnap = await getDoc(ref);
-
-  // A revoked session can never legally un-revoke itself (that's the
-  // security rule working as intended — self-updates can't touch
-  // `revoked`). A fresh sign-in is a legitimate new session, so start a
-  // new record instead of endlessly retrying a write the rules forbid.
-  if (currentSnap.exists() && currentSnap.data().revoked === true) {
-    sessionId = `${sessionId}__${Date.now().toString(36)}`;
-    ref = doc(db, 'sessions', sessionId);
-    currentSnap = await getDoc(ref);
-  }
-
-  const baseFields = {
-    uid, businessId,
-    lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
-    deviceLabel: guessDeviceLabel(),
-    userAgent: navigator.userAgent,
-    lastActiveAt: serverTimestamp(),
-  };
-
-  if (!currentSnap.exists()) {
-    await setDoc(ref, { ...baseFields, createdAt: serverTimestamp(), revoked: false });
-  } else {
-    // Never include `revoked` here — self-updates aren't allowed to
-    // touch it, and it's already false if we got this far.
-    await updateDoc(ref, baseFields).catch(() => {});
-  }
-
-  activeSessionIdRef.current = sessionId;
-  setActiveSessionId(sessionId);
-
-  sessionUnsubRef.current?.();
-  sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
-    if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
-      setSessionRevoked(true);
-      fbSignOut(auth);
-    }
-  });
-}, []);
-
-  // Background heartbeat to keep the "last seen" time accurate for active devices
-useEffect(() => {
-    if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
-        updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
-      }
-    }, 15 * 60 * 1000); // 15 mins
-    return () => clearInterval(interval);
-  }, [firebaseUser, profile?.businessId, sessionRevoked]);
-
-  // FIX: Used a named function 'doLoad' to resolve the recursive ESLint error
-const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
-  stopListeners();
-  setAuthError(null);
-  setAccountRemoved(false);
-  setSessionRevoked(false);
-
-  if (!user) {
-    setProfile(null);
-    setSubscription({ plan: 'free', status: 'active' });
-    setEmailVerified(false);
-    setLoading(false);
-    return;
-  }
-
-  setEmailVerified(!!user.emailVerified);
-  setLoading(true);
-
-  // FIX: force-refresh the ID token before attaching the Firestore
-  // listener. Right after sign-in / verification / password reset, the
-  // Firestore SDK's connection can still be using a stale token for a
-  // moment — this closes that gap instead of just hoping it resolves.
-  user.getIdToken(true).catch(() => {}).then(() => {
-    const userRef = doc(db, 'users', user.uid);
-
-    profileUnsubRef.current = onSnapshot(
-      userRef,
-      (snap) => {
-if (!snap.exists()) {
-  (async () => {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
-      if (auth.currentUser?.uid !== user.uid) return;
-      try {
-        const recheck = await getDoc(userRef);
-        if (recheck.exists()) return; // listener will pick it up
-      } catch (err) {
-        if (attempt === 3) {
-          setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
-          setProfile(null);
-          setLoading(false);
-          return;
-        }
-      }
-    }
-    setAccountRemoved(true);
-    setProfile(null);
-    setLoading(false);
-  })();
-  return;
-}
-        setAccountRemoved(false);
-        const data = { uid: user.uid, ...snap.data() };
-        setProfile(data);
-        setLoading(false);
-
-if (data.businessId && data.active !== false) {
-  registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
-          businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
-            if (bizSnap.exists()) {
-              setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
-            }
-          });
-        }
-      },
-      (err) => {
-        // FIX: more retries, longer backoff — gives slower connections
-        // (mobile networks) a real chance to catch up instead of
-        // dumping the user on an error screen after ~4s.
-        if (err.code === 'permission-denied' && retryCount < 6) {
-          const delay = Math.min(1000 * 2 ** retryCount, 8000);
-          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying (attempt ${retryCount + 1})`);
-          setTimeout(() => {
-            if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
-          }, delay);
-          return;
-        }
-        console.error(`[FlowBiz] onSnapshot(users/${user.uid}) failed:`, err.code || err.name, err.message);
-        setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
-        setProfile(null);
-        setLoading(false);
-      }
-    );
-  });
-}, [registerSession, stopListeners]);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      setFirebaseUser(user);
-      loadProfile(user);
-    });
-    return () => { unsub(); stopListeners(); };
-  }, [loadProfile, stopListeners]);
-
-  const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
-  const logout = () => { stopListeners(); return fbSignOut(auth); };
-  
-const resendVerificationEmail = async () => {
-  if (!auth.currentUser) throw new Error('Not signed in.');
-  const idToken = await auth.currentUser.getIdToken(true);
-  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-  });
-  if (!response.ok) {
-    let message = 'Could not send the verification email.';
-    try { const body = await response.json(); message = body?.error || message; } catch {}
-    throw new Error(message);
-  }
-};
-
-  const refreshEmailVerification = useCallback(async () => {
-    if (!auth.currentUser) return false;
-    try {
-      await reload(auth.currentUser);
-    } catch (err) {
-      console.error('[FlowBiz] refreshEmailVerification: reload() failed:', err.code || err.name, err.message);
-      return auth.currentUser?.emailVerified ?? false;
-    }
-    const verified = !!auth.currentUser.emailVerified;
-    setEmailVerified(verified);
-    return verified;
-  }, []);
-
-  const createStaffInvite = async ({ displayName, role = 'cashier' }) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can invite staff.');
-    if (!['owner', 'cashier'].includes(role)) throw new Error('Invalid role.');
-    const trimmed = (displayName || '').trim();
-    if (!trimmed) throw new Error('Enter a name.');
-   const write = addDoc(collection(db, 'staffInvites'), {
-     businessId: profile.businessId,
-     displayName: trimmed,
-     role,
-     createdBy: profile.uid,
-     createdByName: profile.displayName,
-     createdAt: serverTimestamp(),
-     claimed: false,
-     linkedUid: null,
-   });
-   const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
-   if (error) throw error;
-   if (queuedOffline) return { id: null, queuedOffline: true };
-   return { id: value.id };
-  };
-
-  const cancelStaffInvite = async (inviteId) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can cancel an invite.');
-    await deleteDoc(doc(db, 'staffInvites', inviteId));
-  };
-
-  const revokeSessionsForStaffMember = useCallback(async (uid) => {
-    if (!profile?.businessId) return;
-    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', uid), where('businessId', '==', profile.businessId)));
-    await Promise.all(
-      snap.docs.filter((d) => d.data().revoked !== true).map((d) => updateDoc(doc(db, 'sessions', d.id), { revoked: true }))
-    );
-  }, [profile]);
-
-  const removeStaffAccount = async (uid) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can remove staff accounts.');
-    if (uid === profile.uid) throw new Error("You can't remove your own account here.");
-    if (!auth.currentUser) throw new Error('Your session has expired. Please sign in again.');
-
-    const idToken = await auth.currentUser.getIdToken(true);
-    await revokeSessionsForStaffMember(uid);
-
-    let response;
-    try {
-      response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-        body: JSON.stringify({ targetUid: uid }),
-      });
-    } catch (networkErr) {
-      throw new Error(`Failed to reach the API server. Check your connection.`);
-    }
-
-    let result = null;
-    try { result = await response.json(); } catch { }
-    if (!response.ok) throw new Error(result?.error || result?.message || `Failed to delete the staff account (${response.status}).`);
-
-    let retries = 3;
-    while (retries > 0) {
-      try {
-        await deleteDoc(doc(db, 'users', uid));
-        break;
-      } catch (e) {
-        retries--;
-        if (retries === 0) throw new Error("Staff Auth removed, but profile UI deletion timed out. Refresh the page.");
-        await new Promise(r => setTimeout(r, 1000));
-      }
-    }
-  };
-
-  const toggleMemberActive = async (uid, active) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can do this.');
-    await updateDoc(doc(db, 'users', uid), { active });
-    if (active === false) await revokeSessionsForStaffMember(uid);
-  };
-
-  const revokeSession = async (sessionId) => {
-    await updateDoc(doc(db, 'sessions', sessionId), { revoked: true });
-  };
-
-  const listMySessions = async () => {
-    if (!profile) return [];
-    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', profile.uid)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  };
-
-  const listBusinessSessions = async () => {
-    if (!profile?.businessId) return [];
-    const snap = await getDocs(query(collection(db, 'sessions'), where('businessId', '==', profile.businessId)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  };
-
-  const isOwner = profile?.role === 'owner';
-  
-  // FIX: Explicitly convert Timestamp to milliseconds to satisfy strict linters
-  const expiresMs = subscription?.expiresAt?.toMillis 
-    ? subscription.expiresAt.toMillis() 
-    : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
-
-  const isPro = subscription?.plan === 'pro' && 
-                subscription?.status === 'active' &&
-                (!subscription.expiresAt || expiresMs > Date.now());
-
-  return (
-    <AuthContext.Provider
-      value={{
-        firebaseUser, profile, subscription, isPro, loading, authError, accountRemoved, sessionRevoked,
-        businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
-        isActive: profile?.active !== false, emailVerified,
-        login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
-toggleMemberActive, revokeSession, listMySessions, listBusinessSessions,
-        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),        reloadProfile: async () => loadProfile(auth.currentUser),
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
-  return ctx;
-}
-````
-
 ## File: src/router/AppRouter.jsx
 ````javascript
 import { lazy, Suspense, useEffect } from 'react';
@@ -17039,19 +17580,18 @@ export default function AppRouter() {
 
 ## File: src/pages/AuthAction.jsx
 ````javascript
-// src/pages/AuthAction.jsx
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import {
   applyActionCode,
   verifyPasswordResetCode,
   confirmPasswordReset,
-  reload,
   checkActionCode,
 } from 'firebase/auth';
 import toast from 'react-hot-toast';
 import { auth } from '../firebase';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
@@ -17201,41 +17741,42 @@ function Shell({ children }) {
 
 
 function VerifyEmailPanel({ mode, oobCode }) {
-  const [status, setStatus] = useState('ready'); // ready -> working -> success | error
+  const [status, setStatus] = useState('ready');
   const [message, setMessage] = useState('');
   const [resending, setResending] = useState(false);
+  const [pendingRedirect, setPendingRedirect] = useState(false);
 
   const navigate = useNavigate();
+  const { refreshEmailVerification, loading: authLoading, firebaseUser, isAdmin } = useAuth();
+
+  // Verification itself finishes fast, but AuthContext's own profile-loading
+  // chain is separate and can still be catching up at that exact moment —
+  // that race is what was landing people on the landing page and sticking
+  // there. So instead of navigating the instant verification succeeds, we
+  // wait until AuthContext is actually ready, then go straight to the
+  // correct screen ourselves — never touching RootRoute's fallback at all.
+  useEffect(() => {
+    if (!pendingRedirect || authLoading) return;
+    navigate(firebaseUser ? (isAdmin ? '/dashboard' : '/counter') : '/login', { replace: true });
+  }, [pendingRedirect, authLoading, firebaseUser, isAdmin, navigate]);
 
   const handleRequestNewEmail = async () => {
     if (!auth.currentUser) {
       navigate('/login', { replace: true });
       return;
     }
-
     setResending(true);
-
     try {
       const idToken = await auth.currentUser.getIdToken(true);
       const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
       });
-
       if (!response.ok) throw new Error('request-failed');
-
-      toast.success(
-        'A new verification email has been sent — check your inbox and spam/junk folder.'
-      );
+      toast.success('A new verification email has been sent — check your inbox and spam/junk folder.');
     } catch (err) {
-      console.error(
-        '[FlowBiz] AuthAction resend failed:',
-        err.message
-      );
-
-      toast.error(
-        "Couldn't send a new verification email right now. Please try again shortly."
-      );
+      console.error('[FlowBiz] AuthAction resend failed:', err.message);
+      toast.error("Couldn't send a new verification email right now. Please try again shortly.");
     } finally {
       setResending(false);
     }
@@ -17244,9 +17785,7 @@ function VerifyEmailPanel({ mode, oobCode }) {
   const handleConfirm = async () => {
     if (!oobCode || mode !== 'verifyEmail') {
       setStatus('error');
-      setMessage(
-        "This verification link isn't complete or may have been altered. Please request a new one below."
-      );
+      setMessage("This verification link isn't complete or may have been altered. Please request a new one below.");
       return;
     }
 
@@ -17256,36 +17795,21 @@ function VerifyEmailPanel({ mode, oobCode }) {
       await applyActionCode(auth, oobCode);
 
       if (auth.currentUser) {
-        try {
-          // 1. Reload user and force token refresh to propagate verified status instantly
-          await reload(auth.currentUser);
-          await auth.currentUser.getIdToken(true);
-          
-          // 2. Teleport straight into the dashboard cleanly
-          window.location.assign('/'); 
-          return;
-        } catch {
-          // Non-fatal fallback
-        }
-      } else {
-        window.location.assign('/login');
+        await refreshEmailVerification();
+        setPendingRedirect(true);
         return;
       }
 
+      navigate('/login', { replace: true });
+      return;
     } catch (err) {
       const code = err.code || '';
 
-      // If already verified or expired-code race condition, check currentUser status directly
       if ((code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') && auth.currentUser) {
-        try {
-          await reload(auth.currentUser);
-          await auth.currentUser.getIdToken(true);
-          if (auth.currentUser.emailVerified) {
-             window.location.assign('/'); 
-             return;
-          }
-        } catch {
-          // Fall through to error below
+        const verified = await refreshEmailVerification();
+        if (verified) {
+          setPendingRedirect(true);
+          return;
         }
       }
 
@@ -17304,64 +17828,35 @@ function VerifyEmailPanel({ mode, oobCode }) {
     <Shell>
       {status === 'ready' && (
         <>
-          <h1 className="font-display text-lg font-bold text-ink-900">
-            Verify your email
-          </h1>
-
-          <p className="text-sm text-ink-500">
-            Click below to confirm your email address and activate your FlowBiz account.
-          </p>
-
-          <button className="btn-primary w-full" onClick={handleConfirm}>
-            Verify my email
-          </button>
+          <h1 className="font-display text-lg font-bold text-ink-900">Verify your email 1234</h1>
+          <p className="text-sm text-ink-500">Click below to confirm your email address and activate your FlowBiz account.</p>
+          <button className="btn-primary w-full" onClick={handleConfirm}>Verify my email</button>
         </>
       )}
 
       {status === 'working' && (
         <>
           <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
-
-          <p className="text-sm text-ink-500">
-            Confirming…
-          </p>
+          <p className="text-sm text-ink-500">Confirming…</p>
         </>
       )}
 
       {status === 'error' && (
         <>
-          <h1 className="font-display text-lg font-bold text-ink-900">
-            This verification link isn't valid
-          </h1>
-
-          <p className="text-sm text-ink-500">
-            {message}
-          </p>
-
+          <h1 className="font-display text-lg font-bold text-ink-900">This verification link isn't valid</h1>
+          <p className="text-sm text-ink-500">{message}</p>
           <div className="flex flex-col gap-2">
-            <button
-              className="btn-primary w-full"
-              onClick={handleRequestNewEmail}
-              disabled={resending}
-            >
-              {resending
-                ? 'Sending…'
-                : 'Request a new verification email'}
+            <button className="btn-primary w-full" onClick={handleRequestNewEmail} disabled={resending}>
+              {resending ? 'Sending…' : 'Request a new verification email'}
             </button>
-
-            <Link
-              to="/login"
-              className="btn-outline w-full"
-            >
-              Go to sign in
-            </Link>
+            <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
           </div>
         </>
       )}
     </Shell>
   );
 }
-
+  
 function ResetPasswordPanel({ oobCode }) {
   const [status, setStatus] = useState('ready'); // ready -> checking -> form -> success | error
   const [message, setMessage] = useState('');

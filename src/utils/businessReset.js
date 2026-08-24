@@ -35,68 +35,68 @@ async function deleteTenantCollection(name, businessId, chunkSize = 400) {
 export async function resetBusinessData(businessId, ownerUid) {
   if (!businessId) throw new Error('resetBusinessData() called with no businessId');
   const results = {};
+  const failures = [];
 
-  // 1. Delete all operational records across all store collections
   for (const name of RESET_COLLECTIONS) {
     try {
       results[name] = await deleteTenantCollection(name, businessId);
     } catch (err) {
-      console.warn(`[Reset] Collection ${name} cleanup skipped:`, err.message);
+      console.error(`[Reset] Collection ${name} cleanup FAILED:`, err);
       results[name] = 0;
+      failures.push(`${name} (${err.message || 'unknown error'})`);
     }
   }
 
-  // 2. MODEL 2: Delete Cashier Accounts completely (Firestore + Auth API)
   try {
     const cashiersSnap = await getDocs(query(
-      collection(db, 'users'),
-      where('businessId', '==', businessId),
-      where('role', '==', 'cashier')
+      collection(db, 'users'), where('businessId', '==', businessId), where('role', '==', 'cashier')
     ));
-
     const idToken = auth.currentUser ? await auth.currentUser.getIdToken(true) : null;
 
     for (const cashierDoc of cashiersSnap.docs) {
       const cashierUid = cashierDoc.id;
-
-      // Delete from Firebase Auth via Cloudflare Worker API
       if (idToken) {
         try {
-          await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
+          const res = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
             body: JSON.stringify({ targetUid: cashierUid }),
           });
+          if (!res.ok) failures.push(`cashier auth delete for ${cashierUid} (status ${res.status})`);
         } catch (authErr) {
-          console.warn(`[Reset] Cashier auth delete error for ${cashierUid}:`, authErr);
+          failures.push(`cashier auth delete for ${cashierUid} (${authErr.message})`);
         }
       }
-
-      // Delete from Firestore users collection
-      const batch = writeBatch(db);
-      batch.delete(doc(db, 'users', cashierUid));
-      await batch.commit();
+      try {
+        const batch = writeBatch(db);
+        batch.delete(doc(db, 'users', cashierUid));
+        await batch.commit();
+      } catch (docErr) {
+        failures.push(`cashier profile delete for ${cashierUid} (${docErr.message})`);
+      }
     }
   } catch (cashierErr) {
-    console.warn('[Reset] Cashier cleanup error:', cashierErr);
+    failures.push(`cashier cleanup (${cashierErr.message})`);
   }
 
-  // 3. Reset business settings cleanly to defaults without deleting the doc
-await setDoc(doc(db, 'businessSettings', businessId), {
-  shopName: 'FlowBiz Store',
-  phone: '',
-  email: '',
-  address: '',
-  logoUrl: '',
-  cashierCanRecordExpenses: true,
-  categories: DEFAULT_CATEGORIES,
-  receiptPaperWidth: 80,
-  resetAt: new Date(),
-  resetBy: ownerUid || null,
-}, { merge: true });
+  try {
+    await setDoc(doc(db, 'businessSettings', businessId), {
+      shopName: 'FlowBiz Store', phone: '', email: '', address: '', logoUrl: '',
+      cashierCanRecordExpenses: true, categories: DEFAULT_CATEGORIES, receiptPaperWidth: 80,
+      resetAt: new Date(), resetBy: ownerUid || null,
+    }, { merge: true });
+    results.businessSettings = 1;
+  } catch (settingsErr) {
+    failures.push(`businessSettings reset (${settingsErr.message})`);
+  }
 
-  results.businessSettings = 1;
   results.performedBy = ownerUid || null;
+
+  if (failures.length > 0) {
+    const err = new Error(`Reset finished, but some data may not have been fully cleared: ${failures.join('; ')}`);
+    err.partialResults = results;
+    throw err;
+  }
 
   return results;
 }
