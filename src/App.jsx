@@ -1,7 +1,9 @@
+// src/App.jsx
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './contexts/AuthContext';
 import AppRouter from './router/AppRouter';
 import ErrorBoundary from './components/common/ErrorBoundary';
+import PwaInstallBanner from './components/common/PwaInstallBanner';
 
 function App() {
   return (
@@ -17,6 +19,8 @@ function App() {
           }}
         />
         <AppRouter />
+        {/* Shows the install popup automatically for visitors on phone or desktop */}
+        <PwaInstallBanner />
       </AuthProvider>
     </ErrorBoundary>
   );

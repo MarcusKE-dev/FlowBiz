@@ -1,0 +1,22 @@
+User-agent: *
+Allow: /
+Allow: /privacy
+Allow: /terms
+Allow: /setup
+Allow: /login
+
+Disallow: /dashboard
+Disallow: /counter
+Disallow: /customers
+Disallow: /expenses
+Disallow: /purchases
+Disallow: /products
+Disallow: /suppliers
+Disallow: /stock-take
+Disallow: /reports
+Disallow: /close-day
+Disallow: /users
+Disallow: /settings
+Disallow: /r/
+
+Sitemap: https://flowbiz.co.ke/sitemap.xml
