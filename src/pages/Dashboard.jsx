@@ -44,10 +44,10 @@ export default function Dashboard() {
 
   const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
   const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId) : null, [businessId]); // Removed orderBy('name')
   const { data: products } = useFirestoreCollection(productsQuery);
   const { data: customers } = useFirestoreCollection(customersQuery);
-const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQuery);
+  const { data: rawSuppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQuery);
   const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
   const [activeProduct, setActiveProduct] = useState(null);
   const [completedSale, setCompletedSale] = useState(null);
@@ -63,6 +63,11 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
     try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
     catch { return false; }
   });
+
+  // Alphabetically sort suppliers in memory
+  const suppliers = useMemo(() => {
+    return [...rawSuppliers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [rawSuppliers]);
 
   const togglePrivacyMode = () => {
     setPrivacyMode((prev) => {
@@ -95,29 +100,28 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
     (repayments || []).forEach((r) => {
       list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
     });
-      (creditSales || []).forEach((cs) => {
-     if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-     list.push({
-       id: `credit-${cs.id}`, type: 'Credit Sale',
-       title: `${cs.quantity} × ${cs.productName}`,
-       subtitle: `${cs.customerName || 'Customer'} · Sold by ${cs.soldByName || 'Staff'}`,
-       amount: cs.totalAmount, method: 'Credit', timestamp: cs.soldAt, isPositive: false,
-     });
-   });
-   return list.sort((a, b) => {
+    (creditSales || []).forEach((cs) => {
+      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+      list.push({
+        id: `credit-${cs.id}`, type: 'Credit Sale',
+        title: `${cs.quantity} × ${cs.productName}`,
+        subtitle: `${cs.customerName || 'Customer'} · Sold by ${cs.soldByName || 'Staff'}`,
+        amount: cs.totalAmount, method: 'Credit', timestamp: cs.soldAt, isPositive: false,
+      });
+    });
+    return list.sort((a, b) => {
       const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
       const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
       return bTime - aTime;
     }).slice(0, 8);
-  }, [sales, repayments]);
+  }, [sales, repayments, creditSales]);
 
   const handleCreateCustomer = async ({ name, phone }) => {
     const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
     return { id: ref.id, name, phone };
   };
 
-  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
-const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
+  const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
     const productRef = doc(db, 'products', product.id);
     const saleRef = doc(collection(db, 'sales'));
     const saleData = withBusiness({
@@ -157,7 +161,7 @@ const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod,
     return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
   };
 
-const handleProductSave = async (data) => {
+  const handleProductSave = async (data) => {
     try {
       if (editProduct) {
         const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
@@ -170,21 +174,17 @@ const handleProductSave = async (data) => {
     finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
   };
 
-  // FIX (stuck "Saving…" bug — same pattern as Purchases.jsx/Products.jsx):
-  // throw on error instead of returning, so SupplierFormModal's
-  // catch/finally can reset its "Saving…" button instead of leaving the
-  // form frozen after a failed save.
-const handleSupplierSave = async (supplierData) => {
-  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-  if (!queuedOffline) {
-    setNewSupplierId(ref.id);
-    await refetchSuppliers();
-  }
-  setSupplierModal(false);
-  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-};
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    if (!queuedOffline) {
+      setNewSupplierId(ref.id);
+      await refetchSuppliers();
+    }
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
 
   const handleScanDetected = (code) => {
     setScannerOpen(false);
@@ -217,7 +217,6 @@ const handleSupplierSave = async (supplierData) => {
         <div>
           <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
           <div className="flex items-center gap-2 mt-1">
-
             <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
           </div>
         </div>
@@ -242,7 +241,7 @@ const handleSupplierSave = async (supplierData) => {
           )}
           <div className="grid gap-3 sm:grid-cols-3">
             <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
-<StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
+            <StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
             <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
           </div>
         </>
@@ -301,7 +300,7 @@ const handleSupplierSave = async (supplierData) => {
         </div>
       </Modal>
 
-<ProductFormModal
+      <ProductFormModal
         open={prodModal}
         onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
         onSave={handleProductSave}

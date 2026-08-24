@@ -24,10 +24,12 @@ const empty = { supplierId:'', productId:'', quantity:'', costPricePerUnit:'', p
 
 export default function Purchases() {
   const { profile, businessId } = useAuth();
-  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId) : null, [businessId]); // Removed orderBy('name')
   const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt','desc'), limit(50)) : null, [businessId]);
+  
   const { data: products }  = useFirestoreCollection(productsQ);
-const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
+  const { data: rawSuppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
   const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
   const [form, setForm] = useState(empty);
   const [busy, setBusy] = useState(false);
@@ -38,14 +40,11 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
   const [scannerOpen, setScannerOpen] = useState(false);
   const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
 
-  // FIX (supplier not showing as selected after creating it): a supplier
-  // created via "+ Add new supplier" was written to Firestore correctly
-  // and would eventually appear in the dropdown's option list once the
-  // realtime listener delivered it, but nothing ever selected it in
-  // `form.supplierId` — the newly created supplier looked like it hadn't
-  // been added at all unless you manually reopened the dropdown and
-  // scrolled to find it. This mirrors the same wiring ProductFormModal
-  // already does for its own supplier field.
+  // Sort suppliers in memory to resolve the missing index issue
+  const suppliers = useMemo(() => {
+    return [...rawSuppliers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [rawSuppliers]);
+
   useEffect(() => {
     if (newSupplierId) setForm(p => ({ ...p, supplierId: newSupplierId }));
   }, [newSupplierId]);
@@ -73,7 +72,7 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
     if (!form.productId||!form.supplierId||!form.quantity||!form.costPricePerUnit) { toast.error('Fill in all fields.'); return; }
     if (form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
     setBusy(true);
-try {
+    try {
       const qty   = Number(form.quantity);
       const cost  = Number(form.costPricePerUnit);
       const total = qty * cost;
@@ -88,9 +87,9 @@ try {
         quantity:qty,
         costPricePerUnit:cost,
         totalCost:total,
-       purchasedBy:profile.uid, 
-       purchasedByName:profile.displayName, 
-       purchasedAt:new Date(),
+        purchasedBy:profile.uid, 
+        purchasedByName:profile.displayName, 
+        purchasedAt:new Date(),
         paymentStatus:form.paymentStatus==='paid'?'paid':'pending_supplier_credit',
         paymentMethod:form.paymentStatus==='paid'?form.paymentMethod:null,
         mpesaCode:form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
@@ -107,22 +106,17 @@ try {
     } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setBusy(false); }
   };
 
-  // FIX (stuck "Saving…" bug): this used to `return` after showing the
-  // error toast, which meant SupplierFormModal's own try/catch never
-  // fired and its "Saving…" button never reset — the form just looked
-  // frozen after a failed save, with no obvious way to try again.
-  // Throwing here lets SupplierFormModal's catch/finally reset it.
- const handleSupplierSave = async (supplierData) => {
-  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-  if (!queuedOffline) {
-    setNewSupplierId(ref.id);
-    await refetchSuppliers();
-  }
-  setSupplierModal(false);
-  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-};
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    if (!queuedOffline) {
+      setNewSupplierId(ref.id);
+      await refetchSuppliers();
+    }
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
@@ -171,18 +165,18 @@ try {
       <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
       <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
 
-<ProductFormModal
+      <ProductFormModal
         open={productModal}
         onClose={()=>{setProductModal(false);setPrefillBarcode(null);}}
-onSave={async (data) => {
-  try {
-    const { id, queuedOffline } = await createProduct(data, businessId);
-    setForm(p=>({...p, productId: id}));
-    setProductModal(false);
-    setPrefillBarcode(null);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
-  } catch (err) { toast.error(friendlyErrorMessage(err)); }
-}}
+        onSave={async (data) => {
+          try {
+            const { id, queuedOffline } = await createProduct(data, businessId);
+            setForm(p=>({...p, productId: id}));
+            setProductModal(false);
+            setPrefillBarcode(null);
+            toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+          } catch (err) { toast.error(friendlyErrorMessage(err)); }
+        }}
         suppliers={suppliers}
         prefillBarcode={prefillBarcode}
         onAddSupplier={() => setSupplierModal(true)}
@@ -196,7 +190,7 @@ onSave={async (data) => {
           {purchases.map(p=>(
             <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
               <div><p className="font-medium text-ink-700">{p.quantity} × {p.productName}</p><p className="text-xs text-ink-400">{p.supplierName} · {formatDateTime(p.purchasedAt)}</p></div>
-              <div className="text-right"><p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p><span className={`badge ${p.paymentStatus==='paid'?'bg-moss-100 text-moss-700':'bg-rust-100 text-rust-700'}`}>{p.paymentStatus==='paid'?'Paid':'On credit'}</span></div>
+              <div className="text-right"><p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p><span className={`badge ${p.paymentStatus==='paid'?'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>{p.paymentStatus==='paid'?'Paid':'On credit'}</span></div>
             </div>
           ))}
         </div>

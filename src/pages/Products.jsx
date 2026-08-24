@@ -28,9 +28,9 @@ export default function Products() {
     () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
     [businessId]
   );
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId) : null, [businessId]); // Removed orderBy('name')
   const { data: products, loading, error } = useFirestoreCollection(productsQ);
-const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
+  const { data: rawSuppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(false);
   const [supplierModal, setSupplierModal] = useState(false);
@@ -42,6 +42,10 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
   const [scanFoundProduct, setScanFoundProduct] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Alphabetically sort suppliers in memory
+  const suppliers = useMemo(() => {
+    return [...rawSuppliers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [rawSuppliers]);
 
   const filtered = products.filter(
     (p) =>
@@ -54,7 +58,7 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
 
   const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
 
-const handleSave = async (data) => {
+  const handleSave = async (data) => {
     try {
       if (editing) {
         const { queuedOffline } = await updateProduct(editing.id, data, editing.barcode, businessId);
@@ -66,25 +70,24 @@ const handleSave = async (data) => {
       closeFormModal();
     } catch (err) { toast.error(friendlyErrorMessage(err)); }
   };
-  // FIX (stuck "Saving…" bug — same pattern as Purchases.jsx): throw on
-  // error instead of returning, so SupplierFormModal's catch/finally can
-  // reset its "Saving…" button instead of leaving the form frozen.
-const handleSupplierSave = async (supplierData) => {
-  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-  if (!queuedOffline) {
-    setNewSupplierId(ref.id);
-    await refetchSuppliers();
-  }
-  setSupplierModal(false);
-  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-};
-const handleDel = async () => {
+
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    if (!queuedOffline) {
+      setNewSupplierId(ref.id);
+      await refetchSuppliers();
+    }
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const handleDel = async () => {
     setDeleting(true);
     const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id, pendingDel.barcode, businessId), 4000);
     setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (error) { toast.error(friendlyErrorMessage(err)); return; }
     toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
     setPendingDel(null);
   };
@@ -128,13 +131,13 @@ const handleDel = async () => {
                     <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
                   </div>
                 </div>
-              <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
-                <div className="space-x-3">
-                  <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
-                  <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
+                <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
+                  <div className="space-x-3">
+                    <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
+                    <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
+                  </div>
+                  <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
                 </div>
-                <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
-              </div>
               </div>
             ))}
           </div>
@@ -180,7 +183,9 @@ const handleDel = async () => {
         </div>
       </Modal>
 
-<ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-<ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    </div>
+      <ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+      <ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    
+    </div>
   );
 }

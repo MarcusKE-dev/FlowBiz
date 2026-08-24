@@ -29,10 +29,6 @@ import { formatDateTime } from '../utils/dateRanges';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
 
-// Builds one line item for the cart doc from a cart row. Rounds every
-// money figure through roundMoney() so summing several lines (and their
-// quantity × price multiplication) never leaves floating-point noise in
-// what gets shown or written to Firestore.
 function toLineItem(cartRow) {
   const quantity = Number(cartRow.quantity) || 0;
   const unitPrice = Number(cartRow.unitPrice) || 0;
@@ -66,20 +62,16 @@ export default function Counter() {
   const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
   const salesQ     = useMemo(() => businessId ? tenantQuery('sales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
   const creditSalesQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId) : null, [businessId]); // Removed orderBy('name')
 
   const { data: products,  loading: prodLoading }  = useFirestoreCollection(productsQ);
   const { data: customers }                         = useFirestoreCollection(customersQ);
   const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
   const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
-const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
+  const { data: rawSuppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
+  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
 
   const [search, setSearch]           = useState('');
-
-  // Cart: client-side only ("current sale") state — nothing is written to
-  // Firestore until checkout is confirmed in CartCheckoutModal. One row
-  // per distinct product; scanning/adding the same product again bumps
-  // its quantity instead of creating a duplicate row.
   const [cart, setCart]               = useState([]);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
 
@@ -92,6 +84,11 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
   const [scannerOpen, setScannerOpen] = useState(false);
   const [notFoundCode, setNotFoundCode] = useState(null);
   const [voiding, setVoiding] = useState(false);
+
+  // Alphabetically sort suppliers in memory
+  const suppliers = useMemo(() => {
+    return [...rawSuppliers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [rawSuppliers]);
 
   useEffect(() => {
     if (location.state?.autoScan && session && !isClosed) {
@@ -106,9 +103,6 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
     (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
   );
 
-  // Live productId -> quantity map, used to badge cards already in the
-  // cart (see ProductGrid) so tapping/scanning a product gives lasting
-  // visual confirmation, not just a toast that disappears.
   const cartQuantities = useMemo(
     () => Object.fromEntries(cart.map((item) => [item.productId, item.quantity])),
     [cart]
@@ -116,7 +110,7 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
 
   const mergedSales = useMemo(() => {
     const list = [];
-    sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
+    sales.forEach(s => { list.push({ ...s, isVoided: false, paymentType: s.paymentMethod || 'Cash' }); });
     creditSales.forEach(cs => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
     return list.sort((a, b) => {
       const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
@@ -124,8 +118,6 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
       return bTime - aTime;
     }).slice(0, 100);
   }, [sales, creditSales]);
-
-  // ── Cart operations ──────────────────────────────────────────────────
 
   const addToCart = (product, qty = 1) => {
     if (!product) return;
@@ -165,7 +157,7 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
       toast.error(`Only ${product.stock} of ${product.name} in stock.`);
       qty = product.stock;
     }
-    if (qty < 1) return; // nothing in stock — leave the row as-is rather than a 0/invalid quantity
+    if (qty < 1) return;
     setCart(prev => prev.map(item => item.productId === productId ? { ...item, quantity: qty } : item));
   };
 
@@ -183,9 +175,6 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
     [cart]
   );
 
-  // Re-validates the cart against the LIVE product list right before
-  // building the write — stock may have moved since items were added
-  // (another cashier selling the same product, a stock take, etc).
   function validateCartAgainstStock() {
     for (const row of cart) {
       const product = products.find(p => p.id === row.productId);
@@ -196,14 +185,6 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
     }
   }
 
-  // FIX: same writeBatch + increment() pattern the app already uses
-  // everywhere else for offline-first sales (see CR-8 in the README) —
-  // one sale doc now carries every product in the cart as `items`, with
-  // one stock decrement per line item in the same batch. Aggregate
-  // fields (totalAmount, quantity, productName, costOfGoodsSold, profit)
-  // are still written at the top level so every existing consumer that
-  // only reads those fields — Dashboard's activity feed, this page's own
-  // sales log, useFinancials — keeps working unchanged.
   const handleCartSale = ({ paymentMethod, mpesaCode }) => {
     validateCartAgainstStock();
     const lineItems = cart.map(toLineItem);
@@ -220,9 +201,6 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
       totalAmount,
       costOfGoodsSold,
       profit,
-      // Legacy single-product compatibility: only meaningful when the
-      // cart has exactly one distinct product, mirroring exactly what
-      // the previous single-item sale flow wrote.
       ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
       paymentMethod, mpesaCode: mpesaCode || null,
       soldBy: profile.uid, soldByName: profile.displayName,
@@ -279,11 +257,8 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
       setCompletedSale(record);
       clearCart();
     }
-    // record === null → cashier backed out of checkout; cart is left intact.
   };
 
-  // Voiding restores stock for every line item on the sale (falls back to
-  // the single productId/quantity shape for pre-cart, legacy sale docs).
   const handleVoid = async () => {
     const sale = pendingVoid;
     setVoiding(true);
@@ -319,9 +294,6 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
     try {
       const { id, queuedOffline } = await createProduct(data, businessId);
       toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
-      // If this product was created to resolve a scanned/typed barcode
-      // that didn't match anything, add it straight to the cart so the
-      // scanning flow isn't interrupted any more than necessary.
       if (prefillBarcode !== null && !queuedOffline) {
         addToCart({ id, name: data.name, sellingPrice: data.sellingPrice, costPrice: data.costPrice, stock: data.stock ?? 0, barcode: data.barcode || null }, 1);
       }
@@ -333,21 +305,18 @@ const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(su
     }
   };
   
-const handleSupplierSave = async (supplierData) => {
-  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-  if (!queuedOffline) {
-    setNewSupplierId(ref.id);
-    await refetchSuppliers();
-  }
-  setSupplierModal(false);
-  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-};
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    if (!queuedOffline) {
+      setNewSupplierId(ref.id);
+      await refetchSuppliers();
+    }
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
 
-  // Scanning adds straight to the cart and keeps going — no confirmation
-  // step per scan, and scanning the same product again just bumps its
-  // quantity (handled inside addToCart).
   const handleScanDetected = (code) => {
     setScannerOpen(false);
     const found = findProductByCode(products, code);
@@ -378,10 +347,6 @@ const handleSupplierSave = async (supplierData) => {
         <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Scan, search, or tap a product to add it to the cart.</p></div>
       </div>
 
-      {/* FIX (cart visibility): pinned to the top and sticky as the page
-          scrolls, so after adding something the cart is never "far down"
-          below a long product list. Renders nothing when the cart is
-          empty — no placeholder clutter until there's something to show. */}
       <div className="sticky top-2 z-20">
         <CartList
           cart={cart}
@@ -396,7 +361,6 @@ const handleSupplierSave = async (supplierData) => {
       <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
       {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
         <ProductGrid products={filtered} onSelect={(product) => addToCart(product, 1)} isAdmin={false} cartQuantities={cartQuantities} />}
-
 
       {isAdmin && (
         <div className="mt-4">

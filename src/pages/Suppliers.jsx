@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { addDoc, updateDoc, deleteDoc, doc, writeBatch, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import { addDoc, updateDoc, deleteDoc, doc, writeBatch, serverTimestamp, where, collection } from 'firebase/firestore'; // Removed orderBy
+
 import toast from 'react-hot-toast';
 import { Pencil, Trash2, Banknote, Smartphone } from 'lucide-react';
 import { db } from '../firebase';
@@ -8,6 +9,7 @@ import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner'; // Added Import
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import Modal from '../components/common/Modal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
@@ -18,13 +20,18 @@ import { friendlyErrorMessage } from '../utils/errorMessages';
 
 export default function Suppliers() {
   const { profile, businessId } = useAuth();
-  const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId) : null, [businessId]); // Removed orderBy('name')
   const purchQ  = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
   const paymQ   = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
-const { data: suppliers, loading, refetch } = useFirestoreCollection(suppQ);
+  
+  const { data: rawSuppliers, loading, error, refetch } = useFirestoreCollection(suppQ); // Destructured error
   const { data: purchases }          = useFirestoreCollection(purchQ);
   const { data: spayments }          = useFirestoreCollection(paymQ);
-  
+
+  // Alphabetically sort suppliers in memory
+  const suppliers = useMemo(() => {
+    return [...rawSuppliers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [rawSuppliers]);
 
   const [modal, setModal]       = useState(false);
   const [editing, setEditing]   = useState(null);
@@ -46,21 +53,21 @@ const { data: suppliers, loading, refetch } = useFirestoreCollection(suppQ);
   );
   const totalOwed = owedList.reduce((a, o) => a + o.balance, 0);
 
-const [deleting, setDeleting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const handleSave = async data => {
     const write = editing
       ? updateDoc(doc(db,'suppliers',editing.id), data)
       : addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
 
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    const { queuedOffline, error: writeError } = await raceWithTimeout(write, 4000);
+    if (writeError) { toast.error(friendlyErrorMessage(writeError)); throw writeError; }
     toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
     await refetch();
     setModal(false); setEditing(null);
   };
 
-const handleDel = async () => {
+  const handleDel = async () => {
     const stillExists = suppliers.some((s) => s.id === pendDel.id);
     if (!stillExists) {
       toast.success('Already removed.');
@@ -75,9 +82,9 @@ const handleDel = async () => {
       return;
     }
     setDeleting(true);
-    const { queuedOffline, error } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
+    const { queuedOffline, error: deleteError } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
     setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (deleteError) { toast.error(friendlyErrorMessage(deleteError)); return; }
     toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
     setPendDel(null);
     await refetch();
@@ -99,21 +106,12 @@ const handleDel = async () => {
     batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:new Date(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
 
     const commit = batch.commit();
-    const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+    const { queuedOffline, error: commitError } = await raceWithTimeout(commit, 4000);
     setPaying(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (commitError) { toast.error(friendlyErrorMessage(commitError)); return; }
     toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
     if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
     setPayModal(false); setPayAmt(''); setPayCode('');
-  };
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Supplier added');
-    await refetch();
   };
 
   return (
@@ -122,6 +120,7 @@ const handleDel = async () => {
         <div><h1 className="font-display text-xl font-bold text-ink-900">Suppliers</h1><p className="text-sm text-ink-400">Total owed: <span className="font-semibold text-rust-600">{formatKES(totalOwed)}</span></p></div>
         <button className="btn-primary" onClick={()=>{setEditing(null);setModal(true);}}>+ Add supplier</button>
       </div>
+      <ErrorBanner message={error} /> {/* Display error if it occurs */}
       {loading?<LoadingSpinner />:suppliers.length===0?<EmptyState title="No suppliers yet" description="Add suppliers to track restocking and balances." />:(
         <div className="space-y-3">
           {suppliers.map(s=>{
@@ -141,7 +140,7 @@ const handleDel = async () => {
         </div>
       )}
       <SupplierFormModal open={modal} onClose={()=>{setModal(false);setEditing(null);}} onSave={handleSave} initialSupplier={editing} />
-<ConfirmDialog
+      <ConfirmDialog
         open={!!pendDel}
         title="Remove supplier?"
         message={(owedMap[pendDel?.id]||0) > 0.005
@@ -152,7 +151,8 @@ const handleDel = async () => {
         danger
         onConfirm={handleDel}
         onCancel={()=>{ if (!deleting) setPendDel(null); }}
-      />      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
+      />      
+      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
         <form onSubmit={handlePay} className="space-y-3">
           <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(owedMap[selSupp?.id]||0)}</span></div>
           <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>

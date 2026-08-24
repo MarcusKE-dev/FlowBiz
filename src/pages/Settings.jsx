@@ -1,5 +1,4 @@
-// src/pages/Settings.jsx
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react'; // Added useRef import
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -45,76 +44,76 @@ export default function Settings() {
   const [deleteAccountConfirmText, setDeleteAccountConfirmText] = useState('');
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [otherOwnersCount, setOtherOwnersCount] = useState(null);
-const [exporting, setExporting] = useState(false);
-const [exportProgress, setExportProgress] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(null);
 
-const fileInputRef = useRef(null);
-const [checkingImport, setCheckingImport] = useState(false);
-const [importing, setImporting] = useState(false);
-const [importProgress, setImportProgress] = useState(null);
-const [pendingImport, setPendingImport] = useState(null); // { manifest, nonEmptyCollections, fileName }
-const [importConfirmChecked, setImportConfirmChecked] = useState(false);
+  const fileInputRef = useRef(null);
+  const [checkingImport, setCheckingImport] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState(null);
+  const [pendingImport, setPendingImport] = useState(null); // { manifest, nonEmptyCollections, fileName }
+  const [importConfirmChecked, setImportConfirmChecked] = useState(false);
 
+  const handleImportFileSelected = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file later
+    if (!file) return;
+    setCheckingImport(true);
+    try {
+      const manifest = await readExportZip(file);
+      const nonEmptyCollections = await checkExistingData(businessId, manifest);
+      setPendingImport({ manifest, nonEmptyCollections, fileName: file.name });
+      setImportConfirmChecked(false);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setCheckingImport(false);
+    }
+  };
 
-const handleImportFileSelected = async (e) => {
-  const file = e.target.files?.[0];
-  e.target.value = ''; // allow re-selecting the same file later
-  if (!file) return;
-  setCheckingImport(true);
-  try {
-    const manifest = await readExportZip(file);
-    const nonEmptyCollections = await checkExistingData(businessId, manifest);
-    setPendingImport({ manifest, nonEmptyCollections, fileName: file.name });
-    setImportConfirmChecked(false);
-  } catch (err) {
-    toast.error(err.message);
-  } finally {
-    setCheckingImport(false);
-  }
-};
-
-const handleConfirmImport = async () => {
-  if (!pendingImport) return;
-  setImporting(true);
-  setImportProgress(null);
-  try {
-    const results = await importBusinessData(businessId, pendingImport.manifest, {
-      onProgress: (name, i, total) => setImportProgress(`${name} (${i + 1}/${total})`),
-    });
-    const totalDocs = Object.values(results).reduce((a, b) => a + b, 0);
-    toast.success(`Import complete — ${totalDocs} record(s) restored.`);
-    setPendingImport(null);
-  } catch (err) {
-    toast.error(`Import failed: ${err.message}`);
-  } finally {
-    setImporting(false);
+  const handleConfirmImport = async () => {
+    if (!pendingImport) return;
+    setImporting(true);
     setImportProgress(null);
-  }
-};
+    try {
+      const results = await importBusinessData(businessId, pendingImport.manifest, {
+        onProgress: (name, i, total) => setImportProgress(`${name} (${i + 1}/${total})`),
+      });
+      const totalDocs = Object.values(results).reduce((a, b) => a + b, 0);
+      toast.success(`Import complete — ${totalDocs} record(s) restored.`);
+      setPendingImport(null);
+    } catch (err) {
+      toast.error(`Import failed: ${err.message}`);
+    } finally {
+      setImporting(false);
+      setImportProgress(null);
+    }
+  };
 
-const handleExport = async () => {
-  setExporting(true);
-  setExportProgress(null);
-  try {
-    const blob = await buildExportZip(businessId, {
-      onProgress: (name, i, total) => setExportProgress(`${name} (${i + 1}/${total})`),
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `flowbiz-export-${businessId}-${new Date().toISOString().slice(0, 10)}.zip`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    toast.success('Export downloaded.');
-  } catch (err) {
-    toast.error(`Export failed: ${err.message}`);
-  } finally {
-    setExporting(false);
+  const handleExport = async () => {
+    setExporting(true);
     setExportProgress(null);
-  }
-};
+    try {
+      const blob = await buildExportZip(businessId, {
+        onProgress: (name, i, total) => setExportProgress(`${name} (${i + 1}/${total})`),
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `flowbiz-export-${businessId}-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast.success('Export downloaded.');
+    } catch (err) {
+      toast.error(`Export failed: ${err.message}`);
+    } finally {
+      setExporting(false);
+      setExportProgress(null);
+    }
+  };
+
   const deviceGroups = useMemo(() => {
     const groups = new Map();
     for (const s of sessions) {
@@ -476,59 +475,60 @@ const handleExport = async () => {
         <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
       </div>
 
-<div className="card p-5 space-y-3">
-  <h2 className="font-display text-base font-bold text-ink-800">Backup & Restore</h2>
-  <p className="text-sm text-ink-500">
-    Download everything this business has stored as a .zip (CSVs plus a FlowBiz backup file), or restore a previous FlowBiz export back into this business.
-  </p>
-  <div className="grid grid-cols-2 gap-2">
-    <button type="button" className="btn-outline" onClick={handleExport} disabled={exporting || importing || checkingImport}>
-      {exporting ? (exportProgress || 'Preparing…') : 'Export (.zip)'}
-    </button>
-    <button type="button" className="btn-outline" onClick={() => fileInputRef.current?.click()} disabled={exporting || importing || checkingImport}>
-      {checkingImport ? 'Reading file…' : 'Import (.zip)'}
-    </button>
-  </div>
-  <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleImportFileSelected} />
-</div>
-
-<Modal open={!!pendingImport} onClose={() => { if (!importing) setPendingImport(null); }} title="Import this backup?">
-  <div className="space-y-4">
-    <p className="text-sm text-ink-600">
-      <span className="font-mono text-xs">{pendingImport?.fileName}</span> contains:
-    </p>
-    <div className="max-h-40 overflow-y-auto rounded-lg border border-ink-100 divide-y divide-ink-100">
-      {pendingImport && Object.entries(pendingImport.manifest.collections)
-        .filter(([, docs]) => docs.length > 0)
-        .map(([name, docs]) => (
-          <div key={name} className="flex justify-between px-3 py-1.5 text-xs">
-            <span className="text-ink-500">{name}</span>
-            <span className="font-semibold text-ink-800">{docs.length}</span>
-          </div>
-        ))}
-    </div>
-
-    {pendingImport?.nonEmptyCollections.length > 0 && (
-      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
-        This business already has data in: {pendingImport.nonEmptyCollections.join(', ')}. Importing will add these records alongside what's already there — any record that shares the exact same ID as one you already have will be overwritten.
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Backup & Restore</h2>
+        <p className="text-sm text-ink-500">
+          Download everything this business has stored as a .zip (CSVs plus a FlowBiz backup file), or restore a previous FlowBiz export back into this business.
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" className="btn-outline" onClick={handleExport} disabled={exporting || importing || checkingImport}>
+            {exporting ? (exportProgress || 'Preparing…') : 'Export (.zip)'}
+          </button>
+          <button type="button" className="btn-outline" onClick={() => fileInputRef.current?.click()} disabled={exporting || importing || checkingImport}>
+            {checkingImport ? 'Reading file…' : 'Import (.zip)'}
+          </button>
+        </div>
+        <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleImportFileSelected} />
       </div>
-    )}
 
-    <label className="flex items-start gap-2 text-sm text-ink-600">
-      <input type="checkbox" checked={importConfirmChecked} onChange={(e) => setImportConfirmChecked(e.target.checked)} disabled={importing} className="mt-0.5" />
-      I understand and want to proceed with this import.
-    </label>
+      <Modal open={!!pendingImport} onClose={() => { if (!importing) setPendingImport(null); }} title="Import this backup?">
+        <div className="space-y-4">
+          <p className="text-sm text-ink-600">
+            <span className="font-mono text-xs">{pendingImport?.fileName}</span> contains:
+          </p>
+          <div className="max-h-40 overflow-y-auto rounded-lg border border-ink-100 divide-y divide-ink-100">
+            {pendingImport && Object.entries(pendingImport.manifest.collections)
+              .filter(([, docs]) => docs.length > 0)
+              .map(([name, docs]) => (
+                <div key={name} className="flex justify-between px-3 py-1.5 text-xs">
+                  <span className="text-ink-500">{name}</span>
+                  <span className="font-semibold text-ink-800">{docs.length}</span>
+                </div>
+              ))}
+          </div>
 
-    {importing && <p className="text-xs text-ink-400">{importProgress || 'Starting…'}</p>}
+          {pendingImport?.nonEmptyCollections.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+              This business already has data in: {pendingImport.nonEmptyCollections.join(', ')}. Importing will add these records alongside what's already there — any record that shares the exact same ID as one you already have will be overwritten.
+            </div>
+          )}
 
-    <div className="flex gap-2">
-      <button type="button" className="btn-secondary flex-1" onClick={() => setPendingImport(null)} disabled={importing}>Cancel</button>
-      <button type="button" className="btn-primary flex-1" onClick={handleConfirmImport} disabled={!importConfirmChecked || importing}>
-        {importing ? 'Importing…' : 'Import'}
-      </button>
-    </div>
-  </div>
-</Modal>
+          <label className="flex items-start gap-2 text-sm text-ink-600">
+            <input type="checkbox" checked={importConfirmChecked} onChange={(e) => setImportConfirmChecked(e.target.checked)} disabled={importing} className="mt-0.5" />
+            I understand and want to proceed with this import.
+          </label>
+
+          {importing && <p className="text-xs text-ink-400">{importProgress || 'Starting…'}</p>}
+
+          <div className="flex gap-2">
+            <button type="button" className="btn-secondary flex-1" onClick={() => setPendingImport(null)} disabled={importing}>Cancel</button>
+            <button type="button" className="btn-primary flex-1" onClick={handleConfirmImport} disabled={!importConfirmChecked || importing}>
+              {importing ? 'Importing…' : 'Import'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       <div className="card space-y-3 border-rust-200 p-5">
         <div>
           <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
@@ -543,7 +543,6 @@ const handleExport = async () => {
         </button>
       </div>
 
-      {/* Inserted "Delete My Account" block here */}
       <div className="card space-y-3 border-rust-200 p-5">
         <div>
           <h2 className="font-display text-base font-bold text-rust-700">Delete My Account</h2>
@@ -585,7 +584,6 @@ const handleExport = async () => {
         onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
       />
 
-      {/* Inserted "Delete My Account" Modal here */}
       <Modal open={deleteAccountOpen} onClose={() => { if (!deletingAccount) setDeleteAccountOpen(false); }} title="Delete your account">
         <div className="space-y-4">
           {otherOwnersCount === null ? (

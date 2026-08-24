@@ -31,8 +31,8 @@
   /* Smooth scrolling for all scrollable areas */
   * { scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
 
-  /* Remove iOS input shadows */
-  input, select, textarea, button {
+  /* Remove iOS input shadows while preserving default native checkboxes and radios */
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea, button {
     -webkit-appearance: none;
     appearance: none;
   }
@@ -50,12 +50,7 @@
            transition-colors disabled:opacity-40 disabled:cursor-not-allowed
            min-h-[44px] active:scale-95;
   }
-  /* REDESIGN: primary action color moved from green (moss) to blue — green
-     stays reserved for success/positive-status meaning (paid, active,
-     profit) elsewhere in the app; blue is now the one color that means
-     "primary interactive action", matching every .btn-primary / focused
-     .input across the whole app in this one place. */
-.btn-primary   { @apply btn bg-moss-600  text-white   hover:bg-moss-700  active:bg-moss-800; }
+  .btn-primary   { @apply btn bg-moss-600  text-white   hover:bg-moss-700  active:bg-moss-800; }
   .btn-secondary { @apply btn bg-ink-100   text-ink-800 hover:bg-ink-200   active:bg-ink-300; }
   .btn-danger    { @apply btn bg-rust-600  text-white   hover:bg-rust-700  active:bg-rust-800; }
   .btn-outline   { @apply btn border border-ink-200 text-ink-700 hover:bg-ink-50 active:bg-ink-100; }
