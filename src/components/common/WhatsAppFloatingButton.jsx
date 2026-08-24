@@ -1,32 +1,26 @@
 // src/components/common/WhatsAppFloatingButton.jsx
 
 export default function WhatsAppFloatingButton({
-  phone = '254705062319',
+  phone = '254741104469',
   message = 'Hello FlowBiz! I would like to inquire more about the POS system for my business.',
 }) {
   const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
 
   return (
     <div className="group fixed bottom-5 right-5 z-40 flex items-center gap-2.5">
-      {/* Floating Tooltip (Appears smoothly on desktop hover without affecting the button shape) */}
+      {/* Floating Tooltip on Desktop Hover */}
       <span className="pointer-events-none hidden rounded-xl bg-[#15171d] px-3 py-1.5 text-xs font-bold text-white shadow-xl transition-all duration-200 opacity-0 translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 sm:inline-block whitespace-nowrap">
         Chat with us
       </span>
 
-      {/* Perfectly Uniform Circular WhatsApp Action Button */}
+      {/* Clean, Uniform Circular WhatsApp Button (No pulsing dot) */}
       <a
         href={whatsappUrl}
         target="_blank"
         rel="noopener noreferrer"
         aria-label="Chat with FlowBiz on WhatsApp"
-        className="relative flex h-12 w-12 sm:h-13 sm:w-13 items-center justify-center rounded-full bg-[#25D366] text-white shadow-xl transition-all duration-300 hover:bg-[#20ba5a] hover:shadow-2xl hover:scale-105 active:scale-95 shrink-0"
+        className="flex h-12 w-12 sm:h-13 sm:w-13 items-center justify-center rounded-full bg-[#25D366] text-white shadow-xl transition-all duration-300 hover:bg-[#20ba5a] hover:shadow-2xl hover:scale-105 active:scale-95 shrink-0"
       >
-        {/* Subtle Online Pulse Dot */}
-        <span className="absolute -top-0.5 -right-0.5 flex h-3.5 w-3.5">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-75" />
-          <span className="relative inline-flex h-3.5 w-3.5 rounded-full border-2 border-white bg-[#1a623c]" />
-        </span>
-
         {/* Centered Official WhatsApp SVG Icon */}
         <svg
           className="h-6 w-6 sm:h-7 sm:w-7 fill-current"
