@@ -57,7 +57,38 @@
         "description": "Offline-first POS and business management software for Kenyan retail, wholesale, and service shops with M-Pesa reconciliation and debt tracking."
       }
     </script>
-
+      <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Does FlowBiz work when there is no internet connection?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. FlowBiz uses an offline-first architecture with persistent local caching. Sales, credit purchases, and expenses are saved immediately in your browser or phone storage and sync automatically when connectivity is restored."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How does M-Pesa reconciliation work at closing time?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "When recording sales, cashiers specify whether the payment was received via Cash or M-Pesa. At the end of the shift on the Close Day page, FlowBiz calculates the exact expected M-Pesa sum so you can reconcile it directly against your M-Pesa Till or Paybill balance."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Why does profit stay at zero when I record a Credit (Deni) sale?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "FlowBiz uses a cash-flow-first accounting model specifically designed for retail businesses. Revenue and gross profit are only recognized when the customer pays off their debt to prevent false profit illusions on uncollected credit."
+      }
+    }
+  ]
+}
+</script>
     <!-- Google Fonts Preconnect & Stylesheets -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

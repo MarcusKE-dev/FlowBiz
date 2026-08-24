@@ -24,15 +24,15 @@ export function HowItWorks() {
   ];
 
   return (
-    <section id="workflow" className="py-16 md:py-24 border-t border-[#e8eaed]">
+    <section id="how-it-works" className="py-16 md:py-24 border-t border-[#e8eaed] scroll-mt-14">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
         <div className="text-center max-w-3xl mx-auto space-y-3">
-          
           <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-[#15171d] tracking-tight">
             Get started in 3 simple steps
           </h2>
           <p className="text-sm sm:text-base text-[#5a6273]">
-No technicians. No complicated setup. No expensive POS hardware.          </p>
+            No technicians. No complicated setup. No expensive POS hardware.
+          </p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative pt-4">

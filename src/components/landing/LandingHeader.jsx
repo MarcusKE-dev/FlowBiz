@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Menu, X, ArrowRight, } from 'lucide-react';
+import { Menu, X, ArrowRight } from 'lucide-react';
 
 export function LandingHeader() {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -12,7 +12,6 @@ export function LandingHeader() {
           
           {/* Left: Brand Logo */}
           <Link to="/" className="flex items-center gap-2.5 shrink-0 z-10 leading-none">
-      
             <div className="flex flex-col justify-center">
               <span className="font-extrabold text-lg text-[#15171d] tracking-tight leading-none">
                 FlowBiz
@@ -23,7 +22,7 @@ export function LandingHeader() {
             </div>
           </Link>
 
-          {/* Center: Navigation Links Perfectly Centered Horizontally & Vertically */}
+          {/* Center: Desktop Navigation Links */}
           <nav className="hidden lg:flex absolute inset-0 items-center justify-center pointer-events-none">
             <div className="flex items-center gap-6 xl:gap-8 text-xs sm:text-sm font-semibold text-[#5a6273] pointer-events-auto leading-none">
               <a 
@@ -100,7 +99,7 @@ export function LandingHeader() {
             Features
           </a>
           <a
-            href="#simulator"
+            href="#live-simulator"
             onClick={() => setMobileOpen(false)}
             className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
           >

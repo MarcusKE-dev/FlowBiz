@@ -1,3 +1,4 @@
+// src/pages/LandingPage.jsx
 import { LandingHeader } from '../components/landing/LandingHeader';
 import { HeroSection } from '../components/landing/HeroSection';
 import { FeatureGrid } from '../components/landing/FeatureGrid';
@@ -5,6 +6,7 @@ import { HowItWorks } from '../components/landing/HowItWorks';
 import { PricingComparison } from '../components/landing/PricingComparison';
 import { FaqSection } from '../components/landing/FaqSection';
 import { LandingFooter } from '../components/landing/LandingFooter';
+import WhatsAppFloatingButton from '../components/common/WhatsAppFloatingButton';
 
 export default function LandingPage() {
   return (
@@ -12,13 +14,15 @@ export default function LandingPage() {
       <LandingHeader />
       <main className="flex-1">
         <HeroSection />
-        
         <FeatureGrid />
         <HowItWorks />
         <PricingComparison />
         <FaqSection />
       </main>
       <LandingFooter />
+      
+      {/* Floating 1-tap WhatsApp chat button */}
+      <WhatsAppFloatingButton />
     </div>
   );
 }
