@@ -25,12 +25,13 @@ import { friendlyErrorMessage } from '../utils/errorMessages';
 export default function Products() {
   const { businessId } = useAuth();
   const productsQ = useMemo(
-    () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
+    () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
     [businessId]
   );
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId) : null, [businessId]); // Removed orderBy('name')
+  const suppliersQ = useMemo(() => (businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null), [businessId]);
   const { data: products, loading, error } = useFirestoreCollection(productsQ);
-  const { data: rawSuppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
+  const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
+  
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(false);
   const [supplierModal, setSupplierModal] = useState(false);
@@ -42,21 +43,21 @@ export default function Products() {
   const [scanFoundProduct, setScanFoundProduct] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
-  // Alphabetically sort suppliers in memory
-  const suppliers = useMemo(() => {
-    return [...rawSuppliers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  }, [rawSuppliers]);
-
   const filtered = products.filter(
     (p) =>
       p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.category.toLowerCase().includes(search.toLowerCase()) ||
+      (p.category && p.category.toLowerCase().includes(search.toLowerCase())) ||
       (p.barcode && p.barcode.includes(search.trim())) ||
       (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
   );
+  
   const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
 
-  const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
+  const closeFormModal = () => {
+    setModal(false);
+    setEditing(null);
+    setPrefillBarcode(null);
+  };
 
   const handleSave = async (data) => {
     try {
@@ -68,7 +69,10 @@ export default function Products() {
         toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
       }
       closeFormModal();
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+      throw err;
+    }
   };
 
   const handleSupplierSave = async (supplierData) => {
@@ -87,7 +91,7 @@ export default function Products() {
     setDeleting(true);
     const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id, pendingDel.barcode, businessId), 4000);
     setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(err)); return; }
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
     toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
     setPendingDel(null);
   };
@@ -183,9 +187,9 @@ export default function Products() {
         </div>
       </Modal>
 
-      <ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      
+      <ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />
       <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-      <ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    
+      <ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />
     </div>
   );
 }

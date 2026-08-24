@@ -12,7 +12,7 @@ const RESET_COLLECTIONS = [
 ];
 
 const DEFAULT_CATEGORIES = [
-  'Groceries', 'Beverages', 'Hardware', 'Household',
+'Beverages', 'Hardware', 'Household',
   'Personal Care', 'Stationery', 'Airtime/Float', 'Other'
 ];
 

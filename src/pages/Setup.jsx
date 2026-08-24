@@ -7,7 +7,7 @@ import toast from 'react-hot-toast';
 import { auth, db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 
-const DEFAULT_CATEGORIES = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
+const DEFAULT_CATEGORIES = ['Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
 export default function Setup() {
