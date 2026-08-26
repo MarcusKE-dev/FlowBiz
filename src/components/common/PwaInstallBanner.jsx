@@ -1,16 +1,46 @@
 // src/components/common/PwaInstallBanner.jsx
 import { useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Download, Share, PlusSquare, X } from 'lucide-react';
 import { usePwaInstall } from '../../hooks/usePwaInstall';
 
-export default function PwaInstallBanner() {
-  const { isInstallable, isIOS, isStandalone, promptInstall } = usePwaInstall();
-  const [dismissed, setDismissed] = useState(false);
+const DISMISSED_KEY = 'flowbiz_pwa_banner_dismissed';
 
-  // If already installed or closed by user, don't show
-  if (isStandalone || dismissed) return null;
-  // If neither Android/Desktop installable nor iOS browser, don't show
-  if (!isInstallable && !isIOS) return null;
+export default function PwaInstallBanner() {
+  const location = useLocation();
+  const { isInstallable, isIOS, isStandalone, promptInstall } = usePwaInstall();
+
+  // Read persisted dismissal state from localStorage
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(DISMISSED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleDismiss = () => {
+    setDismissed(true);
+    try {
+      localStorage.setItem(DISMISSED_KEY, 'true');
+    } catch {
+      // Ignore if localStorage is unavailable
+    }
+  };
+
+  const handleInstallClick = async () => {
+    const accepted = await promptInstall();
+    if (accepted) {
+      handleDismiss();
+    }
+  };
+
+  // Only allow on landing page ('/') and signup/setup pages ('/setup', '/signup')
+  const allowedPaths = ['/', '/setup', '/signup'];
+  const isAllowedPath = allowedPaths.includes(location.pathname);
+
+  // If running in installed app mode, permanently dismissed, or not on an allowed path, do not render
+  if (isStandalone || dismissed || !isAllowedPath) return null;
 
   return (
     <aside
@@ -38,7 +68,7 @@ export default function PwaInstallBanner() {
         </div>
         <button
           type="button"
-          onClick={() => setDismissed(true)}
+          onClick={handleDismiss}
           className="text-ink-400 hover:text-ink-700 p-1 min-h-[32px] min-w-[32px] flex items-center justify-center rounded-lg"
           aria-label="Close install prompt"
         >
@@ -47,25 +77,30 @@ export default function PwaInstallBanner() {
       </div>
 
       <div className="mt-3">
-        {/* Android & Desktop Chrome 1-Click Install Button */}
-        {isInstallable && (
+        {/* Android & Desktop Chrome / Edge 1-Click Install Button */}
+        {isInstallable ? (
           <button
             type="button"
-            onClick={promptInstall}
+            onClick={handleInstallClick}
             className="btn-primary w-full !py-2 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
           >
             <Download className="h-4 w-4" /> Install Free App
           </button>
-        )}
-
-        {/* iOS Safari Instructions */}
-        {isIOS && (
+        ) : isIOS ? (
           <div className="rounded-lg bg-[#faf6ef] p-2.5 text-[11px] text-ink-700 border border-ink-100">
             <p className="font-semibold flex items-center flex-wrap gap-1">
               Tap <Share className="h-3.5 w-3.5 text-moss-700 inline" /> Share, then select{' '}
               <PlusSquare className="h-3.5 w-3.5 text-moss-700 inline" /> &quot;Add to Home Screen&quot;
             </p>
           </div>
+        ) : (
+          <button
+            type="button"
+            onClick={handleInstallClick}
+            className="btn-primary w-full !py-2 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
+          >
+            <Download className="h-4 w-4" /> Install Free App
+          </button>
         )}
       </div>
     </aside>

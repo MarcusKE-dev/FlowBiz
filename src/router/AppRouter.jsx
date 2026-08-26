@@ -35,31 +35,30 @@ const routeLoaders = {
   terms: () => import('../pages/Terms'),
 };
 
-const Setup      = lazy(routeLoaders.setup);
-const Login      = lazy(routeLoaders.login);
-const ForgotPassword = lazy(routeLoaders.forgotPassword);
-const JoinStaff  = lazy(routeLoaders.joinStaff);
-const AuthAction = lazy(routeLoaders.authAction);
-const Dashboard  = lazy(routeLoaders.dashboard);
-const Counter    = lazy(routeLoaders.counter);
-const Customers  = lazy(routeLoaders.customers);
-const CustomerDetail = lazy(routeLoaders.customerDetail);
-const Expenses   = lazy(routeLoaders.expenses);
-const Purchases  = lazy(routeLoaders.purchases);
-const Products   = lazy(routeLoaders.products);
-const Suppliers  = lazy(routeLoaders.suppliers);
-const StockTake  = lazy(routeLoaders.stockTake);
-const Reports    = lazy(routeLoaders.reports);
-const CloseDay   = lazy(routeLoaders.closeDay);
-const Users      = lazy(routeLoaders.users);
-const Settings   = lazy(routeLoaders.settings);
-const HelpGuide  = lazy(routeLoaders.helpGuide);
-const Pro        = lazy(routeLoaders.pro);
-const AdvancedAnalytics = lazy(routeLoaders.advancedAnalytics);
+const Setup                 = lazy(routeLoaders.setup);
+const Login                 = lazy(routeLoaders.login);
+const ForgotPassword         = lazy(routeLoaders.forgotPassword);
+const JoinStaff             = lazy(routeLoaders.joinStaff);
+const AuthAction            = lazy(routeLoaders.authAction);
+const Dashboard             = lazy(routeLoaders.dashboard);
+const Counter               = lazy(routeLoaders.counter);
+const Customers             = lazy(routeLoaders.customers);
+const CustomerDetail        = lazy(routeLoaders.customerDetail);
+const Expenses              = lazy(routeLoaders.expenses);
+const Purchases             = lazy(routeLoaders.purchases);
+const Products              = lazy(routeLoaders.products);
+const Suppliers             = lazy(routeLoaders.suppliers);
+const StockTake             = lazy(routeLoaders.stockTake);
+const Reports               = lazy(routeLoaders.reports);
+const CloseDay              = lazy(routeLoaders.closeDay);
+const Users                 = lazy(routeLoaders.users);
+const Settings              = lazy(routeLoaders.settings);
+const HelpGuide             = lazy(routeLoaders.helpGuide);
+const Pro                   = lazy(routeLoaders.pro);
+const AdvancedAnalytics     = lazy(routeLoaders.advancedAnalytics);
 const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
-const Privacy    = lazy(routeLoaders.privacy);
-const Terms      = lazy(routeLoaders.terms);
-
+const Privacy               = lazy(routeLoaders.privacy);
+const Terms                 = lazy(routeLoaders.terms);
 
 function Page({ children, adminOnly = false, requireOpenDay = false }) {
   return (
@@ -73,15 +72,12 @@ function Page({ children, adminOnly = false, requireOpenDay = false }) {
   );
 }
 
-
 function PublicOnly({ children }) {
   const { firebaseUser, loading } = useAuth();
   if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
   if (firebaseUser) return <Navigate to="/dashboard" replace />;
   return children;
 }
-
-// src/router/AppRouter.jsx — replace RootRoute, add this helper above it
 
 function isStandalonePWA() {
   if (typeof window === 'undefined') return false;
@@ -97,9 +93,6 @@ function RootRoute() {
   if (!loading && !firebaseUser && isStandalonePWA()) {
     return <Navigate to="/login" replace />;
   }
-  // Never block a brand-new visitor behind an auth-loading spinner —
-  // show the landing page immediately. If they turn out to already be
-  // signed in, the redirect above fires on the next render.
   return <LandingPage />;
 }
 
@@ -119,14 +112,7 @@ export default function AppRouter() {
     <Suspense fallback={<LoadingSpinner label="Loading..." />}>
       <RoutePrefetcher />
       <Routes>
-        <Route path="/customers"    element={<Page requireOpenDay><Customers /></Page>} />
-        <Route path="/customers/:customerId" element={<Page requireOpenDay><CustomerDetail /></Page>} />
-        <Route path="/expenses"     element={<Page requireOpenDay><Expenses /></Page>} />
-        <Route path="/purchases"    element={<Page adminOnly requireOpenDay><Purchases /></Page>} />
-        <Route path="/products"     element={<Page adminOnly requireOpenDay><Products /></Page>} />
-        <Route path="/suppliers"    element={<Page adminOnly requireOpenDay><Suppliers /></Page>} />
-        <Route path="/stock-take"   element={<Page adminOnly requireOpenDay><StockTake /></Page>} />
-        {/* Opens Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
+        {/* Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
         <Route path="/" element={<RootRoute />} />
 
         {/* Public Authentication & Setup */}
@@ -151,13 +137,13 @@ export default function AppRouter() {
         <Route path="/counter"      element={<Page><Counter /></Page>} />
         <Route path="/customers"    element={<Page><Customers /></Page>} />
         <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
-        <Route path="/expenses"     element={<Page><Expenses /></Page>} />
+        <Route path="/expenses"     element={<Page requireOpenDay><Expenses /></Page>} />
         <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
         <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
         <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
         <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
         <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
-        <Route path="/close-day"    element={<Page adminOnly><CloseDay /></Page>} />
+        <Route path="/close-day"    element={<Page adminOnly requireOpenDay><CloseDay /></Page>} />
         <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
         <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
         <Route path="/help"         element={<Page><HelpGuide /></Page>} />

@@ -1,7 +1,6 @@
-// src/pages/JoinStaff.jsx
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, deleteUser, sendEmailVerification } from 'firebase/auth';
 import { doc, getDoc, writeBatch } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { auth, db } from '../firebase';
@@ -79,24 +78,38 @@ export default function JoinStaff() {
     }
     const { businessId, role, displayName } = freshSnap.data();
 
-    let cred;
+    let targetUser = null;
+    let isNewAuthUser = false;
+
     try {
-      cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      targetUser = cred.user;
+      isNewAuthUser = true;
     } catch (authErr) {
-      const message =
-        authErr.code === 'auth/email-already-in-use' ? "An account with this email already exists." :
-        authErr.code === 'auth/invalid-email'        ? 'Please enter a valid email address.' :
-        authErr.code === 'auth/weak-password'         ? 'Password should be at least 8 characters with upper, lower, and numbers.' :
-        'Could not create your account. Please try again.';
-      setError(message);
-      setSubmitting(false);
-      return;
+      if (authErr.code === 'auth/email-already-in-use') {
+        try {
+          const signInCred = await signInWithEmailAndPassword(auth, email.trim(), password);
+          targetUser = signInCred.user;
+        } catch {
+          setError('An account with this email already exists. Please verify your password or use a different email.');
+          setSubmitting(false);
+          return;
+        }
+      } else {
+        const message =
+          authErr.code === 'auth/invalid-email'  ? 'Please enter a valid email address.' :
+          authErr.code === 'auth/weak-password'   ? 'Password should be at least 8 characters with upper, lower, and numbers.' :
+          'Could not create your account. Please try again.';
+        setError(message);
+        setSubmitting(false);
+        return;
+      }
     }
 
     try {
       const batch = writeBatch(db);
-      batch.set(doc(db, 'users', cred.user.uid), {
-        uid: cred.user.uid,
+      batch.set(doc(db, 'users', targetUser.uid), {
+        uid: targetUser.uid,
         email: email.trim(),
         displayName,
         role,
@@ -107,28 +120,31 @@ export default function JoinStaff() {
       });
       batch.update(doc(db, 'staffInvites', inviteId), {
         claimed: true,
-        linkedUid: cred.user.uid,
+        linkedUid: targetUser.uid,
         claimedAt: new Date(),
       });
       await batch.commit();
     } catch (dbErr) {
       console.error('[JoinStaff] Firestore write failed:', dbErr);
-      try { await deleteUser(cred.user); } catch {}
+      if (isNewAuthUser) {
+        try { await deleteUser(targetUser); } catch {}
+      }
       setError('Something went wrong completing your signup. Please contact your business owner.');
       setSubmitting(false);
       return;
     }
 
     try {
-      const idToken = await cred.user.getIdToken(true);
+      const idToken = await targetUser.getIdToken(true);
       const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
       });
       if (!response.ok) throw new Error('send-verification-failed');
-      toast.success(`Welcome, ${displayName}! Check your email to verify your account.`);
+      toast.success(`Welcome, ${displayName}! Please check your email to verify your account.`);
     } catch {
-      toast.success(`Welcome, ${displayName}! Your account was created.`);
+      try { await sendEmailVerification(targetUser); } catch {}
+      toast.success(`Welcome, ${displayName}! Your account is ready.`);
     }
 
     setSubmitting(false);
@@ -156,7 +172,7 @@ export default function JoinStaff() {
         <div className="w-full max-w-sm card p-6 text-center space-y-3">
           <div className="text-3xl">✅</div>
           <h1 className="font-display text-lg font-bold text-ink-900">Invite Already Claimed</h1>
-          <p className="text-sm text-ink-500">Please sign in with your email and password.</p>
+          <p className="text-sm text-ink-500">This invite link has already been used. Please sign in with your email and password.</p>
           <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
         </div>
       </div>
@@ -166,7 +182,7 @@ export default function JoinStaff() {
   const roleLabel = invite.role === 'owner' ? 'an owner' : 'a cashier';
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4 py-8">
       <div className="w-full max-w-sm space-y-6">
         <div className="flex flex-col items-center text-center gap-3">
           <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
@@ -188,7 +204,7 @@ export default function JoinStaff() {
           </div>
           <div>
             <label className="label">Confirm password</label>
-            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" />
+            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="Repeat password" autoComplete="new-password" />
           </div>
           <button type="submit" className="btn-primary w-full" disabled={submitting}>
             {submitting ? 'Setting up…' : 'Create my sign-in'}

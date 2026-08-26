@@ -35,7 +35,6 @@ function getSessionDocId(uid) {
   return `${getDeviceId()}__${uid}`;
 }
 
-// src/contexts/AuthContext.jsx — replace guessDeviceLabel()
 function guessDeviceLabel() {
   const ua = navigator.userAgent || '';
   let os = 'Unknown device';
@@ -70,7 +69,7 @@ export function AuthProvider({ children }) {
   const profileUnsubRef = useRef(null);
   const sessionUnsubRef = useRef(null);
   const businessUnsubRef = useRef(null);
-  const sessionRegisteredRef = useRef(null); // `${uid}:${businessId}` already registered this auth session
+  const sessionRegisteredRef = useRef(null);
 
   const stopListeners = useCallback(() => {
     profileUnsubRef.current?.();
@@ -82,120 +81,114 @@ export function AuthProvider({ children }) {
     sessionRegisteredRef.current = null;
   }, []);
 
-const registerSession = useCallback(async (uid, businessId, userName) => {
-  const key = `${uid}:${businessId}`;
-  if (sessionRegisteredRef.current === key) return;
-  sessionRegisteredRef.current = key;
+  const registerSession = useCallback(async (uid, businessId, userName) => {
+    if (!uid || !businessId) return;
+    const key = `${uid}:${businessId}`;
+    if (sessionRegisteredRef.current === key) return;
+    sessionRegisteredRef.current = key;
 
-  let sessionId = getSessionDocId(uid);
-  let ref = doc(db, 'sessions', sessionId);
-  let currentSnap = await getDoc(ref);
+    try {
+      let sessionId = getSessionDocId(uid);
+      let ref = doc(db, 'sessions', sessionId);
+      let currentSnap = await getDoc(ref).catch(() => null);
 
-  // A revoked session can never legally un-revoke itself (that's the
-  // security rule working as intended — self-updates can't touch
-  // `revoked`). A fresh sign-in is a legitimate new session, so start a
-  // new record instead of endlessly retrying a write the rules forbid.
-  if (currentSnap.exists() && currentSnap.data().revoked === true) {
-    sessionId = `${sessionId}__${Date.now().toString(36)}`;
-    ref = doc(db, 'sessions', sessionId);
-    currentSnap = await getDoc(ref);
-  }
+      if (currentSnap && currentSnap.exists() && currentSnap.data().revoked === true) {
+        sessionId = `${sessionId}__${Date.now().toString(36)}`;
+        ref = doc(db, 'sessions', sessionId);
+        currentSnap = await getDoc(ref).catch(() => null);
+      }
 
-  const baseFields = {
-    uid, businessId,
-    lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
-    deviceLabel: guessDeviceLabel(),
-    userAgent: navigator.userAgent,
-    lastActiveAt: serverTimestamp(),
-  };
+      const baseFields = {
+        uid,
+        businessId,
+        lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
+        deviceLabel: guessDeviceLabel(),
+        userAgent: navigator.userAgent,
+        lastActiveAt: serverTimestamp(),
+      };
 
-  if (!currentSnap.exists()) {
-    await setDoc(ref, { ...baseFields, createdAt: serverTimestamp(), revoked: false });
-  } else {
-    // Never include `revoked` here — self-updates aren't allowed to
-    // touch it, and it's already false if we got this far.
-    await updateDoc(ref, baseFields).catch(() => {});
-  }
+      if (!currentSnap || !currentSnap.exists()) {
+        await setDoc(ref, { ...baseFields, createdAt: serverTimestamp(), revoked: false });
+      } else {
+        await updateDoc(ref, baseFields).catch(() => {});
+      }
 
-  sessionUnsubRef.current?.();
-  sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
-    if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
-      setSessionRevoked(true);
-      fbSignOut(auth);
+      sessionUnsubRef.current?.();
+      sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
+        if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
+          setSessionRevoked(true);
+          fbSignOut(auth);
+        }
+      });
+    } catch (err) {
+      console.warn('[FlowBiz] registerSession non-fatal warning:', err.message);
     }
-  });
-}, []);
+  }, []);
 
-  // Background heartbeat to keep the "last seen" time accurate for active devices
-useEffect(() => {
+  useEffect(() => {
     if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
         updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
       }
-    }, 15 * 60 * 1000); // 15 mins
+    }, 15 * 60 * 1000);
     return () => clearInterval(interval);
   }, [firebaseUser, profile?.businessId, sessionRevoked]);
 
-  // FIX: Used a named function 'doLoad' to resolve the recursive ESLint error
-const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
-  stopListeners();
-  setAuthError(null);
-  setAccountRemoved(false);
-  setSessionRevoked(false);
+  const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
+    stopListeners();
+    setAuthError(null);
+    setAccountRemoved(false);
+    setSessionRevoked(false);
 
-  if (!user) {
-    setProfile(null);
-    setSubscription({ plan: 'free', status: 'active' });
-    setEmailVerified(false);
-    setLoading(false);
-    return;
-  }
+    if (!user) {
+      setProfile(null);
+      setSubscription({ plan: 'free', status: 'active' });
+      setEmailVerified(false);
+      setLoading(false);
+      return;
+    }
 
-  setEmailVerified(!!user.emailVerified);
-  setLoading(true);
+    setEmailVerified(!!user.emailVerified);
+    setLoading(true);
 
-  // FIX: force-refresh the ID token before attaching the Firestore
-  // listener. Right after sign-in / verification / password reset, the
-  // Firestore SDK's connection can still be using a stale token for a
-  // moment — this closes that gap instead of just hoping it resolves.
-  user.getIdToken(true).catch(() => {}).then(() => {
     const userRef = doc(db, 'users', user.uid);
 
     profileUnsubRef.current = onSnapshot(
       userRef,
       (snap) => {
-if (!snap.exists()) {
-  (async () => {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
-      if (auth.currentUser?.uid !== user.uid) return;
-      try {
-        const recheck = await getDoc(userRef);
-        if (recheck.exists()) return; // listener will pick it up
-      } catch (err) {
-        if (attempt === 3) {
-          setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
-          setProfile(null);
-          setLoading(false);
+        if (!snap.exists()) {
+          (async () => {
+            for (let attempt = 0; attempt < 3; attempt++) {
+              await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+              if (auth.currentUser?.uid !== user.uid) return;
+              try {
+                const recheck = await getDoc(userRef);
+                if (recheck.exists()) return;
+              } catch (err) {
+                if (attempt === 2) {
+                  setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
+                  setProfile(null);
+                  setLoading(false);
+                  return;
+                }
+              }
+            }
+            setAccountRemoved(true);
+            setProfile(null);
+            setLoading(false);
+          })();
           return;
         }
-      }
-    }
-    setAccountRemoved(true);
-    setProfile(null);
-    setLoading(false);
-  })();
-  return;
-}
+
         setAccountRemoved(false);
         const data = { uid: user.uid, ...snap.data() };
         setProfile(data);
         setLoading(false);
 
-if (data.businessId && data.active !== false) {
-  registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
+        if (data.businessId && data.active !== false) {
+          registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
           businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
             if (bizSnap.exists()) {
               setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
@@ -204,25 +197,20 @@ if (data.businessId && data.active !== false) {
         }
       },
       (err) => {
-        // FIX: more retries, longer backoff — gives slower connections
-        // (mobile networks) a real chance to catch up instead of
-        // dumping the user on an error screen after ~4s.
-        if (err.code === 'permission-denied' && retryCount < 6) {
-          const delay = Math.min(1000 * 2 ** retryCount, 8000);
-          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying (attempt ${retryCount + 1})`);
+        if (err.code === 'permission-denied' && retryCount < 5) {
+          const delay = Math.min(1000 * 2 ** retryCount, 6000);
           setTimeout(() => {
             if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
           }, delay);
           return;
         }
-        console.error(`[FlowBiz] onSnapshot(users/${user.uid}) failed:`, err.code || err.name, err.message);
+        console.error(`[FlowBiz] onSnapshot(users/${user.uid}) error:`, err.code || err.name, err.message);
         setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
         setProfile(null);
         setLoading(false);
       }
     );
-  });
-}, [registerSession, stopListeners]);
+  }, [registerSession, stopListeners]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -234,27 +222,32 @@ if (data.businessId && data.active !== false) {
 
   const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
   const logout = () => { stopListeners(); return fbSignOut(auth); };
-  
-const resendVerificationEmail = async () => {
-  if (!auth.currentUser) throw new Error('Not signed in.');
-  const idToken = await auth.currentUser.getIdToken(true);
-  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-  });
-  if (!response.ok) {
-    let message = 'Could not send the verification email.';
-    try { const body = await response.json(); message = body?.error || message; } catch {}
-    throw new Error(message);
-  }
-};
+
+  const resendVerificationEmail = async () => {
+    if (!auth.currentUser) throw new Error('Not signed in.');
+    try {
+      const idToken = await auth.currentUser.getIdToken(true);
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      });
+      if (!response.ok) {
+        let message = 'Could not send the verification email.';
+        try { const body = await response.json(); message = body?.error || message; } catch {}
+        throw new Error(message);
+      }
+    } catch (workerErr) {
+      console.warn('[FlowBiz] Worker email send failed, falling back to direct Firebase Auth send:', workerErr.message);
+      await sendEmailVerification(auth.currentUser);
+    }
+  };
 
   const refreshEmailVerification = useCallback(async () => {
     if (!auth.currentUser) return false;
     try {
       await reload(auth.currentUser);
     } catch (err) {
-      console.error('[FlowBiz] refreshEmailVerification: reload() failed:', err.code || err.name, err.message);
+      console.error('[FlowBiz] refreshEmailVerification reload error:', err.code || err.name, err.message);
       return auth.currentUser?.emailVerified ?? false;
     }
     const verified = !!auth.currentUser.emailVerified;
@@ -267,20 +260,20 @@ const resendVerificationEmail = async () => {
     if (!['owner', 'cashier'].includes(role)) throw new Error('Invalid role.');
     const trimmed = (displayName || '').trim();
     if (!trimmed) throw new Error('Enter a name.');
-   const write = addDoc(collection(db, 'staffInvites'), {
-     businessId: profile.businessId,
-     displayName: trimmed,
-     role,
-     createdBy: profile.uid,
-     createdByName: profile.displayName,
-     createdAt: serverTimestamp(),
-     claimed: false,
-     linkedUid: null,
-   });
-   const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
-   if (error) throw error;
-   if (queuedOffline) return { id: null, queuedOffline: true };
-   return { id: value.id };
+    const write = addDoc(collection(db, 'staffInvites'), {
+      businessId: profile.businessId,
+      displayName: trimmed,
+      role,
+      createdBy: profile.uid,
+      createdByName: profile.displayName,
+      createdAt: serverTimestamp(),
+      claimed: false,
+      linkedUid: null,
+    });
+    const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
+    if (error) throw error;
+    if (queuedOffline) return { id: null, queuedOffline: true };
+    return { id: value.id };
   };
 
   const cancelStaffInvite = async (inviteId) => {
@@ -311,7 +304,7 @@ const resendVerificationEmail = async () => {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
         body: JSON.stringify({ targetUid: uid }),
       });
-    } catch (networkErr) {
+    } catch {
       throw new Error(`Failed to reach the API server. Check your connection.`);
     }
 
@@ -321,7 +314,7 @@ const resendVerificationEmail = async () => {
 
     const { queuedOffline, error: deleteError } = await raceWithTimeout(deleteDoc(doc(db, 'users', uid)), 4000);
     if (deleteError) {
-      throw new Error(`Staff sign-in was removed, but their profile record couldn't be deleted (${deleteError.message}). It should clear automatically once back online — try again if it doesn't.`);
+      throw new Error(`Staff sign-in was removed, but their profile record couldn't be deleted (${deleteError.message}). It should clear automatically once back online.`);
     }
     if (queuedOffline) {
       throw new Error("Staff sign-in was removed, but you're offline — their profile record will finish deleting once you're back online.");
@@ -334,12 +327,9 @@ const resendVerificationEmail = async () => {
     if (active === false) await revokeSessionsForStaffMember(uid);
   };
 
-      const deleteOwnAccount = async ({ password }) => {
+  const deleteOwnAccount = async ({ password }) => {
     if (!profile || !auth.currentUser) throw new Error('You need to be signed in to do this.');
 
-    // Re-authenticate up front — this is irreversible, so it shouldn't
-    // risk failing on the very last step (deleting the login) because the
-    // session had gone stale. Also doubles as the "are you sure" check.
     try {
       const credential = EmailAuthProvider.credential(auth.currentUser.email, password);
       await reauthenticateWithCredential(auth.currentUser, credential);
@@ -358,10 +348,6 @@ const resendVerificationEmail = async () => {
         where('businessId', '==', profile.businessId),
         where('role', '==', 'owner')
       ));
-      // Only counting ACTIVE other owners on purpose — a deactivated owner
-      // can't currently manage the business either, so their presence
-      // shouldn't be what decides "does this business still have someone
-      // running it."
       const otherOwners = othersSnap.docs
         .map((d) => ({ id: d.id, ...d.data() }))
         .filter((u) => u.id !== profile.uid && u.active !== false);
@@ -378,13 +364,9 @@ const resendVerificationEmail = async () => {
           await updateDoc(doc(db, 'businesses', profile.businessId), { createdBy: oldest.id });
         }
       } else {
-        // Sole remaining owner — wipe the business's data first. If this
-        // throws, we stop right here: nothing about the account or
-        // business record gets touched while data might still be sitting
-        // there.
-      mode = 'full-wipe';
-const { resetBusinessData } = await import('../utils/businessReset');
-await resetBusinessData(profile.businessId, profile.uid);
+        mode = 'full-wipe';
+        const { resetBusinessData } = await import('../utils/businessReset');
+        await resetBusinessData(profile.businessId, profile.uid);
       }
     }
 
@@ -406,9 +388,10 @@ await resetBusinessData(profile.businessId, profile.uid);
       if (err.code === 'auth/requires-recent-login') {
         throw new Error("Your business data was handled, but we couldn't remove your sign-in for security reasons — please sign out and back in, then try 'Delete my account' again.");
       }
-      throw new Error("Your business data was handled, but removing your sign-in failed. Please try again — it's safe to retry.");
+      throw new Error("Your business data was handled, but removing your sign-in failed. Please try again.");
     }
   };
+
   const revokeSession = async (sessionId) => {
     await updateDoc(doc(db, 'sessions', sessionId), { revoked: true });
   };
@@ -427,7 +410,6 @@ await resetBusinessData(profile.businessId, profile.uid);
 
   const isOwner = profile?.role === 'owner';
   
-  // FIX: Explicitly convert Timestamp to milliseconds to satisfy strict linters
   const expiresMs = subscription?.expiresAt?.toMillis 
     ? subscription.expiresAt.toMillis() 
     : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
@@ -443,8 +425,9 @@ await resetBusinessData(profile.businessId, profile.uid);
         businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
         isActive: profile?.active !== false, emailVerified,
         login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
-toggleMemberActive, revokeSession, listMySessions, listBusinessSessions, deleteOwnAccount,
-        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),        reloadProfile: async () => loadProfile(auth.currentUser),
+        toggleMemberActive, revokeSession, listMySessions, listBusinessSessions, deleteOwnAccount,
+        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),
+        reloadProfile: async () => loadProfile(auth.currentUser),
       }}
     >
       {children}

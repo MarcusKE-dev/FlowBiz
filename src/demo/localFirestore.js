@@ -1,31 +1,8 @@
 // src/demo/localFirestore.js
-//
-// A minimal Firestore-compatible engine backed by localStorage. It exposes
-// the same function names/signatures as the subset of the `firebase/firestore`
-// SDK this app actually uses (collection, doc, addDoc, setDoc, updateDoc,
-// deleteDoc, getDoc, getDocs, onSnapshot, query, where, orderBy, limit,
-// writeBatch, runTransaction, increment, serverTimestamp, deleteField) so
-// that src/firebase.js can route to either implementation without any
-// calling code knowing the difference.
-//
-// DEMO MODE WIRING: `npm run dev:demo` (vite --mode demo) aliases the
-// package name 'firebase/firestore' itself to THIS FILE (see
-// vite.config.js). That means every `import { collection, doc, ... } from
-// 'firebase/firestore'` anywhere in the app — every page, every hook, and
-// src/firebase.js itself — resolves to the functions below instead of the
-// real Firebase SDK, with zero changes needed in any of those files. This
-// is what actually connects this engine to the rest of the app; previously
-// nothing did.
-//
-// Scope is deliberately limited to the query shapes this app actually
-// issues (==, in, >=, <= filters; single orderBy; limit) — this is not a
-// general-purpose Firestore clone, just enough to power FlowBiz's demo data
-// correctly.
-
 const STORAGE_PREFIX = 'flowbiz_demo_data:';
 
-const cache = new Map();     // collectionName -> Map(docId -> data)
-const listeners = new Map(); // collectionName -> Set(callback)
+const cache = new Map();
+const listeners = new Map();
 let idCounter = 0;
 
 function generateId() {
@@ -33,7 +10,6 @@ function generateId() {
   return `demo_${Date.now().toString(36)}${idCounter.toString(36)}`;
 }
 
-// ── Timestamp (mimics Firestore's Timestamp: toDate()/toMillis()) ─────────
 function makeTimestamp(millis) {
   return {
     __ts: true,
@@ -42,6 +18,7 @@ function makeTimestamp(millis) {
     toMillis() { return millis; },
   };
 }
+
 function reviver(key, value) {
   if (value && typeof value === 'object' && value.__ts === true && typeof value.millis === 'number') {
     return makeTimestamp(value.millis);
@@ -49,36 +26,39 @@ function reviver(key, value) {
   return value;
 }
 
-// ── Storage / cache ─────────────────────────────────────────────────────
 function ensureLoaded(name) {
   if (!cache.has(name)) {
     let obj = {};
     try {
       const raw = localStorage.getItem(STORAGE_PREFIX + name);
       if (raw) obj = JSON.parse(raw, reviver);
-    } catch { /* corrupt or missing — start empty */ }
+    } catch { }
     cache.set(name, new Map(Object.entries(obj)));
   }
   return cache.get(name);
 }
+
 function getRaw(name, id) { return ensureLoaded(name).get(id) || null; }
 function writeRaw(name, id, data) { ensureLoaded(name).set(id, data); }
 function deleteRaw(name, id) { ensureLoaded(name).delete(id); }
+
 function persistTouched(names) {
   names.forEach((name) => {
     const map = ensureLoaded(name);
     localStorage.setItem(STORAGE_PREFIX + name, JSON.stringify(Object.fromEntries(map)));
   });
 }
+
 function subscribe(name, fn) {
   if (!listeners.has(name)) listeners.set(name, new Set());
   listeners.get(name).add(fn);
   return () => listeners.get(name)?.delete(fn);
 }
+
 function notify(names) { names.forEach((name) => listeners.get(name)?.forEach((fn) => fn())); }
 
-// ── Write sentinels ─────────────────────────────────────────────────────
 function isSentinel(v, kind) { return !!v && typeof v === 'object' && v.__sentinel === kind; }
+
 function resolveWriteData(data, base) {
   const out = base ? { ...base } : {};
   Object.entries(data).forEach(([k, v]) => {
@@ -89,11 +69,11 @@ function resolveWriteData(data, base) {
   });
   return out;
 }
+
 export function increment(n) { return { __sentinel: 'increment', n }; }
 export function serverTimestamp() { return { __sentinel: 'serverTimestamp' }; }
 export function deleteField() { return { __sentinel: 'deleteField' }; }
 
-// ── Refs ─────────────────────────────────────────────────────────────────
 export function collection(_db, name) { return { __type: 'collection', name }; }
 export function doc(a, b, c) {
   if (a && a.__type === 'collection') {
@@ -102,22 +82,26 @@ export function doc(a, b, c) {
   return { __type: 'doc', name: b, id: c || generateId() };
 }
 
-// ── Snapshots ────────────────────────────────────────────────────────────
 function makeDocSnapshot(id, data) {
   return { id, exists: () => !!data, data: () => (data ? { ...data } : undefined) };
 }
+
 function makeQuerySnapshot(rows) {
   const docs = rows.map(([id, data]) => makeDocSnapshot(id, data));
   return { docs, empty: docs.length === 0, size: docs.length, forEach(fn) { docs.forEach(fn); } };
 }
 
-// ── Query engine ─────────────────────────────────────────────────────────
-function getField(data, field) { return data ? data[field] : undefined; }
+function getField(data, docId, field) {
+  if (field === '__name__') return docId;
+  return data ? data[field] : undefined;
+}
+
 function toComparable(v) {
   if (v && typeof v.toMillis === 'function') return v.toMillis();
   if (v instanceof Date) return v.getTime();
   return v;
 }
+
 function matchWhere(fieldVal, op, value) {
   const a = toComparable(fieldVal);
   const b = toComparable(value);
@@ -133,6 +117,7 @@ function matchWhere(fieldVal, op, value) {
     default: return true;
   }
 }
+
 function compareField(a, b) {
   const av = toComparable(a); const bv = toComparable(b);
   if (av == null && bv == null) return 0;
@@ -141,17 +126,18 @@ function compareField(a, b) {
   if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv);
   return av < bv ? -1 : av > bv ? 1 : 0;
 }
+
 function runQuery(target) {
   const name = target.__type === 'query' ? target.__collName : target.name;
   let rows = [...ensureLoaded(name).entries()];
   const constraints = target.__type === 'query' ? target.constraints : [];
   constraints.filter((c) => c.kind === 'where').forEach((c) => {
-    rows = rows.filter(([, data]) => matchWhere(getField(data, c.field), c.op, c.value));
+    rows = rows.filter(([id, data]) => matchWhere(getField(data, id, c.field), c.op, c.value));
   });
   const orderC = constraints.find((c) => c.kind === 'orderBy');
   if (orderC) {
     rows = [...rows].sort(
-      (a, b) => compareField(getField(a[1], orderC.field), getField(b[1], orderC.field)) * (orderC.dir === 'desc' ? -1 : 1)
+      (a, b) => compareField(getField(a[1], a[0], orderC.field), getField(b[1], b[0], orderC.field)) * (orderC.dir === 'desc' ? -1 : 1)
     );
   }
   const limitC = constraints.find((c) => c.kind === 'limit');
@@ -166,7 +152,6 @@ export function where(field, op, value) { return { kind: 'where', field, op, val
 export function orderBy(field, dir = 'asc') { return { kind: 'orderBy', field, dir }; }
 export function limit(n) { return { kind: 'limit', n }; }
 
-// ── CRUD ─────────────────────────────────────────────────────────────────
 export async function addDoc(collRef, data) {
   const id = generateId();
   writeRaw(collRef.name, id, resolveWriteData(data, null));
@@ -209,7 +194,7 @@ export function onSnapshot(target, onNext, onError) {
       onError?.(err);
     }
   };
-  const timer = setTimeout(deliver, 0); // async initial delivery, matches real onSnapshot
+  const timer = setTimeout(deliver, 0);
   const unsub = subscribe(key, deliver);
   return () => { clearTimeout(timer); unsub(); };
 }
@@ -262,21 +247,11 @@ export async function runTransaction(_db, updateFn) {
   return result;
 }
 
-// ── Init-time stubs ──────────────────────────────────────────────────────
-// src/firebase.js calls these three real-SDK functions at module load time
-// (initializeFirestore(app, {...}), inside a persistentLocalCache(...) with
-// a persistentMultipleTabManager()). Because Demo Mode aliases the whole
-// 'firebase/firestore' package to this file (see the top-of-file comment),
-// those calls resolve here too — without these three stubs, firebase.js
-// would throw immediately on import in Demo Mode ("initializeFirestore is
-// not exported"). They don't need to do anything: this file's storage is
-// already always "local" (localStorage) and doesn't use the real SDK's
-// cache/tab-manager concepts at all.
 export function initializeFirestore() { return { __demo: true }; }
 export function persistentLocalCache() { return {}; }
 export function persistentMultipleTabManager() { return {}; }
+export function connectFirestoreEmulator() {}
 
-// ── Seeding helpers (used only by src/demo/seedData.js) ────────────────────
 export function seedDoc(name, id, data) { writeRaw(name, id, data); }
 export function seedCommit(names) { persistTouched(names); notify(names); }
 export function clearAllDemoData() {

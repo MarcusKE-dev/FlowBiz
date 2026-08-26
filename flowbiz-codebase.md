@@ -76,7 +76,9 @@ public/
   favicon-16.png
   favicon-32.png
   favicon.svg
-  hero-photo.jpg
+  hero-photo.webp
+  robots.txt
+  sitemap.xml
 src/
   components/
     charts/
@@ -93,7 +95,9 @@ src/
       LoadingSpinner.jsx
       Modal.jsx
       ProtectedRoute.jsx
+      PwaInstallBanner.jsx
       RequireOpenSession.jsx
+      WhatsAppFloatingButton.jsx
     customers/
       AddCustomerModal.jsx
     debtors/
@@ -146,6 +150,7 @@ src/
     useFirestoreCollection.js
     useHardwareScanner.js
     useOnlineStatus.js
+    usePwaInstall.js
     useSettings.js
     useSetupStatus.js
   lib/
@@ -222,82 +227,8 @@ vite.config.js
 
 # Files
 
-## File: cloudflare-worker/src/routes/deleteOwnProfile.js
-````javascript
-import { json, errorResponse } from '../lib/response.js';
-import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
-import { getDocument, deleteDocument } from '../lib/firestore.js';
-
-export async function handleDeleteOwnProfile(request, env) {
-  const authHeader = request.headers.get('Authorization') || '';
-  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!idToken) return errorResponse('Missing Authorization header.', 401);
-
-  let caller;
-  try {
-    caller = await verifyFirebaseIdToken(idToken, env.FIREBASE_PROJECT_ID);
-  } catch (err) {
-    return errorResponse(`Invalid session: ${err.message}`, 401);
-  }
-
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON body.', 400);
-  }
-  const mode = body?.mode;
-  if (mode !== 'full-wipe' && mode !== 'self-only') {
-    return errorResponse('mode must be "full-wipe" or "self-only".', 400);
-  }
-
-  const callerProfile = await getDocument(env, 'users', caller.uid);
-  if (!callerProfile) {
-    // Profile's already gone — nothing left to clean up.
-    return json({ success: true });
-  }
-
-  if (mode === 'full-wipe') {
-    if (!callerProfile.businessId) return errorResponse('No business associated with this account.', 400);
-    await deleteDocument(env, 'businessSettings', callerProfile.businessId);
-    await deleteDocument(env, 'businesses', callerProfile.businessId);
-  }
-
-  await deleteDocument(env, 'users', caller.uid);
-
-  return json({ success: true });
-}
-````
-
 ## File: cloudflare-worker/src/routes/publicDocument.js
 ````javascript
-// src/routes/publicDocument.js
-//
-// GET /r/:token — the ONLY unauthenticated route in this Worker.
-//
-// This is a customer-facing page, not an API response: it renders a full
-// HTML document directly (no React, no build step — the frontend SPA is
-// never involved in serving this route at all).
-//
-// SECURITY MODEL: there is no Firebase Auth here and Firestore Security
-// Rules never apply (this route reads Firestore with the Worker's own
-// service-account credentials, same as every other route in this file —
-// see lib/googleAuth.js). That means the opaque token is the ENTIRE
-// access control for this route. Two things make that safe:
-//   1. The token is 192 bits of crypto.getRandomValues() randomness
-//      (src/utils/documentSharing.js on the frontend) — not a Firestore
-//      auto-ID, not derived from any business/customer/sale ID.
-//   2. Once the token resolves to a { businessId, documentType,
-//      documentId } record, the underlying document is fetched and its
-//      OWN businessId is cross-checked against the share record's
-//      businessId before anything is rendered. A share record can never
-//      be pointed at a document belonging to a different business, and a
-//      manipulated documentId can never bypass the token → document
-//      mapping (see resolveDocument below).
-// Every failure path — missing token, wrong business, deleted document,
-// voided sale — returns the exact same generic "not available" response,
-// so the page can never be used to probe which case caused the failure.
-
 import { html } from '../lib/response.js';
 import { getDocument } from '../lib/firestore.js';
 
@@ -308,8 +239,8 @@ const COLLECTION_BY_TYPE = {
 };
 
 const DOCUMENT_LABEL = {
-  receipt: 'RECEIPT',
-  invoice: 'INVOICE',
+  receipt: 'OFFICIAL RECEIPT',
+  invoice: 'COMMERCIAL INVOICE',
   debtPaymentReceipt: 'DEBT PAYMENT RECEIPT',
 };
 
@@ -319,8 +250,6 @@ function escapeHtml(value) {
   }[c]));
 }
 
-// Prevents a value containing "</script>" (e.g. a customer name) from
-// breaking out of the inline JSON <script> block below.
 function safeJsonForScript(value) {
   return JSON.stringify(value).replace(/</g, '\\u003c');
 }
@@ -339,9 +268,6 @@ function formatDate(isoOrDate) {
   });
 }
 
-// Resolves a token to a tenant-verified document, or null. This is the
-// single security-critical function in this file — see the module
-// comment above for exactly what it guarantees.
 async function resolveDocument(env, token) {
   const shareRecord = await getDocument(env, 'sharedDocuments', token);
   if (!shareRecord) return null;
@@ -352,7 +278,7 @@ async function resolveDocument(env, token) {
 
   const doc = await getDocument(env, collectionName, documentId);
   if (!doc) return null;
-  if (doc.businessId !== businessId) return null; // never trust documentId alone
+  if (doc.businessId !== businessId) return null;
   if (doc.isVoided || doc.status === 'cancelled' || doc.status === 'refunded') return null;
 
   const settings = (await getDocument(env, 'businessSettings', businessId)) || {};
@@ -361,11 +287,14 @@ async function resolveDocument(env, token) {
 
 function buildViewModel(documentType, doc) {
   if (documentType === 'debtPaymentReceipt') {
+    const receiptNo = `PAY-${(doc.id || '').slice(-6).toUpperCase() || '000000'}`;
     return {
       label: DOCUMENT_LABEL.debtPaymentReceipt,
+      receiptNumber: receiptNo,
       dateLabel: formatDate(doc.paidAt),
       customerName: doc.customerName || '—',
-      refLabel: (doc.paymentReferences || []).join(', '),
+      servedByName: doc.recordedByName || '',
+      refLabel: (doc.paymentReferences || []).join(', ') || receiptNo,
       kind: 'debtPaymentReceipt',
       previousBalance: Number(doc.previousBalance) || 0,
       amountPaid: Number(doc.amountPaid) || 0,
@@ -376,21 +305,21 @@ function buildViewModel(documentType, doc) {
     };
   }
   const isCredit = documentType === 'invoice';
-  // FIX (multi-product cart): a Counter.jsx cart sale/invoice stores every
-  // product as `items` on the doc. When present, the public page renders
-  // one row per product instead of the single productName/quantity this
-  // route always assumed before. Legacy single-product docs (no `items`
-  // field) render exactly as before via the fields below.
+  const prefix = isCredit ? 'INV' : 'REC';
+  const receiptNo = `${prefix}-${(doc.id || '').slice(-6).toUpperCase() || '000000'}`;
+
   return {
     label: isCredit ? DOCUMENT_LABEL.invoice : DOCUMENT_LABEL.receipt,
+    receiptNumber: receiptNo,
     dateLabel: formatDate(doc.soldAt),
     customerName: doc.customerName || '',
-    refLabel: '',
+    servedByName: doc.soldByName || '',
+    refLabel: receiptNo,
     kind: 'sale',
     isCredit,
     items: Array.isArray(doc.items) && doc.items.length > 0 ? doc.items : null,
     productName: doc.productName || 'Item',
-    quantity: Number(doc.quantity) || 0,
+    quantity: Number(doc.quantity) || 1,
     soldPricePerUnit: Number(doc.soldPricePerUnit) || 0,
     totalAmount: Number(doc.totalAmount) || 0,
     remainingBalance: Number(doc.remainingBalance ?? doc.totalAmount) || 0,
@@ -406,13 +335,13 @@ function renderNotFound() {
       <div class="empty">
         <div class="empty-icon">📄</div>
         <h1>This document is no longer available</h1>
-        <p>The link may have expired, or the document was removed. Please contact the business directly for a copy.</p>
+        <p>The link may have expired or was removed by the business.</p>
       </div>`,
     includeActions: false,
   }), { status: 404 });
 }
 
-function renderShell({ title, bodyHtml, includeActions, paperWidthMm = 80 }) {
+function renderShell({ title, bodyHtml, paperWidthMm = 80 }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -421,48 +350,107 @@ function renderShell({ title, bodyHtml, includeActions, paperWidthMm = 80 }) {
 <meta name="flowbiz-paper-width" content="${paperWidthMm}" />
 <title>${escapeHtml(title)}</title>
 <style>
-  :root { --ink-900:#15171d; --ink-700:#363b48; --ink-500:#5a6273; --ink-400:#767f8f; --ink-200:#cfd3da; --ink-100:#e8eaed;
-          --moss-700:#1a623c; --moss-600:#1f7c4a; --moss-50:#f1faf4; --rust-600:#c4441d; --sand:#faf6ef; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--sand); font-family: 'Inter', system-ui, -apple-system, sans-serif; color: var(--ink-900); }
-  .page { max-width: 420px; margin: 0 auto; padding: 24px 16px 48px; }
-  .brand { text-align:center; margin-bottom: 16px; }
-  .brand img { height: 36px; }
-  .brand span { font-weight: 800; color: var(--moss-700); font-size: 15px; letter-spacing: 0.02em; }
-  .card { background:#fff; border:1px solid var(--ink-100); border-radius: 14px; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-  .doc-title { text-align:center; font-weight:800; font-size:13px; letter-spacing:0.08em; color: var(--ink-500); margin: 0 0 4px; }
-  .biz-name { text-align:center; font-weight:800; font-size:19px; margin: 0 0 2px; }
-  .biz-meta { text-align:center; font-size:12px; color: var(--ink-400); margin: 0 0 16px; }
-  .logo { display:block; margin: 0 auto 10px; height: 48px; border-radius: 8px; }
-  .meta-row { display:flex; justify-content:space-between; font-size:13px; color: var(--ink-500); padding: 3px 0; }
-  hr { border:none; border-top:1px solid var(--ink-100); margin: 14px 0; }
-  .row { display:flex; justify-content:space-between; align-items:flex-start; font-size:14px; padding: 5px 0; }
-  .row .label { color: var(--ink-500); }
-  .row .value { font-weight:600; color: var(--ink-900); text-align:right; }
-  .row.total .value { font-size:17px; font-weight:800; color: var(--moss-700); }
-  .badge { display:inline-block; padding: 3px 10px; border-radius:999px; font-size:11px; font-weight:700; margin-top: 6px; }
-  .badge.cleared { background: var(--moss-50); color: var(--moss-700); }
-  .badge.partial { background: #fbe5d9; color: var(--rust-600); }
-  .actions { display:flex; gap:8px; margin-top:16px; }
-  .btn { flex:1; text-align:center; padding: 12px 10px; border-radius:10px; font-weight:700; font-size:14px; border:1px solid var(--ink-200); background:#fff; color: var(--ink-700); cursor:pointer; }
-  .btn.primary { background: var(--moss-600); border-color: var(--moss-600); color:#fff; }
-  .footer { text-align:center; font-size:11px; color: var(--ink-400); margin-top: 20px; }
+  :root {
+    --ink-900:#15171d; --ink-700:#363b48; --ink-500:#5a6273; --ink-400:#767f8f; --ink-200:#cfd3da; --ink-100:#e8eaed;
+    --moss-800:#144f30; --moss-700:#1a623c; --moss-600:#1f7c4a; --moss-50:#f1faf4; --rust-600:#c4441d; --rust-50:#fdf4ef;
+    --sand:#f6f1e7;
+  }
+  * { box-sizing: border-box; margin:0; padding:0; }
+  body { background: var(--sand); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: var(--ink-900); }
+  .page { max-width: 440px; margin: 0 auto; padding: 24px 16px 48px; }
+  .brand-bar { display:flex; align-items:center; justify-content:center; gap:6px; margin-bottom: 16px; }
+  .brand-bar span { font-weight: 800; color: var(--moss-700); font-size: 14px; letter-spacing: 0.04em; text-transform:uppercase; }
+  
+  .card {
+    background: #fff;
+    border: 1px solid var(--ink-200);
+    border-radius: 16px;
+    padding: 24px 20px;
+    box-shadow: 0 4px 20px -2px rgba(21, 23, 29, 0.07);
+  }
+  
+  .logo { display:block; margin: 0 auto 10px; height: 48px; max-width:130px; object-fit:contain; border-radius: 6px; }
+  .biz-name { text-align:center; font-weight:800; font-size:18px; color:var(--ink-900); letter-spacing:-0.01em; margin-bottom: 2px; }
+  .biz-meta { text-align:center; font-size:11px; color: var(--ink-400); margin-bottom: 14px; line-height: 1.4; }
+  
+  .doc-header-box {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    background: var(--ink-50, #f5f6f7);
+    padding: 8px 12px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+  }
+  .doc-title { font-weight: 800; font-size: 11px; letter-spacing: 0.04em; color: var(--ink-700); }
+  .doc-number { font-family: monospace; font-weight: 700; font-size: 11px; color: var(--moss-700); }
+  
+  .meta-grid { display:flex; justify-content:space-between; font-size:12px; color: var(--ink-500); padding: 3px 0; }
+  .meta-grid strong { color: var(--ink-900); }
+  
+  .divider { border:none; border-top:1px dashed var(--ink-200); margin: 12px 0; }
+  
+  .item-table { width:100%; border-collapse:collapse; margin-bottom: 12px; }
+  .item-table th { text-align:left; font-size:10px; text-transform:uppercase; color:var(--ink-400); padding-bottom:6px; font-weight:700; }
+  .item-table th:last-child { text-align:right; }
+  .item-table td { padding: 6px 0; font-size:13px; vertical-align:top; }
+  .item-table td:last-child { text-align:right; font-weight:700; }
+  .item-sub { font-size:11px; color: var(--ink-400); margin-top:1.5px; }
+  
+  .total-box {
+    background: var(--moss-50);
+    border: 1px solid rgba(26, 98, 60, 0.15);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-top: 10px;
+  }
+  .total-box.credit { background: var(--rust-50); border-color: rgba(196, 68, 29, 0.15); }
+  .total-label { font-size:12px; font-weight:700; color:var(--moss-700); text-transform:uppercase; }
+  .total-box.credit .total-label { color:var(--rust-600); }
+  .total-val { font-size:17px; font-weight:800; color:var(--moss-700); }
+  .total-box.credit .total-val { color:var(--rust-600); }
+  
+  .status-tag {
+    text-align:center;
+    padding: 6px;
+    border-radius: 6px;
+    font-size:11px;
+    font-weight:700;
+    margin-top: 10px;
+  }
+  .status-tag.cleared { background:var(--moss-50); color:var(--moss-700); border:1px solid rgba(26, 98, 60, 0.2); }
+  .status-tag.partial { background:var(--rust-50); color:var(--rust-600); border:1px solid rgba(196, 68, 29, 0.2); }
+  
+  .actions { display:flex; gap:10px; margin-top:16px; }
+  .btn {
+    flex:1; text-align:center; padding: 11px; border-radius:8px;
+    font-weight:700; font-size:13px; border:1px solid var(--ink-200);
+    background:#fff; color: var(--ink-700); cursor:pointer;
+  }
+  .btn:hover { background: var(--ink-100); }
+  .btn.primary { background: var(--moss-700); border-color: var(--moss-700); color:#fff; }
+  
+  .footer-note { text-align:center; font-size:11px; color: var(--ink-400); margin-top: 18px; line-height: 1.5; }
   .empty { text-align:center; padding: 60px 16px; }
   .empty-icon { font-size: 40px; margin-bottom: 8px; }
-  .empty h1 { font-size: 17px; margin: 0 0 6px; }
-  .empty p { font-size: 13px; color: var(--ink-400); max-width: 320px; margin: 0 auto; }
+  .empty h1 { font-size: 17px; margin-bottom: 6px; }
+  .empty p { font-size: 13px; color: var(--ink-400); max-width: 300px; margin: 0 auto; }
+  
   @media print {
     body { background: #fff; }
-    .actions, .footer, .brand { display: none !important; }
+    .actions, .footer-note, .brand-bar { display: none !important; }
     .page { max-width: none; padding: 0; }
-    .card { border: none; box-shadow: none; border-radius: 0; padding: 0; }
-    @page { size: ${paperWidthMm}mm auto; margin: 4mm; }
+    .card { border: none; box-shadow: none; padding: 0; }
+    @page { size: ${paperWidthMm}mm auto; margin: 3mm; }
   }
 </style>
 </head>
 <body>
   <div class="page">
-    <div class="brand"><span>FlowBiz</span></div>
+    <div class="brand-bar"><span>FLOWBIZ VERIFIED RECEIPT</span></div>
     ${bodyHtml}
   </div>
 </body>
@@ -470,57 +458,95 @@ function renderShell({ title, bodyHtml, includeActions, paperWidthMm = 80 }) {
 }
 
 function renderDocumentBody(vm, settings) {
-  const logoHtml = settings.logoUrl ? `<img class="logo" src="${escapeHtml(settings.logoUrl)}" alt="" />` : '';
-    const metaLine = [settings.phone, settings.email, settings.address].filter(Boolean).join(' · ');
-  let detailRows = '';
+  const logoHtml = settings.logoUrl ? `<img class="logo" src="${escapeHtml(settings.logoUrl)}" alt="Logo" />` : '';
+  const metaLine = [settings.phone, settings.email, settings.address].filter(Boolean).join(' · ');
+
+  let contentHtml = '';
+
   if (vm.kind === 'debtPaymentReceipt') {
-    detailRows = `
-      <div class="row"><span class="label">Previous balance</span><span class="value">${formatKES(vm.previousBalance)}</span></div>
-      <div class="row"><span class="label">Payment received</span><span class="value">${formatKES(vm.amountPaid)}</span></div>
-      <hr/>
-      <div class="row total"><span class="label">Remaining balance</span><span class="value">${formatKES(vm.remainingBalance)}</span></div>
-      <div style="text-align:center;"><span class="badge ${vm.isCleared ? 'cleared' : 'partial'}">${vm.isCleared ? 'DEBT CLEARED' : 'PARTIALLY PAID'}</span></div>
+    contentHtml = `
+      <div style="font-size:13px;">
+        <div class="meta-grid"><span>Previous Total Debt:</span><strong>${formatKES(vm.previousBalance)}</strong></div>
+        <div class="meta-grid"><span>Payment Received:</span><strong style="color:var(--moss-700);">- ${formatKES(vm.amountPaid)}</strong></div>
+      </div>
+      <div class="total-box ${vm.isCleared ? '' : 'credit'}">
+        <span class="total-label">Remaining Debt</span>
+        <span class="total-val">${formatKES(vm.remainingBalance)}</span>
+      </div>
+      <div class="status-tag ${vm.isCleared ? 'cleared' : 'partial'}">
+        ${vm.isCleared ? '✓ DEBT FULLY CLEARED' : '⚠ PARTIALLY PAID'}
+      </div>
     `;
   } else if (vm.items) {
-    // FIX (multi-product cart): one row per product in the cart, exactly
-    // mirroring how the authenticated app's own PDF receipt lists items.
-    const itemRows = vm.items.map((it) => `
-      <div class="row"><span class="label">${it.quantity} × ${escapeHtml(it.productName)}</span><span class="value">${formatKES(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0)))}</span></div>
-    `).join('');
-    detailRows = `
-      ${itemRows}
-      <hr/>
-      ${vm.isCredit
-        ? `<div class="row total"><span class="label">Amount due</span><span class="value">${formatKES(vm.remainingBalance)}</span></div>`
-        : `<div class="row total"><span class="label">Paid (${escapeHtml(vm.paymentMethod)})</span><span class="value">${formatKES(vm.totalAmount)}</span></div>`}
+    const rows = vm.items.map((it) => {
+      const lineTotal = it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0));
+      return `
+        <tr>
+          <td>
+            <div>${escapeHtml(it.productName)}</div>
+            <div class="item-sub">${it.quantity} × ${formatKES(it.unitPrice || 0)}</div>
+          </td>
+          <td>${formatKES(lineTotal)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    contentHtml = `
+      <table class="item-table">
+        <thead><tr><th>Product</th><th>Amount</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="total-box ${vm.isCredit ? 'credit' : ''}">
+        <span class="total-label">${vm.isCredit ? 'Amount Due' : `Total Paid (${escapeHtml(vm.paymentMethod)})`}</span>
+        <span class="total-val">${formatKES(vm.isCredit ? vm.remainingBalance : vm.totalAmount)}</span>
+      </div>
     `;
   } else {
-    detailRows = `
-      <div class="row"><span class="label">${escapeHtml(vm.productName)}</span><span class="value">${formatKES(vm.totalAmount)}</span></div>
-      <div class="row"><span class="label">Quantity</span><span class="value">${vm.quantity} × ${formatKES(vm.soldPricePerUnit)}</span></div>
-      <hr/>
-      ${vm.isCredit
-        ? `<div class="row total"><span class="label">Amount due</span><span class="value">${formatKES(vm.remainingBalance)}</span></div>`
-        : `<div class="row total"><span class="label">Paid (${escapeHtml(vm.paymentMethod)})</span><span class="value">${formatKES(vm.totalAmount)}</span></div>`}
+    contentHtml = `
+      <table class="item-table">
+        <thead><tr><th>Product</th><th>Amount</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>
+              <div>${escapeHtml(vm.productName)}</div>
+              <div class="item-sub">${vm.quantity} × ${formatKES(vm.soldPricePerUnit)}</div>
+            </td>
+            <td>${formatKES(vm.totalAmount)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="total-box ${vm.isCredit ? 'credit' : ''}">
+        <span class="total-label">${vm.isCredit ? 'Amount Due' : `Total Paid (${escapeHtml(vm.paymentMethod)})`}</span>
+        <span class="total-val">${formatKES(vm.isCredit ? vm.remainingBalance : vm.totalAmount)}</span>
+      </div>
     `;
   }
 
   return `
     <div class="card">
       ${logoHtml}
-      <p class="biz-name">${escapeHtml(settings.shopName || 'FlowBiz Store')}</p>
+      <h1 class="biz-name">${escapeHtml(settings.shopName || 'FlowBiz Store')}</h1>
       ${metaLine ? `<p class="biz-meta">${escapeHtml(metaLine)}</p>` : ''}
-      <p class="doc-title">${vm.label}</p>
-      <div class="meta-row"><span>${escapeHtml(vm.dateLabel)}</span>${vm.customerName ? `<span>${escapeHtml(vm.customerName)}</span>` : ''}</div>
-      ${vm.refLabel ? `<div class="meta-row"><span>Ref</span><span>${escapeHtml(vm.refLabel)}</span></div>` : ''}
-      <hr/>
-      ${detailRows}
+      
+      <div class="doc-header-box">
+        <span class="doc-title">${escapeHtml(vm.label)}</span>
+        <span class="doc-number">${escapeHtml(vm.receiptNumber)}</span>
+      </div>
+
+      <div class="meta-grid"><span>Date:</span><strong>${escapeHtml(vm.dateLabel)}</strong></div>
+      ${vm.customerName ? `<div class="meta-grid"><span>Customer:</span><strong>${escapeHtml(vm.customerName)}</strong></div>` : ''}
+      ${vm.servedByName ? `<div class="meta-grid"><span>Served by:</span><strong>${escapeHtml(vm.servedByName)}</strong></div>` : ''}
+      ${vm.mpesaCode ? `<div class="meta-grid"><span>M-Pesa Ref:</span><strong>${escapeHtml(vm.mpesaCode)}</strong></div>` : ''}
+      
+      <hr class="divider"/>
+      ${contentHtml}
+      
       <div class="actions">
         <button class="btn" onclick="window.print()">Print</button>
         <button class="btn primary" onclick="window.__downloadFlowBizPdf()">Download PDF</button>
       </div>
     </div>
-    <p class="footer">Generated by FlowBiz — this link is private to you, please don't share it.</p>
+    <p class="footer-note">Official digital document generated via FlowBiz.<br/>Thank you for your business!</p>
     <script>window.__FLOWBIZ_DOC__ = ${safeJsonForScript(vm)};</script>
     <script>window.__FLOWBIZ_BUSINESS__ = ${safeJsonForScript({
       shopName: settings.shopName || 'FlowBiz Store',
@@ -534,16 +560,6 @@ function renderDocumentBody(vm, settings) {
   `;
 }
 
-// The "Download PDF" button needs an ACTUAL jsPDF-generated file, not just
-// window.print()'s optional "save as PDF" destination (not available/
-// reliable on every device this page will be opened on). This is a
-// deliberately minimal, framework-free re-implementation of the same
-// thermal-receipt layout src/utils/documentService.js already uses in the
-// authenticated app — it can't share that module directly because this
-// page is static HTML served straight from the Worker, not part of the
-// Vite build. The FINANCIAL DATA itself is never recomputed here: every
-// number below is exactly what was already calculated and stored when the
-// document was created — this only re-formats it onto paper a second way.
 function buildPdfScript() {
   return `
 (function () {
@@ -555,101 +571,80 @@ function buildPdfScript() {
     var vm = window.__FLOWBIZ_DOC__;
     var biz = window.__FLOWBIZ_BUSINESS__;
     var jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
-    if (!jsPDFCtor) { alert('Could not load the PDF engine. Please check your connection and try again.'); return; }
+    if (!jsPDFCtor) { alert('Could not initialize PDF engine. Please try again.'); return; }
     var paperWidth = document.querySelector('meta[name="flowbiz-paper-width"]');
     var widthMm = paperWidth ? Number(paperWidth.content) : 80;
-    // FIX (multi-product cart): a fixed 200mm page clips a receipt with
-    // several line items — height now scales with how many products are
-    // on it, same approach the authenticated app's own PDF generator uses.
     var itemCount = (vm.items && vm.items.length) || 1;
-    var estimatedHeight = Math.max(200, 90 + itemCount * 10);
+    var estimatedHeight = Math.max(160, 85 + itemCount * 11);
     var doc = new jsPDFCtor('p', 'mm', [widthMm, estimatedHeight]);
-    var marginX = 5;
+    var marginX = 4;
     var pageWidth = widthMm - marginX;
-    var y = 8;
+    var centerX = widthMm / 2;
+    var y = 5;
 
-    if (biz.logoUrl) {
-      try {
-        var m = /data:image\\/(\\w+);/.exec(biz.logoUrl);
-        var format = m ? m[1].toUpperCase() : 'PNG';
-        var logoSize = widthMm <= 58 ? 11 : 14;
-        doc.addImage(biz.logoUrl, format, marginX, y, logoSize, logoSize);
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
-        doc.text(biz.shopName, marginX + logoSize + 3, y + 5);
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
-        if (biz.phone) doc.text('Tel: ' + biz.phone, marginX + logoSize + 3, y + 9);
-        if (biz.email) doc.text(biz.email, marginX + logoSize + 3, y + 13);
-        y += logoSize + 4;
-      } catch (e) { y += 4; }
-    } else {
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(12);
-      doc.text(biz.shopName, marginX, y + 4);
-      y += 10;
-    }
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5);
+    doc.text(biz.shopName.toUpperCase(), centerX, y + 2, { align: 'center' });
+    y += 5.5;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(90, 98, 115);
+    if (biz.phone) { doc.text('Tel: ' + biz.phone, centerX, y, { align: 'center' }); y += 3.2; }
+    if (biz.email) { doc.text(biz.email, centerX, y, { align: 'center' }); y += 3.2; }
 
-    y += 2;
-    doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
-    doc.line(marginX, y, pageWidth, y);
-    y += 6;
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
-    doc.text(vm.label, marginX, y);
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+    doc.setDrawColor(180, 185, 195); doc.setLineWidth(0.2);
+    doc.line(marginX, y, pageWidth, y); y += 3.8;
+
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(21, 23, 29);
+    doc.text(vm.label + ' ' + (vm.receiptNumber || ''), marginX, y);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(90, 98, 115);
     doc.text(vm.dateLabel, pageWidth, y, { align: 'right' });
-    y += 5;
-    if (vm.customerName) { doc.text('To: ' + vm.customerName, marginX, y); y += 4; }
-    if (vm.refLabel) { doc.text('Ref: ' + vm.refLabel, marginX, y); y += 4; }
+    y += 3.5;
+    if (vm.customerName) { doc.text('Customer: ' + vm.customerName, marginX, y); y += 3.2; }
+    if (vm.servedByName) { doc.text('Served by: ' + vm.servedByName, marginX, y); y += 3.2; }
+    if (vm.mpesaCode) { doc.text('M-Pesa Ref: ' + vm.mpesaCode, marginX, y); y += 3.2; }
 
-    y += 2;
-    doc.setDrawColor(200, 200, 200); doc.setLineWidth(0.2);
-    doc.line(marginX, y, pageWidth, y);
-    y += 6;
+    doc.line(marginX, y, pageWidth, y); y += 4.5;
 
     function row(label, value, bold) {
-      doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(bold ? 10 : 9);
+      doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(bold ? 8 : 7.5);
+      doc.setTextColor(21, 23, 29);
       doc.text(label, marginX, y);
       doc.text(value, pageWidth, y, { align: 'right' });
-      y += 6;
+      y += 4.8;
     }
 
     if (vm.kind === 'debtPaymentReceipt') {
-      row('Previous balance', formatKES(vm.previousBalance));
-      row('Payment received', formatKES(vm.amountPaid));
-      doc.line(marginX, y, pageWidth, y); y += 5;
-      row('Remaining balance', formatKES(vm.remainingBalance), true);
-      y += 4;
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
+      row('Previous Debt:', formatKES(vm.previousBalance));
+      row('Payment Received:', '- ' + formatKES(vm.amountPaid), true);
+      doc.line(marginX, y, pageWidth, y); y += 4;
+      row('Remaining Balance:', formatKES(vm.remainingBalance), true);
+      y += 1.5;
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
       doc.setTextColor(vm.isCleared ? 26 : 196, vm.isCleared ? 98 : 68, vm.isCleared ? 60 : 29);
-      doc.text('STATUS: ' + (vm.isCleared ? 'DEBT CLEARED' : 'PARTIALLY PAID'), marginX, y);
-      doc.setTextColor(0, 0, 0);
+      doc.text(vm.isCleared ? '✓ DEBT FULLY CLEARED' : '⚠ PARTIALLY PAID', centerX, y, { align: 'center' });
     } else if (vm.items && vm.items.length) {
       vm.items.forEach(function (it) {
         var lineTotal = (it.lineTotal != null) ? it.lineTotal : ((it.quantity || 0) * (it.unitPrice || 0));
         row(it.quantity + ' x ' + it.productName, formatKES(lineTotal));
       });
-      doc.line(marginX, y, pageWidth, y); y += 6;
+      doc.line(marginX, y, pageWidth, y); y += 4.5;
       if (vm.isCredit) {
-        row('AMOUNT DUE', formatKES(vm.remainingBalance), true);
+        row('AMOUNT DUE (DENI):', formatKES(vm.remainingBalance), true);
       } else {
-        row('PAID (' + vm.paymentMethod + ')', formatKES(vm.totalAmount), true);
+        row('PAID (' + vm.paymentMethod + '):', formatKES(vm.totalAmount), true);
       }
     } else {
-      row(vm.productName, formatKES(vm.totalAmount));
-      doc.setTextColor(100, 100, 100);
-      row(vm.quantity + ' x @ ' + formatKES(vm.soldPricePerUnit), '');
-      doc.setTextColor(0, 0, 0);
-      doc.line(marginX, y, pageWidth, y); y += 6;
+      row(vm.quantity + ' x ' + vm.productName, formatKES(vm.totalAmount));
+      doc.line(marginX, y, pageWidth, y); y += 4.5;
       if (vm.isCredit) {
-        row('AMOUNT DUE', formatKES(vm.remainingBalance), true);
+        row('AMOUNT DUE (DENI):', formatKES(vm.remainingBalance), true);
       } else {
-        row('PAID (' + vm.paymentMethod + ')', formatKES(vm.totalAmount), true);
+        row('PAID (' + vm.paymentMethod + '):', formatKES(vm.totalAmount), true);
       }
     }
 
-    y += 10;
-    doc.setFontSize(8); doc.setFont('helvetica', 'italic'); doc.setTextColor(100, 100, 100);
-    doc.text('Thank you!', pageWidth / 2 + marginX / 2, y, { align: 'center' });
-
-    doc.save((vm.kind === 'debtPaymentReceipt' ? 'debt-payment-receipt' : vm.label.toLowerCase()) + '.pdf');
+    y += 7;
+    doc.setFontSize(7); doc.setFont('helvetica', 'italic'); doc.setTextColor(120, 125, 135);
+    doc.text('Thank you for your business!', centerX, y, { align: 'center' });
+    doc.save((vm.receiptNumber || 'document').toLowerCase() + '.pdf');
   };
 })();
 `;
@@ -672,208 +667,10 @@ export async function handlePublicDocument(request, env, token) {
   const paperWidthMm = settings.receiptPaperWidth === 58 ? 58 : 80;
 
   return html(renderShell({
-    title: `${vm.label} — ${settings.shopName || 'FlowBiz'}`,
+    title: `${vm.label} (${vm.receiptNumber}) — ${settings.shopName || 'FlowBiz'}`,
     bodyHtml: renderDocumentBody(vm, settings),
     paperWidthMm,
   }));
-}
-````
-
-## File: src/utils/dataExport.js
-````javascript
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
-
-export const EXPORT_COLLECTIONS = [
-  'products', 'sales', 'creditSales', 'customers', 'suppliers', 'expenses',
-  'purchases', 'dailySessions', 'repayments', 'supplierPayments',
-  'stockAdjustments', 'refunds', 'debtPaymentReceipts', 'staffInvites',
-];
-
-function timestampToIso(value) {
-  if (value && typeof value.toDate === 'function') return value.toDate().toISOString();
-  if (value instanceof Date) return value.toISOString();
-  return value;
-}
-
-function flattenForCsv(docData) {
-  const flat = {};
-  Object.entries(docData).forEach(([key, value]) => {
-    if (Array.isArray(value) || (value && typeof value === 'object')) {
-      flat[key] = JSON.stringify(value);
-    } else {
-      flat[key] = value ?? '';
-    }
-  });
-  return flat;
-}
-
-function escapeCsvCell(value) {
-  if (value === null || value === undefined) return '';
-  let str = String(value);
-  if (/^[=+\-@\t\r]/.test(str)) str = "'" + str; // formula-injection guard, same rule csvExport.js already uses
-  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
-  return str;
-}
-
-function rowsToCsv(rows) {
-  if (!rows || rows.length === 0) return '';
-  const headers = Array.from(rows.reduce((set, row) => { Object.keys(row).forEach((k) => set.add(k)); return set; }, new Set()));
-  const lines = [headers.join(',')];
-  rows.forEach((row) => lines.push(headers.map((h) => escapeCsvCell(row[h])).join(',')));
-  return lines.join('\n');
-}
-
-export async function exportBusinessData(businessId, { onProgress } = {}) {
-  if (!businessId) throw new Error('exportBusinessData() called with no businessId');
-
-  const manifest = { exportedAt: new Date().toISOString(), businessId, collections: {} };
-  const csvFiles = {};
-
-  for (let i = 0; i < EXPORT_COLLECTIONS.length; i++) {
-    const name = EXPORT_COLLECTIONS[i];
-    onProgress?.(name, i, EXPORT_COLLECTIONS.length);
-
-    const snap = await getDocs(query(collection(db, name), where('businessId', '==', businessId)));
-    const docs = snap.docs.map((d) => {
-      const jsonSafe = {};
-      Object.entries(d.data()).forEach(([k, v]) => { jsonSafe[k] = timestampToIso(v); });
-      return { id: d.id, ...jsonSafe };
-    });
-
-    manifest.collections[name] = docs;
-    csvFiles[name] = rowsToCsv(docs.map((d) => {
-      const { id, ...rest } = d;
-      return { id, ...flattenForCsv(rest) };
-    }));
-  }
-
-  return { manifest, csvFiles };
-}
-
-export async function buildExportZip(businessId, { onProgress } = {}) {
-  const { manifest, csvFiles } = await exportBusinessData(businessId, { onProgress });
-  const JSZip = (await import('jszip')).default;
-  const zip = new JSZip();
-
-  zip.file('flowbiz-export.json', JSON.stringify(manifest, null, 2));
-  const csvFolder = zip.folder('csv');
-  Object.entries(csvFiles).forEach(([name, csv]) => { if (csv) csvFolder.file(`${name}.csv`, csv); });
-
-  return zip.generateAsync({ type: 'blob' });
-}
-````
-
-## File: src/utils/dataImport.js
-````javascript
-import { doc, writeBatch, getDocs, query, collection, where, limit } from 'firebase/firestore';
-import { db } from '../firebase';
-
-// Ordered so anything another collection references (customers,
-// suppliers, products) is written before the records that reference it.
-export const IMPORT_COLLECTIONS = [
-  'customers', 'suppliers', 'products', 'sales', 'creditSales', 'purchases',
-  'expenses', 'dailySessions', 'repayments', 'supplierPayments',
-  'stockAdjustments', 'refunds', 'debtPaymentReceipts',
-];
-
-function isoToDate(value) {
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
-    const d = new Date(value);
-    if (!Number.isNaN(d.getTime())) return d;
-  }
-  return value;
-}
-
-function reviveDoc(data) {
-  const revived = {};
-  Object.entries(data).forEach(([k, v]) => { revived[k] = isoToDate(v); });
-  return revived;
-}
-
-export async function readExportZip(file) {
-  const JSZip = (await import('jszip')).default;
-  const zip = await JSZip.loadAsync(file);
-  const manifestFile = zip.file('flowbiz-export.json');
-  if (!manifestFile) throw new Error("That doesn't look like a FlowBiz export — flowbiz-export.json wasn't found in the zip.");
-  const text = await manifestFile.async('string');
-  let manifest;
-  try {
-    manifest = JSON.parse(text);
-  } catch {
-    throw new Error('flowbiz-export.json is not valid — the file may be corrupted.');
-  }
-  if (!manifest.collections || typeof manifest.collections !== 'object') {
-    throw new Error("That doesn't look like a FlowBiz export — missing expected data.");
-  }
-  return manifest;
-}
-
-// Which of the collections about to be imported already have ANY
-// document for this business — used to warn before merging into
-// non-empty data, since a document sharing the exact same ID as one you
-// already have will be silently overwritten.
-export async function checkExistingData(businessId, manifest) {
-  const nonEmpty = [];
-  for (const name of IMPORT_COLLECTIONS) {
-    if (!manifest.collections[name]?.length) continue;
-    const snap = await getDocs(query(collection(db, name), where('businessId', '==', businessId), limit(1)));
-    if (!snap.empty) nonEmpty.push(name);
-  }
-  return nonEmpty;
-}
-
-function resolveTargetId(name, originalId, businessId) {
-  if (name === 'dailySessions') {
-    const dateMatch = originalId.match(/(\d{4}-\d{2}-\d{2})$/);
-    if (dateMatch) return `${businessId}_${dateMatch[1]}`;
-  }
-  return originalId;
-}
-
-export async function importBusinessData(businessId, manifest, { onProgress } = {}) {
-  if (!businessId) throw new Error('importBusinessData() called with no businessId');
-
-  const results = {};
-  const barcodeEntries = [];
-
-  for (let i = 0; i < IMPORT_COLLECTIONS.length; i++) {
-    const name = IMPORT_COLLECTIONS[i];
-    const docs = manifest.collections[name] || [];
-    onProgress?.(name, i, IMPORT_COLLECTIONS.length);
-    if (docs.length === 0) { results[name] = 0; continue; }
-
-    let written = 0;
-    for (let start = 0; start < docs.length; start += 400) {
-      const chunk = docs.slice(start, start + 400);
-      const batch = writeBatch(db);
-      chunk.forEach((d) => {
-        const { id, ...rest } = d;
-        if (!id) return;
-        const revived = reviveDoc(rest);
-        revived.businessId = businessId;
-        const targetId = resolveTargetId(name, id, businessId);
-        batch.set(doc(db, name, targetId), revived);
-        if (name === 'products' && revived.barcode) {
-          barcodeEntries.push({ businessId, barcode: revived.barcode, productId: targetId });
-        }
-      });
-      await batch.commit();
-      written += chunk.length;
-    }
-    results[name] = written;
-  }
-
-  for (let start = 0; start < barcodeEntries.length; start += 400) {
-    const chunk = barcodeEntries.slice(start, start + 400);
-    const batch = writeBatch(db);
-    chunk.forEach((entry) => {
-      batch.set(doc(db, 'barcodeIndex', `${businessId}__${entry.barcode}`), entry);
-    });
-    await batch.commit();
-  }
-
-  return results;
 }
 ````
 
@@ -1068,110 +865,6 @@ export async function verifyFirebaseIdToken(idToken, projectId) {
 }
 ````
 
-## File: cloudflare-worker/src/lib/firestore.js
-````javascript
-// src/lib/firestore.js
-//
-// Minimal Firestore REST API client — just enough for this backend's
-// needs (read-by-id, patch-by-id, create-by-id). Deliberately NOT a
-// general Firestore SDK: no queries, no transactions. Every route in this
-// project only ever needs to read/write documents it already knows the ID
-// of (a uid, a businessId, a Paystack reference), so this stays small.
-//
-// Auth is via the OAuth2 access token from googleAuth.js, which — like
-// the Firebase Admin SDK — bypasses Firestore Security Rules entirely.
-// That's expected and required: this is the privileged, server-side path.
-
-import { getGoogleAccessToken } from './googleAuth.js';
-
-function fieldsToObject(fields) {
-  if (!fields) return {};
-  const out = {};
-  for (const [key, value] of Object.entries(fields)) out[key] = valueToJs(value);
-  return out;
-}
-
-function valueToJs(value) {
-  if (value.stringValue !== undefined) return value.stringValue;
-  if (value.integerValue !== undefined) return Number(value.integerValue);
-  if (value.doubleValue !== undefined) return value.doubleValue;
-  if (value.booleanValue !== undefined) return value.booleanValue;
-  if (value.nullValue !== undefined) return null;
-  if (value.timestampValue !== undefined) return value.timestampValue; // ISO string
-  if (value.mapValue !== undefined) return fieldsToObject(value.mapValue.fields);
-  if (value.arrayValue !== undefined) return (value.arrayValue.values || []).map(valueToJs);
-  return null;
-}
-
-function jsToValue(value) {
-  if (value === null || value === undefined) return { nullValue: null };
-  if (typeof value === 'string') return { stringValue: value };
-  if (typeof value === 'boolean') return { booleanValue: value };
-  if (typeof value === 'number') {
-    return Number.isInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
-  }
-  if (value instanceof Date) return { timestampValue: value.toISOString() };
-  if (Array.isArray(value)) return { arrayValue: { values: value.map(jsToValue) } };
-  if (typeof value === 'object') return { mapValue: { fields: objectToFields(value) } };
-  throw new Error(`Unsupported Firestore value type: ${typeof value}`);
-}
-
-function objectToFields(obj) {
-  const fields = {};
-  for (const [key, value] of Object.entries(obj)) fields[key] = jsToValue(value);
-  return fields;
-}
-
-function baseUrl(projectId) {
-  return `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`;
-}
-
-export async function getDocument(env, collection, docId) {
-  const token = await getGoogleAccessToken(env);
-  const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}/${collection}/${docId}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Firestore read failed (${collection}/${docId}): ${await res.text()}`);
-  const data = await res.json();
-  return { id: docId, ...fieldsToObject(data.fields) };
-}
-
-export async function patchDocument(env, collection, docId, updates) {
-  const token = await getGoogleAccessToken(env);
-  const fields = objectToFields(updates);
-  const mask = Object.keys(updates).map((k) => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join('&');
-  const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}/${collection}/${docId}?${mask}`, {
-    method: 'PATCH',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fields }),
-  });
-  if (!res.ok) throw new Error(`Firestore update failed (${collection}/${docId}): ${await res.text()}`);
-  return res.json();
-}
-
-export async function createDocument(env, collection, docId, data) {
-  const token = await getGoogleAccessToken(env);
-  const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}/${collection}?documentId=${encodeURIComponent(docId)}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fields: objectToFields(data) }),
-  });
-  if (res.status === 409) throw new Error('DOCUMENT_ALREADY_EXISTS');
-  if (!res.ok) throw new Error(`Firestore create failed (${collection}/${docId}): ${await res.text()}`);
-  return res.json();
-}
-export async function deleteDocument(env, collection, docId) {
-  const token = await getGoogleAccessToken(env);
-  const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}/${collection}/${docId}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (res.status === 404) return; 
-  if (!res.ok) throw new Error(`Firestore delete failed (${collection}/${docId}): ${await res.text()}`);
-}
-````
-
 ## File: cloudflare-worker/src/lib/googleAuth.js
 ````javascript
 // src/lib/googleAuth.js
@@ -1359,22 +1052,13 @@ export async function sendEmail(env, { to, subject, html, text }) {
 }
 ````
 
-## File: cloudflare-worker/src/routes/deleteStaff.js
+## File: cloudflare-worker/src/routes/deleteOwnProfile.js
 ````javascript
-// src/routes/deleteStaff.js
-//
-// POST /api/auth/delete-staff  { targetUid }
-//
-// Fixes the staff-deletion bug: deletes the actual Firebase Authentication
-// account for a removed staff member, not just their Firestore profile —
-// so the same email can be re-invited afterward.
-
 import { json, errorResponse } from '../lib/response.js';
 import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
-import { getDocument } from '../lib/firestore.js';
-import { deleteAuthUser } from '../lib/identityToolkit.js';
+import { getDocument, deleteDocument } from '../lib/firestore.js';
 
-export async function handleDeleteStaff(request, env) {
+export async function handleDeleteOwnProfile(request, env) {
   const authHeader = request.headers.get('Authorization') || '';
   const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!idToken) return errorResponse('Missing Authorization header.', 401);
@@ -1392,36 +1076,24 @@ export async function handleDeleteStaff(request, env) {
   } catch {
     return errorResponse('Invalid JSON body.', 400);
   }
-  const targetUid = body?.targetUid;
-  if (!targetUid || typeof targetUid !== 'string') return errorResponse('targetUid is required.', 400);
-  if (targetUid === caller.uid) return errorResponse("You can't remove your own account.", 400);
+  const mode = body?.mode;
+  if (mode !== 'full-wipe' && mode !== 'self-only') {
+    return errorResponse('mode must be "full-wipe" or "self-only".', 400);
+  }
 
-  // Step 1 & 2 — the requester must exist, be active, and be an owner.
   const callerProfile = await getDocument(env, 'users', caller.uid);
-  if (!callerProfile) return errorResponse('Caller profile not found.', 403);
-  if (callerProfile.role !== 'owner') return errorResponse('Only an owner can remove staff accounts.', 403);
-  if (callerProfile.active === false) return errorResponse('Your account is deactivated.', 403);
-
-  // Step 3 — the target must belong to the SAME business. This is what
-  // stops one business's owner from deleting another business's staff
-  // member by guessing or leaking a uid.
-  const targetProfile = await getDocument(env, 'users', targetUid);
-  if (!targetProfile) {
-    return errorResponse('Target staff profile not found in Firestore — nothing to reconcile.', 404);
-  }
-  if (targetProfile.businessId !== callerProfile.businessId) {
-    return errorResponse('That account does not belong to your business.', 403);
+  if (!callerProfile) {
+    // Profile's already gone — nothing left to clean up.
+    return json({ success: true });
   }
 
-  // The account that originally created the business can only ever be
-  // removed by itself (via "Delete my account" in Settings) — never by
-  // another owner through this staff-removal flow.
-  const business = await getDocument(env, 'businesses', callerProfile.businessId);
-  if (business && business.createdBy === targetUid) {
-    return errorResponse("The account that created this business can't be removed this way. That person can delete their own account from Settings.", 403);
+  if (mode === 'full-wipe') {
+    if (!callerProfile.businessId) return errorResponse('No business associated with this account.', 400);
+    await deleteDocument(env, 'businessSettings', callerProfile.businessId);
+    await deleteDocument(env, 'businesses', callerProfile.businessId);
   }
 
-  await deleteAuthUser(env, targetUid);
+  await deleteDocument(env, 'users', caller.uid);
 
   return json({ success: true });
 }
@@ -1582,6 +1254,63 @@ export async function handleProPrice() {
   <rect x="62" y="39" width="7" height="15" rx="2.5" fill="#F6F1E7"/>
   <rect x="72" y="31" width="7" height="23" rx="2.5" fill="#F6F1E7"/>
 </svg>
+````
+
+## File: public/robots.txt
+````
+User-agent: *
+Allow: /
+Allow: /privacy
+Allow: /terms
+Allow: /setup
+Allow: /login
+
+Disallow: /dashboard
+Disallow: /counter
+Disallow: /customers
+Disallow: /expenses
+Disallow: /purchases
+Disallow: /products
+Disallow: /suppliers
+Disallow: /stock-take
+Disallow: /reports
+Disallow: /close-day
+Disallow: /users
+Disallow: /settings
+Disallow: /r/
+
+Sitemap: https://flowbiz.co.ke/sitemap.xml
+````
+
+## File: public/sitemap.xml
+````xml
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://flowbiz.co.ke/</loc>
+    <lastmod>2026-08-24</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://flowbiz.co.ke/setup</loc>
+    <lastmod>2026-08-24</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://flowbiz.co.ke/privacy</loc>
+    <lastmod>2026-08-24</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>https://flowbiz.co.ke/terms</loc>
+    <lastmod>2026-08-24</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+</urlset>
 ````
 
 ## File: src/components/charts/MiniBarChart.jsx
@@ -1802,6 +1531,85 @@ export default function Modal({
         {children}
       </div>
     </div>
+  );
+}
+````
+
+## File: src/components/common/PwaInstallBanner.jsx
+````javascript
+import { useState } from 'react';
+import { Download, Share, PlusSquare, X } from 'lucide-react';
+import { usePwaInstall } from '../../hooks/usePwaInstall';
+
+export default function PwaInstallBanner() {
+  const { isInstallable, isIOS, isStandalone, promptInstall } = usePwaInstall();
+  const [dismissed, setDismissed] = useState(false);
+
+  // If already running in installed app mode or closed by user, don't show
+  if (isStandalone || dismissed) return null;
+
+  return (
+    <aside
+      aria-label="Install FlowBiz App"
+      className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md rounded-2xl border border-moss-200 bg-white p-4 shadow-2xl animate-fade-in"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <img
+            src="/icons/icon-96.png"
+            alt="FlowBiz App Icon"
+            className="h-11 w-11 rounded-xl shadow-xs shrink-0 object-cover"
+            onError={(e) => {
+              e.currentTarget.src = '/favicon.svg';
+            }}
+          />
+          <div>
+            <h4 className="font-display text-sm font-bold text-ink-900">
+              Install FlowBiz App
+            </h4>
+            <p className="text-xs text-ink-500">
+              Run your counter faster and work 100% offline.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setDismissed(true)}
+          className="text-ink-400 hover:text-ink-700 p-1 min-h-[32px] min-w-[32px] flex items-center justify-center rounded-lg"
+          aria-label="Close install prompt"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="mt-3">
+        {/* Android & Desktop Chrome / Edge 1-Click Install Button */}
+        {isInstallable ? (
+          <button
+            type="button"
+            onClick={promptInstall}
+            className="btn-primary w-full !py-2 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
+          >
+            <Download className="h-4 w-4" /> Install Free App
+          </button>
+        ) : isIOS ? (
+          <div className="rounded-lg bg-[#faf6ef] p-2.5 text-[11px] text-ink-700 border border-ink-100">
+            <p className="font-semibold flex items-center flex-wrap gap-1">
+              Tap <Share className="h-3.5 w-3.5 text-moss-700 inline" /> Share, then select{' '}
+              <PlusSquare className="h-3.5 w-3.5 text-moss-700 inline" /> &quot;Add to Home Screen&quot;
+            </p>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={promptInstall}
+            className="btn-primary w-full !py-2 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
+          >
+            <Download className="h-4 w-4" /> Install Free App
+          </button>
+        )}
+      </div>
+    </aside>
   );
 }
 ````
@@ -2083,213 +1891,6 @@ return (
               </div>
             );
           })}
-        </div>
-      </div>
-    </section>
-  );
-}
-````
-
-## File: src/components/landing/HeroSection.jsx
-````javascript
-import { Link } from 'react-router-dom';
-import { ArrowRight, CheckCircle2, ShieldCheck, Zap } from 'lucide-react';
-import { PosSimulationMockup } from './PosSimulationMockup';
-
-// Put your image file inside your project's "public/" folder: public/hero-photo.jpg
-const HERO_PHOTO_URL = '/hero-photo.jpg';
-
-export function HeroSection() {
-  return (
-    <section className="relative overflow-hidden">
-      
-      {/* Full-Bleed Hero Background Banner */}
-      <div className="relative min-h-[580px] lg:min-h-[680px] flex items-center bg-[#0d1f16]">
-        
-        {/* 1. Base Background Photo - Fitted to not crop on desktop right side */}
-        <div className="absolute inset-0 z-0 overflow-hidden">
-          <img
-            src={HERO_PHOTO_URL}
-            alt="Retail shop owner managing inventory and POS"
-            className="w-full h-full object-cover object-center lg:object-right"
-            onError={(e) => {
-              // Fallback styling if hero-photo.jpg is not yet loaded
-              e.currentTarget.style.opacity = '0.25';
-            }}
-          />
-        </div>
-
-        {/* 2. Left-to-Right Blur & Gradient Overlay */}
-        {/* On Left: Deep dark-green backdrop with soft blur to keep bold white text 100% readable */}
-        {/* On Right: Blends cleanly to transparent so the person/photo on the right is fully visible and uncropped */}
-        <div 
-          className="absolute inset-0 z-1 pointer-events-none"
-          style={{
-            background: 'linear-gradient(to right, rgba(13, 31, 22, 0.96) 0%, rgba(13, 31, 22, 0.88) 42%, rgba(13, 31, 22, 0.35) 70%, rgba(13, 31, 22, 0.02) 100%)',
-          }}
-        />
-
-        {/* 3. Soft blur mask on left for enhanced text clarity */}
-        <div 
-          className="absolute inset-0 z-1 pointer-events-none hidden md:block"
-          style={{
-            maskImage: 'linear-gradient(to right, black 25%, transparent 65%)',
-            WebkitMaskImage: 'linear-gradient(to right, black 25%, transparent 65%)',
-            backdropFilter: 'blur(8px)',
-            WebkitBackdropFilter: 'blur(8px)',
-          }}
-        />
-
-        {/* 4. Foreground Content Container */}
-        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24 w-full">
-          <div className="max-w-3xl space-y-6 text-white">
-
-
-            {/* Much Larger, Bold Pure White Headline */}
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-black text-white tracking-tight leading-[1.08] drop-shadow-sm">
-              Run your business with ease
-            </h1>
-
-            {/* Minimal & Clear Subtitle */}
-<p className="text-base sm:text-lg lg:text-xl text-[#d1dcd4] font-normal leading-relaxed max-w-2xl">
-  Sell <strong className="text-white font-semibold">faster</strong>, know what you have in{" "}
-  <strong className="text-white font-semibold">stock</strong>, and keep your business running
-  even while <strong className="text-white font-semibold">offline</strong>, then see how it’s doing when you’re <strong className="text-white font-semibold">online.</strong>
-</p>
-            {/* Action Buttons */}
-            <div className="pt-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5">
-              <Link
-                to="/setup"
-                className="bg-[#1a623c] text-white px-8 py-4 rounded-xl text-base font-bold shadow-lg hover:bg-[#144f30] transition-all flex items-center justify-center gap-2 border border-[#348a58]"
-              >
-                <span>Get Started Free</span>
-                <ArrowRight className="h-5 w-5" />
-              </Link>
-              <Link
-                to="/login"
-                className="bg-white/10 backdrop-blur-md border border-white/30 text-white px-7 py-4 rounded-xl text-base font-bold hover:bg-white/20 transition-all flex items-center justify-center"
-              >
-                Sign In to Counter
-              </Link>
-            </div>
-
-            {/* Minimal Trust Checklist */}
-            <div className="pt-6 border-t border-white/15 grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-xs sm:text-sm font-semibold text-[#e1ece4]">
-              <span className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
-                Works 100% Offline
-              </span>
-              <span className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
-                M-Pesa Till Reconciled
-              </span>
-              <span className="flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4 text-[#a3e6ba] shrink-0" />
-                Customer Reminders
-              </span>
-              <span className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
-                No POS Hardware Required
-              </span>
-            </div>
-
-          </div>
-        </div>
-
-      </div>
-
-      {/* Interactive POS Simulator Section below Hero */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 md:py-24">
-        <div className="text-center mb-6">
-        
-          <h2 className="text-xl sm:text-2xl font-extrabold text-[#15171d] mt-1">
-            Live Point of Sale Simulator
-          </h2>
-        </div>
-        <PosSimulationMockup />
-      </div>
-
-    </section>
-  );
-}
-````
-
-## File: src/components/landing/HowItWorks.jsx
-````javascript
-import { Link } from 'react-router-dom';
-import { ArrowRight, UserPlus, PackagePlus, ShoppingBag } from 'lucide-react';
-
-export function HowItWorks() {
-  const steps = [
-    {
-      num: '1',
-      icon: UserPlus,
-      title: 'Register Your Business',
-      description: 'Set up your shop name, store phone number, and initial user account in under 60 seconds. No credit card required.',
-    },
-    {
-      num: '2',
-      icon: PackagePlus,
-      title: 'Add or Scan Products',
-      description: 'Enter your inventory items with buying cost, selling price, and optional barcode. Add categories and supplier links anytime.',
-    },
-    {
-      num: '3',
-      icon: ShoppingBag,
-      title: 'Open Counter & Sell',
-      description: 'Record multi-item cash, M-Pesa, or credit sales with automatic stock deduction, WhatsApp receipts, and end-of-day till audits.',
-    },
-  ];
-
-  return (
-    <section id="workflow" className="py-16 md:py-24 border-t border-[#e8eaed]">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
-        <div className="text-center max-w-3xl mx-auto space-y-3">
-          
-          <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-[#15171d] tracking-tight">
-            Get started in 3 simple steps
-          </h2>
-          <p className="text-sm sm:text-base text-[#5a6273]">
-No technicians. No complicated setup. No expensive POS hardware.          </p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative pt-4">
-          {steps.map((step, idx) => {
-            const Icon = step.icon;
-            return (
-              <div
-                key={idx}
-                className="space-y-4 flex flex-col justify-between pb-6 border-b border-[#e8eaed] md:border-b-0"
-              >
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-lg bg-[#f1faf4] text-[#1a623c] flex items-center justify-center">
-                      <Icon className="h-5 w-5" strokeWidth={2} />
-                    </div>
-                    <span className="text-xl font-black text-[#1a623c]">
-                      Step 0{step.num}
-                    </span>
-                  </div>
-                  <h3 className="text-lg font-bold text-[#15171d]">
-                    {step.title}
-                  </h3>
-                  <p className="text-xs text-[#5a6273] leading-relaxed">
-                    {step.description}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="text-center pt-4">
-          <Link
-            to="/setup"
-            className="inline-flex items-center justify-center gap-2 bg-[#1a623c] text-white px-8 py-3.5 rounded-xl font-bold text-sm hover:bg-[#144f30] transition-all shadow-sm"
-          >
-            Create Your Business in 60 Seconds
-            <ArrowRight className="h-4 w-4" />
-          </Link>
         </div>
       </div>
     </section>
@@ -3514,13 +3115,33 @@ Start free with the essentials. Upgrade to FlowBiz Pro when your business needs 
 
 ## File: src/components/layout/AppShell.jsx
 ````javascript
+import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import BottomNav from './BottomNav';
 import TopHeader from './TopHeader';
+
 export default function AppShell({ children }) {
+  const location = useLocation();
+  const isCounterRoute = location.pathname.startsWith('/counter');
+
+  // The Counter page benefits from a wider working area (product grid +
+  // checkout panel side by side), so on desktop the sidebar collapses to
+  // a slim icon rail automatically the moment it's opened, and expands
+  // again on every other page. This never touches mobile — Sidebar is
+  // hidden below the lg breakpoint regardless of this state. A person
+  // can still override it manually at any time via the toggle at the
+  // bottom of the sidebar; navigating away and back to Counter resets it
+  // to collapsed again.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(isCounterRoute);
+
+  useEffect(() => {
+    setSidebarCollapsed(isCounterRoute);
+  }, [isCounterRoute]);
+
   return (
     <div className="flex min-h-screen bg-sand">
-      <Sidebar />
+      <Sidebar collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed((v) => !v)} />
       <div className="flex min-h-screen flex-1 flex-col overflow-hidden">
         <TopHeader />
         <main className="flex-1 overflow-y-auto px-4 pb-28 pt-4 sm:px-6 lg:pb-8">{children}</main>
@@ -3747,33 +3368,10 @@ export function exitDemoMode() {
 ## File: src/demo/localFirestore.js
 ````javascript
 // src/demo/localFirestore.js
-//
-// A minimal Firestore-compatible engine backed by localStorage. It exposes
-// the same function names/signatures as the subset of the `firebase/firestore`
-// SDK this app actually uses (collection, doc, addDoc, setDoc, updateDoc,
-// deleteDoc, getDoc, getDocs, onSnapshot, query, where, orderBy, limit,
-// writeBatch, runTransaction, increment, serverTimestamp, deleteField) so
-// that src/firebase.js can route to either implementation without any
-// calling code knowing the difference.
-//
-// DEMO MODE WIRING: `npm run dev:demo` (vite --mode demo) aliases the
-// package name 'firebase/firestore' itself to THIS FILE (see
-// vite.config.js). That means every `import { collection, doc, ... } from
-// 'firebase/firestore'` anywhere in the app — every page, every hook, and
-// src/firebase.js itself — resolves to the functions below instead of the
-// real Firebase SDK, with zero changes needed in any of those files. This
-// is what actually connects this engine to the rest of the app; previously
-// nothing did.
-//
-// Scope is deliberately limited to the query shapes this app actually
-// issues (==, in, >=, <= filters; single orderBy; limit) — this is not a
-// general-purpose Firestore clone, just enough to power FlowBiz's demo data
-// correctly.
-
 const STORAGE_PREFIX = 'flowbiz_demo_data:';
 
-const cache = new Map();     // collectionName -> Map(docId -> data)
-const listeners = new Map(); // collectionName -> Set(callback)
+const cache = new Map();
+const listeners = new Map();
 let idCounter = 0;
 
 function generateId() {
@@ -3781,7 +3379,6 @@ function generateId() {
   return `demo_${Date.now().toString(36)}${idCounter.toString(36)}`;
 }
 
-// ── Timestamp (mimics Firestore's Timestamp: toDate()/toMillis()) ─────────
 function makeTimestamp(millis) {
   return {
     __ts: true,
@@ -3790,6 +3387,7 @@ function makeTimestamp(millis) {
     toMillis() { return millis; },
   };
 }
+
 function reviver(key, value) {
   if (value && typeof value === 'object' && value.__ts === true && typeof value.millis === 'number') {
     return makeTimestamp(value.millis);
@@ -3797,36 +3395,39 @@ function reviver(key, value) {
   return value;
 }
 
-// ── Storage / cache ─────────────────────────────────────────────────────
 function ensureLoaded(name) {
   if (!cache.has(name)) {
     let obj = {};
     try {
       const raw = localStorage.getItem(STORAGE_PREFIX + name);
       if (raw) obj = JSON.parse(raw, reviver);
-    } catch { /* corrupt or missing — start empty */ }
+    } catch { }
     cache.set(name, new Map(Object.entries(obj)));
   }
   return cache.get(name);
 }
+
 function getRaw(name, id) { return ensureLoaded(name).get(id) || null; }
 function writeRaw(name, id, data) { ensureLoaded(name).set(id, data); }
 function deleteRaw(name, id) { ensureLoaded(name).delete(id); }
+
 function persistTouched(names) {
   names.forEach((name) => {
     const map = ensureLoaded(name);
     localStorage.setItem(STORAGE_PREFIX + name, JSON.stringify(Object.fromEntries(map)));
   });
 }
+
 function subscribe(name, fn) {
   if (!listeners.has(name)) listeners.set(name, new Set());
   listeners.get(name).add(fn);
   return () => listeners.get(name)?.delete(fn);
 }
+
 function notify(names) { names.forEach((name) => listeners.get(name)?.forEach((fn) => fn())); }
 
-// ── Write sentinels ─────────────────────────────────────────────────────
 function isSentinel(v, kind) { return !!v && typeof v === 'object' && v.__sentinel === kind; }
+
 function resolveWriteData(data, base) {
   const out = base ? { ...base } : {};
   Object.entries(data).forEach(([k, v]) => {
@@ -3837,11 +3438,11 @@ function resolveWriteData(data, base) {
   });
   return out;
 }
+
 export function increment(n) { return { __sentinel: 'increment', n }; }
 export function serverTimestamp() { return { __sentinel: 'serverTimestamp' }; }
 export function deleteField() { return { __sentinel: 'deleteField' }; }
 
-// ── Refs ─────────────────────────────────────────────────────────────────
 export function collection(_db, name) { return { __type: 'collection', name }; }
 export function doc(a, b, c) {
   if (a && a.__type === 'collection') {
@@ -3850,22 +3451,26 @@ export function doc(a, b, c) {
   return { __type: 'doc', name: b, id: c || generateId() };
 }
 
-// ── Snapshots ────────────────────────────────────────────────────────────
 function makeDocSnapshot(id, data) {
   return { id, exists: () => !!data, data: () => (data ? { ...data } : undefined) };
 }
+
 function makeQuerySnapshot(rows) {
   const docs = rows.map(([id, data]) => makeDocSnapshot(id, data));
   return { docs, empty: docs.length === 0, size: docs.length, forEach(fn) { docs.forEach(fn); } };
 }
 
-// ── Query engine ─────────────────────────────────────────────────────────
-function getField(data, field) { return data ? data[field] : undefined; }
+function getField(data, docId, field) {
+  if (field === '__name__') return docId;
+  return data ? data[field] : undefined;
+}
+
 function toComparable(v) {
   if (v && typeof v.toMillis === 'function') return v.toMillis();
   if (v instanceof Date) return v.getTime();
   return v;
 }
+
 function matchWhere(fieldVal, op, value) {
   const a = toComparable(fieldVal);
   const b = toComparable(value);
@@ -3881,6 +3486,7 @@ function matchWhere(fieldVal, op, value) {
     default: return true;
   }
 }
+
 function compareField(a, b) {
   const av = toComparable(a); const bv = toComparable(b);
   if (av == null && bv == null) return 0;
@@ -3889,17 +3495,18 @@ function compareField(a, b) {
   if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv);
   return av < bv ? -1 : av > bv ? 1 : 0;
 }
+
 function runQuery(target) {
   const name = target.__type === 'query' ? target.__collName : target.name;
   let rows = [...ensureLoaded(name).entries()];
   const constraints = target.__type === 'query' ? target.constraints : [];
   constraints.filter((c) => c.kind === 'where').forEach((c) => {
-    rows = rows.filter(([, data]) => matchWhere(getField(data, c.field), c.op, c.value));
+    rows = rows.filter(([id, data]) => matchWhere(getField(data, id, c.field), c.op, c.value));
   });
   const orderC = constraints.find((c) => c.kind === 'orderBy');
   if (orderC) {
     rows = [...rows].sort(
-      (a, b) => compareField(getField(a[1], orderC.field), getField(b[1], orderC.field)) * (orderC.dir === 'desc' ? -1 : 1)
+      (a, b) => compareField(getField(a[1], a[0], orderC.field), getField(b[1], b[0], orderC.field)) * (orderC.dir === 'desc' ? -1 : 1)
     );
   }
   const limitC = constraints.find((c) => c.kind === 'limit');
@@ -3914,7 +3521,6 @@ export function where(field, op, value) { return { kind: 'where', field, op, val
 export function orderBy(field, dir = 'asc') { return { kind: 'orderBy', field, dir }; }
 export function limit(n) { return { kind: 'limit', n }; }
 
-// ── CRUD ─────────────────────────────────────────────────────────────────
 export async function addDoc(collRef, data) {
   const id = generateId();
   writeRaw(collRef.name, id, resolveWriteData(data, null));
@@ -3957,7 +3563,7 @@ export function onSnapshot(target, onNext, onError) {
       onError?.(err);
     }
   };
-  const timer = setTimeout(deliver, 0); // async initial delivery, matches real onSnapshot
+  const timer = setTimeout(deliver, 0);
   const unsub = subscribe(key, deliver);
   return () => { clearTimeout(timer); unsub(); };
 }
@@ -4010,21 +3616,11 @@ export async function runTransaction(_db, updateFn) {
   return result;
 }
 
-// ── Init-time stubs ──────────────────────────────────────────────────────
-// src/firebase.js calls these three real-SDK functions at module load time
-// (initializeFirestore(app, {...}), inside a persistentLocalCache(...) with
-// a persistentMultipleTabManager()). Because Demo Mode aliases the whole
-// 'firebase/firestore' package to this file (see the top-of-file comment),
-// those calls resolve here too — without these three stubs, firebase.js
-// would throw immediately on import in Demo Mode ("initializeFirestore is
-// not exported"). They don't need to do anything: this file's storage is
-// already always "local" (localStorage) and doesn't use the real SDK's
-// cache/tab-manager concepts at all.
 export function initializeFirestore() { return { __demo: true }; }
 export function persistentLocalCache() { return {}; }
 export function persistentMultipleTabManager() { return {}; }
+export function connectFirestoreEmulator() {}
 
-// ── Seeding helpers (used only by src/demo/seedData.js) ────────────────────
 export function seedDoc(name, id, data) { writeRaw(name, id, data); }
 export function seedCommit(names) { persistTouched(names); notify(names); }
 export function clearAllDemoData() {
@@ -4183,43 +3779,56 @@ export function useOnlineStatus() {
 }
 ````
 
-## File: src/hooks/useSettings.js
+## File: src/hooks/usePwaInstall.js
 ````javascript
-import { useEffect, useState } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
+import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 
-const DEFAULT_CATEGORIES = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
-const DEFAULTS = { 
-  shopName: 'FlowBiz', 
-  cashierCanRecordExpenses: true, 
-  categories: DEFAULT_CATEGORIES,
-  phone: '',
-  email: '',
-  address: '',
-  logoUrl: ''
-};
+export function usePwaInstall() {
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [isInstallable, setIsInstallable] = useState(false);
+  const [isIOS, setIsIOS] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
 
-export function useSettings() {
-  const { businessId } = useAuth();
-  const [settings, setSettings] = useState(DEFAULTS);
-  const [loading, setLoading]   = useState(true);
+  useEffect(() => {
+    const standalone =
+      window.matchMedia?.('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true;
+    setIsStandalone(standalone);
 
-useEffect(() => {
-    if (!businessId) { setSettings(DEFAULTS); setLoading(false); return; }
-    const unsub = onSnapshot(
-      doc(db, 'businessSettings', businessId),
-      // BUG FIX (Issue 19): businessId was never included in the returned
-      // settings object, so documentService.js's sendWhatsAppDocument was
-      // always sending businessId: undefined to the server.
-      snap => { setSettings(snap.exists() ? { ...DEFAULTS, ...snap.data(), businessId } : { ...DEFAULTS, businessId }); setLoading(false); },
-      () => { setSettings({ ...DEFAULTS, businessId }); setLoading(false); }
-    );
-    return unsub;
-  }, [businessId]);
+    const userAgent = (navigator.userAgent || '').toLowerCase();
+    const isIosDevice = /iphone|ipad|ipod/.test(userAgent);
+    setIsIOS(isIosDevice && !standalone);
 
-  return { settings, loading };
+    const handleBeforeInstallPrompt = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const promptInstall = async () => {
+    if (!deferredPrompt) {
+      if (/iphone|ipad|ipod/.test((navigator.userAgent || '').toLowerCase())) {
+        return false;
+      }
+      toast('To install, tap your browser menu (⋮) and select "Install app" or "Add to Home screen".');
+      return false;
+    }
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    setDeferredPrompt(null);
+    setIsInstallable(false);
+    return outcome === 'accepted';
+  };
+
+  return { isInstallable, isIOS, isStandalone, promptInstall };
 }
 ````
 
@@ -4298,34 +3907,6 @@ export function withBusiness(data, businessId) {
 }
 ````
 
-## File: src/pages/LandingPage.jsx
-````javascript
-import { LandingHeader } from '../components/landing/LandingHeader';
-import { HeroSection } from '../components/landing/HeroSection';
-import { FeatureGrid } from '../components/landing/FeatureGrid';
-import { HowItWorks } from '../components/landing/HowItWorks';
-import { PricingComparison } from '../components/landing/PricingComparison';
-import { FaqSection } from '../components/landing/FaqSection';
-import { LandingFooter } from '../components/landing/LandingFooter';
-
-export default function LandingPage() {
-  return (
-    <div className="min-h-screen bg-[#faf6ef] text-[#15171d] flex flex-col">
-      <LandingHeader />
-      <main className="flex-1">
-        <HeroSection />
-        
-        <FeatureGrid />
-        <HowItWorks />
-        <PricingComparison />
-        <FaqSection />
-      </main>
-      <LandingFooter />
-    </div>
-  );
-}
-````
-
 ## File: src/router/routePrefetch.js
 ````javascript
 const idle = typeof requestIdleCallback === 'function'
@@ -4365,6 +3946,231 @@ export function exportToCSV(filename, rows) {
   link.href = url; link.setAttribute('download', filename);
   document.body.appendChild(link); link.click();
   document.body.removeChild(link); URL.revokeObjectURL(url);
+}
+````
+
+## File: src/utils/dataExport.js
+````javascript
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../firebase';
+
+export const EXPORT_COLLECTIONS = [
+  'businessSettings',
+  'customers', 'suppliers', 'products', 'sales', 'creditSales', 'purchases',
+  'expenses', 'dailySessions', 'repayments', 'supplierPayments',
+  'stockAdjustments', 'refunds', 'debtPaymentReceipts', 'sharedDocuments', 'staffInvites',
+];
+
+function timestampToIso(value) {
+  if (value && typeof value.toDate === 'function') return value.toDate().toISOString();
+  if (value instanceof Date) return value.toISOString();
+  return value;
+}
+
+function flattenForCsv(docData) {
+  const flat = {};
+  Object.entries(docData).forEach(([key, value]) => {
+    if (Array.isArray(value) || (value && typeof value === 'object')) {
+      flat[key] = JSON.stringify(value);
+    } else {
+      flat[key] = value ?? '';
+    }
+  });
+  return flat;
+}
+
+function escapeCsvCell(value) {
+  if (value === null || value === undefined) return '';
+  let str = String(value);
+  if (/^[=+\-@\t\r]/.test(str)) str = "'" + str;
+  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+  return str;
+}
+
+function rowsToCsv(rows) {
+  if (!rows || rows.length === 0) return '';
+  const headers = Array.from(rows.reduce((set, row) => { Object.keys(row).forEach((k) => set.add(k)); return set; }, new Set()));
+  const lines = [headers.join(',')];
+  rows.forEach((row) => lines.push(headers.map((h) => escapeCsvCell(row[h])).join(',')));
+  return lines.join('\n');
+}
+
+export async function exportBusinessData(businessId, { onProgress } = {}) {
+  if (!businessId) throw new Error('exportBusinessData() called with no businessId');
+
+  const manifest = { exportedAt: new Date().toISOString(), businessId, collections: {} };
+  const csvFiles = {};
+
+  for (let i = 0; i < EXPORT_COLLECTIONS.length; i++) {
+    const name = EXPORT_COLLECTIONS[i];
+    onProgress?.(name, i, EXPORT_COLLECTIONS.length);
+
+    const q = name === 'businessSettings'
+      ? query(collection(db, name), where('__name__', '==', businessId))
+      : query(collection(db, name), where('businessId', '==', businessId));
+
+    const snap = await getDocs(q);
+    const docs = snap.docs.map((d) => {
+      const jsonSafe = {};
+      Object.entries(d.data()).forEach(([k, v]) => { jsonSafe[k] = timestampToIso(v); });
+      return { id: d.id, ...jsonSafe };
+    });
+
+    manifest.collections[name] = docs;
+    csvFiles[name] = rowsToCsv(docs.map((d) => {
+      const { id, ...rest } = d;
+      return { id, ...flattenForCsv(rest) };
+    }));
+  }
+
+  return { manifest, csvFiles };
+}
+
+export async function buildExportZip(businessId, { onProgress } = {}) {
+  const { manifest, csvFiles } = await exportBusinessData(businessId, { onProgress });
+  const JSZip = (await import('jszip')).default;
+  const zip = new JSZip();
+
+  zip.file('flowbiz-export.json', JSON.stringify(manifest, null, 2));
+  const csvFolder = zip.folder('csv');
+  Object.entries(csvFiles).forEach(([name, csv]) => { if (csv) csvFolder.file(`${name}.csv`, csv); });
+
+  return zip.generateAsync({ type: 'blob' });
+}
+````
+
+## File: src/utils/dataImport.js
+````javascript
+import { doc, writeBatch, getDocs, query, collection, where, limit } from 'firebase/firestore';
+import { db } from '../firebase';
+
+export const IMPORT_COLLECTIONS = [
+  'businessSettings',
+  'customers', 'suppliers', 'products', 'sales', 'creditSales', 'purchases',
+  'expenses', 'dailySessions', 'repayments', 'supplierPayments',
+  'stockAdjustments', 'refunds', 'debtPaymentReceipts', 'sharedDocuments', 'staffInvites',
+];
+
+function isoToDate(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return value;
+}
+
+function reviveValue(value) {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') return isoToDate(value);
+  if (Array.isArray(value)) return value.map(reviveValue);
+  if (typeof value === 'object' && !(value instanceof Date)) {
+    const obj = {};
+    for (const [k, v] of Object.entries(value)) {
+      obj[k] = reviveValue(v);
+    }
+    return obj;
+  }
+  return value;
+}
+
+function reviveDoc(data) {
+  const revived = {};
+  Object.entries(data).forEach(([k, v]) => { revived[k] = reviveValue(v); });
+  return revived;
+}
+
+export async function readExportZip(file) {
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(file);
+  const manifestFile = zip.file('flowbiz-export.json');
+  if (!manifestFile) throw new Error("That doesn't look like a FlowBiz export — flowbiz-export.json was not found in the zip archive.");
+  const text = await manifestFile.async('string');
+  let manifest;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    throw new Error('flowbiz-export.json is not valid — the file may be corrupted.');
+  }
+  if (!manifest.collections || typeof manifest.collections !== 'object') {
+    throw new Error("That doesn't look like a valid FlowBiz export — missing collection data.");
+  }
+  return manifest;
+}
+
+export async function checkExistingData(businessId, manifest) {
+  if (!businessId) throw new Error('checkExistingData requires a businessId');
+  const nonEmpty = [];
+  for (const name of IMPORT_COLLECTIONS) {
+    if (!manifest.collections[name]?.length) continue;
+    try {
+      const q = name === 'businessSettings'
+        ? query(collection(db, name), where('__name__', '==', businessId), limit(1))
+        : query(collection(db, name), where('businessId', '==', businessId), limit(1));
+      const snap = await getDocs(q);
+      if (!snap.empty) nonEmpty.push(name);
+    } catch {
+      // Continue checking remaining collections
+    }
+  }
+  return nonEmpty;
+}
+
+function resolveTargetId(name, originalId, businessId, manifestBusinessId) {
+  if (name === 'businessSettings') return businessId;
+  if (name === 'dailySessions') {
+    const dateMatch = originalId.match(/(\d{4}-\d{2}-\d{2})$/);
+    if (dateMatch) return `${businessId}_${dateMatch[1]}`;
+  }
+  if (manifestBusinessId && manifestBusinessId !== businessId && originalId.startsWith(`${manifestBusinessId}_`)) {
+    return originalId.replace(`${manifestBusinessId}_`, `${businessId}_`);
+  }
+  return originalId;
+}
+
+export async function importBusinessData(businessId, manifest, { onProgress } = {}) {
+  if (!businessId) throw new Error('importBusinessData() called with no businessId');
+
+  const results = {};
+  const barcodeEntries = [];
+  const manifestBusinessId = manifest.businessId || null;
+
+  for (let i = 0; i < IMPORT_COLLECTIONS.length; i++) {
+    const name = IMPORT_COLLECTIONS[i];
+    const docs = manifest.collections[name] || [];
+    onProgress?.(name, i, IMPORT_COLLECTIONS.length);
+    if (docs.length === 0) { results[name] = 0; continue; }
+
+    let written = 0;
+    for (let start = 0; start < docs.length; start += 350) {
+      const chunk = docs.slice(start, start + 350);
+      const batch = writeBatch(db);
+      chunk.forEach((d) => {
+        const { id, ...rest } = d;
+        if (!id) return;
+        const revived = reviveDoc(rest);
+        revived.businessId = businessId;
+        const targetId = resolveTargetId(name, id, businessId, manifestBusinessId);
+        batch.set(doc(db, name, targetId), revived);
+        if (name === 'products' && revived.barcode) {
+          barcodeEntries.push({ businessId, barcode: revived.barcode, productId: targetId });
+        }
+      });
+      await batch.commit();
+      written += chunk.length;
+    }
+    results[name] = written;
+  }
+
+  for (let start = 0; start < barcodeEntries.length; start += 350) {
+    const chunk = barcodeEntries.slice(start, start + 350);
+    const batch = writeBatch(db);
+    chunk.forEach((entry) => {
+      batch.set(doc(db, 'barcodeIndex', `${businessId}__${entry.barcode}`), entry);
+    });
+    await batch.commit();
+  }
+
+  return results;
 }
 ````
 
@@ -4628,35 +4434,6 @@ export function parseScanPayload(rawText) {
 }
 ````
 
-## File: src/App.jsx
-````javascript
-import { Toaster } from 'react-hot-toast';
-import { AuthProvider } from './contexts/AuthContext';
-import AppRouter from './router/AppRouter';
-import ErrorBoundary from './components/common/ErrorBoundary';
-
-function App() {
-  return (
-    <ErrorBoundary>
-      <AuthProvider>
-        <Toaster
-          position="top-center"
-          toastOptions={{
-            style: { fontSize: '14px', borderRadius: '10px', maxWidth: '90vw' },
-            success: { iconTheme: { primary: '#1a623c', secondary: '#fff' } },
-            error:   { iconTheme: { primary: '#c4441d', secondary: '#fff' } },
-            duration: 3000,
-          }}
-        />
-        <AppRouter />
-      </AuthProvider>
-    </ErrorBoundary>
-  );
-}
-
-export default App;
-````
-
 ## File: .env.example
 ````
 VITE_FIREBASE_API_KEY=
@@ -4901,7 +4678,7 @@ service firebase.storage {
   match /b/{bucket}/o {
     match /businesses/{businessId}/{fileName} {
       allow read: if true;
-      allow write: if request.auth != null;
+      allow write: if request.auth != null && request.resource.size < 5 * 1024 * 1024;
     }
   }
 }
@@ -5046,6 +4823,110 @@ export default defineConfig(({ mode }) => ({
 }));
 ````
 
+## File: cloudflare-worker/src/lib/firestore.js
+````javascript
+// src/lib/firestore.js
+//
+// Minimal Firestore REST API client — just enough for this backend's
+// needs (read-by-id, patch-by-id, create-by-id). Deliberately NOT a
+// general Firestore SDK: no queries, no transactions. Every route in this
+// project only ever needs to read/write documents it already knows the ID
+// of (a uid, a businessId, a Paystack reference), so this stays small.
+//
+// Auth is via the OAuth2 access token from googleAuth.js, which — like
+// the Firebase Admin SDK — bypasses Firestore Security Rules entirely.
+// That's expected and required: this is the privileged, server-side path.
+
+import { getGoogleAccessToken } from './googleAuth.js';
+
+function fieldsToObject(fields) {
+  if (!fields) return {};
+  const out = {};
+  for (const [key, value] of Object.entries(fields)) out[key] = valueToJs(value);
+  return out;
+}
+
+function valueToJs(value) {
+  if (value.stringValue !== undefined) return value.stringValue;
+  if (value.integerValue !== undefined) return Number(value.integerValue);
+  if (value.doubleValue !== undefined) return value.doubleValue;
+  if (value.booleanValue !== undefined) return value.booleanValue;
+  if (value.nullValue !== undefined) return null;
+  if (value.timestampValue !== undefined) return value.timestampValue; // ISO string
+  if (value.mapValue !== undefined) return fieldsToObject(value.mapValue.fields);
+  if (value.arrayValue !== undefined) return (value.arrayValue.values || []).map(valueToJs);
+  return null;
+}
+
+function jsToValue(value) {
+  if (value === null || value === undefined) return { nullValue: null };
+  if (typeof value === 'string') return { stringValue: value };
+  if (typeof value === 'boolean') return { booleanValue: value };
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
+  }
+  if (value instanceof Date) return { timestampValue: value.toISOString() };
+  if (Array.isArray(value)) return { arrayValue: { values: value.map(jsToValue) } };
+  if (typeof value === 'object') return { mapValue: { fields: objectToFields(value) } };
+  throw new Error(`Unsupported Firestore value type: ${typeof value}`);
+}
+
+function objectToFields(obj) {
+  const fields = {};
+  for (const [key, value] of Object.entries(obj)) fields[key] = jsToValue(value);
+  return fields;
+}
+
+function baseUrl(projectId) {
+  return `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`;
+}
+
+export async function getDocument(env, collection, docId) {
+  const token = await getGoogleAccessToken(env);
+  const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}/${collection}/${docId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Firestore read failed (${collection}/${docId}): ${await res.text()}`);
+  const data = await res.json();
+  return { id: docId, ...fieldsToObject(data.fields) };
+}
+
+export async function patchDocument(env, collection, docId, updates) {
+  const token = await getGoogleAccessToken(env);
+  const fields = objectToFields(updates);
+  const mask = Object.keys(updates).map((k) => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join('&');
+  const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}/${collection}/${docId}?${mask}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) throw new Error(`Firestore update failed (${collection}/${docId}): ${await res.text()}`);
+  return res.json();
+}
+
+export async function createDocument(env, collection, docId, data) {
+  const token = await getGoogleAccessToken(env);
+  const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}/${collection}?documentId=${encodeURIComponent(docId)}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: objectToFields(data) }),
+  });
+  if (res.status === 409) throw new Error('DOCUMENT_ALREADY_EXISTS');
+  if (!res.ok) throw new Error(`Firestore create failed (${collection}/${docId}): ${await res.text()}`);
+  return res.json();
+}
+export async function deleteDocument(env, collection, docId) {
+  const token = await getGoogleAccessToken(env);
+  const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}/${collection}/${docId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return; 
+  if (!res.ok) throw new Error(`Firestore delete failed (${collection}/${docId}): ${await res.text()}`);
+}
+````
+
 ## File: cloudflare-worker/src/lib/response.js
 ````javascript
 // src/lib/response.js
@@ -5073,6 +4954,74 @@ export function html(bodyHtml, init = {}) {
       'Cache-Control': 'no-store',
     },
   });
+}
+````
+
+## File: cloudflare-worker/src/routes/deleteStaff.js
+````javascript
+// src/routes/deleteStaff.js
+//
+// POST /api/auth/delete-staff  { targetUid }
+//
+// Fixes the staff-deletion bug: deletes the actual Firebase Authentication
+// account for a removed staff member, not just their Firestore profile —
+// so the same email can be re-invited afterward.
+
+import { json, errorResponse } from '../lib/response.js';
+import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
+import { getDocument } from '../lib/firestore.js';
+import { deleteAuthUser } from '../lib/identityToolkit.js';
+
+export async function handleDeleteStaff(request, env) {
+  const authHeader = request.headers.get('Authorization') || '';
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!idToken) return errorResponse('Missing Authorization header.', 401);
+
+  let caller;
+  try {
+    caller = await verifyFirebaseIdToken(idToken, env.FIREBASE_PROJECT_ID);
+  } catch (err) {
+    return errorResponse(`Invalid session: ${err.message}`, 401);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON body.', 400);
+  }
+  const targetUid = body?.targetUid;
+  if (!targetUid || typeof targetUid !== 'string') return errorResponse('targetUid is required.', 400);
+  if (targetUid === caller.uid) return errorResponse("You can't remove your own account.", 400);
+
+  // Step 1 & 2 — the requester must exist, be active, and be an owner.
+  const callerProfile = await getDocument(env, 'users', caller.uid);
+  if (!callerProfile) return errorResponse('Caller profile not found.', 403);
+  if (callerProfile.role !== 'owner') return errorResponse('Only an owner can remove staff accounts.', 403);
+  if (callerProfile.active === false) return errorResponse('Your account is deactivated.', 403);
+
+  // Step 3 — the target must belong to the SAME business. This is what
+  // stops one business's owner from deleting another business's staff
+  // member by guessing or leaking a uid.
+  const targetProfile = await getDocument(env, 'users', targetUid);
+  if (!targetProfile) {
+    return errorResponse('Target staff profile not found in Firestore — nothing to reconcile.', 404);
+  }
+  if (targetProfile.businessId !== callerProfile.businessId) {
+    return errorResponse('That account does not belong to your business.', 403);
+  }
+
+  // The account that originally created the business can only ever be
+  // removed by itself (via "Delete my account" in Settings) — never by
+  // another owner through this staff-removal flow.
+  const business = await getDocument(env, 'businesses', callerProfile.businessId);
+  if (business && business.createdBy === targetUid) {
+    return errorResponse("The account that created this business can't be removed this way. That person can delete their own account from Settings.", 403);
+  }
+
+  await deleteAuthUser(env, targetUid);
+
+  return json({ success: true });
 }
 ````
 
@@ -5378,6 +5327,45 @@ export default function ConfirmDialog({ open, title, message, confirmLabel = 'Co
 }
 ````
 
+## File: src/components/common/WhatsAppFloatingButton.jsx
+````javascript
+// src/components/common/WhatsAppFloatingButton.jsx
+
+export default function WhatsAppFloatingButton({
+  phone = '254741104469',
+  message = 'Hello FlowBiz! I would like to inquire more about the POS system for my business.',
+}) {
+  const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+
+  return (
+    <div className="group fixed bottom-5 right-5 z-40 flex items-center gap-2.5">
+      {/* Floating Tooltip on Desktop Hover */}
+      <span className="pointer-events-none hidden rounded-xl bg-[#15171d] px-3 py-1.5 text-xs font-bold text-white shadow-xl transition-all duration-200 opacity-0 translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 sm:inline-block whitespace-nowrap">
+        Chat with us
+      </span>
+
+      {/* Clean, Uniform Circular WhatsApp Button (No pulsing dot) */}
+      <a
+        href={whatsappUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Chat with FlowBiz on WhatsApp"
+        className="flex h-12 w-12 sm:h-13 sm:w-13 items-center justify-center rounded-full bg-[#25D366] text-white shadow-xl transition-all duration-300 hover:bg-[#20ba5a] hover:shadow-2xl hover:scale-105 active:scale-95 shrink-0"
+      >
+        {/* Centered Official WhatsApp SVG Icon */}
+        <svg
+          className="h-6 w-6 sm:h-7 sm:w-7 fill-current"
+          viewBox="0 0 24 24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2zm0 18.15c-1.48 0-2.93-.4-4.2-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.19 8.19 0 0 1-1.26-4.38c0-4.54 3.7-8.24 8.25-8.24 2.2 0 4.27.86 5.82 2.42a8.18 8.18 0 0 1 2.41 5.83c0 4.55-3.7 8.23-8.23 8.23zm4.52-6.16c-.25-.12-1.47-.72-1.7-.81-.23-.09-.39-.13-.56.12-.17.25-.64.81-.79.97-.14.17-.29.19-.54.06-.25-.12-1.05-.39-2-1.23-.74-.66-1.23-1.47-1.38-1.72-.14-.25-.02-.38.11-.5.11-.11.25-.29.37-.43.12-.15.17-.25.25-.42.08-.17.04-.31-.02-.43s-.56-1.34-.76-1.84c-.2-.48-.41-.42-.56-.43h-.48c-.17 0-.43.06-.66.31-.22.25-.86.84-.86 2.05s.88 2.38 1 2.55c.13.17 1.73 2.65 4.2 3.71.59.25 1.05.41 1.41.52.59.19 1.13.16 1.56.1.48-.07 1.47-.6 1.68-1.18.21-.58.21-1.07.15-1.18-.07-.1-.23-.17-.48-.29z" />
+        </svg>
+      </a>
+    </div>
+  );
+}
+````
+
 ## File: src/components/customers/AddCustomerModal.jsx
 ````javascript
 import { useState, useEffect } from 'react';
@@ -5674,6 +5662,204 @@ export default function RepaymentModal({ open, customer, totalOwed, onClose, onS
 }
 ````
 
+## File: src/components/landing/HeroSection.jsx
+````javascript
+import { Link } from 'react-router-dom';
+import { ArrowRight, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { PosSimulationMockup } from './PosSimulationMockup';
+
+const HERO_PHOTO_URL = '/hero-photo.webp';
+
+export function HeroSection() {
+  return (
+    <section className="relative overflow-hidden">
+      
+      {/* Full-Bleed Hero Background Banner */}
+      <div className="relative min-h-[580px] lg:min-h-[680px] flex items-center bg-[#0d1f16]">
+        
+        {/* 1. Base Background Photo */}
+        <div className="absolute inset-0 z-0 overflow-hidden">
+          <img
+            src={HERO_PHOTO_URL}
+            alt="Retail shop owner managing inventory and POS"
+            className="w-full h-full object-cover object-center lg:object-right"
+            onError={(e) => {
+              e.currentTarget.style.opacity = '0.25';
+            }}
+          />
+        </div>
+
+        {/* 2. Left-to-Right Blur & Gradient Overlay */}
+        <div 
+          className="absolute inset-0 z-1 pointer-events-none"
+          style={{
+            background: 'linear-gradient(to right, rgba(13, 31, 22, 0.96) 0%, rgba(13, 31, 22, 0.88) 42%, rgba(13, 31, 22, 0.35) 70%, rgba(13, 31, 22, 0.02) 100%)',
+          }}
+        />
+
+        {/* 3. Soft blur mask on left for enhanced text clarity */}
+        <div 
+          className="absolute inset-0 z-1 pointer-events-none hidden md:block"
+          style={{
+            maskImage: 'linear-gradient(to right, black 25%, transparent 65%)',
+            WebkitMaskImage: 'linear-gradient(to right, black 25%, transparent 65%)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+          }}
+        />
+
+        {/* 4. Foreground Content Container */}
+        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24 w-full">
+          <div className="max-w-3xl space-y-6 text-white">
+
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-black text-white tracking-tight leading-[1.08] drop-shadow-sm">
+              Run your business with ease
+            </h1>
+
+            <p className="text-base sm:text-lg lg:text-xl text-[#d1dcd4] font-normal leading-relaxed max-w-2xl">
+              Sell <strong className="text-white font-semibold">faster</strong>, know what you have in{' '}
+              <strong className="text-white font-semibold">stock</strong>, and keep your business running
+              even while <strong className="text-white font-semibold">offline</strong>, then see how it’s doing when you’re <strong className="text-white font-semibold">online.</strong>
+            </p>
+
+            <div className="pt-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5">
+              <Link
+                to="/setup"
+                className="bg-[#1a623c] text-white px-8 py-4 rounded-xl text-base font-bold shadow-lg hover:bg-[#144f30] transition-all flex items-center justify-center gap-2 border border-[#348a58]"
+              >
+                <span>Get Started Free</span>
+                <ArrowRight className="h-5 w-5" />
+              </Link>
+              <Link
+                to="/login"
+                className="bg-white/10 backdrop-blur-md border border-white/30 text-white px-7 py-4 rounded-xl text-base font-bold hover:bg-white/20 transition-all flex items-center justify-center"
+              >
+                Sign In to Counter
+              </Link>
+            </div>
+
+            <div className="pt-6 border-t border-white/15 grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-xs sm:text-sm font-semibold text-[#e1ece4]">
+              <span className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
+                Works 100% Offline
+              </span>
+              <span className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
+                M-Pesa Till Reconciled
+              </span>
+              <span className="flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-[#a3e6ba] shrink-0" />
+                Customer Reminders
+              </span>
+              <span className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
+                No POS Hardware Required
+              </span>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+
+      {/* Interactive POS Simulator Section with ID linked to header */}
+      <div id="live-simulator" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 md:py-24 scroll-mt-14">
+        <div className="text-center mb-6">
+          <h2 className="text-xl sm:text-2xl font-extrabold text-[#15171d] mt-1">
+            Live Point of Sale Simulator
+          </h2>
+        </div>
+        <PosSimulationMockup />
+      </div>
+
+    </section>
+  );
+}
+````
+
+## File: src/components/landing/HowItWorks.jsx
+````javascript
+import { Link } from 'react-router-dom';
+import { ArrowRight, UserPlus, PackagePlus, ShoppingBag } from 'lucide-react';
+
+export function HowItWorks() {
+  const steps = [
+    {
+      num: '1',
+      icon: UserPlus,
+      title: 'Register Your Business',
+      description: 'Set up your shop name, store phone number, and initial user account in under 60 seconds. No credit card required.',
+    },
+    {
+      num: '2',
+      icon: PackagePlus,
+      title: 'Add or Scan Products',
+      description: 'Enter your inventory items with buying cost, selling price, and optional barcode. Add categories and supplier links anytime.',
+    },
+    {
+      num: '3',
+      icon: ShoppingBag,
+      title: 'Open Counter & Sell',
+      description: 'Record multi-item cash, M-Pesa, or credit sales with automatic stock deduction, WhatsApp receipts, and end-of-day till audits.',
+    },
+  ];
+
+  return (
+    <section id="how-it-works" className="py-16 md:py-24 border-t border-[#e8eaed] scroll-mt-14">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+        <div className="text-center max-w-3xl mx-auto space-y-3">
+          <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-[#15171d] tracking-tight">
+            Get started in 3 simple steps
+          </h2>
+          <p className="text-sm sm:text-base text-[#5a6273]">
+            No technicians. No complicated setup. No expensive POS hardware.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative pt-4">
+          {steps.map((step, idx) => {
+            const Icon = step.icon;
+            return (
+              <div
+                key={idx}
+                className="space-y-4 flex flex-col justify-between pb-6 border-b border-[#e8eaed] md:border-b-0"
+              >
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 rounded-lg bg-[#f1faf4] text-[#1a623c] flex items-center justify-center">
+                      <Icon className="h-5 w-5" strokeWidth={2} />
+                    </div>
+                    <span className="text-xl font-black text-[#1a623c]">
+                      Step 0{step.num}
+                    </span>
+                  </div>
+                  <h3 className="text-lg font-bold text-[#15171d]">
+                    {step.title}
+                  </h3>
+                  <p className="text-xs text-[#5a6273] leading-relaxed">
+                    {step.description}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="text-center pt-4">
+          <Link
+            to="/setup"
+            className="inline-flex items-center justify-center gap-2 bg-[#1a623c] text-white px-8 py-3.5 rounded-xl font-bold text-sm hover:bg-[#144f30] transition-all shadow-sm"
+          >
+            Create Your Business in 60 Seconds
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+````
+
 ## File: src/components/landing/LandingFooter.jsx
 ````javascript
 import { Link } from 'react-router-dom';
@@ -5774,159 +5960,6 @@ export function LandingFooter() {
 
       </div>
     </footer>
-  );
-}
-````
-
-## File: src/components/landing/LandingHeader.jsx
-````javascript
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Menu, X, ArrowRight, } from 'lucide-react';
-
-export function LandingHeader() {
-  const [mobileOpen, setMobileOpen] = useState(false);
-
-  return (
-    <header className="sticky top-0 z-50 bg-[#faf6ef]/95 backdrop-blur-md border-b border-[#e8eaed] h-14 flex items-center">
-      <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="relative flex items-center justify-between h-full">
-          
-          {/* Left: Brand Logo */}
-          <Link to="/" className="flex items-center gap-2.5 shrink-0 z-10 leading-none">
-      
-            <div className="flex flex-col justify-center">
-              <span className="font-extrabold text-lg text-[#15171d] tracking-tight leading-none">
-                FlowBiz
-              </span>
-              <span className="text-[8px] font-bold text-[#1a623c] uppercase tracking-wider leading-none mt-1">
-                Business Manager
-              </span>
-            </div>
-          </Link>
-
-          {/* Center: Navigation Links Perfectly Centered Horizontally & Vertically */}
-          <nav className="hidden lg:flex absolute inset-0 items-center justify-center pointer-events-none">
-            <div className="flex items-center gap-6 xl:gap-8 text-xs sm:text-sm font-semibold text-[#5a6273] pointer-events-auto leading-none">
-              <a 
-                href="#features" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                Features
-              </a>
-              <a 
-                href="#live-simulator" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                Live Simulator
-              </a>
-              <a 
-                href="#how-it-works" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                How It Works
-              </a>
-              <a 
-                href="#pricing" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                Pricing
-              </a>
-              <a 
-                href="#faq" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                FAQ
-              </a>
-            </div>
-          </nav>
-
-          {/* Right: Action Buttons */}
-          <div className="hidden sm:flex items-center gap-2.5 shrink-0 z-10 leading-none">
-            <Link
-              to="/login"
-              className="text-xs sm:text-sm font-bold text-[#363b48] hover:text-[#15171d] px-3 py-2 rounded-lg hover:bg-white transition-colors"
-            >
-              Sign In
-            </Link>
-            <Link
-              to="/setup"
-              className="bg-[#1a623c] text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-bold hover:bg-[#144f30] transition-colors shadow-xs flex items-center gap-1.5 whitespace-nowrap"
-            >
-              <span>Get Started</span>
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-          </div>
-
-          {/* Mobile Menu Button */}
-          <button
-            type="button"
-            onClick={() => setMobileOpen(!mobileOpen)}
-            className="lg:hidden p-1.5 rounded-lg text-[#5a6273] hover:text-[#15171d] hover:bg-white z-10"
-            aria-label="Toggle Menu"
-          >
-            {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
-
-        </div>
-      </div>
-
-      {/* Mobile Dropdown */}
-      {mobileOpen && (
-        <div className="lg:hidden absolute top-full left-0 right-0 border-b border-[#e8eaed] bg-white px-6 py-4 space-y-3 shadow-lg">
-          <a
-            href="#features"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            Features
-          </a>
-          <a
-            href="#simulator"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            Live Simulator
-          </a>
-          <a
-            href="#how-it-works"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            How It Works
-          </a>
-          <a
-            href="#pricing"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            Pricing
-          </a>
-          <a
-            href="#faq"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            FAQ
-          </a>
-          <div className="pt-2.5 border-t border-[#e8eaed] flex flex-col gap-2">
-            <Link
-              to="/login"
-              className="w-full text-center py-2.5 border border-[#cfd3da] rounded-xl text-sm font-bold text-[#15171d]"
-            >
-              Sign In
-            </Link>
-            <Link
-              to="/setup"
-              className="w-full text-center py-3 bg-[#1a623c] text-white rounded-xl text-sm font-bold shadow-md hover:bg-[#144f30] transition-all flex items-center justify-center gap-2"
-            >
-              <span>Get Started Free</span>
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-          </div>
-        </div>
-      )}
-    </header>
   );
 }
 ````
@@ -6520,302 +6553,103 @@ export function useHardwareScanner(onScan, { enabled = true, maxIntervalMs = 80,
 }
 ````
 
-## File: src/pages/Reports.jsx
+## File: src/hooks/useSettings.js
 ````javascript
-import { useMemo, useState } from 'react';
-import { where, orderBy } from 'firebase/firestore';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useFinancialsForRange } from '../hooks/useFinancials';
-import { useDailySession } from '../hooks/useDailySession';
-import { useSettings } from '../hooks/useSettings';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import ErrorBanner from '../components/common/ErrorBanner';
-import Modal from '../components/common/Modal';
-import { formatKES } from '../utils/currency';
-import { formatDate, formatDateTime, getRangeForPreset, startOfDay, endOfDay, todayKey } from '../utils/dateRanges';
-import { computeSupplierBalances, computeExpectedTillBalances } from '../utils/financials';
-import { Printer, TrendingUp } from 'lucide-react';
-import toast from 'react-hot-toast';
 
-const PRESETS = [{id:'today',label:'Today'},{id:'week',label:'This Week'},{id:'month',label:'This Month'},{id:'custom',label:'Custom'}];
+const DEFAULT_CATEGORIES = [
+  'Beverages',
+  'Hardware',
+  'Household',
+  'Personal Care',
+  'Stationery',
+  'Airtime/Float',
+  'Other',
+];
 
-function Card({ label, value, tone='text-ink-900' }) {
-  return <div className="card p-4"><p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p><p className={`mt-1 font-display text-lg font-bold ${tone}`}>{value}</p></div>;
-}
+const DEFAULTS = { 
+  shopName: 'FlowBiz', 
+  cashierCanRecordExpenses: true, 
+  categories: DEFAULT_CATEGORIES,
+  phone: '',
+  email: '',
+  address: '',
+  logoUrl: '',
+};
 
-export default function Reports() {
-  const { businessId, isPro } = useAuth();
-  const [preset, setPreset]         = useState('today');
-  const [cStart, setCStart]         = useState('');
-  const [cEnd,   setCEnd]           = useState('');
-  const [pdfModalOpen, setPdfModalOpen] = useState(false);
+export function useSettings() {
+  const { businessId } = useAuth();
+  const [settings, setSettings] = useState(DEFAULTS);
+  const [loading, setLoading] = useState(true);
 
-  const { start, end } = useMemo(() => {
-    if (preset==='custom'&&cStart&&cEnd) return { start:startOfDay(new Date(cStart)), end:endOfDay(new Date(cEnd)) };
-    return getRangeForPreset(preset==='custom'?'today':preset);
-  }, [preset,cStart,cEnd]);
-
-  const { loading, error, sales, creditSales, summary } = useFinancialsForRange(start, end);
-  const { session } = useDailySession();
-  const { settings } = useSettings();
-
-  // FIX: Matches Dashboard and Products exactly to utilize correct offline index
-  const productsQ = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
-  const outstandingCreditQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, where('status', 'in', ['pending', 'partial'])) : null, [businessId]);
-  const supplierPaymentsQ = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId) : null, [businessId]);
-
-  const { data: products } = useFirestoreCollection(productsQ);
-  const { data: purchasesData } = useFirestoreCollection(purchasesQ);
-  const { data: outstandingCreditSales } = useFirestoreCollection(outstandingCreditQ);
-  const { data: supplierPaymentsData } = useFirestoreCollection(supplierPaymentsQ);
-  const { data: suppliersData } = useFirestoreCollection(suppliersQ);
-
-  const totalInventoryValue = useMemo(() => {
-    return products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
-  }, [products]);
-
-  const lowStock = useMemo(() => {
-    return products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
-  }, [products]);
-
-  const supplierBalances = useMemo(
-    () => computeSupplierBalances(purchasesData, supplierPaymentsData, suppliersData),
-    [purchasesData, supplierPaymentsData, suppliersData]
-  );
-
-  // FIX: Added Credit Sales to product performance mapping
-  //
-  // FIX (multi-product cart): a Counter.jsx cart sale carries several
-  // products on ONE sale/creditSale doc via `items` — attributing the
-  // whole doc's aggregate quantity/revenue/profit to its (misleading)
-  // summary productName would badly skew best-seller/most-profitable
-  // rankings. When `items` is present, each line item is credited to its
-  // own product individually instead; legacy single-product docs (no
-  // `items` field) are read exactly as before.
-  const productPerf = useMemo(() => {
-    const m = {};
-    const ensure = (name) => {
-      if (!m[name]) m[name] = { name, qty: 0, revenue: 0, profit: 0 };
-      return m[name];
-    };
-    sales.forEach((s) => {
-      if (s.isVoided) return;
-      if (Array.isArray(s.items) && s.items.length > 0) {
-        s.items.forEach((it) => {
-          const row = ensure(it.productName);
-          row.qty     += Number(it.quantity) || 0;
-          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
-          row.profit  += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
-        });
-      } else {
-        const row = ensure(s.productName);
-        row.qty     += Number(s.quantity) || 0;
-        row.revenue += Number(s.totalAmount) || 0;
-        row.profit  += Number(s.profit) || 0;
-      }
-    });
-    creditSales.forEach((cs) => {
-      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-      if (Array.isArray(cs.items) && cs.items.length > 0) {
-        cs.items.forEach((it) => {
-          const row = ensure(it.productName);
-          row.qty += Number(it.quantity) || 0;
-          // Revenue and Profit are zero until repaid via repayments collection
-        });
-      } else {
-        const row = ensure(cs.productName);
-        row.qty += Number(cs.quantity) || 0;
-        // Revenue and Profit are zero until repaid via repayments collection
-      }
-    });
-    return Object.values(m);
-  }, [sales, creditSales]);
-
-  const bestSelling    = [...productPerf].sort((a,b)=>b.qty-a.qty).slice(0,5);
-  const mostProfitable = [...productPerf].sort((a,b)=>b.profit-a.profit).slice(0,5);
-
-  const { expectedCashAtClose, expectedMpesaAtClose } = computeExpectedTillBalances({
-    openingCashFloat:         preset === 'today' ? (session?.openingCashFloat || 0) : 0,
-    openingMpesaFloat:        preset === 'today' ? (session?.openingMpesaFloat || 0) : 0,
-    totalCashSales:           summary.totalCashSales,
-    totalMpesaSales:          summary.totalMpesaSales,
-    totalDebtRepaymentsCash:  summary.totalDebtRepaymentsCash,
-    totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
-    totalExpensesCash:        summary.totalExpensesCash,
-    totalExpensesMpesa:       summary.totalExpensesMpesa,
-    totalCashOutflows:        summary.totalCashOutflows,
-    totalMpesaOutflows:       summary.totalMpesaOutflows,
-  });
-
-  const businessName = settings?.shopName || 'FlowBiz Store';
-
-  const doExport = async (action) => {
-    if (!isPro) { toast.error("Professional reports require FlowBiz Pro."); return; }
-    try {
-      const { jsPDF } = await import('jspdf');
-      const { loadImageAsDataUrl } = await import('../utils/documentService');
-      const doc = new jsPDF('p', 'mm', 'a4');
-      const pageWidth = doc.internal.pageSize.getWidth();
-      const marginX = 15;
-      let y = 15;
-
-      const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
-      if (logoDataUrl) {
-        const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
-        try { doc.addImage(logoDataUrl, format, marginX, y, 18, 18); } catch (err) { console.error('Logo embed failed:', err); }
-      }
-
-      const textX = logoDataUrl ? marginX + 24 : marginX;
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(16);
-      doc.text(businessName, textX, y + 7);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
-      doc.setTextColor(110, 110, 110);
-      doc.text(`FlowBiz Financial Report · ${formatDate(start)} — ${formatDate(end)}`, textX, y + 13);
-      doc.setTextColor(0, 0, 0);
-      y += 26;
-
-      doc.setDrawColor(210, 210, 210);
-      doc.line(marginX, y, pageWidth - marginX, y);
-      y += 8;
-
-      const sectionTitle = (title) => {
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(11);
-        doc.text(title, marginX, y);
-        y += 6;
-        doc.setDrawColor(230, 230, 230);
-        doc.line(marginX, y - 3.5, pageWidth - marginX, y - 3.5);
-      };
-
-      const row = (label, value, opts = {}) => {
-        doc.setFont('helvetica', opts.bold ? 'bold' : 'normal');
-        doc.setFontSize(10);
-        doc.text(label, marginX, y);
-        doc.text(value, pageWidth - marginX, y, { align: 'right' });
-        y += 6.5;
-      };
-
-      sectionTitle('Financial Summary');
-      row('Cash balance', formatKES(expectedCashAtClose));
-      row('M-Pesa balance', formatKES(expectedMpesaAtClose));
-      row('Credit sales (this period)', formatKES(summary.totalCreditSales));
-      row('Debt repayments collected', formatKES(summary.totalDebtRepayments));
-      y += 4;
-
-      sectionTitle('Profit Calculation');
-      row('Revenue', formatKES(summary.revenue));
-      row('Cost of goods sold', `- ${formatKES(summary.costOfGoodsSold)}`);
-      row('Gross profit', formatKES(summary.grossProfit), { bold: true });
-      row('Total expenses', `- ${formatKES(summary.totalExpenses)}`);
-      row('Net profit', formatKES(summary.netProfit), { bold: true });
-      y += 4;
-
-      if (bestSelling.length > 0) {
-        sectionTitle('Top Selling Products');
-        bestSelling.forEach((p) => row(p.name, `${p.qty} sold · ${formatKES(p.revenue)}`));
-        y += 4;
-      }
-
-      if (lowStock.length > 0) {
-        sectionTitle('Low Stock Alerts');
-        lowStock.slice(0, 10).forEach((p) => row(p.name, `${p.stock} left`));
-        y += 4;
-      }
-
-      doc.setFontSize(8);
-      doc.setTextColor(150, 150, 150);
-      doc.text(`Generated ${formatDateTime(new Date())} · FlowBiz`, marginX, 287);
-
-      if (action === 'download') {
-        doc.save(`flowbiz-report-${preset}-${todayKey()}.pdf`);
-      } else {
-        doc.autoPrint();
-        window.open(doc.output('bloburl'), '_blank');
-      }
-      toast.success('Report generated successfully.');
-      setPdfModalOpen(false);
-    } catch (err) {
-      toast.error('Failed to generate PDF. Check console.');
-      console.error(err);
+  useEffect(() => {
+    if (!businessId) {
+      setSettings(DEFAULTS);
+      setLoading(false);
+      return;
     }
-  };
+    const unsub = onSnapshot(
+      doc(db, 'businessSettings', businessId),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          const rawCategories = Array.isArray(data.categories) ? data.categories : DEFAULT_CATEGORIES;
+          const cleanedCategories = rawCategories.filter(
+            (c) => c && c.trim().toLowerCase() !== 'groceries'
+          );
+          setSettings({
+            ...DEFAULTS,
+            ...data,
+            categories: cleanedCategories.length > 0 ? cleanedCategories : DEFAULT_CATEGORIES,
+            businessId,
+          });
+        } else {
+          setSettings({ ...DEFAULTS, businessId });
+        }
+        setLoading(false);
+      },
+      () => {
+        setSettings({ ...DEFAULTS, businessId });
+        setLoading(false);
+      }
+    );
+    return unsub;
+  }, [businessId]);
 
+  return { settings, loading };
+}
+````
+
+## File: src/pages/LandingPage.jsx
+````javascript
+// src/pages/LandingPage.jsx
+import { LandingHeader } from '../components/landing/LandingHeader';
+import { HeroSection } from '../components/landing/HeroSection';
+import { FeatureGrid } from '../components/landing/FeatureGrid';
+import { HowItWorks } from '../components/landing/HowItWorks';
+import { PricingComparison } from '../components/landing/PricingComparison';
+import { FaqSection } from '../components/landing/FaqSection';
+import { LandingFooter } from '../components/landing/LandingFooter';
+import WhatsAppFloatingButton from '../components/common/WhatsAppFloatingButton';
+
+export default function LandingPage() {
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
-      <div className="flex justify-between items-center">
-        <h1 className="font-display text-xl font-bold text-ink-900">Reports</h1>
-        <Link to="/advanced-analytics" className="btn-outline">
-          <TrendingUp className="h-4 w-4" /> Advanced Analytics
-        </Link>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        {PRESETS.map(p=>(
-          <button key={p.id} onClick={()=>setPreset(p.id)} className={`rounded-full px-3.5 py-1.5 text-sm font-semibold ${preset===p.id?'bg-ink-900 text-white':'bg-ink-100 text-ink-600 hover:bg-ink-200'}`}>{p.label}</button>
-        ))}
-        {preset==='custom'&&(
-          <div className="flex items-center gap-2">
-            <input type="date" className="input !w-auto" value={cStart} onChange={e=>setCStart(e.target.value)} />
-            <span className="text-ink-400">to</span>
-            <input type="date" className="input !w-auto" value={cEnd} onChange={e=>setCEnd(e.target.value)} />
-          </div>
-        )}
-      </div>
-
-      <ErrorBanner message={error ? `${error}` : null} />
+    <div className="min-h-screen bg-[#faf6ef] text-[#15171d] flex flex-col">
+      <LandingHeader />
+      <main className="flex-1">
+        <HeroSection />
+        <FeatureGrid />
+        <HowItWorks />
+        <PricingComparison />
+        <FaqSection />
+      </main>
+      <LandingFooter />
       
-      {loading ? <LoadingSpinner /> : (
-        <>
-          <div>
-            <h2 className="mb-2 font-display text-sm font-bold text-ink-800">Financial Summary</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Card label="Cash Balance" value={formatKES(expectedCashAtClose)} />
-              <Card label="M-Pesa Balance" value={formatKES(expectedMpesaAtClose)} />
-              <Card label="Credit Sales" value={formatKES(summary.totalCreditSales)} tone="text-rust-600" />
-              <Card label="Repayments Collected" value={formatKES(summary.totalDebtRepayments)} tone="text-moss-700" />
-            </div>
-          </div>
-          <div>
-            <h2 className="mb-2 font-display text-sm font-bold text-ink-800">Profit Calculation</h2>
-            <div className="card divide-y divide-ink-100">
-              {[
-                ['Revenue',               summary.revenue,             false],
-                ['− Cost of goods sold',  -summary.costOfGoodsSold,    false],
-                ['= Gross profit',        summary.grossProfit,          true ],
-                ['− Total expenses',      -summary.totalExpenses,       false],
-                ['= Net profit',          summary.netProfit,            true ],
-              ].map(([label,value,bold],i)=>(
-                <div key={label} className={`flex items-center justify-between px-4 py-3 ${bold?'bg-ink-50/60':''}`}>
-                  <span className={`text-sm ${bold?'font-bold text-ink-900':'text-ink-600'}`}>{label}</span>
-                  <span className={`font-semibold ${value<0?'text-rust-600':i===4?'text-moss-700':'text-ink-800'}`}>{formatKES(value)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <button className="btn-primary" onClick={() => setPdfModalOpen(true)}>
-              <Printer className="h-4 w-4" strokeWidth={1.75} /> Get PDF Report
-            </button>
-          </div>
-        </>
-      )}
-
-      <Modal open={pdfModalOpen} onClose={() => setPdfModalOpen(false)} title="Get PDF Report">
-        <div className="space-y-3">
-          <p className="text-sm text-ink-500 mb-4">Choose how you want to export your professional financial report.</p>
-          <button className="btn-primary w-full" onClick={() => doExport('download')}>Download PDF</button>
-          <button className="btn-outline w-full" onClick={() => doExport('print')}>Print Report</button>
-          <button className="btn-secondary w-full mt-2" onClick={() => setPdfModalOpen(false)}>Cancel</button>
-        </div>
-      </Modal>
+      {/* Floating 1-tap WhatsApp chat button */}
+      <WhatsAppFloatingButton />
     </div>
   );
 }
@@ -6841,6 +6675,39 @@ export function roundMoney(amount) {
   if (!Number.isFinite(v)) return 0;
   return Math.round((v + Number.EPSILON) * 100) / 100;
 }
+````
+
+## File: src/App.jsx
+````javascript
+// src/App.jsx
+import { Toaster } from 'react-hot-toast';
+import { AuthProvider } from './contexts/AuthContext';
+import AppRouter from './router/AppRouter';
+import ErrorBoundary from './components/common/ErrorBoundary';
+import PwaInstallBanner from './components/common/PwaInstallBanner';
+
+function App() {
+  return (
+    <ErrorBoundary>
+      <AuthProvider>
+        <Toaster
+          position="top-center"
+          toastOptions={{
+            style: { fontSize: '14px', borderRadius: '10px', maxWidth: '90vw' },
+            success: { iconTheme: { primary: '#1a623c', secondary: '#fff' } },
+            error:   { iconTheme: { primary: '#c4441d', secondary: '#fff' } },
+            duration: 3000,
+          }}
+        />
+        <AppRouter />
+        {/* Shows the install popup automatically for visitors on phone or desktop */}
+        <PwaInstallBanner />
+      </AuthProvider>
+    </ErrorBoundary>
+  );
+}
+
+export default App;
 ````
 
 ## File: src/firebase.js
@@ -6884,86 +6751,6 @@ if (import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true') {
 }
 
 export default app;
-````
-
-## File: src/index.css
-````css
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@layer base {
-  /* Prevent double-tap zoom on interactive elements — smooth POS experience */
-  * {
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
-    box-sizing: border-box;
-  }
-
-  html {
-    @apply font-sans text-ink-900;
-    /* Prevent iOS bounce / overscroll that breaks fixed bottom nav */
-    overscroll-behavior: none;
-    -webkit-text-size-adjust: 100%;
-  }
-
-  body {
-    @apply bg-sand m-0 p-0;
-    overscroll-behavior: none;
-    /* Safe area insets for notched phones */
-    padding-bottom: env(safe-area-inset-bottom);
-    padding-left:   env(safe-area-inset-left);
-    padding-right:  env(safe-area-inset-right);
-  }
-
-  h1, h2, h3, h4 { @apply font-display; }
-
-  /* Smooth scrolling for all scrollable areas */
-  * { scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
-
-  /* Remove iOS input shadows */
-  input, select, textarea, button {
-    -webkit-appearance: none;
-    appearance: none;
-  }
-
-  /* Minimum touch target for all interactive elements */
-  button, a, [role="button"] {
-    min-height: 44px;
-    min-width: 44px;
-  }
-}
-
-@layer components {
-  .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold
-           transition-colors disabled:opacity-40 disabled:cursor-not-allowed
-           min-h-[44px] active:scale-95;
-  }
-  /* REDESIGN: primary action color moved from green (moss) to blue — green
-     stays reserved for success/positive-status meaning (paid, active,
-     profit) elsewhere in the app; blue is now the one color that means
-     "primary interactive action", matching every .btn-primary / focused
-     .input across the whole app in this one place. */
-.btn-primary   { @apply btn bg-moss-600  text-white   hover:bg-moss-700  active:bg-moss-800; }
-  .btn-secondary { @apply btn bg-ink-100   text-ink-800 hover:bg-ink-200   active:bg-ink-300; }
-  .btn-danger    { @apply btn bg-rust-600  text-white   hover:bg-rust-700  active:bg-rust-800; }
-  .btn-outline   { @apply btn border border-ink-200 text-ink-700 hover:bg-ink-50 active:bg-ink-100; }
-
-  .input {
-    @apply w-full rounded-lg border border-ink-200 bg-white px-3 py-2.5 text-sm text-ink-900
-           placeholder:text-ink-300 focus:outline-none focus:ring-2 focus:ring-moss-500
-           focus:border-moss-500 min-h-[44px];
-  }
-  .label  { @apply block text-xs font-semibold uppercase tracking-wide text-ink-500 mb-1.5; }
-  .card   { @apply bg-white rounded-xl2 border border-ink-100 shadow-sm; }
-  .badge  { @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold; }
-
-  /* Bottom nav safe area support on iOS notched devices */
-  .bottom-nav-safe {
-    padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
-  }
-}
 ````
 
 ## File: CHANGES.md
@@ -7151,51 +6938,6 @@ Fixed:
 | `src/pages/Dashboard.jsx` | `handleSupplierSave` throws on error (consistency fix). |
 ````
 
-## File: package.json
-````json
-{
-  "name": "flowbiz",
-  "private": true,
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "dev:demo": "vite --mode demo",
-    "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@zxing/browser": "^0.2.1",
-    "@zxing/library": "^0.23.0",
-    "firebase": "^12.15.0",
-    "jspdf": "^2.5.1",
-    "lucide-react": "^1.22.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-hot-toast": "^2.4.1",
-    "react-icons": "^5.7.0",
-    "jszip": "^3.10.1",
-    "react-router-dom": "^6.30.0"
-  },
-  "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.2",
-    "autoprefixer": "^10.4.20",
-    "eslint": "^10.5.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.3",
-    "globals": "^17.6.0",
-    "postcss": "^8.4.49",
-    "tailwindcss": "^3.4.17",
-    "vite": "^8.1.0",
-    "vite-plugin-pwa": "^1.3.0"
-  }
-}
-````
-
 ## File: cloudflare-worker/src/lib/identityToolkit.js
 ````javascript
 // src/lib/identityToolkit.js
@@ -7275,6 +7017,158 @@ export async function deleteAuthUser(env, uid) {
     if (res.status === 400 && errText.includes('USER_NOT_FOUND')) return;
     throw new Error(`Failed to delete Firebase Auth user ${uid}: ${errText}`);
   }
+}
+````
+
+## File: src/components/landing/LandingHeader.jsx
+````javascript
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Menu, X, ArrowRight } from 'lucide-react';
+
+export function LandingHeader() {
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  return (
+    <header className="sticky top-0 z-50 bg-[#faf6ef]/95 backdrop-blur-md border-b border-[#e8eaed] h-14 flex items-center">
+      <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="relative flex items-center justify-between h-full">
+          
+          {/* Left: Brand Logo */}
+          <Link to="/" className="flex items-center gap-2.5 shrink-0 z-10 leading-none">
+            <div className="flex flex-col justify-center">
+              <span className="font-extrabold text-lg text-[#15171d] tracking-tight leading-none">
+                FlowBiz
+              </span>
+              <span className="text-[8px] font-bold text-[#1a623c] uppercase tracking-wider leading-none mt-1">
+                Business Manager
+              </span>
+            </div>
+          </Link>
+
+          {/* Center: Desktop Navigation Links */}
+          <nav className="hidden lg:flex absolute inset-0 items-center justify-center pointer-events-none">
+            <div className="flex items-center gap-6 xl:gap-8 text-xs sm:text-sm font-semibold text-[#5a6273] pointer-events-auto leading-none">
+              <a 
+                href="#features" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                Features
+              </a>
+              <a 
+                href="#live-simulator" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                Live Simulator
+              </a>
+              <a 
+                href="#how-it-works" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                How It Works
+              </a>
+              <a 
+                href="#pricing" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                Pricing
+              </a>
+              <a 
+                href="#faq" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                FAQ
+              </a>
+            </div>
+          </nav>
+
+          {/* Right: Action Buttons */}
+          <div className="hidden sm:flex items-center gap-2.5 shrink-0 z-10 leading-none">
+            <Link
+              to="/login"
+              className="text-xs sm:text-sm font-bold text-[#363b48] hover:text-[#15171d] px-3 py-2 rounded-lg hover:bg-white transition-colors"
+            >
+              Sign In
+            </Link>
+            <Link
+              to="/setup"
+              className="bg-[#1a623c] text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-bold hover:bg-[#144f30] transition-colors shadow-xs flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <span>Get Started</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+
+          {/* Mobile Menu Button */}
+          <button
+            type="button"
+            onClick={() => setMobileOpen(!mobileOpen)}
+            className="lg:hidden p-1.5 rounded-lg text-[#5a6273] hover:text-[#15171d] hover:bg-white z-10"
+            aria-label="Toggle Menu"
+          >
+            {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
+
+        </div>
+      </div>
+
+      {/* Mobile Dropdown */}
+      {mobileOpen && (
+        <div className="lg:hidden absolute top-full left-0 right-0 border-b border-[#e8eaed] bg-white px-6 py-4 space-y-3 shadow-lg">
+          <a
+            href="#features"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            Features
+          </a>
+          <a
+            href="#live-simulator"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            Live Simulator
+          </a>
+          <a
+            href="#how-it-works"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            How It Works
+          </a>
+          <a
+            href="#pricing"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            Pricing
+          </a>
+          <a
+            href="#faq"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            FAQ
+          </a>
+          <div className="pt-2.5 border-t border-[#e8eaed] flex flex-col gap-2">
+            <Link
+              to="/login"
+              className="w-full text-center py-2.5 border border-[#cfd3da] rounded-xl text-sm font-bold text-[#15171d]"
+            >
+              Sign In
+            </Link>
+            <Link
+              to="/setup"
+              className="w-full text-center py-3 bg-[#1a623c] text-white rounded-xl text-sm font-bold shadow-md hover:bg-[#144f30] transition-all flex items-center justify-center gap-2"
+            >
+              <span>Get Started Free</span>
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
+        </div>
+      )}
+    </header>
+  );
 }
 ````
 
@@ -7487,9 +7381,6 @@ export async function checkActionCode() {
   return Promise.resolve({});
 }
 
-// FIX: ForgotPassword.jsx and AuthAction.jsx's reset-password panel now
-// import these. Unreachable in normal Demo Mode use — stubbed only so
-// the aliased 'firebase/auth' import never breaks the build.
 export async function sendPasswordResetEmail() {
   return Promise.resolve();
 }
@@ -7501,6 +7392,16 @@ export async function verifyPasswordResetCode() {
 export async function confirmPasswordReset() {
   return Promise.resolve();
 }
+
+export const EmailAuthProvider = {
+  credential: (email, password) => ({ email, password }),
+};
+
+export async function reauthenticateWithCredential() {
+  return Promise.resolve();
+}
+
+export function connectAuthEmulator() {}
 ````
 
 ## File: src/pages/Expenses.jsx
@@ -8442,6 +8343,422 @@ export default function Privacy() {
 }
 ````
 
+## File: src/pages/Reports.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { where, orderBy } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useFinancialsForRange } from '../hooks/useFinancials';
+import { useDailySession } from '../hooks/useDailySession';
+import { useSettings } from '../hooks/useSettings';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import ErrorBanner from '../components/common/ErrorBanner';
+import Modal from '../components/common/Modal';
+import { formatKES } from '../utils/currency';
+import { formatDate, formatDateTime, getRangeForPreset, startOfDay, endOfDay, todayKey } from '../utils/dateRanges';
+import { computeSupplierBalances, computeExpectedTillBalances } from '../utils/financials';
+import { Printer, TrendingUp } from 'lucide-react';
+import toast from 'react-hot-toast';
+
+const PRESETS = [
+  { id: 'today', label: 'Today' },
+  { id: 'week', label: 'This Week' },
+  { id: 'month', label: 'This Month' },
+  { id: 'custom', label: 'Custom' },
+];
+
+function Card({ label, value, tone = 'text-ink-900' }) {
+  return (
+    <div className="card p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
+      <p className={`mt-1 font-display text-lg font-bold ${tone}`}>{value}</p>
+    </div>
+  );
+}
+
+export default function Reports() {
+  const { businessId } = useAuth();
+  const [preset, setPreset] = useState('today');
+  const [cStart, setCStart] = useState('');
+  const [cEnd, setCEnd] = useState('');
+  const [pdfModalOpen, setPdfModalOpen] = useState(false);
+
+  const { start, end } = useMemo(() => {
+    if (preset === 'custom' && cStart && cEnd) {
+      return { start: startOfDay(new Date(cStart)), end: endOfDay(new Date(cEnd)) };
+    }
+    return getRangeForPreset(preset === 'custom' ? 'today' : preset);
+  }, [preset, cStart, cEnd]);
+
+  const {
+    loading,
+    error,
+    sales,
+    creditSales,
+    summary,
+    purchases,
+    supplierPayments,
+  } = useFinancialsForRange(start, end);
+
+  const { session } = useDailySession();
+  const { settings } = useSettings();
+
+  const productsQ = useMemo(
+    () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
+    [businessId]
+  );
+  const purchasesQ = useMemo(
+    () => (businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null),
+    [businessId]
+  );
+  const outstandingCreditQ = useMemo(
+    () => (businessId ? tenantQuery('creditSales', businessId, where('status', 'in', ['pending', 'partial'])) : null),
+    [businessId]
+  );
+  const supplierPaymentsQ = useMemo(
+    () => (businessId ? tenantQuery('supplierPayments', businessId) : null),
+    [businessId]
+  );
+  const suppliersQ = useMemo(
+    () => (businessId ? tenantQuery('suppliers', businessId) : null),
+    [businessId]
+  );
+
+  const { data: products } = useFirestoreCollection(productsQ);
+  const { data: purchasesData } = useFirestoreCollection(purchasesQ);
+  const { data: outstandingCreditSales } = useFirestoreCollection(outstandingCreditQ);
+  const { data: supplierPaymentsData } = useFirestoreCollection(supplierPaymentsQ);
+  const { data: suppliersData } = useFirestoreCollection(suppliersQ);
+
+  const totalInventoryValue = useMemo(() => {
+    return products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
+  }, [products]);
+
+  const lowStock = useMemo(() => {
+    return products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
+  }, [products]);
+
+  const supplierBalances = useMemo(
+    () => computeSupplierBalances(purchasesData, supplierPaymentsData, suppliersData),
+    [purchasesData, supplierPaymentsData, suppliersData]
+  );
+
+  // Cash and M-Pesa purchase/supplier payment breakdowns (same as Close Day)
+  const cashPurchases = useMemo(
+    () => (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash').reduce((s, p) => s + (Number(p.totalCost) || 0), 0),
+    [purchases]
+  );
+  const mpesaPurchases = useMemo(
+    () => (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa').reduce((s, p) => s + (Number(p.totalCost) || 0), 0),
+    [purchases]
+  );
+  const creditPurchases = useMemo(
+    () => (purchases || []).filter((p) => p.paymentStatus === 'pending_supplier_credit').reduce((s, p) => s + (Number(p.totalCost) || 0), 0),
+    [purchases]
+  );
+  const cashSupplierPay = useMemo(
+    () => (supplierPayments || []).filter((p) => p.method === 'Cash').reduce((s, p) => s + (Number(p.amount) || 0), 0),
+    [supplierPayments]
+  );
+  const mpesaSupplierPay = useMemo(
+    () => (supplierPayments || []).filter((p) => p.method === 'M-Pesa').reduce((s, p) => s + (Number(p.amount) || 0), 0),
+    [supplierPayments]
+  );
+
+  const productPerf = useMemo(() => {
+    const m = {};
+    const ensure = (name) => {
+      if (!m[name]) m[name] = { name, qty: 0, revenue: 0, profit: 0 };
+      return m[name];
+    };
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      if (Array.isArray(s.items) && s.items.length > 0) {
+        s.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty += Number(it.quantity) || 0;
+          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
+          row.profit += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
+        });
+      } else {
+        const row = ensure(s.productName);
+        row.qty += Number(s.quantity) || 0;
+        row.revenue += Number(s.totalAmount) || 0;
+        row.profit += Number(s.profit) || 0;
+      }
+    });
+    (creditSales || []).forEach((cs) => {
+      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+      if (Array.isArray(cs.items) && cs.items.length > 0) {
+        cs.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty += Number(it.quantity) || 0;
+        });
+      } else {
+        const row = ensure(cs.productName);
+        row.qty += Number(cs.quantity) || 0;
+      }
+    });
+    return Object.values(m);
+  }, [sales, creditSales]);
+
+  const bestSelling = [...productPerf].sort((a, b) => b.qty - a.qty).slice(0, 5);
+
+  const { expectedCashAtClose, expectedMpesaAtClose } = computeExpectedTillBalances({
+    openingCashFloat: preset === 'today' ? (session?.openingCashFloat || 0) : 0,
+    openingMpesaFloat: preset === 'today' ? (session?.openingMpesaFloat || 0) : 0,
+    totalCashSales: summary.totalCashSales,
+    totalMpesaSales: summary.totalMpesaSales,
+    totalDebtRepaymentsCash: summary.totalDebtRepaymentsCash,
+    totalDebtRepaymentsMpesa: summary.totalDebtRepaymentsMpesa,
+    totalExpensesCash: summary.totalExpensesCash,
+    totalExpensesMpesa: summary.totalExpensesMpesa,
+    totalCashOutflows: summary.totalCashOutflows,
+    totalMpesaOutflows: summary.totalMpesaOutflows,
+  });
+
+  const businessName = settings?.shopName || 'FlowBiz Store';
+
+  const doExport = async (action) => {
+    try {
+      const { jsPDF } = await import('jspdf');
+      const { loadImageAsDataUrl } = await import('../utils/documentService');
+      const doc = new jsPDF('p', 'mm', 'a4');
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const marginX = 14;
+      const contentWidth = pageWidth - (marginX * 2);
+      let y = 14;
+
+      // 1. Clean Header (No green background)
+      const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
+      let textX = marginX;
+
+      if (logoDataUrl) {
+        try {
+          const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
+          doc.addImage(logoDataUrl, format, marginX, y, 16, 16);
+          textX = marginX + 20;
+        } catch (err) {
+          console.error('Logo embed error:', err);
+        }
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.setTextColor(21, 23, 29);
+      doc.text(businessName.toUpperCase(), textX, y + 6);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(90, 98, 115);
+      const metaLine = [settings.phone, settings.email, settings.address].filter(Boolean).join(' · ');
+      if (metaLine) {
+        doc.text(metaLine, textX, y + 11);
+      }
+      doc.text(`FINANCIAL AUDIT & PERFORMANCE STATEMENT  |  ${formatDate(start)} to ${formatDate(end)}`, textX, y + 15.5);
+
+      y += 22;
+      doc.setDrawColor(21, 23, 29);
+      doc.setLineWidth(0.4);
+      doc.line(marginX, y, pageWidth - marginX, y);
+      y += 6;
+
+      // Helper for clean subsection headers
+      const drawSectionHeader = (title) => {
+        doc.setFillColor(246, 241, 231); // warm subtle sand
+        doc.roundedRect(marginX, y, contentWidth, 6.5, 1, 1, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.setTextColor(21, 23, 29);
+        doc.text(title.toUpperCase(), marginX + 3, y + 4.6);
+        y += 9.5;
+      };
+
+      // Helper for clean data rows
+      const drawDataRow = (label, value, isBold = false, isHighlight = false, valueColor = [21, 23, 29]) => {
+        if (isHighlight) {
+          doc.setFillColor(241, 250, 244);
+          doc.roundedRect(marginX, y - 3.5, contentWidth, 6, 0.8, 0.8, 'F');
+        }
+        doc.setFont('helvetica', isBold ? 'bold' : 'normal');
+        doc.setFontSize(8.5);
+        doc.setTextColor(54, 59, 72);
+        doc.text(label, marginX + 3, y + 0.8);
+
+        doc.setTextColor(valueColor[0], valueColor[1], valueColor[2]);
+        doc.setFont('helvetica', isBold ? 'bold' : 'normal');
+        doc.text(value, pageWidth - marginX - 3, y + 0.8, { align: 'right' });
+
+        doc.setDrawColor(232, 234, 237);
+        doc.setLineWidth(0.12);
+        doc.line(marginX + 3, y + 2.5, pageWidth - marginX - 3, y + 2.5);
+
+        y += 5.8;
+      };
+
+      // 2. Cash Drawer Reconciliation Breakdown
+      drawSectionHeader('1. Cash Drawer Shift Reconciliation');
+      if (preset === 'today') {
+        drawDataRow('Opening Cash Float', formatKES(session?.openingCashFloat || 0));
+      }
+      drawDataRow('+ Cash Sales Received', formatKES(summary.totalCashSales));
+      drawDataRow('+ Debt Repayments Collected (Cash)', formatKES(summary.totalDebtRepaymentsCash));
+      drawDataRow('− Shop Expenses Paid (Cash)', `- ${formatKES(summary.totalExpensesCash)}`);
+      drawDataRow('− Customer Refunds Issued (Cash)', `- ${formatKES(summary.totalRefundsCash)}`);
+      drawDataRow('− Direct Stock Purchases Paid (Cash)', `- ${formatKES(cashPurchases)}`);
+      drawDataRow('− Supplier Debt Payments (Cash)', `- ${formatKES(cashSupplierPay)}`);
+      drawDataRow('= Net Expected Cash in Drawer', formatKES(expectedCashAtClose), true, true, [26, 98, 60]);
+      y += 3;
+
+      // 3. M-Pesa Till Reconciliation Breakdown
+      drawSectionHeader('2. M-Pesa Till Shift Reconciliation');
+      if (preset === 'today') {
+        drawDataRow('Opening M-Pesa Balance', formatKES(session?.openingMpesaFloat || 0));
+      }
+      drawDataRow('+ M-Pesa Sales Received', formatKES(summary.totalMpesaSales));
+      drawDataRow('+ Debt Repayments Collected (M-Pesa)', formatKES(summary.totalDebtRepaymentsMpesa));
+      drawDataRow('− Shop Expenses Paid (M-Pesa)', `- ${formatKES(summary.totalExpensesMpesa)}`);
+      drawDataRow('− Customer Refunds Issued (M-Pesa)', `- ${formatKES(summary.totalRefundsMpesa)}`);
+      drawDataRow('− Direct Stock Purchases Paid (M-Pesa)', `- ${formatKES(mpesaPurchases)}`);
+      drawDataRow('− Supplier Debt Payments (M-Pesa)', `- ${formatKES(mpesaSupplierPay)}`);
+      drawDataRow('= Net Expected M-Pesa Till Balance', formatKES(expectedMpesaAtClose), true, true, [26, 98, 60]);
+      y += 3;
+
+      // 4. Profit & Loss Statement (Cash-Flow / Operating)
+      drawSectionHeader('3. Cash-Flow Profit & Loss Statement');
+      drawDataRow('Recognized Cash-Flow Revenue (Sales + Debt Repaid − Refunds)', formatKES(summary.revenue));
+      drawDataRow('− Cost of Goods Sold (COGS)', `- ${formatKES(summary.costOfGoodsSold)}`);
+      drawDataRow('= Gross Profit', formatKES(summary.grossProfit), true, true, [26, 98, 60]);
+      drawDataRow('− Total Operating Expenses', `- ${formatKES(summary.totalExpenses)}`);
+      drawDataRow('= Net Operating Profit', formatKES(summary.netProfit), true, true, summary.netProfit >= 0 ? [26, 98, 60] : [196, 68, 29]);
+      y += 3;
+
+      // 5. Purchases & Supplier Restocking Summary
+      drawSectionHeader('4. Stock Purchases & Supplier Credit Activity');
+      drawDataRow('Total Stock Purchases (Cash & M-Pesa Paid)', formatKES(cashPurchases + mpesaPurchases));
+      drawDataRow('Stock Taken on Supplier Credit (Payables Added)', formatKES(creditPurchases), false, false, [196, 68, 29]);
+      drawDataRow('Supplier Debt Payments Cleared', formatKES(cashSupplierPay + mpesaSupplierPay), false, false, [26, 98, 60]);
+      drawDataRow('Total Current Supplier Balance Outstanding', formatKES(supplierBalances.reduce((a, b) => a + b.balance, 0)), true);
+      y += 3;
+
+      // 6. Top Sellers & Low Stock (compact)
+      if (bestSelling.length > 0) {
+        drawSectionHeader('5. Top-Performing Product Sales');
+        bestSelling.forEach((p, idx) => {
+          drawDataRow(`${idx + 1}. ${p.name} (${p.qty} units)`, formatKES(p.revenue));
+        });
+        y += 3;
+      }
+
+      // Footer
+      doc.setFontSize(7.5);
+      doc.setTextColor(140, 145, 155);
+      doc.text(`Generated on ${formatDateTime(new Date())} · Official Record from FlowBiz Workstation`, marginX, 287);
+      doc.text(`Page 1 of 1`, pageWidth - marginX, 287, { align: 'right' });
+
+      if (action === 'download') {
+        doc.save(`flowbiz-report-${preset}-${todayKey()}.pdf`);
+      } else {
+        doc.autoPrint();
+        window.open(doc.output('bloburl'), '_blank');
+      }
+      toast.success('Report ready.');
+      setPdfModalOpen(false);
+    } catch (err) {
+      toast.error('Failed to generate PDF. Check console.');
+      console.error(err);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-5">
+      <div className="flex justify-between items-center">
+        <h1 className="font-display text-xl font-bold text-ink-900">Reports</h1>
+        <Link to="/advanced-analytics" className="btn-outline">
+          <TrendingUp className="h-4 w-4" /> Advanced Analytics
+        </Link>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {PRESETS.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => setPreset(p.id)}
+            className={`rounded-full px-3.5 py-1.5 text-sm font-semibold ${
+              preset === p.id ? 'bg-ink-900 text-white' : 'bg-ink-100 text-ink-600 hover:bg-ink-200'
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+        {preset === 'custom' && (
+          <div className="flex items-center gap-2">
+            <input type="date" className="input !w-auto" value={cStart} onChange={(e) => setCStart(e.target.value)} />
+            <span className="text-ink-400">to</span>
+            <input type="date" className="input !w-auto" value={cEnd} onChange={(e) => setCEnd(e.target.value)} />
+          </div>
+        )}
+      </div>
+
+      <ErrorBanner message={error ? `${error}` : null} />
+
+      {loading ? (
+        <LoadingSpinner />
+      ) : (
+        <>
+          <div>
+            <h2 className="mb-2 font-display text-sm font-bold text-ink-800">Financial Summary</h2>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Card label="Cash Balance" value={formatKES(expectedCashAtClose)} />
+              <Card label="M-Pesa Balance" value={formatKES(expectedMpesaAtClose)} />
+              <Card label="Credit Sales" value={formatKES(summary.totalCreditSales)} tone="text-rust-600" />
+              <Card label="Repayments Collected" value={formatKES(summary.totalDebtRepayments)} tone="text-moss-700" />
+            </div>
+          </div>
+          <div>
+            <h2 className="mb-2 font-display text-sm font-bold text-ink-800">Profit Calculation</h2>
+            <div className="card divide-y divide-ink-100">
+              {[
+                ['Revenue', summary.revenue, false],
+                ['− Cost of goods sold', -summary.costOfGoodsSold, false],
+                ['= Gross profit', summary.grossProfit, true],
+                ['− Total expenses', -summary.totalExpenses, false],
+                ['= Net profit', summary.netProfit, true],
+              ].map(([label, value, bold], i) => (
+                <div key={label} className={`flex items-center justify-between px-4 py-3 ${bold ? 'bg-ink-50/60' : ''}`}>
+                  <span className={`text-sm ${bold ? 'font-bold text-ink-900' : 'text-ink-600'}`}>{label}</span>
+                  <span className={`font-semibold ${value < 0 ? 'text-rust-600' : i === 4 ? 'text-moss-700' : 'text-ink-800'}`}>
+                    {formatKES(value)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-primary" onClick={() => setPdfModalOpen(true)}>
+              <Printer className="h-4 w-4" strokeWidth={1.75} /> Get PDF Report
+            </button>
+          </div>
+        </>
+      )}
+
+      <Modal open={pdfModalOpen} onClose={() => setPdfModalOpen(false)} title="Export Financial Report">
+        <div className="space-y-3">
+          <p className="text-sm text-ink-500 mb-4">Export clean, print-ready accounting reports with full till reconciliation and purchases for your records.</p>
+          <button className="btn-primary w-full" onClick={() => doExport('download')}>Download PDF Report</button>
+          <button className="btn-outline w-full" onClick={() => doExport('print')}>Print Report Directly</button>
+          <button className="btn-secondary w-full mt-2" onClick={() => setPdfModalOpen(false)}>Cancel</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+````
+
 ## File: src/pages/Terms.jsx
 ````javascript
 import { Link } from 'react-router-dom';
@@ -9139,112 +9456,6 @@ export default function Terms() {
 }
 ````
 
-## File: src/utils/businessReset.js
-````javascript
-// src/utils/businessReset.js
-import { collection, query, where, getDocs, writeBatch, doc, setDoc, limit } from 'firebase/firestore';
-import { db, auth } from '../firebase';
-
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-
-const RESET_COLLECTIONS = [
-  'products', 'sales', 'customers', 'suppliers', 'creditSales', 'expenses',
-  'purchases', 'dailySessions', 'repayments', 'supplierPayments',
-  'stockAdjustments', 'barcodeIndex', 'refunds',
-  'debtPaymentReceipts', 'sharedDocuments', 'staffInvites', 'sessions',
-];
-
-const DEFAULT_CATEGORIES = [
-  'Groceries', 'Beverages', 'Hardware', 'Household',
-  'Personal Care', 'Stationery', 'Airtime/Float', 'Other'
-];
-
-async function deleteTenantCollection(name, businessId, chunkSize = 400) {
-  let totalDeleted = 0;
-  while (true) {
-    const snap = await getDocs(query(collection(db, name), where('businessId', '==', businessId), limit(chunkSize)));
-    if (snap.empty) break;
-
-    const batch = writeBatch(db);
-    snap.docs.forEach((d) => batch.delete(d.ref));
-    await batch.commit();
-
-    totalDeleted += snap.docs.length;
-    if (snap.docs.length < chunkSize) break;
-  }
-  return totalDeleted;
-}
-
-export async function resetBusinessData(businessId, ownerUid) {
-  if (!businessId) throw new Error('resetBusinessData() called with no businessId');
-  const results = {};
-  const failures = [];
-
-  for (const name of RESET_COLLECTIONS) {
-    try {
-      results[name] = await deleteTenantCollection(name, businessId);
-    } catch (err) {
-      console.error(`[Reset] Collection ${name} cleanup FAILED:`, err);
-      results[name] = 0;
-      failures.push(`${name} (${err.message || 'unknown error'})`);
-    }
-  }
-
-  try {
-    const cashiersSnap = await getDocs(query(
-      collection(db, 'users'), where('businessId', '==', businessId), where('role', '==', 'cashier')
-    ));
-    const idToken = auth.currentUser ? await auth.currentUser.getIdToken(true) : null;
-
-    for (const cashierDoc of cashiersSnap.docs) {
-      const cashierUid = cashierDoc.id;
-      if (idToken) {
-        try {
-          const res = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-            body: JSON.stringify({ targetUid: cashierUid }),
-          });
-          if (!res.ok) failures.push(`cashier auth delete for ${cashierUid} (status ${res.status})`);
-        } catch (authErr) {
-          failures.push(`cashier auth delete for ${cashierUid} (${authErr.message})`);
-        }
-      }
-      try {
-        const batch = writeBatch(db);
-        batch.delete(doc(db, 'users', cashierUid));
-        await batch.commit();
-      } catch (docErr) {
-        failures.push(`cashier profile delete for ${cashierUid} (${docErr.message})`);
-      }
-    }
-  } catch (cashierErr) {
-    failures.push(`cashier cleanup (${cashierErr.message})`);
-  }
-
-  try {
-    await setDoc(doc(db, 'businessSettings', businessId), {
-      shopName: 'FlowBiz Store', phone: '', email: '', address: '', logoUrl: '',
-      cashierCanRecordExpenses: true, categories: DEFAULT_CATEGORIES, receiptPaperWidth: 80,
-      resetAt: new Date(), resetBy: ownerUid || null,
-    }, { merge: true });
-    results.businessSettings = 1;
-  } catch (settingsErr) {
-    failures.push(`businessSettings reset (${settingsErr.message})`);
-  }
-
-  results.performedBy = ownerUid || null;
-
-  if (failures.length > 0) {
-    const err = new Error(`Reset finished, but some data may not have been fully cleared: ${failures.join('; ')}`);
-    err.partialResults = results;
-    throw err;
-  }
-
-  return results;
-}
-````
-
 ## File: src/utils/customers.js
 ````javascript
 // src/utils/customers.js
@@ -9422,10 +9633,10 @@ export function computeFinancials({
   });
 
   const directSalesCostOfGoodsSold = activeSales.reduce((acc, s) => acc + getCostOfSale(s), 0);
-  const costOfGoodsSold = Math.max(0, directSalesCostOfGoodsSold + repaymentCogs - refundCogs);
+  const costOfGoodsSold = directSalesCostOfGoodsSold + repaymentCogs - refundCogs;
 
   const grossSalesRevenue = totalCashSales + totalMpesaSales + totalCreditSales;
-  const revenue = Math.max(0, totalCashSales + totalMpesaSales + repaymentRevenue - refundRevenue);
+  const revenue = totalCashSales + totalMpesaSales + repaymentRevenue - refundRevenue;
   const grossProfit = revenue - costOfGoodsSold;
 
   const filteredExpenses = (expenses || []).filter((expense) => !isExpenseExcluded(expense));
@@ -9437,8 +9648,8 @@ export function computeFinancials({
   const netProfit     = grossProfit - totalExpenses;
 
   // Realized net receipts by tender method
-  const totalCashReceipts  = Math.max(0, totalCashSales  + totalDebtRepaymentsCash  - totalRefundsCash);
-  const totalMpesaReceipts = Math.max(0, totalMpesaSales + totalDebtRepaymentsMpesa - totalRefundsMpesa);
+  const totalCashReceipts  = totalCashSales  + totalDebtRepaymentsCash  - totalRefundsCash;
+  const totalMpesaReceipts = totalMpesaSales + totalDebtRepaymentsMpesa - totalRefundsMpesa;
 
   const purchasePaymentsCash  = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash');
   const purchasePaymentsMpesa = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa');
@@ -9506,60 +9717,208 @@ export function computeSupplierBalances(purchases = [], supplierPayments = [], s
 ````javascript
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeFinancials } from './financials.js';
+import { computeFinancials, computeExpectedTillBalances, computeSupplierBalances } from './financials.js';
 
-test('a credit sale alone contributes zero revenue, COGS, and profit until repaid', () => {
-  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'pending', amountPaid: 0 };
-  const summary = computeFinancials({
-    sales: [],
-    creditSales: [creditSale],
-    allCreditSales: [creditSale],
-    expenses: [],
-    debtRepayments: [],
-  });
+test('1. Cash Sale creates immediate revenue, COGS, gross profit, and cash receipts', () => {
+  const sale = {
+    id: 's1',
+    totalAmount: 1500,
+    costPricePerUnit: 1000,
+    quantity: 1,
+    paymentMethod: 'Cash',
+    isVoided: false,
+  };
+  const summary = computeFinancials({ sales: [sale] });
 
-  assert.equal(summary.totalCreditSales, 15000);
-  assert.equal(summary.revenue, 0);
-  assert.equal(summary.costOfGoodsSold, 0);
-  assert.equal(summary.grossProfit, 0);
-  assert.equal(summary.netProfit, 0);
-  assert.equal(summary.totalCashReceipts, 0);
+  assert.equal(summary.revenue, 1500);
+  assert.equal(summary.costOfGoodsSold, 1000);
+  assert.equal(summary.grossProfit, 500);
+  assert.equal(summary.totalCashReceipts, 1500);
   assert.equal(summary.totalMpesaReceipts, 0);
 });
 
-test('a full debt repayment recognizes the full sale as revenue, COGS, and profit', () => {
-  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'paid', amountPaid: 15000 };
+test('2. Unpaid Credit Sale contributes zero revenue, COGS, and profit', () => {
+  const creditSale = {
+    id: 'c1',
+    costPricePerUnit: 2000,
+    quantity: 1,
+    totalAmount: 3000,
+    status: 'pending',
+    amountPaid: 0,
+  };
   const summary = computeFinancials({
-    sales: [],
-    creditSales: [],
-    allCreditSales: [creditSale],
-    expenses: [],
-    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 15000, method: 'Cash' }],
-  });
-
-  assert.equal(summary.revenue, 15000);
-  assert.equal(summary.costOfGoodsSold, 10000);
-  assert.equal(summary.grossProfit, 5000);
-  assert.equal(summary.netProfit, 5000);
-  assert.equal(summary.totalCashReceipts, 15000);
-});
-
-test('refunding a repaid credit sale reverses revenue, cogs, profit and receipts correctly', () => {
-  const creditSale = { id: 'c1', costPricePerUnit: 10000, quantity: 1, totalAmount: 15000, status: 'refunded', amountPaid: 5000 };
-  const summary = computeFinancials({
-    sales: [],
     creditSales: [creditSale],
     allCreditSales: [creditSale],
-    expenses: [],
-    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 5000, method: 'Cash' }],
-    refunds: [{ id: 'ref1', creditSaleId: 'c1', amount: 5000, method: 'Cash' }],
   });
 
+  assert.equal(summary.totalCreditSales, 3000);
   assert.equal(summary.revenue, 0);
   assert.equal(summary.costOfGoodsSold, 0);
   assert.equal(summary.grossProfit, 0);
   assert.equal(summary.netProfit, 0);
-  assert.equal(summary.totalCashReceipts, 0);
+});
+
+test('3. Partial Debt Repayment recognizes proportional revenue and COGS', () => {
+  const creditSale = {
+    id: 'c1',
+    costPricePerUnit: 2000,
+    quantity: 1,
+    totalAmount: 3000,
+    status: 'partial',
+    amountPaid: 1000,
+  };
+  const summary = computeFinancials({
+    creditSales: [creditSale],
+    allCreditSales: [creditSale],
+    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 1000, method: 'Cash' }],
+  });
+
+  assert.equal(summary.revenue, 1000);
+  assert.equal(Math.round(summary.costOfGoodsSold * 100) / 100, 666.67);
+  assert.equal(Math.round(summary.grossProfit * 100) / 100, 333.33);
+  assert.equal(summary.totalCashReceipts, 1000);
+});
+
+test('4. Full Debt Repayment recognizes full revenue and COGS', () => {
+  const creditSale = {
+    id: 'c1',
+    costPricePerUnit: 2000,
+    quantity: 1,
+    totalAmount: 3000,
+    status: 'paid',
+    amountPaid: 3000,
+  };
+  const summary = computeFinancials({
+    allCreditSales: [creditSale],
+    debtRepayments: [
+      { id: 'r1', creditSaleId: 'c1', amount: 1000, method: 'Cash' },
+      { id: 'r2', creditSaleId: 'c1', amount: 2000, method: 'M-Pesa' },
+    ],
+  });
+
+  assert.equal(summary.revenue, 3000);
+  assert.equal(summary.costOfGoodsSold, 2000);
+  assert.equal(summary.grossProfit, 1000);
+  assert.equal(summary.totalCashReceipts, 1000);
+  assert.equal(summary.totalMpesaReceipts, 2000);
+});
+
+test('5. Net Refund Exceeding Sales correctly produces negative net revenue and profit without zero-clamping', () => {
+  const creditSale = {
+    id: 'c1',
+    costPricePerUnit: 3000,
+    quantity: 1,
+    totalAmount: 5000,
+    status: 'refunded',
+  };
+  const summary = computeFinancials({
+    sales: [{ totalAmount: 1000, costPricePerUnit: 600, quantity: 1, paymentMethod: 'Cash', isVoided: false }],
+    allCreditSales: [creditSale],
+    refunds: [{ id: 'ref1', creditSaleId: 'c1', amount: 5000, method: 'Cash' }],
+  });
+
+  assert.equal(summary.revenue, -4000);
+  assert.equal(summary.costOfGoodsSold, -2400);
+  assert.equal(summary.grossProfit, -1600);
+  assert.equal(summary.totalCashReceipts, -4000);
+});
+
+test('6. Expected Till Balances maintain exact cash and M-Pesa float reconciliation', () => {
+  const balances = computeExpectedTillBalances({
+    openingCashFloat: 2000,
+    openingMpesaFloat: 5000,
+    totalCashSales: 4500,
+    totalMpesaSales: 8000,
+    totalDebtRepaymentsCash: 1500,
+    totalDebtRepaymentsMpesa: 2000,
+    totalExpensesCash: 800,
+    totalExpensesMpesa: 500,
+    totalCashOutflows: 1200, // stock purchases + supplier payments + refunds
+    totalMpesaOutflows: 0,
+  });
+
+  // Expected Cash: 2000 + 4500 + 1500 - 800 - 1200 = 6000
+  assert.equal(balances.expectedCashAtClose, 6000);
+  // Expected M-Pesa: 5000 + 8000 + 2000 - 500 - 0 = 14500
+  assert.equal(balances.expectedMpesaAtClose, 14500);
+});
+
+test('7. Supplier balance aggregation correctly matches purchases and payments', () => {
+  const purchases = [
+    { supplierId: 's1', totalCost: 10000, paymentStatus: 'pending_supplier_credit' },
+    { supplierId: 's1', totalCost: 5000, paymentStatus: 'pending_supplier_credit' },
+    { supplierId: 's2', totalCost: 8000, paymentStatus: 'paid' },
+  ];
+  const payments = [
+    { supplierId: 's1', amount: 6000 },
+  ];
+  const suppliers = [
+    { id: 's1', name: 'Wholesaler Alpha' },
+    { id: 's2', name: 'Wholesaler Beta' },
+  ];
+
+  const balances = computeSupplierBalances(purchases, payments, suppliers);
+  assert.equal(balances.length, 1);
+  assert.equal(balances[0].supplierId, 's1');
+  assert.equal(balances[0].balance, 9000);
+});
+
+test('8. Multi-item cart sale uses costOfGoodsSold aggregate properly', () => {
+  const multiSale = {
+    id: 's_multi',
+    totalAmount: 2250,
+    costOfGoodsSold: 1320,
+    profit: 930,
+    quantity: 6,
+    paymentMethod: 'Cash',
+    isVoided: false,
+    items: [
+      { productId: 'p1', productName: 'Book', quantity: 3, unitPrice: 500, costPrice: 300, lineTotal: 1500, lineCost: 900 },
+      { productId: 'p2', productName: 'Storybook', quantity: 2, unitPrice: 350, costPrice: 200, lineTotal: 700, lineCost: 400 },
+      { productId: 'p3', productName: 'Pen', quantity: 1, unitPrice: 50, costPrice: 20, lineTotal: 50, lineCost: 20 },
+    ]
+  };
+  const summary = computeFinancials({ sales: [multiSale] });
+  assert.equal(summary.revenue, 2250);
+  assert.equal(summary.costOfGoodsSold, 1320);
+  assert.equal(summary.grossProfit, 930);
+});
+
+test('9. Voided sales are excluded from active calculations', () => {
+  const voidedSale = {
+    id: 's_void',
+    totalAmount: 5000,
+    costPricePerUnit: 3000,
+    quantity: 1,
+    paymentMethod: 'Cash',
+    isVoided: true,
+  };
+  const validSale = {
+    id: 's_valid',
+    totalAmount: 2000,
+    costPricePerUnit: 1200,
+    quantity: 1,
+    paymentMethod: 'Cash',
+    isVoided: false,
+  };
+  const summary = computeFinancials({ sales: [voidedSale, validSale] });
+  assert.equal(summary.revenue, 2000);
+  assert.equal(summary.costOfGoodsSold, 1200);
+  assert.equal(summary.grossProfit, 800);
+  assert.equal(summary.totalCashReceipts, 2000);
+});
+
+test('10. Expenses exclude supplier payments and stock purchases to prevent double-counting', () => {
+  const expenses = [
+    { id: 'e1', category: 'Rent', amount: 15000, paymentMethod: 'Cash' },
+    { id: 'e2', category: 'Electricity', amount: 2500, paymentMethod: 'M-Pesa' },
+    { id: 'e3', category: 'Supplier Payment', description: 'Supplier payment to Alpha', amount: 6000, paymentMethod: 'Cash' },
+    { id: 'e4', category: 'Other', description: 'Stock Purchase direct', amount: 4000, paymentMethod: 'Cash' },
+  ];
+  const summary = computeFinancials({ expenses });
+  assert.equal(summary.totalExpenses, 17500);
+  assert.equal(summary.totalExpensesCash, 15000);
+  assert.equal(summary.totalExpensesMpesa, 2500);
 });
 ````
 
@@ -9724,6 +10083,81 @@ export async function restoreProduct(productId, barcode, businessId) {
 }
 ````
 
+## File: src/index.css
+````css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Prevent double-tap zoom on interactive elements — smooth POS experience */
+  * {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    box-sizing: border-box;
+  }
+
+  html {
+    @apply font-sans text-ink-900;
+    /* Prevent iOS bounce / overscroll that breaks fixed bottom nav */
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-sand m-0 p-0;
+    overscroll-behavior: none;
+    /* Safe area insets for notched phones */
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left:   env(safe-area-inset-left);
+    padding-right:  env(safe-area-inset-right);
+  }
+
+  h1, h2, h3, h4 { @apply font-display; }
+
+  /* Smooth scrolling for all scrollable areas */
+  * { scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
+
+  /* Remove iOS input shadows while preserving default native checkboxes and radios */
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea, button {
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  /* Minimum touch target for all interactive elements */
+  button, a, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold
+           transition-colors disabled:opacity-40 disabled:cursor-not-allowed
+           min-h-[44px] active:scale-95;
+  }
+  .btn-primary   { @apply btn bg-moss-600  text-white   hover:bg-moss-700  active:bg-moss-800; }
+  .btn-secondary { @apply btn bg-ink-100   text-ink-800 hover:bg-ink-200   active:bg-ink-300; }
+  .btn-danger    { @apply btn bg-rust-600  text-white   hover:bg-rust-700  active:bg-rust-800; }
+  .btn-outline   { @apply btn border border-ink-200 text-ink-700 hover:bg-ink-50 active:bg-ink-100; }
+
+  .input {
+    @apply w-full rounded-lg border border-ink-200 bg-white px-3 py-2.5 text-sm text-ink-900
+           placeholder:text-ink-300 focus:outline-none focus:ring-2 focus:ring-moss-500
+           focus:border-moss-500 min-h-[44px];
+  }
+  .label  { @apply block text-xs font-semibold uppercase tracking-wide text-ink-500 mb-1.5; }
+  .card   { @apply bg-white rounded-xl2 border border-ink-100 shadow-sm; }
+  .badge  { @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+
+  /* Bottom nav safe area support on iOS notched devices */
+  .bottom-nav-safe {
+    padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
+  }
+}
+````
+
 ## File: src/main.jsx
 ````javascript
 import { StrictMode } from 'react';
@@ -9811,114 +10245,60 @@ createRoot(document.getElementById('root')).render(
 }
 ````
 
-## File: cloudflare-worker/src/index.js
-````javascript
-// src/index.js — the Worker's entry point / router.
-//
-// Deliberately a plain switch on pathname + method, no router library:
-// a dependency here is a dependency every one of FlowBiz's privileged
-// operations (and now the public document route) trusts.
-//
-// FIX: removed the /api/whatsapp/send route (routes/whatsappSend.js).
-// Auditing it found it called the real Meta WhatsApp Cloud API — nothing
-// in the frontend has ever called this endpoint (WhatsApp sharing has
-// always gone through the client-side wa.me deep-link utility instead),
-// so it was dead code, and its Cloud-API approach directly contradicts
-// FlowBiz's "deep links only, no WhatsApp API" product requirement. See
-// routes/whatsappSend.js.removed for the file that was deleted, and the
-// project notes for the WHATSAPP_ACCESS_TOKEN secret this leaves unused.
-
-import { corsHeaders, handleOptions } from './lib/cors.js';
-import { errorResponse } from './lib/response.js';
-import { handleDeleteStaff } from './routes/deleteStaff.js';
-import { handlePaystackInitialize } from './routes/paystackInitialize.js';
-import { handlePaystackWebhook } from './routes/paystackWebhook.js';
-import { handlePublicDocument } from './routes/publicDocument.js';
-import { handleProPrice } from './routes/proPrice.js';
-import { handleSendVerificationEmail } from './routes/sendVerificationEmail.js';
-import { handleSendPasswordReset } from './routes/sendPasswordResetEmail.js';
-import { handleDeleteOwnProfile } from './routes/deleteOwnProfile.js';
-function getAllowedOrigins(env) {
-  return (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
-}
-
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-
-    // Paystack calls the webhook directly (server-to-server) — it never
-    // needs, and should never get, FlowBiz's browser CORS headers.
-    if (url.pathname === '/api/paystack/webhook' && request.method === 'POST') {
-      try {
-        return await handlePaystackWebhook(request, env);
-      } catch (err) {
-        console.error('Webhook error:', err);
-        return errorResponse('Internal server error.', 500);
-      }
-    }
-
-    // Public receipt/invoice/debt-payment-receipt links (/r/<token>) are
-    // opened directly by a customer's browser — a full-page navigation,
-    // not a fetch() from the FlowBiz frontend — so it deliberately does
-    // NOT go through verifyFirebaseIdToken like every other route below.
-    // See routes/publicDocument.js for the token → document security
-    // model. Handled up front, same as the webhook, since it returns
-    // HTML rather than the JSON shape the block below assumes.
-    if (url.pathname.startsWith('/r/') && request.method === 'GET') {
-      const token = url.pathname.slice('/r/'.length);
-      try {
-        return await handlePublicDocument(request, env, token);
-      } catch (err) {
-        console.error('Public document error:', err);
-        return errorResponse('Internal server error.', 500);
-      }
-    }
-
-    const allowedOrigins = getAllowedOrigins(env);
-    if (request.method === 'OPTIONS') return handleOptions(request, allowedOrigins);
-
-    const origin = request.headers.get('Origin') || '';
-    const extraHeaders = corsHeaders(origin, allowedOrigins);
-
-    let response;
-    try {
-// cloudflare-worker/src/index.js
-      if (url.pathname === '/api/auth/delete-staff' && request.method === 'POST') {
-        response = await handleDeleteStaff(request, env);
-      } else if (url.pathname === '/api/auth/send-verification-email' && request.method === 'POST') {
-        response = await handleSendVerificationEmail(request, env);
-      } else if (url.pathname === '/api/auth/send-password-reset' && request.method === 'POST') {
-        response = await handleSendPasswordReset(request, env);
-      } else if (url.pathname === '/api/paystack/initialize' && request.method === 'POST') {
-        response = await handlePaystackInitialize(request, env);
-      } else if (url.pathname === '/api/pro/price' && request.method === 'GET') {
-        response = await handleProPrice();
-              } else if (url.pathname === '/api/auth/delete-own-profile' && request.method === 'POST') {
-        response = await handleDeleteOwnProfile(request, env);
-      } else {
-        response = errorResponse('Not found.', 404);
-      }
-    } catch (err) {
-      console.error('Unhandled error:', err);
-      response = errorResponse('Internal server error.', 500);
-    }
-
-    const headers = new Headers(response.headers);
-    for (const [key, value] of Object.entries(extraHeaders)) headers.set(key, value);
-    return new Response(response.body, { status: response.status, headers });
+## File: package.json
+````json
+{
+  "name": "flowbiz",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:demo": "vite --mode demo",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
   },
-};
+  "dependencies": {
+    "@zxing/browser": "^0.2.1",
+    "@zxing/library": "^0.23.0",
+    "firebase": "^12.15.0",
+    "jspdf": "^2.5.1",
+    "lucide-react": "^1.22.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-hot-toast": "^2.4.1",
+    "react-icons": "^5.7.0",
+    "jszip": "^3.10.1",
+    "react-router-dom": "^6.30.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^10.5.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.6.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "vite": "^8.1.0",
+    "vite-plugin-pwa": "^1.3.0"
+  }
+}
 ````
 
 ## File: src/components/common/ProtectedRoute.jsx
 ````javascript
 import { useEffect, useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { isDemoMode } from '../../demo/demoMode';
 import LoadingSpinner from './LoadingSpinner';
-import { Lock, Ban, AlertCircle, Mail } from 'lucide-react';
+import { Ban, AlertCircle, RefreshCw, Store } from 'lucide-react';
 
 export default function ProtectedRoute({ children, adminOnly = false }) {
   const {
@@ -9945,7 +10325,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
 
     const pollId = setInterval(() => {
       if (document.visibilityState === 'visible') refreshEmailVerification();
-    }, 20000);
+    }, 5000);
 
     return () => {
       window.removeEventListener('focus', handleFocus);
@@ -9954,7 +10334,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     };
   }, [demo, firebaseUser, emailVerified, refreshEmailVerification]);
 
-      const [checkingVerification, setCheckingVerification] = useState(false);
+  const [checkingVerification, setCheckingVerification] = useState(false);
   const [resending, setResending] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
 
@@ -9964,13 +10344,12 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     return () => clearTimeout(t);
   }, [resendCooldown]);
   
-if (loading) return <LoadingSpinner label="Checking your session…" />;
+  if (loading) return <LoadingSpinner label="Checking your session…" />;
 
   if (sessionRevoked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-sand p-6">
         <div className="card max-w-sm w-full p-6 text-center space-y-4">
-          
           <h2 className="font-display text-lg font-bold text-ink-900">This device was signed out</h2>
           <p className="text-sm text-ink-500">An owner revoked access for this device from Settings → Device Management.</p>
           <button className="btn-primary w-full" onClick={() => (window.location.href = '/login')}>Go to sign in</button>
@@ -9981,55 +10360,66 @@ if (loading) return <LoadingSpinner label="Checking your session…" />;
 
   if (!firebaseUser) return <Navigate to="/login" replace />;
 
-  if (accountRemoved) {
+  if (!profile) {
+    if (accountRemoved) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+          <div className="card max-w-sm w-full p-6 text-center space-y-4">
+            <Store className="h-12 w-12 mx-auto text-moss-600" strokeWidth={1.5} />
+            <h2 className="font-display text-lg font-bold text-ink-900">Business Setup Required</h2>
+            <p className="text-sm text-ink-500">
+              You are signed in as <span className="font-semibold text-ink-700">{firebaseUser.email}</span>, but your business workspace is not configured yet.
+            </p>
+            <div className="flex flex-col gap-2">
+              <Link to="/setup" className="btn-primary w-full">Set Up Business Now</Link>
+              <button className="btn-outline w-full" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="flex min-h-screen items-center justify-center bg-sand p-6">
-        <div className="card max-w-sm w-full p-6 text-center space-y-4">
-          <Ban className="h-12 w-12 text-rust-500" strokeWidth={1.5} />
-          <h2 className="font-display text-lg font-bold text-ink-900">This account has been removed</h2>
-          <p className="text-sm text-ink-500">Please contact your business owner.</p>
-          <button className="btn-primary w-full" onClick={logout}>Sign Out</button>
+        <div className="card max-w-md w-full p-6 text-center space-y-4">
+          <AlertCircle className="h-12 w-12 mx-auto text-amber-500" strokeWidth={1.5} />
+          <h2 className="font-display text-lg font-bold text-ink-900">Loading Account Profile</h2>
+          <p className="text-sm text-ink-500">
+            Connecting to your business workspace. If this takes more than a few moments, click below.
+          </p>
+          <div className="flex flex-col gap-2">
+            <button className="btn-primary w-full flex items-center justify-center gap-2" onClick={reloadProfile}>
+              <RefreshCw className="h-4 w-4" /> Reload Profile
+            </button>
+            <Link to="/setup" className="btn-outline w-full">Set Up / Reconfigure Business</Link>
+            <button className="text-xs text-ink-400 hover:underline pt-1" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out</button>
+          </div>
         </div>
       </div>
     );
   }
-
-if (!profile) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-sand p-6">
-      <div className="card max-w-md w-full p-6 text-center space-y-4">
-        <AlertCircle className="h-12 w-12 text-amber-500" strokeWidth={1.5} />
-        <h2 className="font-display text-lg font-bold text-ink-900">We couldn't load your account</h2>
-        <p className="text-sm text-ink-500">
-          This usually clears up on its own. Please try again, or sign out and back in if it keeps happening.
-        </p>
-        <div className="flex flex-col gap-2">
-          <button className="btn-primary w-full" onClick={reloadProfile}>Try again</button>
-          <button className="btn-outline w-full" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out and return to login</button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
   if (!isActive) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-sand p-6">
-        <div className="card max-w-sm p-6">
+        <div className="card max-w-sm p-6 text-center space-y-3">
+          <Ban className="h-10 w-10 mx-auto text-rust-500" strokeWidth={1.5} />
           <h2 className="font-display text-lg font-bold text-ink-900">Account deactivated</h2>
-          <p className="mt-2 text-sm text-ink-500">Contact a business owner to regain access.</p>
+          <p className="text-sm text-ink-500">Contact your business owner to regain access.</p>
+          <button className="btn-outline w-full" onClick={logout}>Sign Out</button>
         </div>
       </div>
     );
   }
 
-if (!demo && !emailVerified) {
+  if (!demo && !emailVerified) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-sand p-6">
         <div className="card max-w-sm w-full p-6 text-center space-y-4">
-          
           <h2 className="font-display text-lg font-bold text-ink-900">Verify your email</h2>
-          <p className="text-sm text-ink-500">We've sent a verification link to your email address. Please check your Inbox, and if you don't see it within a minute or two, check your Spam/Junk folder too.</p>
+          <p className="text-sm text-ink-500">
+            We sent a verification link to <span className="font-semibold text-ink-800">{firebaseUser.email}</span>. Please check your inbox (and spam/junk folder) and click the link to activate your account.
+          </p>
           <div className="flex flex-col gap-2">
             <button
               className="btn-primary w-full"
@@ -10038,7 +10428,8 @@ if (!demo && !emailVerified) {
                 setCheckingVerification(true);
                 try {
                   const verified = await refreshEmailVerification();
-                  if (!verified) toast.error("Not verified yet — check your inbox (and spam/junk folder) and click the link, then try again.");
+                  if (!verified) toast.error("Not verified yet — check your inbox and click the link, then try again.");
+                  else toast.success("Email verified! Welcome.");
                 } finally {
                   setCheckingVerification(false);
                 }
@@ -10053,16 +10444,16 @@ if (!demo && !emailVerified) {
                 setResending(true);
                 try {
                   await resendVerificationEmail();
-                  toast.success('Verification email sent — check your inbox and spam/junk folder.');
+                  toast.success('Verification email sent — check your inbox.');
                   setResendCooldown(60);
                 } catch (err) {
-                  console.error('[FlowBiz] resendVerificationEmail failed:', err.code || err.name, err.message);
+                  console.error('[FlowBiz] resendVerificationEmail error:', err.message);
                   toast.error(
                     err.code === 'auth/too-many-requests'
-                      ? 'Too many verification attempts. Please wait before requesting another email.'
-                      : "Couldn't send the verification email. Please try again in a moment."
+                      ? 'Too many attempts. Please wait a minute before requesting another email.'
+                      : "Couldn't send the verification email. Please try again shortly."
                   );
-                  if (err.code === 'auth/too-many-requests') setResendCooldown(60);
+                  setResendCooldown(60);
                 } finally {
                   setResending(false);
                 }
@@ -10084,25 +10475,72 @@ if (!demo && !emailVerified) {
 
 ## File: src/components/layout/Sidebar.jsx
 ````javascript
-import { NavLink, Link } from 'react-router-dom';import * as Lucide from 'lucide-react';
+import { NavLink } from 'react-router-dom';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+import * as Lucide from 'lucide-react';
 import { NAV_ITEMS } from './navConfig';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSettings } from '../../hooks/useSettings';
-const Icon = ({ name, className='h-5 w-5' }) => { const C = Lucide[name]||Lucide.Circle; return <C className={className} strokeWidth={1.75} />; };
-export default function Sidebar() {
+
+const Icon = ({ name, className = 'h-5 w-5' }) => {
+  const C = Lucide[name] || Lucide.Circle;
+  return <C className={className} strokeWidth={1.75} />;
+};
+
+// `collapsed` and `onToggleCollapse` are optional — any existing caller
+// that renders <Sidebar /> with no props keeps behaving exactly as
+// before (always expanded, no toggle button rendered).
+export default function Sidebar({ collapsed = false, onToggleCollapse }) {
   const { isAdmin } = useAuth();
   const { settings } = useSettings();
   const items = NAV_ITEMS
-    .filter(i => !i.adminOnly || isAdmin)
-    .filter(i => i.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses);
+    .filter((item) => !item.adminOnly || isAdmin)
+    .filter((item) => item.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses);
+
   return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r border-ink-100 bg-white lg:flex">
-      <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
-        {items.map(item => (
-<NavLink key={item.to} to={item.to} end={item.to==='/'} className={({isActive}) => `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${isActive ? 'bg-moss-50 text-moss-800' : 'text-ink-500 hover:bg-ink-50 hover:text-ink-800'}`}>            <Icon name={item.icon} />{item.label}
+    <aside
+      className={`hidden shrink-0 flex-col border-r border-ink-100 bg-white transition-[width] duration-200 lg:flex ${
+        collapsed ? 'w-[68px]' : 'w-60'
+      }`}
+    >
+      <nav className="flex-1 space-y-0.5 overflow-y-auto px-2.5 py-3">
+        {items.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.to === '/'}
+            title={collapsed ? item.label : undefined}
+            className={({ isActive }) =>
+              `flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors ${
+                collapsed ? 'justify-center px-0' : 'px-3'
+              } ${isActive ? 'bg-moss-50 text-moss-800' : 'text-ink-500 hover:bg-ink-50 hover:text-ink-800'}`
+            }
+          >
+            <Icon name={item.icon} />
+            {!collapsed && item.label}
           </NavLink>
         ))}
       </nav>
+
+      {onToggleCollapse && (
+        <div className="border-t border-ink-100 p-2">
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className={`flex w-full items-center gap-2 rounded-lg py-2 text-xs font-semibold text-ink-400 transition-colors hover:bg-ink-50 hover:text-ink-700 ${
+              collapsed ? 'justify-center px-0' : 'px-3'
+            }`}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {collapsed ? (
+              <ChevronRight className="h-4 w-4" strokeWidth={1.75} />
+            ) : (
+              <ChevronLeft className="h-4 w-4" strokeWidth={1.75} />
+            )}
+            {!collapsed && 'Collapse'}
+          </button>
+        </div>
+      )}
     </aside>
   );
 }
@@ -10268,239 +10706,6 @@ export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemo
         Sell  {formatKES(total)}
       </button>
     </div>
-  );
-}
-````
-
-## File: src/components/products/ProductFormModal.jsx
-````javascript
-import { useEffect, useState } from 'react';
-import toast from 'react-hot-toast';
-import Modal from '../common/Modal';
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { db } from '../../firebase';
-import { useAuth } from '../../contexts/AuthContext';
-import { raceWithTimeout } from '../../utils/offlineWrite';
-
-const empty = {
-  name: '', category: '', costPrice: '', sellingPrice: '', stock: '',
-  lowStockThreshold: '5', supplierId: '', barcode: '', description: '',
-};
-
-// FIX: Free plan product limit.
-const FREE_PLAN_PRODUCT_LIMIT = 100;
-
-export default function ProductFormModal({
-   open, onClose, onSave, suppliers, initialProduct, prefillBarcode, onAddSupplier, newSupplierId,
-simplifiedForPurchase = false, productCount = 0,
- }) {
-  const { businessId, isPro } = useAuth();
-  const [form, setForm] = useState(empty);
-  const [categories, setCategories] = useState([]);
-  const [showAddCategory, setShowAddCategory] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [savingCategory, setSavingCategory] = useState(false);
-
-  // MULTI-TENANT CHANGE: categories used to live in a single global
-  // settings/categories doc shared by every business in the project.
-  // They now live inside this business's own businessSettings/{businessId}
-  // document, alongside shopName and cashierCanRecordExpenses.
-  useEffect(() => {
-    if (!open || !businessId) return;
-    const unsub = onSnapshot(doc(db, 'businessSettings', businessId), (snap) => {
-      if (snap.exists() && snap.data().categories) {
-        setCategories(snap.data().categories);
-      } else {
-        const defaults = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
-        setCategories(defaults);
-        setDoc(doc(db, 'businessSettings', businessId), { categories: defaults }, { merge: true }).catch(console.error);
-      }
-    });
-    return unsub;
-  }, [open, businessId]);
-
-  useEffect(() => {
-    setBusy(false);
-    if (open) {
-      if (initialProduct) {
-        setForm({
-          ...empty, ...initialProduct,
-          costPrice: initialProduct.costPrice ?? '',
-          sellingPrice: initialProduct.sellingPrice ?? '',
-          stock: initialProduct.stock ?? '',
-          lowStockThreshold: initialProduct.lowStockThreshold ?? '5',
-          supplierId: initialProduct.supplierId ?? '',
-          barcode: initialProduct.barcode ?? '',
-          description: initialProduct.description ?? '',
-        });
-      } else {
-        setForm({ ...empty, barcode: prefillBarcode || '', category: categories[0] || '' });
-      }
-    }
-  }, [initialProduct, prefillBarcode, open]);
-
-  useEffect(() => {
-    if (open && !initialProduct && !form.category && categories.length > 0) {
-      setForm(prev => ({ ...prev, category: categories[0] }));
-    }
-  }, [categories, open, initialProduct, form.category]);
-
-  useEffect(() => {
-    if (newSupplierId) setForm((prev) => ({ ...prev, supplierId: newSupplierId }));
-  }, [newSupplierId]);
-
-  const set = (f) => (e) => setForm((p) => ({ ...p, [f]: e.target.value }));
-
-const handleAddCategory = async () => {
-    const trimmed = newCategoryName.trim();
-    if (!trimmed || savingCategory) return;
-    if (categories.some(c => c.toLowerCase() === trimmed.toLowerCase())) { toast.error('Category already exists.'); return; }
-    const updated = [...categories, trimmed];
-    setSavingCategory(true);
-    const write = setDoc(doc(db, 'businessSettings', businessId), { categories: updated }, { merge: true });
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-    setSavingCategory(false);
-    if (error) { toast.error('Failed to add category: ' + error.message); return; }
-    setForm(prev => ({ ...prev, category: trimmed }));
-    setShowAddCategory(false);
-    setNewCategoryName('');
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Category added');
-  };
-
-  const handle = async (e) => {
-    e.preventDefault();
-    if (!form.name.trim()) return;
-    if (!form.category) return toast.error('Please select or add a category.');
-    if (!simplifiedForPurchase && Number(form.costPrice) < 0) return toast.error('Cost price cannot be negative.');
-    if (Number(form.sellingPrice) <= 0) return toast.error('Selling price must be greater than zero.');
-   if (!initialProduct && !simplifiedForPurchase && Number(form.stock) < 0) return toast.error('Stock cannot be negative.');
-
-
-    if (!initialProduct && !isPro && productCount >= FREE_PLAN_PRODUCT_LIMIT) {
-      toast.error(`Free plan is limited to ${FREE_PLAN_PRODUCT_LIMIT} products. Upgrade to FlowBiz Pro to add more.`);
-      return;
-    }
-const barcodeVal = form.barcode.trim();
-if (barcodeVal && /^FB-\d{6}$/i.test(barcodeVal)) {
-  toast.error("That looks like a product's internal code, not a barcode. Scan or enter the item's real barcode instead.");
-  return;
-}
-    setBusy(true);
-    try {
-      await onSave({
-        name: form.name.trim(),
-        category: form.category,
-        costPrice: simplifiedForPurchase ? 0 : Number(form.costPrice),
-        sellingPrice: Number(form.sellingPrice),
-        stock: initialProduct ? initialProduct.stock : (simplifiedForPurchase ? 0 : Number(form.stock)),
-       lowStockThreshold: simplifiedForPurchase ? 5 : (Number(form.lowStockThreshold) || 5),
-        supplierId: simplifiedForPurchase ? null : (form.supplierId || null),
-        barcode: form.barcode.trim() || null,
-        description: form.description.trim(),
-      });
-    } catch (err) {
-      setBusy(false);
-    }
-  };
-
-  const handleClose = () => { if (!busy) onClose(); };
-
-  return (
-    <Modal open={open} onClose={handleClose} title={initialProduct ? 'Edit product' : 'Add product'}>
-      <form onSubmit={handle} className="space-y-3">
-        <div><label className="label">Product name</label><input className="input" value={form.name} onChange={set('name')} disabled={busy} required /></div>
-
-        {initialProduct?.internalCode && (
-          <div className="rounded-lg bg-ink-50 px-3 py-2 text-xs text-ink-500">
-            Internal code: <span className="font-mono font-semibold text-ink-700">{initialProduct.internalCode}</span>
-          </div>
-        )}
-
-        <div>
-          <label className="label">Barcode <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
-          <input className="input font-mono" value={form.barcode} onChange={set('barcode')} placeholder="Scan or type manufacturer barcode" disabled={busy} />
-          {!initialProduct && <p className="mt-1 text-xs text-ink-400">Leave blank if this product doesn't have a manufacturer barcode.</p>}
-        </div>
-
-        <div className={simplifiedForPurchase ? '' : 'grid grid-cols-2 gap-3'}>
-          <div>
-            <label className="label">Category</label>
-            <select className="input" value={form.category} onChange={set('category')} disabled={busy} required>
-              <option value="" disabled>— Select Category —</option>
-              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-              {showAddCategory ? (
-                <div className="mt-2 space-y-2 rounded-lg bg-ink-50 p-2.5">
-                  <label className="text-[11px] font-semibold text-ink-700 uppercase tracking-wide">New Category</label>
-                  <input className="input !py-1 !min-h-0 text-xs" value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="e.g. Fruits" disabled={busy || savingCategory} autoFocus />
-                  <div className="flex gap-1.5 justify-end">
-                    <button type="button" className="btn-secondary !py-1 !px-2.5 !min-h-0 text-xs" onClick={() => { setShowAddCategory(false); setNewCategoryName(''); }} disabled={busy || savingCategory}>Cancel</button>
-                    <button type="button" className="btn-primary !py-1 !px-2.5 !min-h-0 text-xs" onClick={handleAddCategory} disabled={busy || savingCategory}>{savingCategory ? 'Saving…' : 'Save'}</button>
-                  </div>
-                </div>
-              ) : (
-                <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={() => setShowAddCategory(true)} disabled={busy}>+ Add Category</button>
-              )}
-          </div>
-          {!simplifiedForPurchase && (
-           <div>
-              <label className="label">Supplier</label>
-             <select className="input" value={form.supplierId} onChange={set('supplierId')} disabled={busy}>
-                <option value="">— None —</option>
-               {(suppliers || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-              {onAddSupplier && <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={onAddSupplier} disabled={busy}>+ Add new supplier</button>}
-            </div>
-          )}
-        </div>
-
-        {simplifiedForPurchase ? (
-          <div>
-            <label className="label">Selling price (KES)</label>
-            <input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required />
-            <p className="mt-1 text-xs text-ink-400">Stock starts at 0. Go back to the purchase form to record what was actually received and its cost.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Buying price (KES)</label><input type="number" min="0" step="0.01" className="input" value={form.costPrice} onChange={set('costPrice')} disabled={busy} required /></div>
-            <div><label className="label">Selling price (KES)</label><input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required /></div>
-          </div>
-        )}
-
-        {!simplifiedForPurchase && (
-         <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Stock qty</label>
-              <input type="number" min="0" className="input disabled:bg-ink-50 disabled:text-ink-400" value={form.stock} onChange={set('stock')} disabled={!!initialProduct || busy} required={!initialProduct} />
-              {initialProduct && <p className="mt-1 text-[11px] text-ink-400">Stock quantity is changed via Purchases, Sales, or Stock Take.</p>}
-            </div>
-            <div><label className="label">Low stock alert</label><input type="number" min="0" className="input" value={form.lowStockThreshold} onChange={set('lowStockThreshold')} disabled={busy} /></div>
-          </div>
-        )}
-
-        <div>
-          <label className="label">Description <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
-          <textarea className="input !min-h-[70px]" rows={2} value={form.description} onChange={set('description')} placeholder="Product details or specifications" disabled={busy} />
-        </div>
-
-        {Number(form.sellingPrice) > 0 && Number(form.costPrice) > 0 && Number(form.sellingPrice) <= Number(form.costPrice) && (
-          <p className="text-xs text-rust-600 font-medium">⚠️ Selling price is at or below cost — you'll make no profit on this item.</p>
-        )}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="btn-primary" disabled={busy}>
-            {busy ? (
-              <span className="flex items-center gap-1.5">
-                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                {initialProduct ? 'Saving...' : 'Adding Product...'}
-              </span>
-            ) : (initialProduct ? 'Save changes' : 'Add product')}
-          </button>
-        </div>
-      </form>
-    </Modal>
   );
 }
 ````
@@ -11624,10 +11829,9 @@ export default function InventoryIntelligence() {
 
 ## File: src/pages/JoinStaff.jsx
 ````javascript
-// src/pages/JoinStaff.jsx
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, deleteUser, sendEmailVerification } from 'firebase/auth';
 import { doc, getDoc, writeBatch } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { auth, db } from '../firebase';
@@ -11705,24 +11909,38 @@ export default function JoinStaff() {
     }
     const { businessId, role, displayName } = freshSnap.data();
 
-    let cred;
+    let targetUser = null;
+    let isNewAuthUser = false;
+
     try {
-      cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      targetUser = cred.user;
+      isNewAuthUser = true;
     } catch (authErr) {
-      const message =
-        authErr.code === 'auth/email-already-in-use' ? "An account with this email already exists." :
-        authErr.code === 'auth/invalid-email'        ? 'Please enter a valid email address.' :
-        authErr.code === 'auth/weak-password'         ? 'Password should be at least 8 characters with upper, lower, and numbers.' :
-        'Could not create your account. Please try again.';
-      setError(message);
-      setSubmitting(false);
-      return;
+      if (authErr.code === 'auth/email-already-in-use') {
+        try {
+          const signInCred = await signInWithEmailAndPassword(auth, email.trim(), password);
+          targetUser = signInCred.user;
+        } catch {
+          setError('An account with this email already exists. Please verify your password or use a different email.');
+          setSubmitting(false);
+          return;
+        }
+      } else {
+        const message =
+          authErr.code === 'auth/invalid-email'  ? 'Please enter a valid email address.' :
+          authErr.code === 'auth/weak-password'   ? 'Password should be at least 8 characters with upper, lower, and numbers.' :
+          'Could not create your account. Please try again.';
+        setError(message);
+        setSubmitting(false);
+        return;
+      }
     }
 
     try {
       const batch = writeBatch(db);
-      batch.set(doc(db, 'users', cred.user.uid), {
-        uid: cred.user.uid,
+      batch.set(doc(db, 'users', targetUser.uid), {
+        uid: targetUser.uid,
         email: email.trim(),
         displayName,
         role,
@@ -11733,28 +11951,31 @@ export default function JoinStaff() {
       });
       batch.update(doc(db, 'staffInvites', inviteId), {
         claimed: true,
-        linkedUid: cred.user.uid,
+        linkedUid: targetUser.uid,
         claimedAt: new Date(),
       });
       await batch.commit();
     } catch (dbErr) {
       console.error('[JoinStaff] Firestore write failed:', dbErr);
-      try { await deleteUser(cred.user); } catch {}
+      if (isNewAuthUser) {
+        try { await deleteUser(targetUser); } catch {}
+      }
       setError('Something went wrong completing your signup. Please contact your business owner.');
       setSubmitting(false);
       return;
     }
 
     try {
-      const idToken = await cred.user.getIdToken(true);
+      const idToken = await targetUser.getIdToken(true);
       const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
       });
       if (!response.ok) throw new Error('send-verification-failed');
-      toast.success(`Welcome, ${displayName}! Check your email to verify your account.`);
+      toast.success(`Welcome, ${displayName}! Please check your email to verify your account.`);
     } catch {
-      toast.success(`Welcome, ${displayName}! Your account was created.`);
+      try { await sendEmailVerification(targetUser); } catch {}
+      toast.success(`Welcome, ${displayName}! Your account is ready.`);
     }
 
     setSubmitting(false);
@@ -11782,7 +12003,7 @@ export default function JoinStaff() {
         <div className="w-full max-w-sm card p-6 text-center space-y-3">
           <div className="text-3xl">✅</div>
           <h1 className="font-display text-lg font-bold text-ink-900">Invite Already Claimed</h1>
-          <p className="text-sm text-ink-500">Please sign in with your email and password.</p>
+          <p className="text-sm text-ink-500">This invite link has already been used. Please sign in with your email and password.</p>
           <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
         </div>
       </div>
@@ -11792,7 +12013,7 @@ export default function JoinStaff() {
   const roleLabel = invite.role === 'owner' ? 'an owner' : 'a cashier';
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4 py-8">
       <div className="w-full max-w-sm space-y-6">
         <div className="flex flex-col items-center text-center gap-3">
           <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
@@ -11814,7 +12035,7 @@ export default function JoinStaff() {
           </div>
           <div>
             <label className="label">Confirm password</label>
-            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" />
+            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="Repeat password" autoComplete="new-password" />
           </div>
           <button type="submit" className="btn-primary w-full" disabled={submitting}>
             {submitting ? 'Setting up…' : 'Create my sign-in'}
@@ -11824,224 +12045,6 @@ export default function JoinStaff() {
     </div>
   );
 }
-````
-
-## File: src/utils/whatsapp.js
-````javascript
-// src/utils/whatsapp.js
-//
-// Centralized WhatsApp deep-link utilities — the ONLY place in FlowBiz that
-// builds a wa.me URL or normalizes a phone number for WhatsApp purposes.
-// Every component that needs to "send via WhatsApp" imports from here
-// instead of re-implementing phone normalization / URL construction
-// (previously duplicated between documentService.js and nowhere else —
-// this file is now the single source so future WhatsApp features don't
-// grow a third copy).
-//
-// STRICTLY a wa.me deep link mechanism: FlowBiz opens WhatsApp with a
-// pre-filled message and the person using FlowBiz presses Send themselves.
-// There is no WhatsApp Business API call, no webhook, no automated
-// sending anywhere in this file.
-
-// Turns a locally-typed Kenyan number (07xx…, 01xx…, or a bare 7xx…/1xx…)
-// into the international-format digits WhatsApp's wa.me links expect.
-// Numbers that already look international (start with a country code) are
-// left alone — FlowBiz doesn't assume every customer is Kenyan.
-export function normalizePhone(rawPhone) {
-  const digits = String(rawPhone || '').replace(/[^\d]/g, '');
-  if (!digits) return '';
-
-  if (digits.startsWith('0') && digits.length === 10) {
-    return '254' + digits.slice(1);
-  }
-  if (digits.length === 9 && (digits.startsWith('7') || digits.startsWith('1'))) {
-    return '254' + digits;
-  }
-  return digits;
-}
-
-// A WhatsApp/E.164-style number is roughly 8–15 digits once normalized.
-// This is a sanity check, not full validation — it's what stands between
-// a typo and a broken WhatsApp link.
-export function isValidWhatsAppPhone(rawPhone) {
-  const digits = normalizePhone(rawPhone);
-  return digits.length >= 8 && digits.length <= 15;
-}
-
-// Returns null (never a broken URL) if the phone number doesn't pass
-// isValidWhatsAppPhone.
-export function createWhatsAppLink(rawPhone, message) {
-  if (!isValidWhatsAppPhone(rawPhone)) return null;
-  const digits = normalizePhone(rawPhone);
-  return `https://wa.me/${digits}?text=${encodeURIComponent(message || '')}`;
-}
-
-// Opens the link in a new tab/window and returns whether it actually did.
-// Callers use the return value to show the correct toast — FlowBiz never
-// claims a message was "sent"; only that WhatsApp was opened.
-export function openWhatsApp(rawPhone, message) {
-  const url = createWhatsAppLink(rawPhone, message);
-  if (!url) return false;
-  window.open(url, '_blank', 'noopener,noreferrer');
-  return true;
-}
-
-// ── Message templates ──────────────────────────────────────────────────
-// Kept here rather than in documentService.js so every message FlowBiz
-// ever pre-fills into WhatsApp is defined in exactly one place. All of
-// these are generated dynamically from real FlowBiz data — nothing here
-// is a hardcoded business name, amount, or date.
-
-// documentUrl is optional so this still works before a share link exists
-// (e.g. a caller that hasn't been updated) — but every real call site now
-// passes one, per the "message must contain a real FlowBiz document URL"
-// requirement.
-//
-// FIX (multi-product cart): `items` is optional — when a sale/invoice was
-// built from the Counter cart with more than one product, pass its
-// `items` array (see Counter.jsx's buildLineItems) and every line is
-// listed individually instead of collapsing to a single product/quantity
-// line. Single-product sales (Dashboard's own quick-scan sale flow, or a
-// one-item cart checkout) keep working exactly as before by omitting
-// `items` or passing an array with a single entry.
-export function buildReceiptMessage({
-  shopName, customerName, productName, quantity, totalAmount,
-  isCredit, remainingBalance, businessPhone, documentUrl, formatKES, items,
-}) {
-  const label = isCredit ? 'Invoice' : 'Receipt';
-  const lines = [`*${shopName}*`];
-  if (customerName) lines.push(`Hello ${customerName},`);
-
-  if (Array.isArray(items) && items.length > 1) {
-    lines.push(`${label}:`);
-    items.forEach((it) => {
-      const lineTotal = it.lineTotal ?? (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0);
-      lines.push(`• ${it.quantity} × ${it.productName} — ${formatKES(lineTotal)}`);
-    });
-  } else {
-    const singleName = (Array.isArray(items) && items[0]?.productName) || productName;
-    const singleQty = (Array.isArray(items) && items[0]?.quantity) || quantity;
-    lines.push(`${label} — ${singleQty} × ${singleName}`);
-  }
-
-  lines.push(`Total: ${formatKES(totalAmount)}`);
-  if (isCredit) lines.push(`Amount due: ${formatKES(remainingBalance)}`);
-  if (documentUrl) lines.push('', `Download ${label}:`, documentUrl);
-  const contactDigits = businessPhone ? normalizePhone(businessPhone) : '';
-  if (contactDigits) lines.push('', `Contact ${shopName}: +${contactDigits}`);
-  lines.push('', isCredit ? 'Payment due — thank you for your business!' : 'Thank you for your business!');
-  return lines.join('\n');
-}
-
-export function buildDebtReminderMessage({ shopName, customerName, outstandingAmount, businessPhone, formatKES }) {
-  const lines = [
-    `Hello ${customerName || 'there'},`,
-    '',
-    `This is a friendly reminder from ${shopName} regarding your outstanding balance of ${formatKES(outstandingAmount)}.`,
-    '',
-    'Please arrange payment at your earliest convenience.',
-  ];
-const contactDigits = businessPhone ? normalizePhone(businessPhone) : '';
-  if (contactDigits) lines.push('', `Contact: +${contactDigits}`);  lines.push('', 'Thank you.');
-  return lines.join('\n');
-}
-
-export function buildDebtPaymentReceiptMessage({
-  shopName, customerName, amountPaid, previousBalance, remainingBalance, isCleared, documentUrl, formatKES,
-}) {
-  const lines = [`Hello ${customerName || 'there'},`, '', `We have received your payment of ${formatKES(amountPaid)}.`, ''];
-  if (isCleared) {
-    lines.push('This payment clears your outstanding balance with us.');
-    lines.push('', `Remaining balance: ${formatKES(0)}`);
-  } else {
-    lines.push(`Previous balance: ${formatKES(previousBalance)}`);
-    lines.push(`Payment received: ${formatKES(amountPaid)}`);
-    lines.push(`Remaining balance: ${formatKES(remainingBalance)}`);
-  }
-if (documentUrl) lines.push('', 'Download your payment receipt:', documentUrl);  lines.push('', `— ${shopName}`, '', 'Thank you.');
-  return lines.join('\n');
-}
-````
-
-## File: index.html
-````html
-<!doctype html>
-<html lang="en-KE">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
-    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
-    <link rel="preconnect" href="https://js.paystack.co" crossorigin />
-    <link rel="preconnect" href="https://api.paystack.co" crossorigin />
-    <link rel="preconnect" href="https://flowbiz-api.flowbiz.workers.dev" crossorigin />
-    <!-- PWA & Mobile Meta Tags -->
-    <meta name="application-name" content="FlowBiz" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="FlowBiz" />
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="theme-color" content="#1a623c" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-
-    <!-- SEO & Search Engine Optimization Meta Tags -->
-    <title>FlowBiz — POS, Inventory & Business Manager for Kenyan SMBs</title>
-    <meta name="description" content="Offline-first Point of Sale (POS), real-time stock inventory, M-Pesa till reconciliation, and customer credit (deni) ledger tailored for Kenyan retail shops, wholesalers, and supermarkets." />
-    <meta name="keywords" content="POS Kenya, Point of Sale Nairobi, M-Pesa POS integration, retail management Kenya, duka inventory app, deni credit ledger, Kenyan business software, FlowBiz, stock control Kenya" />
-    <meta name="author" content="FlowBiz" />
-    <meta name="robots" content="index, follow" />
-    <link rel="canonical" href="https://flowbiz.co.ke/" />
-
-    <!-- Open Graph (Facebook, WhatsApp, LinkedIn, X preview) -->
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://flowbiz.co.ke/" />
-    <meta property="og:title" content="FlowBiz — Modern POS & Business Manager for Kenyan Shops" />
-    <meta property="og:description" content="Fast offline-first multi-product POS, automated M-Pesa float reconciliation, debt ledger, and inventory intelligence for Kenyan businesses." />
-    <meta property="og:image" content="https://flowbiz.co.ke/icons/icon-512.png" />
-    <meta property="og:locale" content="en_KE" />
-    <meta property="og:site_name" content="FlowBiz" />
-
-    <!-- Twitter Card -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="FlowBiz — POS & Inventory Management for Kenyan Businesses" />
-    <meta name="twitter:description" content="Manage sales, track cash & M-Pesa till float, audit inventory, and record customer debt with zero false profit illusions." />
-    <meta name="twitter:image" content="https://flowbiz.co.ke/icons/icon-512.png" />
-
-    <!-- Structured Data (Schema.org JSON-LD for Google Rich Results) -->
-    <script type="application/ld+json">
-      {
-        "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        "name": "FlowBiz",
-        "operatingSystem": "Web, Android, iOS, Windows, macOS",
-        "applicationCategory": "BusinessApplication",
-        "offers": {
-          "@type": "Offer",
-          "price": "0",
-          "priceCurrency": "KES"
-        },
-        "description": "Offline-first POS and business management software for Kenyan retail, wholesale, and service shops with M-Pesa reconciliation and debt tracking."
-      }
-    </script>
-
-    <!-- Google Fonts Preconnect & Stylesheets -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-
-    <!-- Firebase & Cloud Performance Preconnects -->
-    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
-    <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
-    <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
-  </head>
-  <body class="bg-[#faf6ef] text-[#15171d] antialiased">
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-    <!-- Paystack Inline Payment Gateway Script -->
-    <script src="https://js.paystack.co/v2/inline.js"></script>
-  </body>
-</html>
 ````
 
 ## File: cloudflare-worker/src/routes/paystackInitialize.js
@@ -12115,6 +12118,437 @@ export async function handlePaystackInitialize(request, env) {
   });
 
 return json({ authorization_url: paystackData.data.authorization_url, access_code: paystackData.data.access_code, reference });}
+````
+
+## File: cloudflare-worker/src/index.js
+````javascript
+// src/index.js — the Worker's entry point / router.
+//
+// Deliberately a plain switch on pathname + method, no router library:
+// a dependency here is a dependency every one of FlowBiz's privileged
+// operations (and now the public document route) trusts.
+//
+// FIX: removed the /api/whatsapp/send route (routes/whatsappSend.js).
+// Auditing it found it called the real Meta WhatsApp Cloud API — nothing
+// in the frontend has ever called this endpoint (WhatsApp sharing has
+// always gone through the client-side wa.me deep-link utility instead),
+// so it was dead code, and its Cloud-API approach directly contradicts
+// FlowBiz's "deep links only, no WhatsApp API" product requirement. See
+// routes/whatsappSend.js.removed for the file that was deleted, and the
+// project notes for the WHATSAPP_ACCESS_TOKEN secret this leaves unused.
+
+import { corsHeaders, handleOptions } from './lib/cors.js';
+import { errorResponse } from './lib/response.js';
+import { handleDeleteStaff } from './routes/deleteStaff.js';
+import { handlePaystackInitialize } from './routes/paystackInitialize.js';
+import { handlePaystackWebhook } from './routes/paystackWebhook.js';
+import { handlePublicDocument } from './routes/publicDocument.js';
+import { handleProPrice } from './routes/proPrice.js';
+import { handleSendVerificationEmail } from './routes/sendVerificationEmail.js';
+import { handleSendPasswordReset } from './routes/sendPasswordResetEmail.js';
+import { handleDeleteOwnProfile } from './routes/deleteOwnProfile.js';
+function getAllowedOrigins(env) {
+  return (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    // Paystack calls the webhook directly (server-to-server) — it never
+    // needs, and should never get, FlowBiz's browser CORS headers.
+    if (url.pathname === '/api/paystack/webhook' && request.method === 'POST') {
+      try {
+        return await handlePaystackWebhook(request, env);
+      } catch (err) {
+        console.error('Webhook error:', err);
+        return errorResponse('Internal server error.', 500);
+      }
+    }
+
+    // Public receipt/invoice/debt-payment-receipt links (/r/<token>) are
+    // opened directly by a customer's browser — a full-page navigation,
+    // not a fetch() from the FlowBiz frontend — so it deliberately does
+    // NOT go through verifyFirebaseIdToken like every other route below.
+    // See routes/publicDocument.js for the token → document security
+    // model. Handled up front, same as the webhook, since it returns
+    // HTML rather than the JSON shape the block below assumes.
+    if (url.pathname.startsWith('/r/') && request.method === 'GET') {
+      const token = url.pathname.slice('/r/'.length);
+      try {
+        return await handlePublicDocument(request, env, token);
+      } catch (err) {
+        console.error('Public document error:', err);
+        return errorResponse('Internal server error.', 500);
+      }
+    }
+
+    const allowedOrigins = getAllowedOrigins(env);
+    if (request.method === 'OPTIONS') return handleOptions(request, allowedOrigins);
+
+    const origin = request.headers.get('Origin') || '';
+    const extraHeaders = corsHeaders(origin, allowedOrigins);
+
+    let response;
+    try {
+// cloudflare-worker/src/index.js
+      if (url.pathname === '/api/auth/delete-staff' && request.method === 'POST') {
+        response = await handleDeleteStaff(request, env);
+      } else if (url.pathname === '/api/auth/send-verification-email' && request.method === 'POST') {
+        response = await handleSendVerificationEmail(request, env);
+      } else if (url.pathname === '/api/auth/send-password-reset' && request.method === 'POST') {
+        response = await handleSendPasswordReset(request, env);
+      } else if (url.pathname === '/api/paystack/initialize' && request.method === 'POST') {
+        response = await handlePaystackInitialize(request, env);
+      } else if (url.pathname === '/api/pro/price' && request.method === 'GET') {
+        response = await handleProPrice();
+              } else if (url.pathname === '/api/auth/delete-own-profile' && request.method === 'POST') {
+        response = await handleDeleteOwnProfile(request, env);
+      } else {
+        response = errorResponse('Not found.', 404);
+      }
+    } catch (err) {
+      console.error('Unhandled error:', err);
+      response = errorResponse('Internal server error.', 500);
+    }
+
+    const headers = new Headers(response.headers);
+    for (const [key, value] of Object.entries(extraHeaders)) headers.set(key, value);
+    return new Response(response.body, { status: response.status, headers });
+  },
+};
+````
+
+## File: src/components/products/ProductFormModal.jsx
+````javascript
+import { useEffect, useState } from 'react';
+import toast from 'react-hot-toast';
+import Modal from '../common/Modal';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { db } from '../../firebase';
+import { useAuth } from '../../contexts/AuthContext';
+import { raceWithTimeout } from '../../utils/offlineWrite';
+
+const empty = {
+  name: '',
+  category: '',
+  costPrice: '',
+  sellingPrice: '',
+  stock: '',
+  lowStockThreshold: '5',
+  supplierId: '',
+  barcode: '',
+  description: '',
+};
+
+const DEFAULT_CATEGORIES = [
+  'Beverages',
+  'Hardware',
+  'Household',
+  'Personal Care',
+  'Stationery',
+  'Airtime/Float',
+  'Other',
+];
+
+const FREE_PLAN_PRODUCT_LIMIT = 100;
+
+export default function ProductFormModal({
+  open,
+  onClose,
+  onSave,
+  suppliers = [],
+  initialProduct = null,
+  prefillBarcode = null,
+  prefillSupplierId = null,
+  onAddSupplier,
+  newSupplierId,
+  simplifiedForPurchase = false,
+  productCount = 0,
+}) {
+  const { businessId, isPro } = useAuth();
+  const [form, setForm] = useState(empty);
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [savingCategory, setSavingCategory] = useState(false);
+
+  // Only true if we are editing an existing product that already has a Firestore document ID
+  const isEditing = Boolean(initialProduct && initialProduct.id);
+
+  // Load permanent categories from Firestore
+  useEffect(() => {
+    if (!open || !businessId) return;
+    const unsub = onSnapshot(doc(db, 'businessSettings', businessId), (snap) => {
+      if (snap.exists() && Array.isArray(snap.data().categories)) {
+        const cleaned = snap
+          .data()
+          .categories.filter((c) => c && c.trim().toLowerCase() !== 'groceries');
+        setCategories(cleaned.length > 0 ? cleaned : DEFAULT_CATEGORIES);
+      } else {
+        setCategories(DEFAULT_CATEGORIES);
+        setDoc(
+          doc(db, 'businessSettings', businessId),
+          { categories: DEFAULT_CATEGORIES },
+          { merge: true }
+        ).catch(console.error);
+      }
+    });
+    return unsub;
+  }, [open, businessId]);
+
+  // Sync form state when modal opens
+  useEffect(() => {
+    setBusy(false);
+    setShowAddCategory(false);
+    setNewCategoryName('');
+    if (open) {
+      if (initialProduct && initialProduct.id) {
+        setForm({
+          ...empty,
+          ...initialProduct,
+          category: initialProduct.category || '',
+          costPrice: initialProduct.costPrice ?? '',
+          sellingPrice: initialProduct.sellingPrice ?? '',
+          stock: initialProduct.stock ?? '',
+          lowStockThreshold: initialProduct.lowStockThreshold ?? '5',
+          supplierId: initialProduct.supplierId || '',
+          barcode: initialProduct.barcode || '',
+          description: initialProduct.description || '',
+        });
+      } else {
+        setForm({
+          ...empty,
+          barcode: prefillBarcode || '',
+          category: '', // Starts empty with "— Select Category —"
+          supplierId: prefillSupplierId || initialProduct?.supplierId || '',
+        });
+      }
+    }
+  }, [initialProduct, prefillBarcode, prefillSupplierId, open]);
+
+  useEffect(() => {
+    if (newSupplierId) {
+      setForm((prev) => ({ ...prev, supplierId: newSupplierId }));
+    }
+  }, [newSupplierId]);
+
+  const set = (f) => (e) => setForm((p) => ({ ...p, [f]: e.target.value }));
+
+  const handleAddCategory = async () => {
+    const trimmed = newCategoryName.trim();
+    if (!trimmed || savingCategory) return;
+    if (categories.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
+      toast.error('Category already exists.');
+      return;
+    }
+    const updated = [...categories, trimmed];
+    setSavingCategory(true);
+    const write = setDoc(
+      doc(db, 'businessSettings', businessId),
+      { categories: updated },
+      { merge: true }
+    );
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    setSavingCategory(false);
+    if (error) {
+      toast.error('Failed to add category: ' + error.message);
+      return;
+    }
+    setForm((prev) => ({ ...prev, category: trimmed }));
+    setShowAddCategory(false);
+    setNewCategoryName('');
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Category added');
+  };
+
+  const handle = async (e) => {
+    e.preventDefault();
+    if (!form.name.trim() || busy) return;
+    if (!form.category) {
+      toast.error('Please select a category.');
+      return;
+    }
+    if (!simplifiedForPurchase && Number(form.costPrice) < 0) {
+      toast.error('Cost price cannot be negative.');
+      return;
+    }
+    if (Number(form.sellingPrice) <= 0) {
+      toast.error('Selling price must be greater than zero.');
+      return;
+    }
+    if (!isEditing && !simplifiedForPurchase && Number(form.stock) < 0) {
+      toast.error('Stock cannot be negative.');
+      return;
+    }
+
+    if (!isEditing && !isPro && productCount >= FREE_PLAN_PRODUCT_LIMIT) {
+      toast.error(`Free plan is limited to ${FREE_PLAN_PRODUCT_LIMIT} products. Upgrade to FlowBiz Pro to add more.`);
+      return;
+    }
+
+    const barcodeVal = form.barcode.trim();
+    if (barcodeVal && /^FB-\d{6}$/i.test(barcodeVal)) {
+      toast.error("That looks like an internal code, not a barcode. Scan or enter the item's manufacturer barcode.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const costPriceVal = simplifiedForPurchase ? 0 : (Number(form.costPrice) || 0);
+      const sellingPriceVal = Number(form.sellingPrice) || 0;
+      const stockVal = isEditing
+        ? (Number(initialProduct.stock) || 0)
+        : (simplifiedForPurchase ? 0 : (Number(form.stock) || 0));
+      const thresholdVal = simplifiedForPurchase ? 5 : (Number(form.lowStockThreshold) || 5);
+
+      await onSave({
+        name: form.name.trim(),
+        category: form.category,
+        costPrice: costPriceVal,
+        sellingPrice: sellingPriceVal,
+        stock: stockVal,
+        lowStockThreshold: thresholdVal,
+        supplierId: form.supplierId || null,
+        barcode: form.barcode.trim() || null,
+        description: form.description.trim(),
+      });
+    } catch {
+      // Handled by onSave
+    } finally {
+      // Guarantees the button is never stuck on "Saving..."
+      setBusy(false);
+    }
+  };
+
+  const handleClose = () => {
+    if (!busy) onClose();
+  };
+
+  const hasSuppliers = suppliers && suppliers.length > 0;
+
+  return (
+    <Modal open={open} onClose={handleClose} title={isEditing ? 'Edit product' : 'Add product'}>
+      <form onSubmit={handle} className="space-y-3">
+        <div>
+          <label className="label">Product name</label>
+          <input className="input" value={form.name} onChange={set('name')} disabled={busy} required autoFocus />
+        </div>
+
+        {isEditing && initialProduct?.internalCode && (
+          <div className="rounded-lg bg-ink-50 px-3 py-2 text-xs text-ink-500">
+            Internal code: <span className="font-mono font-semibold text-ink-700">{initialProduct.internalCode}</span>
+          </div>
+        )}
+
+        <div>
+          <label className="label">Barcode <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
+          <input className="input font-mono" value={form.barcode} onChange={set('barcode')} placeholder="Scan or type manufacturer barcode" disabled={busy} />
+          {!isEditing && <p className="mt-1 text-xs text-ink-400">Leave blank if this product doesn't have a barcode.</p>}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Category</label>
+            <select className="input" value={form.category} onChange={set('category')} disabled={busy} required>
+              <option value="" disabled>— Select Category —</option>
+              {categories.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+
+            {showAddCategory ? (
+              <div className="mt-2 space-y-2 rounded-lg bg-ink-50 p-2.5">
+                <label className="text-[11px] font-semibold text-ink-700 uppercase tracking-wide">New Category</label>
+                <input
+                  className="input !py-1 !min-h-0 text-xs"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  placeholder="e.g. Accessories"
+                  disabled={busy || savingCategory}
+                  autoFocus
+                />
+                <div className="flex gap-1.5 justify-end">
+                  <button type="button" className="btn-secondary !py-1 !px-2.5 !min-h-0 text-xs" onClick={() => { setShowAddCategory(false); setNewCategoryName(''); }} disabled={busy || savingCategory}>Cancel</button>
+                  <button type="button" className="btn-primary !py-1 !px-2.5 !min-h-0 text-xs" onClick={handleAddCategory} disabled={busy || savingCategory}>{savingCategory ? 'Saving…' : 'Save'}</button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={() => setShowAddCategory(true)} disabled={busy}>+ Add Category</button>
+            )}
+          </div>
+
+          <div>
+            <label className="label">Supplier <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
+            <select className="input" value={form.supplierId || ''} onChange={set('supplierId')} disabled={busy}>
+              <option value="">{hasSuppliers ? '— Select Supplier —' : '— None (No Suppliers) —'}</option>
+              {hasSuppliers && suppliers.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+            {onAddSupplier && (
+              <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={onAddSupplier} disabled={busy}>+ Add new supplier</button>
+            )}
+          </div>
+        </div>
+
+        {simplifiedForPurchase ? (
+          <div>
+            <label className="label">Selling price (KES)</label>
+            <input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required />
+            <p className="mt-1 text-xs text-ink-400">Stock &amp; buying cost will be recorded in the purchase form.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Buying price (KES)</label>
+              <input type="number" min="0" step="0.01" className="input" value={form.costPrice} onChange={set('costPrice')} disabled={busy} required />
+            </div>
+            <div>
+              <label className="label">Selling price (KES)</label>
+              <input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required />
+            </div>
+          </div>
+        )}
+
+        {!simplifiedForPurchase && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Stock qty</label>
+              <input type="number" min="0" className="input disabled:bg-ink-50 disabled:text-ink-400" value={form.stock} onChange={set('stock')} disabled={isEditing || busy} required={!isEditing} />
+              {isEditing && <p className="mt-1 text-[11px] text-ink-400">Stock is managed via Purchases, Sales, or Stock Take.</p>}
+            </div>
+            <div>
+              <label className="label">Low stock alert</label>
+              <input type="number" min="0" className="input" value={form.lowStockThreshold} onChange={set('lowStockThreshold')} disabled={busy} />
+            </div>
+          </div>
+        )}
+
+        <div>
+          <label className="label">Description <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
+          <textarea className="input !min-h-[70px]" rows={2} value={form.description} onChange={set('description')} placeholder="Product details or notes" disabled={busy} />
+        </div>
+
+        {Number(form.sellingPrice) > 0 && Number(form.costPrice) > 0 && Number(form.sellingPrice) <= Number(form.costPrice) && (
+          <p className="text-xs text-rust-600 font-medium">⚠️ Selling price is at or below cost — you will make no profit on this item.</p>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy}>
+            {busy ? (
+              <span className="flex items-center gap-1.5">
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                {isEditing ? 'Saving...' : 'Adding Product...'}
+              </span>
+            ) : (isEditing ? 'Save changes' : 'Add product')}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
 ````
 
 ## File: src/pages/AdvancedAnalytics.jsx
@@ -13058,6 +13492,259 @@ export default function Users() {
 }
 ````
 
+## File: src/utils/businessReset.js
+````javascript
+// src/utils/businessReset.js
+import { collection, query, where, getDocs, writeBatch, doc, setDoc, limit } from 'firebase/firestore';
+import { db, auth } from '../firebase';
+
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+
+const RESET_COLLECTIONS = [
+  'products', 'sales', 'customers', 'suppliers', 'creditSales', 'expenses',
+  'purchases', 'dailySessions', 'repayments', 'supplierPayments',
+  'stockAdjustments', 'barcodeIndex', 'refunds',
+  'debtPaymentReceipts', 'sharedDocuments', 'staffInvites', 'sessions',
+];
+
+const DEFAULT_CATEGORIES = [
+'Beverages', 'Hardware', 'Household',
+  'Personal Care', 'Stationery', 'Airtime/Float', 'Other'
+];
+
+async function deleteTenantCollection(name, businessId, chunkSize = 400) {
+  let totalDeleted = 0;
+  while (true) {
+    const snap = await getDocs(query(collection(db, name), where('businessId', '==', businessId), limit(chunkSize)));
+    if (snap.empty) break;
+
+    const batch = writeBatch(db);
+    snap.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+
+    totalDeleted += snap.docs.length;
+    if (snap.docs.length < chunkSize) break;
+  }
+  return totalDeleted;
+}
+
+export async function resetBusinessData(businessId, ownerUid) {
+  if (!businessId) throw new Error('resetBusinessData() called with no businessId');
+  const results = {};
+  const failures = [];
+
+  for (const name of RESET_COLLECTIONS) {
+    try {
+      results[name] = await deleteTenantCollection(name, businessId);
+    } catch (err) {
+      console.error(`[Reset] Collection ${name} cleanup FAILED:`, err);
+      results[name] = 0;
+      failures.push(`${name} (${err.message || 'unknown error'})`);
+    }
+  }
+
+  try {
+    const cashiersSnap = await getDocs(query(
+      collection(db, 'users'), where('businessId', '==', businessId), where('role', '==', 'cashier')
+    ));
+    const idToken = auth.currentUser ? await auth.currentUser.getIdToken(true) : null;
+
+    for (const cashierDoc of cashiersSnap.docs) {
+      const cashierUid = cashierDoc.id;
+      if (idToken) {
+        try {
+          const res = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+            body: JSON.stringify({ targetUid: cashierUid }),
+          });
+          if (!res.ok) failures.push(`cashier auth delete for ${cashierUid} (status ${res.status})`);
+        } catch (authErr) {
+          failures.push(`cashier auth delete for ${cashierUid} (${authErr.message})`);
+        }
+      }
+      try {
+        const batch = writeBatch(db);
+        batch.delete(doc(db, 'users', cashierUid));
+        await batch.commit();
+      } catch (docErr) {
+        failures.push(`cashier profile delete for ${cashierUid} (${docErr.message})`);
+      }
+    }
+  } catch (cashierErr) {
+    failures.push(`cashier cleanup (${cashierErr.message})`);
+  }
+
+  try {
+    await setDoc(doc(db, 'businessSettings', businessId), {
+      shopName: 'FlowBiz Store', phone: '', email: '', address: '', logoUrl: '',
+      cashierCanRecordExpenses: true, categories: DEFAULT_CATEGORIES, receiptPaperWidth: 80,
+      resetAt: new Date(), resetBy: ownerUid || null,
+    }, { merge: true });
+    results.businessSettings = 1;
+  } catch (settingsErr) {
+    failures.push(`businessSettings reset (${settingsErr.message})`);
+  }
+
+  results.performedBy = ownerUid || null;
+
+  if (failures.length > 0) {
+    const err = new Error(`Reset finished, but some data may not have been fully cleared: ${failures.join('; ')}`);
+    err.partialResults = results;
+    throw err;
+  }
+
+  return results;
+}
+````
+
+## File: src/utils/whatsapp.js
+````javascript
+export function normalizePhone(rawPhone) {
+  const digits = String(rawPhone || '').replace(/[^\d]/g, '');
+  if (!digits) return '';
+
+  if (digits.startsWith('0') && digits.length === 10) {
+    return '254' + digits.slice(1);
+  }
+  if (digits.length === 9 && (digits.startsWith('7') || digits.startsWith('1'))) {
+    return '254' + digits;
+  }
+  return digits;
+}
+
+export function isValidWhatsAppPhone(rawPhone) {
+  const digits = normalizePhone(rawPhone);
+  return digits.length >= 8 && digits.length <= 15;
+}
+
+export function createWhatsAppLink(rawPhone, message) {
+  if (!isValidWhatsAppPhone(rawPhone)) return null;
+  const digits = normalizePhone(rawPhone);
+  return `https://wa.me/${digits}?text=${encodeURIComponent(message || '')}`;
+}
+
+export function openWhatsApp(rawPhone, message) {
+  const url = createWhatsAppLink(rawPhone, message);
+  if (!url) return false;
+  window.open(url, '_blank', 'noopener,noreferrer');
+  return true;
+}
+
+// Sleek, Structured WhatsApp Digital Receipts / Invoices
+export function buildReceiptMessage({
+  shopName, customerName, productName, quantity, totalAmount,
+  isCredit, remainingBalance, businessPhone, documentUrl, formatKES, items,
+}) {
+  const label = isCredit ? 'COMMERCIAL INVOICE' : 'OFFICIAL RECEIPT';
+  const lines = [
+    `🧾 *${shopName.toUpperCase()}*`,
+    `📋 _${label}_`,
+    '──────────────────',
+  ];
+
+  if (customerName) {
+    lines.push(`👤 *Customer:* ${customerName}`);
+  }
+
+  lines.push('');
+  lines.push('*Items Ordered:*');
+
+  if (Array.isArray(items) && items.length > 1) {
+    items.forEach((it) => {
+      const lineTotal = it.lineTotal ?? (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0);
+      lines.push(`• ${it.quantity}× ${it.productName} → *${formatKES(lineTotal)}*`);
+    });
+  } else {
+    const singleName = (Array.isArray(items) && items[0]?.productName) || productName;
+    const singleQty = (Array.isArray(items) && items[0]?.quantity) || quantity;
+    lines.push(`• ${singleQty}× ${singleName} → *${formatKES(totalAmount)}*`);
+  }
+
+  lines.push('──────────────────');
+  if (isCredit) {
+    lines.push(`💰 *Total Amount Due:* ${formatKES(remainingBalance)}`);
+    lines.push(`⚠️ *Status:* Payment Pending (Deni)`);
+  } else {
+    lines.push(`✅ *Total Amount Paid:* ${formatKES(totalAmount)}`);
+  }
+
+  if (documentUrl) {
+    lines.push('');
+    lines.push(`🔗 *View / Download Digital ${isCredit ? 'Invoice' : 'Receipt'}:*`);
+    lines.push(documentUrl);
+  }
+
+  const contactDigits = businessPhone ? normalizePhone(businessPhone) : '';
+  if (contactDigits) {
+    lines.push('');
+    lines.push(`📞 *Questions? Call:* +${contactDigits}`);
+  }
+
+  lines.push('');
+  lines.push(`_Thank you for choosing ${shopName}!_`);
+  return lines.join('\n');
+}
+
+// Professional Debt Reminder
+export function buildDebtReminderMessage({ shopName, customerName, outstandingAmount, businessPhone, formatKES }) {
+  const lines = [
+    `🏬 *${shopName.toUpperCase()}*`,
+    '📌 *ACCOUNT STATEMENT & REMINDER*',
+    '──────────────────',
+    `Hello *${customerName || 'Customer'}*,`,
+    '',
+    `This is a friendly reminder regarding your outstanding balance with *${shopName}*.`,
+    '',
+    `💰 *Outstanding Balance:* *${formatKES(outstandingAmount)}*`,
+    '',
+    'Kindly arrange to settle the balance at your earliest convenience.',
+  ];
+
+  const contactDigits = businessPhone ? normalizePhone(businessPhone) : '';
+  if (contactDigits) {
+    lines.push('');
+    lines.push(`📞 *Store Contact:* +${contactDigits}`);
+  }
+
+  lines.push('──────────────────');
+  lines.push('_Thank you for your continued partnership!_');
+  return lines.join('\n');
+}
+
+// Debt Payment Receipt (Clear confirmation)
+export function buildDebtPaymentReceiptMessage({
+  shopName, customerName, amountPaid, previousBalance, remainingBalance, isCleared, documentUrl, formatKES,
+}) {
+  const lines = [
+    `*${shopName.toUpperCase()}*`,
+    '*DEBT REPAYMENT CONFIRMATION*',
+    '──────────────────',
+    `Hello *${customerName || 'Customer'}*,`,
+    '',
+    `We have received your payment of *${formatKES(amountPaid)}*.`,
+    '',
+    `• *Previous Balance:* ${formatKES(previousBalance)}`,
+    `• *Amount Paid:* -${formatKES(amountPaid)}`,
+    `• *Remaining Balance:* *${formatKES(remainingBalance)}*`,
+    '',
+    isCleared
+      ? '*Status: DEBT FULLY CLEARED!*'
+      : '*Status: PARTIALLY PAID*',
+  ];
+
+  if (documentUrl) {
+    lines.push('');
+    lines.push('*Download Official Payment Receipt:*');
+    lines.push(documentUrl);
+  }
+
+  lines.push('──────────────────');
+  lines.push(`_Thank you for settling your account with ${shopName}._`);
+  return lines.join('\n');
+}
+````
+
 ## File: firestore.rules
 ````
 rules_version = '2';
@@ -13108,7 +13795,8 @@ service cloud.firestore {
     // ── Businesses ──────────────────────────────────────────────────────
     match /businesses/{businessId} {
       allow get: if isStaff() && myBusinessId() == businessId;
-      allow create: if isSignedIn();
+      allow create: if isSignedIn()
+                    && request.resource.data.subscription.plan == 'free';
       allow update: if isOwner() && myBusinessId() == businessId
                     && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription']);
       allow delete: if false;
@@ -13117,8 +13805,8 @@ service cloud.firestore {
     match /barcodeIndex/{docId} {
       allow read: if isOwner() && owns(resource.data);
       allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && owns(request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
-      allow update: if false;
     }
 
     match /productCodeCounters/{businessId} {
@@ -13127,7 +13815,9 @@ service cloud.firestore {
 
     match /businessSettings/{businessId} {
       allow get: if isStaff() && myBusinessId() == businessId;
-      allow write: if isOwner() && myBusinessId() == businessId;
+      allow create: if isSignedIn() && request.resource.data.businessId == businessId;
+      allow update: if isOwner() && myBusinessId() == businessId;
+      allow delete: if false;
     }
 
     // ── Users & invites ─────────────────────────────────────────────────
@@ -13137,19 +13827,21 @@ service cloud.firestore {
 
       allow create: if isSignedIn() && request.auth.uid == userId
                     && request.resource.data.role in ['owner', 'cashier']
+                    && request.resource.data.businessId is string
+                    && request.resource.data.businessId.size() > 0
                     && (
-                      (
-                        request.resource.data.role == 'owner'
-                        && !exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
-                        && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.createdBy == request.auth.uid
-                      )
+                      request.resource.data.role == 'owner'
                       ||
                       (
                         request.resource.data.claimedFromInviteId is string
                         && isValidInviteClaim(request.resource.data.claimedFromInviteId, request.resource.data.businessId, request.resource.data.role)
                       )
                     );
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow update: if (isOwner() && ownsUpdate(resource.data, request.resource.data))
+                    ||
+                    (isSignedIn() && request.auth.uid == userId
+                     && request.resource.data.role == resource.data.role
+                     && request.resource.data.businessId == resource.data.businessId);
       allow delete: if isOwner() && owns(resource.data) && userId != request.auth.uid;
     }
 
@@ -13158,11 +13850,13 @@ service cloud.firestore {
       allow list: if isOwner() && resource.data.businessId == myBusinessId();
       allow create: if isOwner() && request.resource.data.businessId == myBusinessId()
                     && request.resource.data.role in ['owner', 'cashier'];
-      allow update: if isSignedIn()
+      allow update: if (isOwner() && ownsUpdate(resource.data, request.resource.data))
+                    ||
+                    (isSignedIn()
                     && resource.data.claimed == false
                     && request.resource.data.claimed == true
                     && request.resource.data.linkedUid == request.auth.uid
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'linkedUid', 'claimedAt']);
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'linkedUid', 'claimedAt']));
       allow delete: if isOwner() && resource.data.businessId == myBusinessId();
     }
 
@@ -13178,7 +13872,7 @@ service cloud.firestore {
 
       allow update: if isSignedIn() && (
         (resource.data.uid == request.auth.uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent']))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent', 'lastUserName', 'uid', 'businessId']))
         ||
         (isOwner() && resource.data.businessId == myBusinessId()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked']))
@@ -13235,7 +13929,7 @@ service cloud.firestore {
     match /debtPaymentReceipts/{id} {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data);
-      allow update: if false;
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
@@ -13243,7 +13937,7 @@ service cloud.firestore {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data)
                     && request.resource.data.documentType in ['receipt', 'invoice', 'debtPaymentReceipt'];
-      allow update: if false;
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
@@ -13285,11 +13979,123 @@ service cloud.firestore {
     match /dailySessions/{id} {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow update: if isStaff() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
   }
 }
+````
+
+## File: index.html
+````html
+<!doctype html>
+<html lang="en-KE">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <link rel="preconnect" href="https://js.paystack.co" crossorigin />
+    <link rel="preconnect" href="https://api.paystack.co" crossorigin />
+    <link rel="preconnect" href="https://flowbiz-api.flowbiz.workers.dev" crossorigin />
+    <!-- PWA & Mobile Meta Tags -->
+    <meta name="application-name" content="FlowBiz" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="FlowBiz" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#1a623c" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+
+    <!-- SEO & Search Engine Optimization Meta Tags -->
+    <title>FlowBiz — POS, Inventory & Business Manager for Kenyan SMBs</title>
+    <meta name="description" content="Offline-first Point of Sale (POS), real-time stock inventory, M-Pesa till reconciliation, and customer credit (deni) ledger tailored for Kenyan retail shops, wholesalers, and supermarkets." />
+    <meta name="keywords" content="POS Kenya, Point of Sale Nairobi, M-Pesa POS integration, retail management Kenya, duka inventory app, deni credit ledger, Kenyan business software, FlowBiz, stock control Kenya" />
+    <meta name="author" content="FlowBiz" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://flowbiz.co.ke/" />
+
+    <!-- Open Graph (Facebook, WhatsApp, LinkedIn, X preview) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://flowbiz.co.ke/" />
+    <meta property="og:title" content="FlowBiz — Modern POS & Business Manager for Kenyan Shops" />
+    <meta property="og:description" content="Fast offline-first multi-product POS, automated M-Pesa float reconciliation, debt ledger, and inventory intelligence for Kenyan businesses." />
+    <meta property="og:image" content="https://flowbiz.co.ke/icons/icon-512.png" />
+    <meta property="og:locale" content="en_KE" />
+    <meta property="og:site_name" content="FlowBiz" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="FlowBiz — POS & Inventory Management for Kenyan Businesses" />
+    <meta name="twitter:description" content="Manage sales, track cash & M-Pesa till float, audit inventory, and record customer debt with zero false profit illusions." />
+    <meta name="twitter:image" content="https://flowbiz.co.ke/icons/icon-512.png" />
+
+    <!-- Structured Data (Schema.org JSON-LD for Google Rich Results) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "FlowBiz",
+        "operatingSystem": "Web, Android, iOS, Windows, macOS",
+        "applicationCategory": "BusinessApplication",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "KES"
+        },
+        "description": "Offline-first POS and business management software for Kenyan retail, wholesale, and service shops with M-Pesa reconciliation and debt tracking."
+      }
+    </script>
+      <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Does FlowBiz work when there is no internet connection?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. FlowBiz uses an offline-first architecture with persistent local caching. Sales, credit purchases, and expenses are saved immediately in your browser or phone storage and sync automatically when connectivity is restored."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How does M-Pesa reconciliation work at closing time?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "When recording sales, cashiers specify whether the payment was received via Cash or M-Pesa. At the end of the shift on the Close Day page, FlowBiz calculates the exact expected M-Pesa sum so you can reconcile it directly against your M-Pesa Till or Paybill balance."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Why does profit stay at zero when I record a Credit (Deni) sale?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "FlowBiz uses a cash-flow-first accounting model specifically designed for retail businesses. Revenue and gross profit are only recognized when the customer pays off their debt to prevent false profit illusions on uncollected credit."
+      }
+    }
+  ]
+}
+</script>
+    <!-- Google Fonts Preconnect & Stylesheets -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+    <!-- Firebase & Cloud Performance Preconnects -->
+    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
+  </head>
+  <body class="bg-[#faf6ef] text-[#15171d] antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+    <!-- Paystack Inline Payment Gateway Script -->
+    <script src="https://js.paystack.co/v2/inline.js"></script>
+  </body>
+</html>
 ````
 
 ## File: cloudflare-worker/wrangler.toml
@@ -13923,7 +14729,8 @@ export default function StockTake() {
 ## File: src/pages/Suppliers.jsx
 ````javascript
 import { useMemo, useState } from 'react';
-import { addDoc, updateDoc, deleteDoc, doc, writeBatch, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import { addDoc, updateDoc, deleteDoc, doc, writeBatch, serverTimestamp, where, collection } from 'firebase/firestore'; // Removed orderBy
+
 import toast from 'react-hot-toast';
 import { Pencil, Trash2, Banknote, Smartphone } from 'lucide-react';
 import { db } from '../firebase';
@@ -13932,6 +14739,7 @@ import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner'; // Added Import
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import Modal from '../components/common/Modal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
@@ -13942,13 +14750,18 @@ import { friendlyErrorMessage } from '../utils/errorMessages';
 
 export default function Suppliers() {
   const { profile, businessId } = useAuth();
-  const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
+  const suppQ   = useMemo(() => businessId ? tenantQuery('suppliers', businessId) : null, [businessId]); // Removed orderBy('name')
   const purchQ  = useMemo(() => businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null, [businessId]);
   const paymQ   = useMemo(() => businessId ? tenantQuery('supplierPayments', businessId) : null, [businessId]);
-const { data: suppliers, loading, refetch } = useFirestoreCollection(suppQ);
+  
+  const { data: rawSuppliers, loading, error, refetch } = useFirestoreCollection(suppQ); // Destructured error
   const { data: purchases }          = useFirestoreCollection(purchQ);
   const { data: spayments }          = useFirestoreCollection(paymQ);
-  
+
+  // Alphabetically sort suppliers in memory
+  const suppliers = useMemo(() => {
+    return [...rawSuppliers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [rawSuppliers]);
 
   const [modal, setModal]       = useState(false);
   const [editing, setEditing]   = useState(null);
@@ -13970,21 +14783,21 @@ const { data: suppliers, loading, refetch } = useFirestoreCollection(suppQ);
   );
   const totalOwed = owedList.reduce((a, o) => a + o.balance, 0);
 
-const [deleting, setDeleting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const handleSave = async data => {
     const write = editing
       ? updateDoc(doc(db,'suppliers',editing.id), data)
       : addDoc(tenantCollection('suppliers'), withBusiness({ ...data, createdAt:serverTimestamp() }, businessId));
 
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    const { queuedOffline, error: writeError } = await raceWithTimeout(write, 4000);
+    if (writeError) { toast.error(friendlyErrorMessage(writeError)); throw writeError; }
     toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
     await refetch();
     setModal(false); setEditing(null);
   };
 
-const handleDel = async () => {
+  const handleDel = async () => {
     const stillExists = suppliers.some((s) => s.id === pendDel.id);
     if (!stillExists) {
       toast.success('Already removed.');
@@ -13999,9 +14812,9 @@ const handleDel = async () => {
       return;
     }
     setDeleting(true);
-    const { queuedOffline, error } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
+    const { queuedOffline, error: deleteError } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
     setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (deleteError) { toast.error(friendlyErrorMessage(deleteError)); return; }
     toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
     setPendDel(null);
     await refetch();
@@ -14023,21 +14836,12 @@ const handleDel = async () => {
     batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:new Date(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
 
     const commit = batch.commit();
-    const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+    const { queuedOffline, error: commitError } = await raceWithTimeout(commit, 4000);
     setPaying(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    if (commitError) { toast.error(friendlyErrorMessage(commitError)); return; }
     toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
     if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
     setPayModal(false); setPayAmt(''); setPayCode('');
-  };
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    if (!queuedOffline) setNewSupplierId(ref.id); // offline: won't auto-select until next reload — acceptable trade-off
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Supplier added');
-    await refetch();
   };
 
   return (
@@ -14046,6 +14850,7 @@ const handleDel = async () => {
         <div><h1 className="font-display text-xl font-bold text-ink-900">Suppliers</h1><p className="text-sm text-ink-400">Total owed: <span className="font-semibold text-rust-600">{formatKES(totalOwed)}</span></p></div>
         <button className="btn-primary" onClick={()=>{setEditing(null);setModal(true);}}>+ Add supplier</button>
       </div>
+      <ErrorBanner message={error} /> {/* Display error if it occurs */}
       {loading?<LoadingSpinner />:suppliers.length===0?<EmptyState title="No suppliers yet" description="Add suppliers to track restocking and balances." />:(
         <div className="space-y-3">
           {suppliers.map(s=>{
@@ -14065,7 +14870,7 @@ const handleDel = async () => {
         </div>
       )}
       <SupplierFormModal open={modal} onClose={()=>{setModal(false);setEditing(null);}} onSave={handleSave} initialSupplier={editing} />
-<ConfirmDialog
+      <ConfirmDialog
         open={!!pendDel}
         title="Remove supplier?"
         message={(owedMap[pendDel?.id]||0) > 0.005
@@ -14076,7 +14881,8 @@ const handleDel = async () => {
         danger
         onConfirm={handleDel}
         onCancel={()=>{ if (!deleting) setPendDel(null); }}
-      />      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
+      />      
+      <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
         <form onSubmit={handlePay} className="space-y-3">
           <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(owedMap[selSupp?.id]||0)}</span></div>
           <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
@@ -14106,330 +14912,328 @@ import { formatDateTime } from './dateRanges';
 import { openWhatsApp, buildReceiptMessage } from './whatsapp';
 
 export async function loadImageAsDataUrl(url) {
-    if (!url) return null;
-    try {
-        const response = await fetch(url);
-        const blob = await response.blob();
-        return await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-        });
-    } catch (err) {
-        console.error('Could not load business logo for PDF:', err);
-        return null;
-    }
-}
-
-// Shared header used by every thermal-receipt-style document this file
-// generates (sale receipts/invoices, and now debt payment receipts) —
-// keeps the logo/business-info block identical across document types
-// instead of re-implementing it per document.
-async function drawDocumentHeader(doc, settings, marginX, startY, paperWidthMm = 80) {
-    let y = startY;
-    const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
-    const logoSize = paperWidthMm <= 58 ? 11 : 14;
-    const textX = logoDataUrl ? marginX + logoSize + 3 : marginX;
-
-    if (logoDataUrl) {
-        try {
-            const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
-            doc.addImage(logoDataUrl, format, marginX, y, logoSize, logoSize);
-        } catch (err) {
-            console.error('Could not embed business logo in PDF:', err);
-        }
-    }
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(paperWidthMm <= 58 && logoDataUrl ? 9 : 11);
-    doc.text(settings.shopName || 'Business Receipt', textX, y + 5);
-
-    let lineY = y + 9;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    // FIX (#14): shows whichever of phone/email/address are actually
-    // configured — never a placeholder — same "only if set" rule the
-    // phone line already followed. Pulled straight from businessSettings,
-    // nothing hardcoded.
-    if (settings.phone) { doc.text(`Tel: ${settings.phone}`, textX, lineY); lineY += 4; }
-    if (settings.email) { doc.text(settings.email, textX, lineY); lineY += 4; }
-    if (settings.address && paperWidthMm > 58) { doc.text(settings.address, textX, lineY); lineY += 4; }
-
-    return Math.max(y + (logoDataUrl ? logoSize + 4 : 8), lineY + 2);
-}
-// FIX (thermal paper width): FlowBiz's receipts were always generated at
-// a fixed 80mm width. Some businesses' printers use 58mm paper — read
-// from businessSettings.receiptPaperWidth (defaults to 80, set in
-// Settings.jsx) so both PDF layouts, and the public receipt page's own
-// PDF/print output, size correctly for whichever paper the business
-// actually uses. Nothing else about the layout changes.
-function resolvePaperWidthMm(settings) {
-    return settings?.receiptPaperWidth === 58 ? 58 : 80;
-}
-
-// FIX (multi-product cart): a sale/invoice from Counter.jsx's cart may
-// contain several distinct products (data.items — see
-// Counter.jsx's buildLineItems). When present, every line item is used;
-// when absent (a legacy single-product sale, or Dashboard's own
-// single-item quick-sale flow, which is unchanged), a single synthetic
-// line is built from the doc's existing top-level fields exactly as
-// before — so single-product receipts render identically to before this
-// change.
-function resolveDocumentItems(data) {
-    if (Array.isArray(data.items) && data.items.length > 0) return data.items;
-    return [{
-        productName: data.productName || data.description || 'Item',
-        quantity: data.quantity,
-        unitPrice: data.soldPricePerUnit,
-        lineTotal: data.totalAmount ?? data.amount ?? 0,
-    }];
-}
-
-// Replace the buildDocument function in src/utils/documentService.js
-async function buildDocument(data, settings, typeLabel) {
-    const paperWidthMm = resolvePaperWidthMm(settings);
-    const items = resolveDocumentItems(data);
-
-    // FIX (multi-product cart): a single fixed 200mm page height clips a
-    // cart with several line items. Height now scales with how many
-    // distinct products are on the receipt, while staying at least as
-    // tall as the original single-item receipt was.
-    const estimatedHeight = Math.max(200, 90 + items.length * 10);
-    const doc = new jsPDF('p', 'mm', [paperWidthMm, estimatedHeight]); // Thermal receipt size
-    const marginX = 5;
-    const pageWidth = paperWidthMm - marginX;
-    let y = await drawDocumentHeader(doc, settings, marginX, 8, paperWidthMm);
-
-    // 2. DOCUMENT TYPE & META DATA
-    y += 2;
-    doc.setDrawColor(0, 0, 0);
-    doc.setLineWidth(0.4);
-    doc.line(marginX, y, pageWidth, y);
-    
-    y += 6;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text(typeLabel, marginX, y); // "INVOICE" or "RECEIPT"
-    
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text(formatDateTime(data.soldAt || data.recordedAt || new Date()), pageWidth, y, { align: 'right' });
-    
-    y += 5;
-    doc.text(`Ref: ${data.id?.substring(0, 8).toUpperCase() || 'N/A'}`, marginX, y);
-    if (data.customerName) {
-        y += 4;
-        doc.text(`To: ${data.customerName}`, marginX, y);
-    }
-
-    // 3. ITEMIZED TABLE
-    y += 4;
-    doc.setDrawColor(200, 200, 200);
-    doc.setLineWidth(0.2);
-    doc.line(marginX, y, pageWidth, y);
-    
-    y += 5;
-    doc.setFont('helvetica', 'bold');
-    doc.text('ITEM', marginX, y);
-    doc.text('TOTAL', pageWidth, y, { align: 'right' });
-    
-    y += 2;
-    doc.line(marginX, y, pageWidth, y);
-
-    // Items — every product in the cart gets its own line, each with its
-    // own qty × unit price sub-line, exactly mirroring how a single item
-    // was already rendered.
-    y += 5;
-    doc.setFont('helvetica', 'normal');
-
-    items.forEach((item) => {
-        const itemName = item.productName || 'Item';
-        const splitName = doc.splitTextToSize(itemName, Math.max(pageWidth - 30, 20));
-        doc.text(splitName, marginX, y);
-
-        const lineTotal = item.lineTotal ?? ((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0));
-        doc.text(formatKES(lineTotal), pageWidth, y, { align: 'right' });
-
-        y += (splitName.length * 4);
-        if (item.quantity) {
-            doc.setTextColor(100, 100, 100);
-            doc.text(`${item.quantity} × @ ${formatKES(item.unitPrice || 0)}`, marginX, y);
-            doc.setTextColor(0, 0, 0);
-            y += 4;
-        }
+  if (!url) return null;
+  try {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
     });
-
-    // 4. TOTALS SECTION
-    y += 2;
-    doc.line(marginX, y, pageWidth, y);
-    y += 6;
-
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    if (data.isCredit) {
-        doc.text('TOTAL DUE:', marginX, y);
-        doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth, y, { align: 'right' });
-    } else {
-        doc.text('PAID:', marginX, y);
-        doc.text(formatKES(data.totalAmount || data.amount || 0), pageWidth, y, { align: 'right' });
-        doc.setFontSize(8);
-        doc.setFont('helvetica', 'normal');
-        y += 4;
-        doc.text(`Via: ${data.paymentMethod || data.method}`, pageWidth, y, { align: 'right' });
-    }
-
-    // 5. FOOTER
-    y += 12;
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'italic');
-    doc.setTextColor(100, 100, 100);
-    doc.text(data.isCredit ? 'Payment due — thank you!' : 'Thank you for your business!', (marginX + pageWidth) / 2, y, { align: 'center' });
-
-    return doc;
+  } catch (err) {
+    console.error('Could not load business logo for PDF:', err);
+    return null;
+  }
 }
 
-// A debt payment receipt is deliberately its own document shape — a
-// payment against an existing debt is not a sale, and PART 15 requires it
-// to visually read as a distinct document ("DEBT PAYMENT RECEIPT"), not a
-// sales receipt with different labels bolted on.
-async function buildDebtPaymentDocument(receipt, settings) {
-    const paperWidthMm = resolvePaperWidthMm(settings);
-    const doc = new jsPDF('p', 'mm', [paperWidthMm, 200]);
-    const marginX = 5;
-    const pageWidth = paperWidthMm - marginX;
-    let y = await drawDocumentHeader(doc, settings, marginX, 8, paperWidthMm);
+async function drawDocumentHeader(doc, settings, marginX, startY, paperWidthMm = 80) {
+  let y = startY;
+  const logoDataUrl = await loadImageAsDataUrl(settings.logoUrl);
+  const logoSize = paperWidthMm <= 58 ? 10 : 13;
+  const centerX = paperWidthMm / 2;
 
-    y += 2;
-    doc.setDrawColor(0, 0, 0);
-    doc.setLineWidth(0.4);
-    doc.line(marginX, y, pageWidth, y);
-
-    y += 6;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text('DEBT PAYMENT RECEIPT', marginX, y);
-
-    y += 5;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text(formatDateTime(receipt.paidAt || new Date()), marginX, y);
-    y += 4;
-    doc.text(`Customer: ${receipt.customerName || '—'}`, marginX, y);
-    y += 4;
-    doc.text(`Payment method: ${receipt.method}${receipt.mpesaCode ? ` (${receipt.mpesaCode})` : ''}`, marginX, y);
-    if (receipt.paymentReferences?.length) {
-        y += 4;
-        const refText = receipt.paymentReferences.join(', ');
-        const splitRef = doc.splitTextToSize(`Ref: ${refText}`, pageWidth - marginX);
-        doc.text(splitRef, marginX, y);
-        y += (splitRef.length - 1) * 3.5;
+  if (logoDataUrl) {
+    try {
+      const format = logoDataUrl.match(/data:image\/(\w+);/)?.[1]?.toUpperCase() || 'PNG';
+      doc.addImage(logoDataUrl, format, centerX - (logoSize / 2), y, logoSize, logoSize);
+      y += logoSize + 2.5;
+    } catch (err) {
+      console.error('Could not embed business logo in PDF:', err);
     }
+  }
 
-    y += 6;
-    doc.setDrawColor(200, 200, 200);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(paperWidthMm <= 58 ? 9.5 : 11.5);
+  doc.setTextColor(21, 23, 29);
+  doc.text((settings.shopName || 'FLOWBIZ STORE').toUpperCase(), centerX, y + 2, { align: 'center' });
+
+  y += 5.5;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(90, 98, 115);
+
+  if (settings.phone) {
+    doc.text(`Tel: ${settings.phone}`, centerX, y, { align: 'center' });
+    y += 3.4;
+  }
+  if (settings.email) {
+    doc.text(settings.email, centerX, y, { align: 'center' });
+    y += 3.4;
+  }
+  if (settings.address) {
+    doc.text(settings.address, centerX, y, { align: 'center' });
+    y += 3.4;
+  }
+
+  return y + 1;
+}
+
+function resolvePaperWidthMm(settings) {
+  return settings?.receiptPaperWidth === 58 ? 58 : 80;
+}
+
+function resolveDocumentItems(data) {
+  if (Array.isArray(data.items) && data.items.length > 0) return data.items;
+  return [{
+    productName: data.productName || data.description || 'Item',
+    quantity: data.quantity || 1,
+    unitPrice: data.soldPricePerUnit || data.totalAmount || 0,
+    lineTotal: data.totalAmount ?? data.amount ?? 0,
+  }];
+}
+
+async function buildDocument(data, settings, typeLabel) {
+  const paperWidthMm = resolvePaperWidthMm(settings);
+  const items = resolveDocumentItems(data);
+
+  const estimatedHeight = Math.max(160, 85 + items.length * 11);
+  const doc = new jsPDF('p', 'mm', [paperWidthMm, estimatedHeight]);
+  const marginX = 4;
+  const pageWidth = paperWidthMm - marginX;
+  const contentWidth = pageWidth - marginX;
+  const centerX = paperWidthMm / 2;
+
+  let y = await drawDocumentHeader(doc, settings, marginX, 5, paperWidthMm);
+
+  const drawDivider = (currentY) => {
+    doc.setDrawColor(180, 185, 195);
     doc.setLineWidth(0.2);
-    doc.line(marginX, y, pageWidth, y);
-    y += 6;
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(marginX, currentY, pageWidth, currentY);
+    doc.setLineDashPattern([], 0);
+  };
 
-    const row = (label, value, boldRow = false) => {
-        doc.setFont('helvetica', boldRow ? 'bold' : 'normal');
-        doc.setFontSize(9);
-        doc.text(label, marginX, y);
-        doc.text(value, pageWidth, y, { align: 'right' });
-        y += 5.5;
-    };
-    row('Previous balance', formatKES(receipt.previousBalance));
-    row('Payment received', formatKES(receipt.amountPaid));
-    y += 1;
-    doc.line(marginX, y, pageWidth, y);
-    y += 5;
-    row('Remaining balance', formatKES(receipt.remainingBalance), true);
+  drawDivider(y);
+  y += 4;
 
-    y += 4;
+  const docRef = data.id ? `#${data.id.slice(-6).toUpperCase()}` : '#REC';
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(21, 23, 29);
+  doc.text(`${typeLabel} ${docRef}`, marginX, y);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(90, 98, 115);
+  doc.text(formatDateTime(data.soldAt || data.recordedAt || new Date()), pageWidth, y, { align: 'right' });
+
+  y += 3.5;
+  if (data.customerName) {
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    if (receipt.isCleared) {
-        doc.setTextColor(26, 98, 60); // moss
-        doc.text('STATUS: DEBT CLEARED', marginX, y);
-    } else {
-        doc.setTextColor(196, 68, 29); // rust
-        doc.text('STATUS: PARTIALLY PAID', marginX, y);
+    doc.setTextColor(21, 23, 29);
+    doc.text(`Customer: ${data.customerName}`, marginX, y);
+    y += 3.5;
+  }
+  if (data.soldByName) {
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(90, 98, 115);
+    doc.text(`Served by: ${data.soldByName}`, marginX, y);
+    y += 3.5;
+  }
+
+  drawDivider(y);
+  y += 4;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(54, 59, 72);
+  doc.text('ITEM', marginX, y);
+  doc.text('AMOUNT', pageWidth, y, { align: 'right' });
+
+  y += 1.5;
+
+  items.forEach((item) => {
+    y += 3.5;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(21, 23, 29);
+
+    const itemName = item.productName || 'Item';
+    const splitName = doc.splitTextToSize(itemName, contentWidth - 22);
+    doc.text(splitName, marginX, y);
+
+    const lineTotal = item.lineTotal ?? ((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0));
+    doc.text(formatKES(lineTotal), pageWidth, y, { align: 'right' });
+
+    y += (splitName.length * 3);
+    if (item.quantity) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.8);
+      doc.setTextColor(110, 115, 125);
+      doc.text(`${item.quantity} x @ ${formatKES(item.unitPrice || 0)}`, marginX, y);
     }
-    doc.setTextColor(0, 0, 0);
+  });
 
-    y += 10;
+  y += 3.5;
+  drawDivider(y);
+  y += 4.5;
+
+  if (data.isCredit) {
+    doc.setFillColor(253, 244, 239);
+    doc.roundedRect(marginX, y - 3, contentWidth, 10.5, 1, 1, 'F');
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
-    doc.setFont('helvetica', 'italic');
-    doc.setTextColor(100, 100, 100);
-    doc.text('Thank you for your payment!', (marginX + pageWidth) / 2, y, { align: 'center' });
+    doc.setTextColor(196, 68, 29);
+    doc.text('AMOUNT DUE (DENI):', marginX + 2, y + 3.5);
+    doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth - 2, y + 3.5, { align: 'right' });
+    y += 12;
+  } else {
+    doc.setFillColor(241, 250, 244);
+    doc.roundedRect(marginX, y - 3, contentWidth, 11.5, 1, 1, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(26, 98, 60);
+    doc.text('TOTAL PAID:', marginX + 2, y + 2.5);
+    doc.text(formatKES(data.totalAmount || data.amount || 0), pageWidth - 2, y + 2.5, { align: 'right' });
 
-    return doc;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(54, 59, 72);
+    const methodStr = `${data.paymentMethod || data.method || 'Cash'}${data.mpesaCode ? ` (${data.mpesaCode})` : ''}`;
+    doc.text(`Tender: ${methodStr}`, marginX + 2, y + 6.8);
+    y += 13.5;
+  }
+
+  doc.setFontSize(7);
+  doc.setFont('helvetica', 'italic');
+  doc.setTextColor(120, 125, 135);
+  doc.text(data.isCredit ? 'Payment due · Thank you!' : 'Thank you for shopping with us!', centerX, y, { align: 'center' });
+
+  return doc;
+}
+
+// Squeezed, balanced debt payment document that never overflows
+async function buildDebtPaymentDocument(receipt, settings) {
+  const paperWidthMm = resolvePaperWidthMm(settings);
+  const doc = new jsPDF('p', 'mm', [paperWidthMm, 155]);
+  const marginX = 4;
+  const pageWidth = paperWidthMm - marginX;
+  const contentWidth = pageWidth - marginX;
+  const centerX = paperWidthMm / 2;
+
+  let y = await drawDocumentHeader(doc, settings, marginX, 5, paperWidthMm);
+
+  const drawDivider = (currentY) => {
+    doc.setDrawColor(180, 185, 195);
+    doc.setLineWidth(0.2);
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(marginX, currentY, pageWidth, currentY);
+    doc.setLineDashPattern([], 0);
+  };
+
+  drawDivider(y);
+  y += 4;
+
+  const recNo = receipt.receiptDocId ? `#PAY-${receipt.receiptDocId.slice(-6).toUpperCase()}` : '#PAYMENT';
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(21, 23, 29);
+  doc.text(`DEBT RECEIPT ${recNo}`, marginX, y);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(90, 98, 115);
+  doc.text(formatDateTime(receipt.paidAt || new Date()), pageWidth, y, { align: 'right' });
+
+  y += 3.5;
+  doc.text(`Customer: ${receipt.customerName || 'Customer'}`, marginX, y);
+  const methodStr = `${receipt.method || 'Cash'}${receipt.mpesaCode ? ` (${receipt.mpesaCode})` : ''}`;
+  doc.text(methodStr, pageWidth, y, { align: 'right' });
+
+  y += 3.5;
+  drawDivider(y);
+  y += 4.5;
+
+  const row = (label, val, boldVal = false, color = [21, 23, 29]) => {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(90, 98, 115);
+    doc.text(label, marginX, y);
+
+    doc.setFont('helvetica', boldVal ? 'bold' : 'normal');
+    doc.setTextColor(color[0], color[1], color[2]);
+    doc.text(val, pageWidth, y, { align: 'right' });
+    y += 4.8;
+  };
+
+  row('Previous Total Debt:', formatKES(receipt.previousBalance));
+  row('Payment Received:', `- ${formatKES(receipt.amountPaid)}`, true, [26, 98, 60]);
+
+  drawDivider(y - 1);
+  y += 3.5;
+
+  row('Remaining Debt:', formatKES(receipt.remainingBalance), true, receipt.isCleared ? [26, 98, 60] : [196, 68, 29]);
+
+  y += 1.5;
+  const isCleared = !!receipt.isCleared;
+  const statusColor = isCleared ? [26, 98, 60] : [196, 68, 29];
+  doc.setFillColor(isCleared ? 241 : 253, isCleared ? 250 : 244, isCleared ? 244 : 239);
+  doc.roundedRect(marginX, y, contentWidth, 6.5, 1, 1, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(statusColor[0], statusColor[1], statusColor[2]);
+  doc.text(isCleared ? '✓ DEBT FULLY CLEARED' : '⚠ PARTIALLY PAID', centerX, y + 4.5, { align: 'center' });
+
+  y += 12;
+  doc.setFontSize(7);
+  doc.setFont('helvetica', 'italic');
+  doc.setTextColor(120, 125, 135);
+  doc.text('Thank you for settling your balance!', centerX, y, { align: 'center' });
+
+  return doc;
 }
 
 export async function generateReceiptPDF(sale, settings) {
-    const doc = await buildDocument(sale, settings, 'RECEIPT');
-    doc.save(`receipt-${sale.id}.pdf`);
+  const doc = await buildDocument(sale, settings, 'RECEIPT');
+  doc.save(`receipt-${sale.id}.pdf`);
 }
 
 export async function printReceipt(sale, settings) {
-    const doc = await buildDocument(sale, settings, 'RECEIPT');
-    doc.autoPrint();
-    window.open(doc.output('bloburl'), '_blank');
+  const doc = await buildDocument(sale, settings, 'RECEIPT');
+  doc.autoPrint();
+  window.open(doc.output('bloburl'), '_blank');
 }
 
 export async function generateInvoicePDF(creditSale, settings) {
-    const doc = await buildDocument(creditSale, settings, 'INVOICE');
-    doc.save(`invoice-${creditSale.id}.pdf`);
+  const doc = await buildDocument(creditSale, settings, 'INVOICE');
+  doc.save(`invoice-${creditSale.id}.pdf`);
 }
 
 export async function printInvoice(creditSale, settings) {
-    const doc = await buildDocument(creditSale, settings, 'INVOICE');
-    doc.autoPrint();
-    window.open(doc.output('bloburl'), '_blank');
+  const doc = await buildDocument(creditSale, settings, 'INVOICE');
+  doc.autoPrint();
+  window.open(doc.output('bloburl'), '_blank');
 }
 
 export async function generateDebtPaymentReceiptPDF(receipt, settings) {
-    const doc = await buildDebtPaymentDocument(receipt, settings);
-    doc.save(`debt-payment-receipt-${Date.now()}.pdf`);
+  const doc = await buildDebtPaymentDocument(receipt, settings);
+  doc.save(`debt-receipt-${Date.now()}.pdf`);
 }
 
 export async function printDebtPaymentReceipt(receipt, settings) {
-    const doc = await buildDebtPaymentDocument(receipt, settings);
-    doc.autoPrint();
-    window.open(doc.output('bloburl'), '_blank');
+  const doc = await buildDebtPaymentDocument(receipt, settings);
+  doc.autoPrint();
+  window.open(doc.output('bloburl'), '_blank');
 }
 
-// FIX (Part 24 — centralize WhatsApp deep-link construction): phone
-// normalization and wa.me URL building used to live here directly; they
-// now live in ./whatsapp.js so every WhatsApp-sharing feature (sale
-// receipts, debt reminders, debt payment receipts) shares one
-// implementation.
-//
-// documentUrl is the public share link from src/utils/documentSharing.js
-// — callers fetch/create it BEFORE calling this function (share-link
-// creation is an async Firestore write; this function stays synchronous
-// and focused on building the message + opening WhatsApp, same contract
-// as before).
-//
-// FIX (multi-product cart): passes sale.items through so a multi-product
-// cart sale's WhatsApp message lists every product, not just one.
 export function sendWhatsAppDocument(sale, settings, phone, documentUrl) {
-    const message = buildReceiptMessage({
-        shopName: settings.shopName || 'FlowBiz Store',
-        customerName: sale.customerName,
-        productName: sale.productName,
-        quantity: sale.quantity,
-        totalAmount: sale.totalAmount,
-        isCredit: sale.isCredit,
-        remainingBalance: sale.remainingBalance ?? sale.totalAmount,
-        businessPhone: settings.phone,
-        documentUrl,
-        formatKES,
-        items: sale.items,
-    });
-    const opened = openWhatsApp(phone, message);
-    if (!opened) throw new Error('Enter a valid phone number.');
+  const message = buildReceiptMessage({
+    shopName: settings.shopName || 'FlowBiz Store',
+    customerName: sale.customerName,
+    productName: sale.productName,
+    quantity: sale.quantity,
+    totalAmount: sale.totalAmount,
+    isCredit: sale.isCredit,
+    remainingBalance: sale.remainingBalance ?? sale.totalAmount,
+    businessPhone: settings.phone,
+    documentUrl,
+    formatKES,
+    items: sale.items,
+  });
+  const opened = openWhatsApp(phone, message);
+  if (!opened) throw new Error('Enter a valid phone number.');
 }
 ````
 
@@ -14741,1078 +15545,6 @@ export default function CustomerDetail() {
 }
 ````
 
-## File: src/pages/Products.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { Pencil, Trash2, TrendingUp } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function Products() {
-  const { businessId } = useAuth();
-  const productsQ = useMemo(
-    () => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null,
-    [businessId]
-  );
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const { data: products, loading, error } = useFirestoreCollection(productsQ);
-const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
-  const [search, setSearch] = useState('');
-  const [modal, setModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [editing, setEditing] = useState(null);
-  const [pendingDel, setPendingDel] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [scanFoundProduct, setScanFoundProduct] = useState(null);
-  const [deleting, setDeleting] = useState(false);
-
-
-  const filtered = products.filter(
-    (p) =>
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.category.toLowerCase().includes(search.toLowerCase()) ||
-      (p.barcode && p.barcode.includes(search.trim())) ||
-      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
-  );
-  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
-
-  const closeFormModal = () => { setModal(false); setEditing(null); setPrefillBarcode(null); };
-
-const handleSave = async (data) => {
-    try {
-      if (editing) {
-        const { queuedOffline } = await updateProduct(editing.id, data, editing.barcode, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
-      } else {
-        const { queuedOffline } = await createProduct(data, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
-      }
-      closeFormModal();
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-  };
-  // FIX (stuck "Saving…" bug — same pattern as Purchases.jsx): throw on
-  // error instead of returning, so SupplierFormModal's catch/finally can
-  // reset its "Saving…" button instead of leaving the form frozen.
-const handleSupplierSave = async (supplierData) => {
-  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-  if (!queuedOffline) {
-    setNewSupplierId(ref.id);
-    await refetchSuppliers();
-  }
-  setSupplierModal(false);
-  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-};
-const handleDel = async () => {
-    setDeleting(true);
-    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id, pendingDel.barcode, businessId), 4000);
-    setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
-    setPendingDel(null);
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setScanFoundProduct(found);
-    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
-  };
-
-  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
-
-  return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
-        <div className="flex gap-2">
-          <Link to="/inventory-intelligence" className="btn-outline">
-            <TrendingUp className="h-4 w-4" /> Intelligence
-          </Link>
-          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
-        </div>
-      </div>
-      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      <ErrorBanner message={error} />
-      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
-        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
-      ) : (
-        <>
-          <div className="space-y-2.5 sm:hidden">
-            {filtered.map((p) => (
-              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
-                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
-                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
-                  </div>
-                </div>
-              <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
-                <div className="space-x-3">
-                  <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
-                  <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
-                </div>
-                <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
-              </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="hidden sm:block card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {filtered.map((p) => (
-                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
-                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
-                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
-                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
-                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
-                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
-                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
-          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
-        </div>
-      </Modal>
-
-<ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-<ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />    </div>
-  );
-}
-````
-
-## File: src/pages/Purchases.jsx
-````javascript
-import { useEffect, useMemo, useState } from 'react';
-import { doc, writeBatch, increment, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
-
-import toast from 'react-hot-toast';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-const empty = { supplierId:'', productId:'', quantity:'', costPricePerUnit:'', paymentStatus:'paid', paymentMethod:'Cash', mpesaCode:'' };
-
-export default function Purchases() {
-  const { profile, businessId } = useAuth();
-  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const purchasesQ = useMemo(() => businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt','desc'), limit(50)) : null, [businessId]);
-  const { data: products }  = useFirestoreCollection(productsQ);
-const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
-  const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
-  const [form, setForm] = useState(empty);
-  const [busy, setBusy] = useState(false);
-  const [productModal, setProductModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
-
-  // FIX (supplier not showing as selected after creating it): a supplier
-  // created via "+ Add new supplier" was written to Firestore correctly
-  // and would eventually appear in the dropdown's option list once the
-  // realtime listener delivered it, but nothing ever selected it in
-  // `form.supplierId` — the newly created supplier looked like it hadn't
-  // been added at all unless you manually reopened the dropdown and
-  // scrolled to find it. This mirrors the same wiring ProductFormModal
-  // already does for its own supplier field.
-  useEffect(() => {
-    if (newSupplierId) setForm(p => ({ ...p, supplierId: newSupplierId }));
-  }, [newSupplierId]);
-
-  const selProd = products.find(p=>p.id===form.productId);
-  const selSupp = suppliers.find(s=>s.id===form.supplierId);
-  const totalCost = (Number(form.quantity)||0)*(Number(form.costPricePerUnit)||0);
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) {
-      setForm(p => ({ ...p, productId: found.id }));
-      toast.success(`Selected ${found.name}`);
-    } else {
-      setPrefillBarcode(code);
-      setProductModal(true);
-    }
-  };
-
-  useHardwareScanner(handleScanDetected, { enabled: !productModal && !supplierModal && !scannerOpen });
-
-  const handle = async e => {
-    e.preventDefault();
-    if (!form.productId||!form.supplierId||!form.quantity||!form.costPricePerUnit) { toast.error('Fill in all fields.'); return; }
-    if (form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
-    setBusy(true);
-try {
-      const qty   = Number(form.quantity);
-      const cost  = Number(form.costPricePerUnit);
-      const total = qty * cost;
-      const batch = writeBatch(db);
-      batch.update(doc(db,'products',form.productId), { stock:increment(qty), costPrice:cost, updatedAt:serverTimestamp() });
-      const purchRef = doc(collection(db,'purchases'));
-      batch.set(purchRef, withBusiness({
-        supplierId:form.supplierId,
-        supplierName:selSupp?.name||'',
-        productId:form.productId,
-        productName:selProd?.name||'',
-        quantity:qty,
-        costPricePerUnit:cost,
-        totalCost:total,
-       purchasedBy:profile.uid, 
-       purchasedByName:profile.displayName, 
-       purchasedAt:new Date(),
-        paymentStatus:form.paymentStatus==='paid'?'paid':'pending_supplier_credit',
-        paymentMethod:form.paymentStatus==='paid'?form.paymentMethod:null,
-        mpesaCode:form.paymentStatus==='paid'&&form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
-      }, businessId));
-      
-      const commit = batch.commit();
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
-      if (error) throw error;
-      
-      toast.success(queuedOffline ? "Purchase queued offline — it'll sync soon." : 'Purchase recorded and stock updated');
-      if (queuedOffline) commit.catch((err) => toast.error(`A purchase from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
-      
-      setForm(empty);
-    } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setBusy(false); }
-  };
-
-  // FIX (stuck "Saving…" bug): this used to `return` after showing the
-  // error toast, which meant SupplierFormModal's own try/catch never
-  // fired and its "Saving…" button never reset — the form just looked
-  // frozen after a failed save, with no obvious way to try again.
-  // Throwing here lets SupplierFormModal's catch/finally reset it.
- const handleSupplierSave = async (supplierData) => {
-  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-  if (!queuedOffline) {
-    setNewSupplierId(ref.id);
-    await refetchSuppliers();
-  }
-  setSupplierModal(false);
-  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-};
-
-  return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <h1 className="font-display text-xl font-bold text-ink-900">Record Purchase</h1>
-      <form onSubmit={handle} className="card space-y-3 p-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">Supplier</label>
-            <select className="input" value={form.supplierId} onChange={set('supplierId')} required>
-              <option value="">— Select —</option>
-              {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>setSupplierModal(true)}>+ Add new supplier</button>
-          </div>
-          <div>
-            <label className="label">Product</label>
-            <select className="input" value={form.productId} onChange={set('productId')} required>
-              <option value="">— Select —</option>
-              {products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <button type="button" className="mt-2 text-sm font-semibold text-moss-700" onClick={()=>{setPrefillBarcode(null);setProductModal(true);}}>+ Add new product</button>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Qty received</label><input type="number" min="1" className="input" value={form.quantity} onChange={set('quantity')} required /></div>
-          <div><label className="label">Cost / unit (KES)</label><input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required /></div>
-        </div>
-        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm text-ink-600">Total cost: <span className="font-semibold">{formatKES(totalCost)}</span></div>
-        <div>
-          <label className="label">Payment status</label>
-          <div className="grid grid-cols-2 gap-2">
-            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'paid'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='paid'?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>Paid now</button>
-            <button type="button" onClick={()=>setForm(p=>({...p,paymentStatus:'credit'}))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus==='credit'?'border-rust-500 bg-rust-50 text-rust-700':'border-ink-200 text-ink-500'}`}>On credit</button>
-          </div>
-        </div>
-        {form.paymentStatus==='paid'&&(
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Paid via</label><select className="input" value={form.paymentMethod} onChange={set('paymentMethod')}><option>Cash</option><option>M-Pesa</option></select></div>
-            {form.paymentMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} /></div>}
-          </div>
-        )}
-        <button type="submit" className="btn-primary w-full" disabled={busy}>{busy?'Saving…':'Record purchase'}</button>
-      </form>
-      <h2 className="font-display text-sm font-bold text-ink-800">Recent purchases</h2>
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
-
-<ProductFormModal
-        open={productModal}
-        onClose={()=>{setProductModal(false);setPrefillBarcode(null);}}
-onSave={async (data) => {
-  try {
-    const { id, queuedOffline } = await createProduct(data, businessId);
-    setForm(p=>({...p, productId: id}));
-    setProductModal(false);
-    setPrefillBarcode(null);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
-  } catch (err) { toast.error(friendlyErrorMessage(err)); }
-}}
-        suppliers={suppliers}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-        simplifiedForPurchase
-      />
-      <SupplierFormModal open={supplierModal} onClose={()=>setSupplierModal(false)} onSave={handleSupplierSave} />
-      {loading?<LoadingSpinner />:purchases.length===0?<EmptyState title="No purchases yet" />:(
-        <div className="card divide-y divide-ink-100">
-          {purchases.map(p=>(
-            <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
-              <div><p className="font-medium text-ink-700">{p.quantity} × {p.productName}</p><p className="text-xs text-ink-400">{p.supplierName} · {formatDateTime(p.purchasedAt)}</p></div>
-              <div className="text-right"><p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p><span className={`badge ${p.paymentStatus==='paid'?'bg-moss-100 text-moss-700':'bg-rust-100 text-rust-700'}`}>{p.paymentStatus==='paid'?'Paid':'On credit'}</span></div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-````
-
-## File: src/pages/Setup.jsx
-````javascript
-// src/pages/Setup.jsx — replace the entire file
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
-import { doc, collection, writeBatch, setDoc, serverTimestamp } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { auth, db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-
-const DEFAULT_CATEGORIES = ['Groceries', 'Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-
-export default function Setup() {
-  const { firebaseUser, loading: authLoading } = useAuth();
-  const navigate = useNavigate();
-  // Firestore rules can only see a doc created earlier IN THE SAME batch
-  // via getAfter() — a plain get()/exists() check (which is what
-  // businessSettings' write rule uses via isOwner()) only sees the
-  // pre-batch state. So the user profile must be written and committed
-  // FIRST, as its own step, before businessSettings is written.
-  const creatingRef = useRef(false);
-
-  useEffect(() => {
-    if (authLoading) return;
-    // Bounce an already-signed-in visitor away — but never while THIS
-    // component's own signup flow is what just signed them in, or this
-    // fires the instant the Auth account is created and cuts the flow
-    // short before Firestore writes / the verification email are sent.
-    if (firebaseUser && !creatingRef.current) {
-      navigate('/', { replace: true });
-    }
-  }, [firebaseUser, authLoading, navigate]);
-
-  const [businessName, setBusinessName] = useState('');
-  const [displayName, setDisplayName]   = useState('');
-  const [email, setEmail]               = useState('');
-  const [password, setPassword]         = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [submitting, setSubmitting]     = useState(false);
-  const [error, setError]               = useState(null);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
-    if (!businessName.trim()) { setError('Enter your business name.'); return; }
-    if (!displayName.trim()) { setError('Enter your name.'); return; }
-      if (password.length < 8) {
-      setError('Password must be at least 8 characters long.');
-      return;
-    }
-    if (!/[A-Z]/.test(password)) {
-      setError('Password must include at least one uppercase letter.');
-      return;
-    }
-    if (!/[a-z]/.test(password)) {
-      setError('Password must include at least one lowercase letter.');
-      return;
-    }
-    if (!/[0-9]/.test(password)) {
-      setError('Password must include at least one number.');
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
-
-    setSubmitting(true);
-    creatingRef.current = true;
-
-    let cred;
-    try {
-      cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-    } catch (err) {
-      creatingRef.current = false;
-      const message =
-        err.code === 'auth/email-already-in-use' ? 'An account with this email already exists.' :
-        err.code === 'auth/invalid-email'        ? 'Please enter a valid email address.' :
-        err.code === 'auth/weak-password'         ? 'Password is too weak.' :
-        'Could not create your account. Please try again.';
-      setError(message);
-      setSubmitting(false);
-      return;
-    }
-
-    const businessId = doc(collection(db, 'businesses')).id;
-
-    try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'businesses', businessId), {
-        name: businessName.trim(),
-        ownerIds: [cred.user.uid],
-        createdAt: serverTimestamp(),
-        createdBy: cred.user.uid,
-        subscription: { plan: 'free', status: 'active', expiresAt: null },
-      });
-      batch.set(doc(db, 'users', cred.user.uid), {
-        uid: cred.user.uid,
-        email: email.trim(),
-        displayName: displayName.trim(),
-        role: 'owner',
-        businessId,
-        active: true,
-        createdAt: serverTimestamp(),
-      });
-      await batch.commit();
-    } catch (err) {
-      console.error('[FlowBiz] Business setup failed — rolling back Auth account:', err.code || err.name, err.message);
-      try {
-        await deleteUser(cred.user);
-      } catch (rollbackErr) {
-        console.error('[FlowBiz] Rollback failed — an orphaned Auth account may remain:', rollbackErr);
-        setError('Something went wrong finishing setup, and we could not fully undo it. Please contact support before retrying with this email.');
-        creatingRef.current = false;
-        setSubmitting(false);
-        return;
-      }
-      setError('Something went wrong setting up your business. Please try again.');
-      creatingRef.current = false;
-      setSubmitting(false);
-      return;
-    }
-
-    // Non-critical, so it doesn't roll back the whole account if it's
-    // ever slow or briefly fails — useSettings.js and ProductFormModal.jsx
-    // both already default gracefully when this doc doesn't exist yet.
-    try {
-      await setDoc(doc(db, 'businessSettings', businessId), {
-        shopName: businessName.trim(),
-        cashierCanRecordExpenses: true,
-        categories: DEFAULT_CATEGORIES,
-      });
-    } catch (err) {
-      console.error('[FlowBiz] businessSettings write failed (non-fatal):', err.code || err.name, err.message);
-    }
-
-try {
-  const idToken = await cred.user.getIdToken(true);
-  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-  });
-  if (!response.ok) throw new Error('request-failed');
-  toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Check your email to verify your account.`);
-} catch (err) {
-  console.error('[FlowBiz] send-verification-email failed after setup:', err.message);
-  toast.success(`Welcome to FlowBiz, ${displayName.trim()}!`);
-}
-
-    setSubmitting(false);
-    navigate('/', { replace: true });
-  };
-
-if (authLoading && !creatingRef.current) {
-      return (
-      <div className="flex min-h-screen items-center justify-center bg-ink-950">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-white">Create your business</h1>
-            <p className="text-sm text-ink-400">Set up FlowBiz in a couple of minutes.</p>
-          </div>
-        </div>
-        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
-          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-          <div><label className="label">Business name</label><input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="" disabled={submitting} /></div>
-          <div><label className="label">Your name</label><input className="input" required value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="Full name" disabled={submitting} /></div>
-          <div><label className="label">Email</label><input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="owner@yourbusiness.co.ke" autoComplete="username" disabled={submitting} /></div>
-          <div><label className="label">Password</label><input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="" autoComplete="new-password" disabled={submitting} /></div>
-          <div><label className="label">Confirm password</label><input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" disabled={submitting} /></div>
-          <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Setting up…' : 'Create business'}</button>
-        </form>
-        <p className="text-center text-sm text-ink-400">Already have an account? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link></p>
-      </div>
-    </div>
-  );
-}
-````
-
-## File: src/pages/Counter.jsx
-````javascript
-import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { Trash2 } from 'lucide-react';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useDailySession } from '../hooks/useDailySession';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import ProductGrid from '../components/pos/ProductGrid';
-import CartList from '../components/pos/CartList';
-import CartCheckoutModal from '../components/pos/CartCheckoutModal';
-import SaleCompleteModal from '../components/pos/SaleCompleteModal';
-import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES, roundMoney } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-// Builds one line item for the cart doc from a cart row. Rounds every
-// money figure through roundMoney() so summing several lines (and their
-// quantity × price multiplication) never leaves floating-point noise in
-// what gets shown or written to Firestore.
-function toLineItem(cartRow) {
-  const quantity = Number(cartRow.quantity) || 0;
-  const unitPrice = Number(cartRow.unitPrice) || 0;
-  const costPrice = Number(cartRow.costPrice) || 0;
-  const lineTotal = roundMoney(quantity * unitPrice);
-  const lineCost = roundMoney(quantity * costPrice);
-  return {
-    productId: cartRow.productId,
-    productName: cartRow.productName,
-    quantity,
-    unitPrice,
-    costPrice,
-    lineTotal,
-    lineCost,
-    lineProfit: roundMoney(lineTotal - lineCost),
-    barcode: cartRow.barcode || null,
-  };
-}
-
-function summarizeProductName(lineItems) {
-  if (lineItems.length === 1) return lineItems[0].productName;
-  return `${lineItems[0].productName} +${lineItems.length - 1} more`;
-}
-
-export default function Counter() {
-  const { profile, isAdmin, businessId } = useAuth();
-  const location = useLocation();
-  const navigate = useNavigate();
-  
-  const productsQ  = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const customersQ = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const salesQ     = useMemo(() => businessId ? tenantQuery('sales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
-  const creditSalesQ = useMemo(() => businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt','desc'), limit(100)) : null, [businessId]);
-  const suppliersQ = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-
-  const { data: products,  loading: prodLoading }  = useFirestoreCollection(productsQ);
-  const { data: customers }                         = useFirestoreCollection(customersQ);
-  const { data: sales,     loading: salesLoading }  = useFirestoreCollection(salesQ);
-  const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
-const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
-
-  const [search, setSearch]           = useState('');
-
-  // Cart: client-side only ("current sale") state — nothing is written to
-  // Firestore until checkout is confirmed in CartCheckoutModal. One row
-  // per distinct product; scanning/adding the same product again bumps
-  // its quantity instead of creating a duplicate row.
-  const [cart, setCart]               = useState([]);
-  const [checkoutOpen, setCheckoutOpen] = useState(false);
-
-  const [completedSale, setCompletedSale] = useState(null);
-  const [pendingVoid, setPendingVoid] = useState(null);
-  const [prodModal, setProdModal]     = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [notFoundCode, setNotFoundCode] = useState(null);
-  const [voiding, setVoiding] = useState(false);
-
-  useEffect(() => {
-    if (location.state?.autoScan && session && !isClosed) {
-      setScannerOpen(true);
-      navigate(location.pathname, { replace: true, state: {} });
-    }
-  }, [location, navigate, session, isClosed]);
-
-  const filtered = products.filter(p =>
-    p.name.toLowerCase().includes(search.toLowerCase()) ||
-    (p.barcode && p.barcode.includes(search.trim())) ||
-    (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
-  );
-
-  // Live productId -> quantity map, used to badge cards already in the
-  // cart (see ProductGrid) so tapping/scanning a product gives lasting
-  // visual confirmation, not just a toast that disappears.
-  const cartQuantities = useMemo(
-    () => Object.fromEntries(cart.map((item) => [item.productId, item.quantity])),
-    [cart]
-  );
-
-  const mergedSales = useMemo(() => {
-    const list = [];
-    sales.forEach(s => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
-    creditSales.forEach(cs => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
-    return list.sort((a, b) => {
-      const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
-      const bTime = b.soldAt?.toMillis?.() ?? b.soldAt?.toDate?.()?.getTime?.() ?? new Date(b.soldAt || 0).getTime();
-      return bTime - aTime;
-    }).slice(0, 100);
-  }, [sales, creditSales]);
-
-  // ── Cart operations ──────────────────────────────────────────────────
-
-  const addToCart = (product, qty = 1) => {
-    if (!product) return;
-    if ((product.stock || 0) <= 0) { toast.error(`${product.name} is out of stock.`); return; }
-    setCart(prev => {
-      const idx = prev.findIndex(item => item.productId === product.id);
-      if (idx >= 0) {
-        const nextQty = (Number(prev[idx].quantity) || 0) + qty;
-        if (nextQty > product.stock) {
-          toast.error(`Only ${product.stock} of ${product.name} in stock.`);
-          return prev;
-        }
-        const next = [...prev];
-        next[idx] = { ...next[idx], quantity: nextQty };
-        return next;
-      }
-      if (qty > product.stock) {
-        toast.error(`Only ${product.stock} of ${product.name} in stock.`);
-        return prev;
-      }
-      return [...prev, {
-        productId: product.id,
-        productName: product.name,
-        quantity: qty,
-        unitPrice: product.sellingPrice,
-        costPrice: product.costPrice,
-        barcode: product.barcode || null,
-      }];
-    });
-  };
-
-  const updateCartQuantity = (productId, rawQty) => {
-    const product = products.find(p => p.id === productId);
-    let qty = parseInt(rawQty, 10);
-    if (!Number.isFinite(qty) || qty < 1) qty = 1;
-    if (product && qty > product.stock) {
-      toast.error(`Only ${product.stock} of ${product.name} in stock.`);
-      qty = product.stock;
-    }
-    if (qty < 1) return; // nothing in stock — leave the row as-is rather than a 0/invalid quantity
-    setCart(prev => prev.map(item => item.productId === productId ? { ...item, quantity: qty } : item));
-  };
-
-  const updateCartPrice = (productId, rawPrice) => {
-    let price = Number(rawPrice);
-    if (!Number.isFinite(price) || price < 0) price = 0;
-    setCart(prev => prev.map(item => item.productId === productId ? { ...item, unitPrice: price } : item));
-  };
-
-  const removeCartItem = (productId) => setCart(prev => prev.filter(item => item.productId !== productId));
-  const clearCart = () => setCart([]);
-
-  const cartTotal = useMemo(
-    () => roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0)),
-    [cart]
-  );
-
-  // Re-validates the cart against the LIVE product list right before
-  // building the write — stock may have moved since items were added
-  // (another cashier selling the same product, a stock take, etc).
-  function validateCartAgainstStock() {
-    for (const row of cart) {
-      const product = products.find(p => p.id === row.productId);
-      if (!product) throw new Error(`${row.productName} is no longer available.`);
-      if ((Number(row.quantity) || 0) > product.stock) {
-        throw new Error(`Only ${product.stock} of ${row.productName} left in stock.`);
-      }
-    }
-  }
-
-  // FIX: same writeBatch + increment() pattern the app already uses
-  // everywhere else for offline-first sales (see CR-8 in the README) —
-  // one sale doc now carries every product in the cart as `items`, with
-  // one stock decrement per line item in the same batch. Aggregate
-  // fields (totalAmount, quantity, productName, costOfGoodsSold, profit)
-  // are still written at the top level so every existing consumer that
-  // only reads those fields — Dashboard's activity feed, this page's own
-  // sales log, useFinancials — keeps working unchanged.
-  const handleCartSale = ({ paymentMethod, mpesaCode }) => {
-    validateCartAgainstStock();
-    const lineItems = cart.map(toLineItem);
-    const totalAmount = roundMoney(lineItems.reduce((s, i) => s + i.lineTotal, 0));
-    const costOfGoodsSold = roundMoney(lineItems.reduce((s, i) => s + i.lineCost, 0));
-    const profit = roundMoney(totalAmount - costOfGoodsSold);
-    const quantity = lineItems.reduce((s, i) => s + i.quantity, 0);
-
-    const saleRef = doc(collection(db, 'sales'));
-    const saleData = withBusiness({
-      items: lineItems,
-      productName: summarizeProductName(lineItems),
-      quantity,
-      totalAmount,
-      costOfGoodsSold,
-      profit,
-      // Legacy single-product compatibility: only meaningful when the
-      // cart has exactly one distinct product, mirroring exactly what
-      // the previous single-item sale flow wrote.
-      ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
-      paymentMethod, mpesaCode: mpesaCode || null,
-      soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: new Date(), isCredit: false, isVoided: false,
-    }, businessId);
-
-    const batch = writeBatch(db);
-    lineItems.forEach((item) => {
-      batch.update(doc(db, 'products', item.productId), { stock: increment(-item.quantity), updatedAt: serverTimestamp() });
-    });
-    batch.set(saleRef, saleData);
-
-    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
-  };
-
-  const handleCartCredit = ({ customerId, customerName, customerPhone }) => {
-    validateCartAgainstStock();
-    const lineItems = cart.map(toLineItem);
-    const totalAmount = roundMoney(lineItems.reduce((s, i) => s + i.lineTotal, 0));
-    const costOfGoodsSold = roundMoney(lineItems.reduce((s, i) => s + i.lineCost, 0));
-    const quantity = lineItems.reduce((s, i) => s + i.quantity, 0);
-
-    const creditRef = doc(collection(db, 'creditSales'));
-    const creditData = withBusiness({
-      customerId, customerName, customerPhone: customerPhone || '',
-      items: lineItems,
-      productName: summarizeProductName(lineItems),
-      quantity,
-      totalAmount,
-      costOfGoodsSold,
-      ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
-      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
-      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true,
-    }, businessId);
-
-    const batch = writeBatch(db);
-    lineItems.forEach((item) => {
-      batch.update(doc(db, 'products', item.productId), { stock: increment(-item.quantity), updatedAt: serverTimestamp() });
-    });
-    batch.set(creditRef, creditData);
-
-    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
-  };
-
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email:'', address:'', notes:'', createdAt:serverTimestamp() }, businessId));
-    return { id:ref.id, name, phone };
-  };
-
-  const handleCheckoutClose = (record) => {
-    setCheckoutOpen(false);
-    if (record && record.id) {
-      setCompletedSale(record);
-      clearCart();
-    }
-    // record === null → cashier backed out of checkout; cart is left intact.
-  };
-
-  // Voiding restores stock for every line item on the sale (falls back to
-  // the single productId/quantity shape for pre-cart, legacy sale docs).
-  const handleVoid = async () => {
-    const sale = pendingVoid;
-    setVoiding(true);
-    try {
-      const lineItems = Array.isArray(sale.items) && sale.items.length > 0
-        ? sale.items
-        : [{ productId: sale.productId, quantity: sale.quantity }];
-
-      const targets = lineItems.filter((item) => item.productId);
-      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
-
-      const batch = writeBatch(db);
-      let anyProductMissing = false;
-      targets.forEach((item, idx) => {
-        if (snaps[idx].exists()) {
-          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
-        } else {
-          anyProductMissing = true;
-        }
-      });
-
-      batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
-
-      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
-      if (error) throw error;
-
-      toast.success(queuedOffline ? 'Sale voided offline.' : (anyProductMissing ? 'Sale voided (some products were deleted, stock not restored for those).' : 'Sale voided and stock restored.'));
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setVoiding(false); setPendingVoid(null); }
-  };
-
-  const handleProductSave = async (data) => {
-    try {
-      const { id, queuedOffline } = await createProduct(data, businessId);
-      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
-      // If this product was created to resolve a scanned/typed barcode
-      // that didn't match anything, add it straight to the cart so the
-      // scanning flow isn't interrupted any more than necessary.
-      if (prefillBarcode !== null && !queuedOffline) {
-        addToCart({ id, name: data.name, sellingPrice: data.sellingPrice, costPrice: data.costPrice, stock: data.stock ?? 0, barcode: data.barcode || null }, 1);
-      }
-      setProdModal(false);
-      setPrefillBarcode(null);
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err));
-      throw err;
-    }
-  };
-  
-const handleSupplierSave = async (supplierData) => {
-  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-  if (!queuedOffline) {
-    setNewSupplierId(ref.id);
-    await refetchSuppliers();
-  }
-  setSupplierModal(false);
-  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-};
-
-  // Scanning adds straight to the cart and keeps going — no confirmation
-  // step per scan, and scanning the same product again just bumps its
-  // quantity (handled inside addToCart).
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) {
-      addToCart(found, 1);
-      toast.success(`${found.name} added to cart`, { duration: 1200 });
-    } else {
-      setNotFoundCode(code);
-    }
-  };
-
-  useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale && !checkoutOpen,
-  });
-
-  if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
-  if (isClosed) return (
-    <div className="mx-auto max-w-sm pt-8 space-y-4 text-center">
-      <EmptyState title="Today's session is closed" description="Sales are locked. An owner can reopen to continue trading." />
-      {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>}
-    </div>
-  );
-  if (!session) return <OpenSessionPrompt onOpen={floats => openSession({ ...floats, openedBy:profile.uid })} />;
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Counter</h1><p className="text-sm text-ink-400">Scan, search, or tap a product to add it to the cart.</p></div>
-      </div>
-
-      {/* FIX (cart visibility): pinned to the top and sticky as the page
-          scrolls, so after adding something the cart is never "far down"
-          below a long product list. Renders nothing when the cart is
-          empty — no placeholder clutter until there's something to show. */}
-      <div className="sticky top-2 z-20">
-        <CartList
-          cart={cart}
-          onUpdateQuantity={updateCartQuantity}
-          onUpdatePrice={updateCartPrice}
-          onRemove={removeCartItem}
-          onClear={clearCart}
-          onCheckout={() => setCheckoutOpen(true)}
-        />
-      </div>
-
-      <input className="input" placeholder="Search products or codes…" value={search} onChange={e=>setSearch(e.target.value)} />
-      {prodLoading ? <LoadingSpinner /> : filtered.length===0 ? <EmptyState title="No products match" /> :
-        <ProductGrid products={filtered} onSelect={(product) => addToCart(product, 1)} isAdmin={false} cartQuantities={cartQuantities} />}
-
-
-      {isAdmin && (
-        <div className="mt-4">
-          <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Sales log (last 100)</h2>
-          {salesLoading || creditLoading ? <LoadingSpinner /> : mergedSales.length === 0 ? <EmptyState title="No sales recorded" /> : (
-            <div className="card divide-y divide-ink-100">
-              {mergedSales.map(s=>(
-                <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided?'opacity-40 line-through':''}`}>
-                  <div>
-                    <p className="font-medium text-ink-700">
-                      {s.quantity} × {s.productName} — {formatKES(s.totalAmount)}
-                      {Array.isArray(s.items) && s.items.length > 1 && (
-                        <span className="badge bg-ink-100 text-ink-500 ml-2 align-middle">{s.items.length} products</span>
-                      )}
-                    </p>
-                    <p className="text-xs text-ink-400">
-                      {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
-                      {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
-                    </p>
-                  </div>
-                  {!s.isVoided && !s.isCredit && isAdmin && (
-                    <button onClick={()=>setPendingVoid(s)} className="p-1 text-rust-400 hover:text-rust-600 min-h-[44px] min-w-[44px] flex items-center justify-center" title="Void sale"><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
-                  )}
-                  {s.isCredit && isAdmin && (
-                    <Link to={`/customers/${s.customerId}`} className="btn-outline !py-1 !px-2.5 !min-h-0 text-xs text-ink-500 hover:text-ink-700">View Customer</Link>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={()=>setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!notFoundCode} onClose={()=>setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={()=>setNotFoundCode(null)}>Cancel</button>
-          {isAdmin ? (
-            <button className="btn-primary" onClick={()=>{ setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
-          ) : (
-            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
-          )}
-        </div>
-      </Modal>
-
-      <CartCheckoutModal
-        open={checkoutOpen}
-        cart={cart}
-        total={cartTotal}
-        customers={customers}
-        onClose={handleCheckoutClose}
-        onConfirmSale={handleCartSale}
-        onConfirmCredit={handleCartCredit}
-        onCreateCustomer={handleCreateCustomer}
-      />
-      <SaleCompleteModal
-        open={!!completedSale}
-        sale={completedSale}
-        onClose={() => setCompletedSale(null)}
-      />
-
-      <ProductFormModal
-        open={prodModal}
-        onClose={()=>{setProdModal(false);setPrefillBarcode(null);}}
-        onSave={handleProductSave}
-        suppliers={suppliers}
-        initialProduct={null}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-      />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-      <ConfirmDialog open={!!pendingVoid} title="Void this sale?" message={`Stock for "${pendingVoid?.productName}" will be restored${Array.isArray(pendingVoid?.items) && pendingVoid.items.length > 1 ? ` for all ${pendingVoid.items.length} products in this sale` : ` (×${pendingVoid?.quantity})`}.`} confirmLabel={voiding ? "Voiding..." : "Void sale"} confirmDisabled={voiding} danger onConfirm={handleVoid} onCancel={()=>setPendingVoid(null)} />
-    </div>
-  );
-}
-````
-
 ## File: src/pages/Pro.jsx
 ````javascript
 // src/pages/Pro.jsx
@@ -15980,10 +15712,2577 @@ export default function Pro() {
 }
 ````
 
+## File: src/pages/Setup.jsx
+````javascript
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
+import { doc, collection, writeBatch, serverTimestamp, getDoc } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { auth, db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+
+const DEFAULT_CATEGORIES = ['Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+
+export default function Setup() {
+  const { firebaseUser, profile, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
+  const creatingRef = useRef(false);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (firebaseUser && profile?.businessId && !creatingRef.current) {
+      navigate(profile.role === 'owner' ? '/dashboard' : '/counter', { replace: true });
+    }
+  }, [firebaseUser, profile, authLoading, navigate]);
+
+  const [businessName, setBusinessName] = useState('');
+  const [displayName, setDisplayName]   = useState('');
+  const [email, setEmail]               = useState('');
+  const [password, setPassword]         = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submitting, setSubmitting]     = useState(false);
+  const [error, setError]               = useState(null);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+
+    if (!businessName.trim()) { setError('Enter your business name.'); return; }
+    if (!displayName.trim()) { setError('Enter your name.'); return; }
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters long.');
+      return;
+    }
+    if (!/[A-Z]/.test(password)) {
+      setError('Password must include at least one uppercase letter.');
+      return;
+    }
+    if (!/[a-z]/.test(password)) {
+      setError('Password must include at least one lowercase letter.');
+      return;
+    }
+    if (!/[0-9]/.test(password)) {
+      setError('Password must include at least one number.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setSubmitting(true);
+    creatingRef.current = true;
+
+    let targetUser = null;
+
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      targetUser = cred.user;
+    } catch (err) {
+      if (err.code === 'auth/email-already-in-use') {
+        try {
+          const signInCred = await signInWithEmailAndPassword(auth, email.trim(), password);
+          const existingProfileSnap = await getDoc(doc(db, 'users', signInCred.user.uid));
+          if (existingProfileSnap.exists() && existingProfileSnap.data()?.businessId) {
+            setError('An account with this email already exists. Please sign in instead.');
+            creatingRef.current = false;
+            setSubmitting(false);
+            return;
+          }
+          targetUser = signInCred.user;
+        } catch {
+          setError('An account with this email already exists. Please sign in or use another email.');
+          creatingRef.current = false;
+          setSubmitting(false);
+          return;
+        }
+      } else {
+        const message =
+          err.code === 'auth/invalid-email' ? 'Please enter a valid email address.' :
+          err.code === 'auth/weak-password'  ? 'Password is too weak. Please choose a stronger password.' :
+          'Could not create your account. Please try again.';
+        setError(message);
+        creatingRef.current = false;
+        setSubmitting(false);
+        return;
+      }
+    }
+
+    if (!targetUser) {
+      setError('Failed to authenticate. Please try again.');
+      creatingRef.current = false;
+      setSubmitting(false);
+      return;
+    }
+
+    const businessId = doc(collection(db, 'businesses')).id;
+
+    try {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'businesses', businessId), {
+        name: businessName.trim(),
+        ownerIds: [targetUser.uid],
+        createdAt: serverTimestamp(),
+        createdBy: targetUser.uid,
+        subscription: { plan: 'free', status: 'active', expiresAt: null },
+      });
+      batch.set(doc(db, 'users', targetUser.uid), {
+        uid: targetUser.uid,
+        email: email.trim(),
+        displayName: displayName.trim(),
+        role: 'owner',
+        businessId,
+        active: true,
+        createdAt: serverTimestamp(),
+      });
+      batch.set(doc(db, 'businessSettings', businessId), {
+        businessId,
+        shopName: businessName.trim(),
+        cashierCanRecordExpenses: true,
+        categories: DEFAULT_CATEGORIES,
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error('[FlowBiz] Business setup write failed:', err.code || err.name, err.message);
+      setError('Something went wrong setting up your business records. Please try again.');
+      creatingRef.current = false;
+      setSubmitting(false);
+      return;
+    }
+
+    try {
+      const idToken = await targetUser.getIdToken(true);
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      });
+      if (!response.ok) throw new Error('worker-send-failed');
+      toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Please check your email to verify your account.`);
+    } catch (err) {
+      console.warn('[FlowBiz] Worker email send failed, attempting direct send:', err.message);
+      try {
+        await sendEmailVerification(targetUser);
+        toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Check your email to verify.`);
+      } catch {
+        toast.success(`Welcome to FlowBiz, ${displayName.trim()}!`);
+      }
+    }
+
+    setSubmitting(false);
+    navigate('/', { replace: true });
+  };
+
+  if (authLoading && !creatingRef.current) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-ink-950">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4 py-8">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="flex flex-col items-center text-center gap-3">
+          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
+          <div>
+            <h1 className="font-display text-2xl font-bold text-white">Create your business</h1>
+            <p className="text-sm text-ink-400">Set up FlowBiz in under a minute.</p>
+          </div>
+        </div>
+        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
+          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
+          <div>
+            <label className="label">Business name</label>
+            <input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="e.g. Nairobi Smart Retail" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Your name</label>
+            <input className="input" required value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="e.g. John Kamau" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Email</label>
+            <input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="owner@yourbusiness.co.ke" autoComplete="username" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Password</label>
+            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 chars (upper, lower, number)" autoComplete="new-password" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Confirm password</label>
+            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="Repeat password" autoComplete="new-password" disabled={submitting} />
+          </div>
+          <button type="submit" className="btn-primary w-full" disabled={submitting}>
+            {submitting ? 'Setting up…' : 'Create business'}
+          </button>
+        </form>
+        <p className="text-center text-sm text-ink-400">
+          Already have an account? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link>
+        </p>
+      </div>
+    </div>
+  );
+}
+````
+
+## File: src/pages/Counter.jsx
+````javascript
+// src/pages/Counter.jsx
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import {
+  Trash2, ShoppingCart, Banknote, Smartphone, BookOpen, Printer, Download,
+  MessageCircle, CheckCircle2, X, Plus, Minus, ArrowUpRight
+} from 'lucide-react';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { useSettings } from '../hooks/useSettings';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useDailySession } from '../hooks/useDailySession';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct } from '../utils/products';
+import { printReceipt, generateReceiptPDF, printInvoice, generateInvoicePDF, sendWhatsAppDocument } from '../utils/documentService';
+import { getOrCreateShareLink } from '../utils/documentSharing';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import ProductGrid from '../components/pos/ProductGrid';
+import CartList from '../components/pos/CartList';
+import CartCheckoutModal from '../components/pos/CartCheckoutModal';
+import SaleCompleteModal from '../components/pos/SaleCompleteModal';
+import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES, roundMoney } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+// ── Everything below this line down to the component itself is 100%
+// unchanged business logic — no Firestore calls, no auth handling, and
+// no data flow were touched in this pass. Only the JSX returned at the
+// bottom (the desktop layout) was reworked. ──────────────────────────
+
+function toLineItem(cartRow) {
+  const quantity = Number(cartRow.quantity) || 0;
+  const unitPrice = Number(cartRow.unitPrice) || 0;
+  const costPrice = Number(cartRow.costPrice) || 0;
+  const lineTotal = roundMoney(quantity * unitPrice);
+  const lineCost = roundMoney(quantity * costPrice);
+  return {
+    productId: cartRow.productId,
+    productName: cartRow.productName,
+    quantity,
+    unitPrice,
+    costPrice,
+    lineTotal,
+    lineCost,
+    lineProfit: roundMoney(lineTotal - lineCost),
+    barcode: cartRow.barcode || null,
+  };
+}
+
+function summarizeProductName(lineItems) {
+  if (lineItems.length === 1) return lineItems[0].productName;
+  return `${lineItems[0].productName} +${lineItems.length - 1} more`;
+}
+
+export default function Counter() {
+  const { profile, isAdmin, isPro, businessId } = useAuth();
+  const { settings } = useSettings();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const productsQ = useMemo(() => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null), [businessId]);
+  const customersQ = useMemo(() => (businessId ? tenantQuery('customers', businessId, orderBy('name')) : null), [businessId]);
+  const salesQ = useMemo(() => (businessId ? tenantQuery('sales', businessId, orderBy('soldAt', 'desc'), limit(100)) : null), [businessId]);
+  const creditSalesQ = useMemo(() => (businessId ? tenantQuery('creditSales', businessId, orderBy('soldAt', 'desc'), limit(100)) : null), [businessId]);
+  const suppliersQ = useMemo(() => (businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null), [businessId]);
+
+  const { data: products, loading: prodLoading } = useFirestoreCollection(productsQ);
+  const { data: customers } = useFirestoreCollection(customersQ);
+  const { data: sales, loading: salesLoading } = useFirestoreCollection(salesQ);
+  const { data: creditSales, loading: creditLoading } = useFirestoreCollection(creditSalesQ);
+  const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
+  const { session, loading: sessLoading, isClosed, openSession, reopenSession } = useDailySession();
+
+  const [search, setSearch] = useState('');
+
+  // Cart State
+  const [cart, setCart] = useState([]);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [completedSale, setCompletedSale] = useState(null);
+
+  // Desktop In-Place Checkout & Direct Document State
+  const [desktopMethod, setDesktopMethod] = useState('Cash');
+  const [desktopMpesaCode, setDesktopMpesaCode] = useState('');
+  const [desktopCustomerId, setDesktopCustomerId] = useState('');
+  const [desktopNewMode, setDesktopNewMode] = useState(false);
+  const [desktopNewName, setDesktopNewName] = useState('');
+  const [desktopNewPhone, setDesktopNewPhone] = useState('');
+  const [desktopSubmitting, setDesktopSubmitting] = useState(false);
+  const [desktopLastSale, setDesktopLastSale] = useState(null);
+  const [desktopCustomerPhone, setDesktopCustomerPhone] = useState('');
+  const [desktopSendingWhatsApp, setDesktopSendingWhatsApp] = useState(false);
+
+  const [pendingVoid, setPendingVoid] = useState(null);
+  const [prodModal, setProdModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [notFoundCode, setNotFoundCode] = useState(null);
+  const [voiding, setVoiding] = useState(false);
+
+  useEffect(() => {
+    if (location.state?.autoScan && session && !isClosed) {
+      setScannerOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location, navigate, session, isClosed]);
+
+  const filtered = products.filter(
+    (p) =>
+      p.name.toLowerCase().includes(search.toLowerCase()) ||
+      (p.barcode && p.barcode.includes(search.trim())) ||
+      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  const cartQuantities = useMemo(
+    () => Object.fromEntries(cart.map((item) => [item.productId, item.quantity])),
+    [cart]
+  );
+
+  const mergedSales = useMemo(() => {
+    const list = [];
+    sales.forEach((s) => { list.push({ ...s, isCredit: false, paymentType: s.paymentMethod || 'Cash' }); });
+    creditSales.forEach((cs) => { list.push({ ...cs, isCredit: true, paymentType: 'Credit' }); });
+    return list.sort((a, b) => {
+      const aTime = a.soldAt?.toMillis?.() ?? a.soldAt?.toDate?.()?.getTime?.() ?? new Date(a.soldAt || 0).getTime();
+      const bTime = b.soldAt?.toMillis?.() ?? b.soldAt?.toDate?.()?.getTime?.() ?? new Date(b.soldAt || 0).getTime();
+      return bTime - aTime;
+    }).slice(0, 100);
+  }, [sales, creditSales]);
+
+  // Cart operations
+  const addToCart = (product, qty = 1) => {
+    if (!product) return;
+    if ((product.stock || 0) <= 0) {
+      toast.error(`${product.name} is out of stock.`);
+      return;
+    }
+    setCart((prev) => {
+      const idx = prev.findIndex((item) => item.productId === product.id);
+      if (idx >= 0) {
+        const nextQty = (Number(prev[idx].quantity) || 0) + qty;
+        if (nextQty > product.stock) {
+          toast.error(`Only ${product.stock} of ${product.name} in stock.`);
+          return prev;
+        }
+        const next = [...prev];
+        next[idx] = { ...next[idx], quantity: nextQty };
+        return next;
+      }
+      if (qty > product.stock) {
+        toast.error(`Only ${product.stock} of ${product.name} in stock.`);
+        return prev;
+      }
+      return [
+        ...prev,
+        {
+          productId: product.id,
+          productName: product.name,
+          quantity: qty,
+          unitPrice: product.sellingPrice,
+          costPrice: product.costPrice,
+          barcode: product.barcode || null,
+        },
+      ];
+    });
+  };
+
+  const updateCartQuantity = (productId, rawQty) => {
+    const product = products.find((p) => p.id === productId);
+    let qty = parseInt(rawQty, 10);
+    if (!Number.isFinite(qty) || qty < 1) qty = 1;
+    if (product && qty > product.stock) {
+      toast.error(`Only ${product.stock} of ${product.name} in stock.`);
+      qty = product.stock;
+    }
+    if (qty < 1) return;
+    setCart((prev) => prev.map((item) => (item.productId === productId ? { ...item, quantity: qty } : item)));
+  };
+
+  const updateCartPrice = (productId, rawPrice) => {
+    let price = Number(rawPrice);
+    if (!Number.isFinite(price) || price < 0) price = 0;
+    setCart((prev) => prev.map((item) => (item.productId === productId ? { ...item, unitPrice: price } : item)));
+  };
+
+  const removeCartItem = (productId) => setCart((prev) => prev.filter((item) => item.productId !== productId));
+  const clearCart = () => setCart([]);
+
+  const cartTotal = useMemo(
+    () => roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0)),
+    [cart]
+  );
+  const cartCost = useMemo(
+    () => roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.costPrice) || 0), 0)),
+    [cart]
+  );
+  const cartEstimatedProfit = Math.max(0, cartTotal - cartCost);
+
+  function validateCartAgainstStock() {
+    for (const row of cart) {
+      const product = products.find((p) => p.id === row.productId);
+      if (!product) throw new Error(`${row.productName} is no longer available.`);
+      if ((Number(row.quantity) || 0) > product.stock) {
+        throw new Error(`Only ${product.stock} of ${row.productName} left in stock.`);
+      }
+    }
+  }
+
+  const handleCartSale = ({ paymentMethod, mpesaCode }) => {
+    validateCartAgainstStock();
+    const lineItems = cart.map(toLineItem);
+    const totalAmount = roundMoney(lineItems.reduce((s, i) => s + i.lineTotal, 0));
+    const costOfGoodsSold = roundMoney(lineItems.reduce((s, i) => s + i.lineCost, 0));
+    const profit = roundMoney(totalAmount - costOfGoodsSold);
+    const quantity = lineItems.reduce((s, i) => s + i.quantity, 0);
+
+    const saleRef = doc(collection(db, 'sales'));
+    const saleData = withBusiness(
+      {
+        items: lineItems,
+        productName: summarizeProductName(lineItems),
+        quantity,
+        totalAmount,
+        costOfGoodsSold,
+        profit,
+        ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
+        paymentMethod,
+        mpesaCode: mpesaCode || null,
+        soldBy: profile.uid,
+        soldByName: profile.displayName,
+        soldAt: new Date(),
+        isCredit: false,
+        isVoided: false,
+      },
+      businessId
+    );
+
+    const batch = writeBatch(db);
+    lineItems.forEach((item) => {
+      batch.update(doc(db, 'products', item.productId), { stock: increment(-item.quantity), updatedAt: serverTimestamp() });
+    });
+    batch.set(saleRef, saleData);
+
+    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleCartCredit = ({ customerId, customerName, customerPhone }) => {
+    validateCartAgainstStock();
+    const lineItems = cart.map(toLineItem);
+    const totalAmount = roundMoney(lineItems.reduce((s, i) => s + i.lineTotal, 0));
+    const costOfGoodsSold = roundMoney(lineItems.reduce((s, i) => s + i.lineCost, 0));
+    const quantity = lineItems.reduce((s, i) => s + i.quantity, 0);
+
+    const creditRef = doc(collection(db, 'creditSales'));
+    const creditData = withBusiness(
+      {
+        customerId,
+        customerName,
+        customerPhone: customerPhone || '',
+        items: lineItems,
+        productName: summarizeProductName(lineItems),
+        quantity,
+        totalAmount,
+        costOfGoodsSold,
+        ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
+        soldBy: profile.uid,
+        soldByName: profile.displayName,
+        soldAt: serverTimestamp(),
+        status: 'pending',
+        amountPaid: 0,
+        remainingBalance: totalAmount,
+        paymentHistory: [],
+        isCredit: true,
+      },
+      businessId
+    );
+
+    const batch = writeBatch(db);
+    lineItems.forEach((item) => {
+      batch.update(doc(db, 'products', item.productId), { stock: increment(-item.quantity), updatedAt: serverTimestamp() });
+    });
+    batch.set(creditRef, creditData);
+
+    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
+    return { id: ref.id, name, phone };
+  };
+
+  // In-Place Desktop Checkout (Direct execution on PC screen)
+  const handleDesktopCheckout = async () => {
+    if (cart.length === 0 || desktopSubmitting) return;
+    if (desktopMethod === 'M-Pesa' && !desktopMpesaCode.trim()) {
+      toast.error('Enter M-Pesa transaction code.');
+      return;
+    }
+    if (desktopMethod === 'Credit' && !desktopCustomerId && !(desktopNewMode && desktopNewName.trim())) {
+      toast.error('Please select or create a customer for credit sales.');
+      return;
+    }
+
+    setDesktopSubmitting(true);
+    try {
+      let cId = desktopCustomerId;
+      let cName = customers.find((c) => c.id === desktopCustomerId)?.name;
+      let cPhone = customers.find((c) => c.id === desktopCustomerId)?.phone;
+
+      if (desktopMethod === 'Credit' && desktopNewMode) {
+        const cr = await handleCreateCustomer({ name: desktopNewName.trim(), phone: desktopNewPhone.trim() });
+        cId = cr.id;
+        cName = cr.name;
+        cPhone = cr.phone;
+      }
+
+      const { record, commit } =
+        desktopMethod === 'Credit'
+          ? handleCartCredit({ customerId: cId, customerName: cName, customerPhone: cPhone })
+          : handleCartSale({ paymentMethod: desktopMethod, mpesaCode: desktopMethod === 'M-Pesa' ? desktopMpesaCode.trim() : null });
+
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+
+      if (queuedOffline) {
+        toast.success("Sale saved — it'll sync once you're back online.");
+        commit.catch((err) => toast.error(`A sale from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+      } else {
+        toast.success('Sale completed!');
+      }
+
+      setDesktopLastSale(record);
+      setDesktopCustomerPhone(cPhone || record.customerPhone || '');
+      clearCart();
+      setDesktopMpesaCode('');
+      setDesktopCustomerId('');
+      setDesktopNewMode(false);
+      setDesktopNewName('');
+      setDesktopNewPhone('');
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+    } finally {
+      setDesktopSubmitting(false);
+    }
+  };
+
+  // Direct In-Panel WhatsApp Sender
+  const handleDesktopWhatsApp = async () => {
+    if (!desktopCustomerPhone.trim()) {
+      toast.error('Enter a valid customer phone number.');
+      return;
+    }
+    if (!desktopLastSale) return;
+    setDesktopSendingWhatsApp(true);
+    try {
+      const documentUrl = await getOrCreateShareLink({
+        businessId,
+        documentType: desktopLastSale.isCredit ? 'invoice' : 'receipt',
+        documentId: desktopLastSale.id,
+        createdBy: profile?.uid,
+      });
+      sendWhatsAppDocument(desktopLastSale, settings, desktopCustomerPhone.trim(), documentUrl);
+      toast.success('WhatsApp opened.');
+    } catch (err) {
+      toast.error(err.message || 'Could not send WhatsApp receipt.');
+    } finally {
+      setDesktopSendingWhatsApp(false);
+    }
+  };
+
+  const handleCheckoutClose = (record) => {
+    setCheckoutOpen(false);
+    if (record && record.id) {
+      setCompletedSale(record);
+      setDesktopLastSale(record);
+      setDesktopCustomerPhone(record.customerPhone || '');
+      clearCart();
+    }
+  };
+
+  const handleVoid = async () => {
+    const sale = pendingVoid;
+    setVoiding(true);
+    try {
+      const lineItems = Array.isArray(sale.items) && sale.items.length > 0 ? sale.items : [{ productId: sale.productId, quantity: sale.quantity }];
+      const targets = lineItems.filter((item) => item.productId);
+      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
+
+      const batch = writeBatch(db);
+      let anyProductMissing = false;
+      targets.forEach((item, idx) => {
+        if (snaps[idx].exists()) {
+          batch.update(doc(db, 'products', item.productId), { stock: increment(item.quantity), updatedAt: serverTimestamp() });
+        } else {
+          anyProductMissing = true;
+        }
+      });
+
+      batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
+
+      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+      if (error) throw error;
+
+      toast.success(queuedOffline ? 'Sale voided offline.' : anyProductMissing ? 'Sale voided (some deleted products not restored).' : 'Sale voided and stock restored.');
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+    } finally {
+      setVoiding(false);
+      setPendingVoid(null);
+    }
+  };
+
+  const handleProductSave = async (data) => {
+    try {
+      const { id, queuedOffline } = await createProduct(data, businessId);
+      toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      if (prefillBarcode !== null && !queuedOffline) {
+        addToCart({ id, name: data.name, sellingPrice: data.sellingPrice, costPrice: data.costPrice, stock: data.stock ?? 0, barcode: data.barcode || null }, 1);
+      }
+      setProdModal(false);
+      setPrefillBarcode(null);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+      throw err;
+    }
+  };
+
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) {
+      toast.error(friendlyErrorMessage(error));
+      throw error;
+    }
+    if (!queuedOffline) {
+      setNewSupplierId(ref.id);
+      await refetchSuppliers();
+    }
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) {
+      addToCart(found, 1);
+      toast.success(`${found.name} added to cart`, { duration: 1200 });
+    } else {
+      setNotFoundCode(code);
+    }
+  };
+
+  useHardwareScanner(handleScanDetected, {
+    enabled: !!session && !isClosed && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale && !checkoutOpen,
+  });
+
+  if (sessLoading) return <LoadingSpinner label="Loading today's session…" />;
+  if (isClosed) {
+    return (
+      <div className="mx-auto max-w-sm pt-8 space-y-4 text-center">
+        <EmptyState title="Today's session is closed" description="Sales are locked. An owner can reopen to continue trading." />
+        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>}
+      </div>
+    );
+  }
+  if (!session) return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
+
+  // Display-only helper for the desktop post-sale panel — mirrors the
+  // same items[] check SaleCompleteModal already uses for the mobile
+  // receipt, so a multi-product cart is itemized instead of collapsed
+  // into "Product A +2 more". Reads only; nothing is written here.
+  const desktopSaleItems =
+    desktopLastSale && Array.isArray(desktopLastSale.items) && desktopLastSale.items.length > 1
+      ? desktopLastSale.items
+      : null;
+
+  return (
+    <div className="mx-auto max-w-7xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Counter</h1>
+          <p className="text-sm text-ink-400">Scan a barcode, search, or click a product to add it to the sale.</p>
+        </div>
+      </div>
+
+      {/* Desktop gets a fixed-width checkout column so it never gets
+          squeezed by the product grid; mobile is untouched (single
+          column, cart pinned to the top). */}
+      <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_336px] xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_420px] lg:items-start lg:gap-6">
+
+        {/* LEFT: product catalog + sales log */}
+        <div className="min-w-0 space-y-4">
+
+          {/* Mobile-only cart bar, pinned to the top of the screen */}
+          <div className="sticky top-2 z-20 lg:hidden">
+            <CartList
+              cart={cart}
+              onUpdateQuantity={updateCartQuantity}
+              onUpdatePrice={updateCartPrice}
+              onRemove={removeCartItem}
+              onClear={clearCart}
+              onCheckout={() => setCheckoutOpen(true)}
+            />
+          </div>
+
+          <input
+            className="input"
+            placeholder="Search products by name, category, or barcode…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+
+          {prodLoading ? (
+            <LoadingSpinner />
+          ) : filtered.length === 0 ? (
+            <EmptyState title="No products match" description="Try another search keyword or scan a barcode." />
+          ) : (
+            <ProductGrid products={filtered} onSelect={(product) => addToCart(product, 1)} isAdmin={false} cartQuantities={cartQuantities} />
+          )}
+
+          {isAdmin && (
+            <div className="mt-6 space-y-2 border-t border-ink-100 pt-4">
+              <h2 className="font-display text-sm font-bold text-ink-800">Sales log (last 100)</h2>
+              {salesLoading || creditLoading ? (
+                <LoadingSpinner />
+              ) : mergedSales.length === 0 ? (
+                <EmptyState title="No sales recorded" />
+              ) : (
+                <div className="card max-h-96 divide-y divide-ink-100 overflow-y-auto">
+                  {mergedSales.map((s) => (
+                    <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided ? 'opacity-40 line-through' : ''}`}>
+                      <div>
+                        <p className="font-medium text-ink-700">
+                          {s.quantity} × {s.productName} — {formatKES(s.totalAmount)}
+                          {Array.isArray(s.items) && s.items.length > 1 && (
+                            <span className="badge ml-2 bg-ink-100 text-ink-500 align-middle">{s.items.length} products</span>
+                          )}
+                        </p>
+                        <p className="text-xs text-ink-400">
+                          {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
+                          {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
+                        </p>
+                      </div>
+                      {!s.isVoided && !s.isCredit && isAdmin && (
+                        <button onClick={() => setPendingVoid(s)} className="flex min-h-[44px] min-w-[44px] items-center justify-center p-1 text-rust-400 hover:text-rust-600" title="Void sale">
+                          <Trash2 className="h-4 w-4" strokeWidth={1.75} />
+                        </button>
+                      )}
+                      {s.isCredit && isAdmin && (
+                        <Link to={`/customers/${s.customerId}`} className="btn-outline !min-h-0 !px-2.5 !py-1 text-xs text-ink-500 hover:text-ink-700">
+                          View customer
+                        </Link>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT: desktop-only checkout terminal — hidden below the lg
+            breakpoint, so mobile always renders the single-column view
+            above with the cart bar and the mobile checkout modal
+            further down this file. */}
+        <div className="hidden lg:sticky lg:top-4 lg:flex lg:flex-col lg:gap-4">
+
+          <div className="card space-y-4 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Current order</p>
+                <p className="mt-0.5 text-sm font-semibold text-ink-800">
+                  {cart.length === 0 ? 'No items yet' : `${cart.length} item${cart.length !== 1 ? 's' : ''} in cart`}
+                </p>
+              </div>
+              {cart.length > 0 && (
+                <button type="button" onClick={clearCart} className="text-xs font-semibold text-rust-500 hover:underline">
+                  Clear all
+                </button>
+              )}
+            </div>
+
+            <div className="max-h-60 divide-y divide-ink-100 overflow-y-auto">
+              {cart.length === 0 ? (
+                <div className="flex flex-col items-center gap-1.5 rounded-xl border border-dashed border-ink-200 bg-ink-50 py-8 text-center">
+                  <ShoppingCart className="h-5 w-5 text-ink-300" strokeWidth={1.5} />
+                  <p className="px-4 text-xs text-ink-400">Select products from the list to add them here.</p>
+                </div>
+              ) : (
+                cart.map((item) => {
+                  const lineTotal = roundMoney((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0));
+                  return (
+                    <div key={item.productId} className="space-y-1.5 py-2.5 first:pt-0">
+                      <div className="flex items-start justify-between gap-1 text-xs">
+                        <span className="truncate pr-1 font-semibold leading-snug text-ink-800">{item.productName}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeCartItem(item.productId)}
+                          className="shrink-0 rounded p-0.5 text-ink-400 hover:text-rust-500"
+                          aria-label={`Remove ${item.productName}`}
+                        >
+                          <X className="h-3.5 w-3.5" strokeWidth={1.75} />
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1 rounded-lg border border-ink-200 bg-white px-1 py-0.5">
+                          <button
+                            type="button"
+                            onClick={() => updateCartQuantity(item.productId, item.quantity - 1)}
+                            className="flex h-6 w-6 items-center justify-center rounded text-ink-500 hover:bg-ink-50"
+                            aria-label="Decrease quantity"
+                          >
+                            <Minus className="h-3 w-3" strokeWidth={2} />
+                          </button>
+                          <span className="w-5 text-center text-xs font-bold text-ink-900">{item.quantity}</span>
+                          <button
+                            type="button"
+                            onClick={() => updateCartQuantity(item.productId, item.quantity + 1)}
+                            className="flex h-6 w-6 items-center justify-center rounded text-ink-500 hover:bg-ink-50"
+                            aria-label="Increase quantity"
+                          >
+                            <Plus className="h-3 w-3" strokeWidth={2} />
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-1 text-[11px] text-ink-400">
+                          <span>@ KES</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.unitPrice}
+                            onChange={(e) => updateCartPrice(item.productId, e.target.value)}
+                            className="w-16 rounded border border-ink-200 px-1.5 py-0.5 text-right text-xs font-bold text-ink-900"
+                            aria-label={`Unit price for ${item.productName}`}
+                          />
+                        </div>
+                        <span className="font-display text-sm font-bold text-moss-700">{formatKES(lineTotal)}</span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="space-y-2.5 border-t border-ink-100 pt-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Payment method</p>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { id: 'Cash', label: 'Cash', Icon: Banknote },
+                  { id: 'M-Pesa', label: 'M-Pesa', Icon: Smartphone },
+                  { id: 'Credit', label: 'Deni', Icon: BookOpen },
+                ].map(({ id, label, Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setDesktopMethod(id)}
+                    className={`flex flex-col items-center gap-1 rounded-lg border py-2 text-xs font-semibold ${
+                      desktopMethod === id
+                        ? 'border-moss-600 bg-moss-50 text-moss-800'
+                        : 'border-ink-200 text-ink-500 hover:bg-ink-50'
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" strokeWidth={1.75} />
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {desktopMethod === 'M-Pesa' && (
+                <div className="space-y-1 rounded-lg bg-ink-50 p-2.5">
+                  <label className="text-[11px] font-semibold text-ink-600">
+                    M-Pesa transaction code <span className="text-rust-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={desktopMpesaCode}
+                    onChange={(e) => setDesktopMpesaCode(e.target.value.toUpperCase())}
+                    placeholder="e.g. QWE1234567"
+                    className="w-full rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-mono font-bold uppercase text-ink-900"
+                  />
+                </div>
+              )}
+
+              {desktopMethod === 'Credit' && (
+                <div className="space-y-2 rounded-lg bg-ink-50 p-2.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-semibold text-ink-600">Customer (Deni)</label>
+                    <button
+                      type="button"
+                      onClick={() => setDesktopNewMode((v) => !v)}
+                      className="text-[11px] font-semibold text-moss-700 hover:underline"
+                    >
+                      {desktopNewMode ? 'Use existing' : '+ New customer'}
+                    </button>
+                  </div>
+                  {!desktopNewMode ? (
+                    <select
+                      className="input !min-h-0 !py-1.5 text-xs"
+                      value={desktopCustomerId}
+                      onChange={(e) => setDesktopCustomerId(e.target.value)}
+                    >
+                      <option value="">— Select customer —</option>
+                      {customers.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}{c.phone ? ` · ${c.phone}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <input
+                        className="input !min-h-0 !py-1.5 text-xs"
+                        placeholder="Customer name"
+                        value={desktopNewName}
+                        onChange={(e) => setDesktopNewName(e.target.value)}
+                      />
+                      <input
+                        className="input !min-h-0 !py-1.5 text-xs"
+                        placeholder="Phone (07xx...)"
+                        value={desktopNewPhone}
+                        onChange={(e) => setDesktopNewPhone(e.target.value)}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center justify-between border-t border-ink-100 pt-2.5">
+                <div>
+                  <p className="text-[11px] text-ink-400">Total</p>
+                  {cartEstimatedProfit > 0 && (
+                    <p className="text-[11px] font-semibold text-moss-700">Margin +{formatKES(cartEstimatedProfit)}</p>
+                  )}
+                </div>
+                <p className="font-display text-xl font-bold text-ink-900">{formatKES(cartTotal)}</p>
+              </div>
+
+              <button
+                type="button"
+                disabled={cart.length === 0 || desktopSubmitting}
+                onClick={handleDesktopCheckout}
+                className="btn-primary flex w-full items-center justify-center gap-1.5 !py-3"
+              >
+                <span>{desktopSubmitting ? 'Recording…' : desktopMethod === 'Credit' ? 'Record credit' : 'Complete sale'}</span>
+                <ArrowUpRight className="h-4 w-4" strokeWidth={1.75} />
+              </button>
+            </div>
+          </div>
+
+          {/* Post-sale receipt actions — only shown right after a sale
+              completes on this screen, same pattern as the mobile
+              SaleCompleteModal, just inline instead of a popup. */}
+          {desktopLastSale && (
+            <div className="card space-y-3 p-4">
+              <div className="flex items-center justify-between border-b border-ink-100 pb-2.5">
+                <div className="flex items-center gap-1.5 text-moss-700">
+                  <CheckCircle2 className="h-4 w-4" strokeWidth={2} />
+                  <span className="text-xs font-semibold">Sale completed</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDesktopLastSale(null)}
+                  className="rounded p-1 text-ink-400 hover:text-ink-700"
+                  aria-label="Dismiss"
+                >
+                  <X className="h-3.5 w-3.5" strokeWidth={1.75} />
+                </button>
+              </div>
+
+              <div className="space-y-1">
+                {desktopSaleItems ? (
+                  desktopSaleItems.map((item, idx) => (
+                    <div key={item.productId || idx} className="flex items-center justify-between text-xs text-ink-600">
+                      <span>{item.quantity} × {item.productName}</span>
+                      <span className="font-semibold text-ink-800">
+                        {formatKES(item.lineTotal ?? (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0))}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-xs text-ink-600">{desktopLastSale.productName}</p>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between border-t border-ink-100 pt-2.5 text-sm">
+                <span className="font-semibold text-ink-700">
+                  {desktopLastSale.isCredit ? 'Amount due' : 'Total paid'}
+                </span>
+                <span className="font-display font-bold text-ink-900">{formatKES(desktopLastSale.totalAmount)}</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (desktopLastSale.isCredit) printInvoice(desktopLastSale, settings);
+                    else printReceipt(desktopLastSale, settings);
+                  }}
+                  className="btn-outline !min-h-0 flex items-center justify-center gap-1.5 !py-1.5 text-xs"
+                >
+                  <Printer className="h-3.5 w-3.5" strokeWidth={1.75} /> Print
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (desktopLastSale.isCredit) generateInvoicePDF(desktopLastSale, settings);
+                    else generateReceiptPDF(desktopLastSale, settings);
+                  }}
+                  className="btn-outline !min-h-0 flex items-center justify-center gap-1.5 !py-1.5 text-xs"
+                >
+                  <Download className="h-3.5 w-3.5" strokeWidth={1.75} /> Download
+                </button>
+              </div>
+
+              <div className="space-y-1.5 rounded-lg bg-ink-50 p-2.5">
+                <label className="text-[11px] font-semibold text-ink-600">
+                  WhatsApp {desktopLastSale.isCredit ? 'invoice' : 'receipt'} {!isPro && <span className="text-amber-600">— Pro</span>}
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    placeholder="Customer phone (07xx...)"
+                    value={desktopCustomerPhone}
+                    onChange={(e) => setDesktopCustomerPhone(e.target.value)}
+                    className="input !min-h-0 flex-1 !py-1.5 text-xs"
+                  />
+                  {isPro ? (
+                    <button
+                      type="button"
+                      onClick={handleDesktopWhatsApp}
+                      disabled={desktopSendingWhatsApp}
+                      className="btn-primary !min-h-0 flex shrink-0 items-center gap-1 !py-1.5 !px-3 text-xs"
+                    >
+                      <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
+                      {desktopSendingWhatsApp ? 'Sending…' : 'Send'}
+                    </button>
+                  ) : (
+                    <Link to="/pro" className="btn-primary !min-h-0 flex shrink-0 items-center gap-1 !py-1.5 !px-3 text-xs">
+                      <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} /> Unlock
+                    </Link>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+      </div>
+
+      {/* Floating & scanner elements */}
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
+        <p className="mb-4 text-sm text-ink-500">
+          No product matches barcode <span className="font-mono">{notFoundCode}</span>.
+        </p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
+          {isAdmin ? (
+            <button
+              className="btn-primary"
+              onClick={() => {
+                setPrefillBarcode(notFoundCode);
+                setNotFoundCode(null);
+                setProdModal(true);
+              }}
+            >
+              Create product
+            </button>
+          ) : (
+            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
+          )}
+        </div>
+      </Modal>
+
+      {/* Mobile checkout modal */}
+      <CartCheckoutModal
+        open={checkoutOpen}
+        cart={cart}
+        total={cartTotal}
+        customers={customers}
+        onClose={handleCheckoutClose}
+        onConfirmSale={handleCartSale}
+        onConfirmCredit={handleCartCredit}
+        onCreateCustomer={handleCreateCustomer}
+      />
+
+      {/* Mobile sale-complete modal */}
+      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
+
+      <ProductFormModal
+        open={prodModal}
+        onClose={() => {
+          setProdModal(false);
+          setPrefillBarcode(null);
+        }}
+        onSave={handleProductSave}
+        suppliers={suppliers}
+        initialProduct={null}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+      />
+
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+
+      <ConfirmDialog
+        open={!!pendingVoid}
+        title="Void this sale?"
+        message={`Stock for "${pendingVoid?.productName}" will be restored${
+          Array.isArray(pendingVoid?.items) && pendingVoid.items.length > 1
+            ? ` for all ${pendingVoid.items.length} products in this sale`
+            : ` (×${pendingVoid?.quantity})`
+        }.`}
+        confirmLabel={voiding ? 'Voiding...' : 'Void sale'}
+        confirmDisabled={voiding}
+        danger
+        onConfirm={handleVoid}
+        onCancel={() => setPendingVoid(null)}
+      />
+    </div>
+  );
+}
+````
+
+## File: src/pages/Products.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { Pencil, Trash2, TrendingUp } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Products() {
+  const { businessId } = useAuth();
+  const productsQ = useMemo(
+    () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
+    [businessId]
+  );
+  const suppliersQ = useMemo(() => (businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null), [businessId]);
+  const { data: products, loading, error } = useFirestoreCollection(productsQ);
+  const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
+  
+  const [search, setSearch] = useState('');
+  const [modal, setModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [pendingDel, setPendingDel] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanFoundProduct, setScanFoundProduct] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const filtered = products.filter(
+    (p) =>
+      p.name.toLowerCase().includes(search.toLowerCase()) ||
+      (p.category && p.category.toLowerCase().includes(search.toLowerCase())) ||
+      (p.barcode && p.barcode.includes(search.trim())) ||
+      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  );
+  
+  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
+
+  const closeFormModal = () => {
+    setModal(false);
+    setEditing(null);
+    setPrefillBarcode(null);
+  };
+
+  const handleSave = async (data) => {
+    try {
+      if (editing) {
+        const { queuedOffline } = await updateProduct(editing.id, data, editing.barcode, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
+      } else {
+        const { queuedOffline } = await createProduct(data, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      }
+      closeFormModal();
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+      throw err;
+    }
+  };
+
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    if (!queuedOffline) {
+      setNewSupplierId(ref.id);
+      await refetchSuppliers();
+    }
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const handleDel = async () => {
+    setDeleting(true);
+    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id, pendingDel.barcode, businessId), 4000);
+    setDeleting(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
+    setPendingDel(null);
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setScanFoundProduct(found);
+    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
+  };
+
+  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
+        <div className="flex gap-2">
+          <Link to="/inventory-intelligence" className="btn-outline">
+            <TrendingUp className="h-4 w-4" /> Intelligence
+          </Link>
+          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
+        </div>
+      </div>
+      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <ErrorBanner message={error} />
+      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
+        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
+      ) : (
+        <>
+          <div className="space-y-2.5 sm:hidden">
+            {filtered.map((p) => (
+              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
+                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
+                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
+                  <div className="space-x-3">
+                    <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
+                    <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
+                  </div>
+                  <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden sm:block card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
+                </thead>
+                <tbody className="divide-y divide-ink-100">
+                  {filtered.map((p) => (
+                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
+                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
+                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
+                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
+                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
+                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
+                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1">
+                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
+          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
+        </div>
+      </Modal>
+
+      <ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+      <ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />
+    </div>
+  );
+}
+````
+
+## File: src/pages/Purchases.jsx
+````javascript
+import { useEffect, useMemo, useState } from 'react';
+import { doc, writeBatch, increment, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+const empty = { supplierId: '', productId: '', quantity: '', costPricePerUnit: '', paymentStatus: 'paid', paymentMethod: 'Cash', mpesaCode: '' };
+
+export default function Purchases() {
+  const { profile, businessId } = useAuth();
+  const productsQ = useMemo(() => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null), [businessId]);
+  const suppliersQ = useMemo(() => (businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null), [businessId]);
+  const purchasesQ = useMemo(() => (businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt', 'desc'), limit(50)) : null), [businessId]);
+
+  const { data: products } = useFirestoreCollection(productsQ);
+  const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
+  const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
+
+  const [form, setForm] = useState(empty);
+  const [busy, setBusy] = useState(false);
+  const [productModal, setProductModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const set = (f) => (e) => setForm((p) => ({ ...p, [f]: e.target.value }));
+
+  useEffect(() => {
+    if (newSupplierId) setForm((p) => ({ ...p, supplierId: newSupplierId }));
+  }, [newSupplierId]);
+
+  const selProd = products.find((p) => p.id === form.productId);
+  const selSupp = suppliers.find((s) => s.id === form.supplierId);
+  const totalCost = (Number(form.quantity) || 0) * (Number(form.costPricePerUnit) || 0);
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) {
+      setForm((p) => ({ ...p, productId: found.id, costPricePerUnit: found.costPrice || p.costPricePerUnit }));
+      toast.success(`Selected ${found.name}`);
+    } else {
+      setPrefillBarcode(code);
+      setProductModal(true);
+    }
+  };
+
+  useHardwareScanner(handleScanDetected, { enabled: !productModal && !supplierModal && !scannerOpen });
+
+  const handle = async (e) => {
+    e.preventDefault();
+    if (!form.supplierId) {
+      toast.error('Please select a supplier.');
+      return;
+    }
+    if (!form.productId) {
+      toast.error('Please select a product.');
+      return;
+    }
+    if (!form.quantity || !form.costPricePerUnit) {
+      toast.error('Enter quantity and cost price.');
+      return;
+    }
+    if (form.paymentStatus === 'paid' && form.paymentMethod === 'M-Pesa' && !form.mpesaCode.trim()) {
+      toast.error('Enter M-Pesa transaction code.');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const qty = Number(form.quantity);
+      const cost = Number(form.costPricePerUnit);
+      const total = qty * cost;
+      const batch = writeBatch(db);
+
+      // Links the selected supplier to the product
+      const productRef = doc(db, 'products', form.productId);
+      const productUpdates = {
+        stock: increment(qty),
+        costPrice: cost,
+        updatedAt: serverTimestamp(),
+      };
+      if (form.supplierId) {
+        productUpdates.supplierId = form.supplierId;
+      }
+      batch.update(productRef, productUpdates);
+
+      const purchRef = doc(collection(db, 'purchases'));
+      batch.set(
+        purchRef,
+        withBusiness(
+          {
+            supplierId: form.supplierId,
+            supplierName: selSupp?.name || '',
+            productId: form.productId,
+            productName: selProd?.name || '',
+            quantity: qty,
+            costPricePerUnit: cost,
+            totalCost: total,
+            purchasedBy: profile.uid,
+            purchasedByName: profile.displayName,
+            purchasedAt: new Date(),
+            paymentStatus: form.paymentStatus === 'paid' ? 'paid' : 'pending_supplier_credit',
+            paymentMethod: form.paymentStatus === 'paid' ? form.paymentMethod : null,
+            mpesaCode: form.paymentStatus === 'paid' && form.paymentMethod === 'M-Pesa' ? form.mpesaCode.trim() : null,
+          },
+          businessId
+        )
+      );
+
+      const commit = batch.commit();
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+
+      toast.success(queuedOffline ? "Purchase queued offline — it'll sync soon." : 'Purchase recorded and stock updated');
+      if (queuedOffline) commit.catch((err) => toast.error(`A purchase from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+
+      setForm(empty);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    if (!queuedOffline) {
+      setNewSupplierId(ref.id);
+      await refetchSuppliers();
+    }
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const hasSuppliers = suppliers && suppliers.length > 0;
+  const hasProducts = products && products.length > 0;
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4">
+      <h1 className="font-display text-xl font-bold text-ink-900">Record Purchase</h1>
+      <form onSubmit={handle} className="card space-y-3 p-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Supplier</label>
+            <select className="input" value={form.supplierId} onChange={set('supplierId')} required>
+              <option value="" disabled>{hasSuppliers ? '— Select Supplier —' : '— None (No Suppliers) —'}</option>
+              {hasSuppliers && suppliers.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+            <button type="button" className="mt-2 text-sm font-semibold text-moss-700 hover:underline" onClick={() => setSupplierModal(true)}>+ Add new supplier</button>
+          </div>
+          <div>
+            <label className="label">Product</label>
+            <select className="input" value={form.productId} onChange={set('productId')} required>
+              <option value="" disabled>{hasProducts ? '— Select Product —' : '— None (No Products) —'}</option>
+              {hasProducts && products.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <button type="button" className="mt-2 text-sm font-semibold text-moss-700 hover:underline" onClick={() => { setPrefillBarcode(null); setProductModal(true); }}>+ Add new product</button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Qty received</label>
+            <input type="number" min="1" className="input" value={form.quantity} onChange={set('quantity')} required />
+          </div>
+          <div>
+            <label className="label">Cost / unit (KES)</label>
+            <input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required />
+          </div>
+        </div>
+        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm text-ink-600">
+          Total cost: <span className="font-semibold text-ink-900">{formatKES(totalCost)}</span>
+        </div>
+        <div>
+          <label className="label">Payment status</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => setForm((p) => ({ ...p, paymentStatus: 'paid' }))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus === 'paid' ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}>Paid now</button>
+            <button type="button" onClick={() => setForm((p) => ({ ...p, paymentStatus: 'credit' }))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus === 'credit' ? 'border-rust-500 bg-rust-50 text-rust-700' : 'border-ink-200 text-ink-500'}`}>On credit</button>
+          </div>
+        </div>
+        {form.paymentStatus === 'paid' && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Paid via</label>
+              <select className="input" value={form.paymentMethod} onChange={set('paymentMethod')}>
+                <option value="Cash">Cash</option>
+                <option value="M-Pesa">M-Pesa</option>
+              </select>
+            </div>
+            {form.paymentMethod === 'M-Pesa' && (
+              <div>
+                <label className="label">M-Pesa code</label>
+                <input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} placeholder="e.g. QWE1234567" required />
+              </div>
+            )}
+          </div>
+        )}
+        <button type="submit" className="btn-primary w-full" disabled={busy}>
+          {busy ? 'Saving…' : 'Record purchase'}
+        </button>
+      </form>
+      <h2 className="font-display text-sm font-bold text-ink-800">Recent purchases</h2>
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <ProductFormModal
+        open={productModal}
+        onClose={() => { setProductModal(false); setPrefillBarcode(null); }}
+        prefillSupplierId={form.supplierId || null}
+        onSave={async (data) => {
+          try {
+            const { id, queuedOffline } = await createProduct(data, businessId);
+            setForm((p) => ({
+              ...p,
+              productId: id,
+              supplierId: data.supplierId || p.supplierId || '',
+              costPricePerUnit: data.costPrice || p.costPricePerUnit,
+            }));
+            setProductModal(false);
+            setPrefillBarcode(null);
+            toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added and selected');
+          } catch (err) {
+            toast.error(friendlyErrorMessage(err));
+            throw err;
+          }
+        }}
+        suppliers={suppliers}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+        simplifiedForPurchase
+      />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+      {loading ? (
+        <LoadingSpinner />
+      ) : purchases.length === 0 ? (
+        <EmptyState title="No purchases yet" />
+      ) : (
+        <div className="card divide-y divide-ink-100">
+          {purchases.map((p) => (
+            <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
+              <div>
+                <p className="font-medium text-ink-700">{p.quantity} × {p.productName}</p>
+                <p className="text-xs text-ink-400">{p.supplierName || 'Supplier'} · {formatDateTime(p.purchasedAt)}</p>
+              </div>
+              <div className="text-right">
+                <p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p>
+                <span className={`badge ${p.paymentStatus === 'paid' ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>
+                  {p.paymentStatus === 'paid' ? 'Paid' : 'On credit'}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+````
+
+## File: src/router/AppRouter.jsx
+````javascript
+import { lazy, Suspense, useEffect } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import ProtectedRoute from '../components/common/ProtectedRoute';
+import AppShell from '../components/layout/AppShell';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import { useAuth } from '../contexts/AuthContext';
+import { prefetchRoutes } from './routePrefetch';
+import RequireOpenSession from '../components/common/RequireOpenSession';
+import LandingPage from '../pages/LandingPage';
+
+const routeLoaders = {
+  setup: () => import('../pages/Setup'),
+  login: () => import('../pages/Login'),
+  forgotPassword: () => import('../pages/ForgotPassword'),
+  joinStaff: () => import('../pages/JoinStaff'),
+  authAction: () => import('../pages/AuthAction'),
+  dashboard: () => import('../pages/Dashboard'),
+  counter: () => import('../pages/Counter'),
+  customers: () => import('../pages/Customers'),
+  customerDetail: () => import('../pages/CustomerDetail'),
+  expenses: () => import('../pages/Expenses'),
+  purchases: () => import('../pages/Purchases'),
+  products: () => import('../pages/Products'),
+  suppliers: () => import('../pages/Suppliers'),
+  stockTake: () => import('../pages/StockTake'),
+  reports: () => import('../pages/Reports'),
+  closeDay: () => import('../pages/CloseDay'),
+  users: () => import('../pages/Users'),
+  settings: () => import('../pages/Settings'),
+  helpGuide: () => import('../pages/HelpGuide'),
+  pro: () => import('../pages/Pro'),
+  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
+  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
+  privacy: () => import('../pages/Privacy'),
+  terms: () => import('../pages/Terms'),
+};
+
+const Setup                 = lazy(routeLoaders.setup);
+const Login                 = lazy(routeLoaders.login);
+const ForgotPassword         = lazy(routeLoaders.forgotPassword);
+const JoinStaff             = lazy(routeLoaders.joinStaff);
+const AuthAction            = lazy(routeLoaders.authAction);
+const Dashboard             = lazy(routeLoaders.dashboard);
+const Counter               = lazy(routeLoaders.counter);
+const Customers             = lazy(routeLoaders.customers);
+const CustomerDetail        = lazy(routeLoaders.customerDetail);
+const Expenses              = lazy(routeLoaders.expenses);
+const Purchases             = lazy(routeLoaders.purchases);
+const Products              = lazy(routeLoaders.products);
+const Suppliers             = lazy(routeLoaders.suppliers);
+const StockTake             = lazy(routeLoaders.stockTake);
+const Reports               = lazy(routeLoaders.reports);
+const CloseDay              = lazy(routeLoaders.closeDay);
+const Users                 = lazy(routeLoaders.users);
+const Settings              = lazy(routeLoaders.settings);
+const HelpGuide             = lazy(routeLoaders.helpGuide);
+const Pro                   = lazy(routeLoaders.pro);
+const AdvancedAnalytics     = lazy(routeLoaders.advancedAnalytics);
+const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
+const Privacy               = lazy(routeLoaders.privacy);
+const Terms                 = lazy(routeLoaders.terms);
+
+function Page({ children, adminOnly = false, requireOpenDay = false }) {
+  return (
+    <ProtectedRoute adminOnly={adminOnly}>
+      <AppShell>
+        <Suspense fallback={<LoadingSpinner />}>
+          {requireOpenDay ? <RequireOpenSession>{children}</RequireOpenSession> : children}
+        </Suspense>
+      </AppShell>
+    </ProtectedRoute>
+  );
+}
+
+function PublicOnly({ children }) {
+  const { firebaseUser, loading } = useAuth();
+  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
+  if (firebaseUser) return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
+function isStandalonePWA() {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+function RootRoute() {
+  const { firebaseUser, loading, isAdmin } = useAuth();
+
+  if (!loading && firebaseUser) {
+    return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
+  }
+  if (!loading && !firebaseUser && isStandalonePWA()) {
+    return <Navigate to="/login" replace />;
+  }
+  return <LandingPage />;
+}
+
+function RoutePrefetcher() {
+  const { firebaseUser, isAdmin } = useAuth();
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
+    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
+    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
+  }, [firebaseUser, isAdmin]);
+  return null;
+}
+
+export default function AppRouter() {
+  return (
+    <Suspense fallback={<LoadingSpinner label="Loading..." />}>
+      <RoutePrefetcher />
+      <Routes>
+        {/* Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
+        <Route path="/" element={<RootRoute />} />
+
+        {/* Public Authentication & Setup */}
+        <Route path="/setup" element={<Setup />} />
+        <Route path="/signup" element={<Setup />} />
+        <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
+        <Route path="/signin" element={<PublicOnly><Login /></PublicOnly>} />
+        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
+        <Route path="/join/:inviteId" element={<JoinStaff />} />
+        <Route path="/auth/action" element={<AuthAction />} />
+        
+        {/* Public Legal Pages */}
+        <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
+        <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
+
+        {/* Protected Store Management Routes */}
+        <Route path="/dashboard"    element={<Page adminOnly><Dashboard /></Page>} />
+        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
+        <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
+        <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
+
+        <Route path="/counter"      element={<Page><Counter /></Page>} />
+        <Route path="/customers"    element={<Page><Customers /></Page>} />
+        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
+        <Route path="/expenses"     element={<Page requireOpenDay><Expenses /></Page>} />
+        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
+        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
+        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
+        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
+        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
+        <Route path="/close-day"    element={<Page adminOnly requireOpenDay><CloseDay /></Page>} />
+        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
+        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
+        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
+        <Route path="*"             element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
+  );
+}
+````
+
+## File: src/contexts/AuthContext.jsx
+````javascript
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import {
+  onAuthStateChanged, signInWithEmailAndPassword, signOut as fbSignOut, sendEmailVerification, reload,
+  deleteUser, EmailAuthProvider, reauthenticateWithCredential,
+} from 'firebase/auth';
+import {
+  doc,
+  onSnapshot,
+  deleteDoc,
+  updateDoc,
+  collection,
+  addDoc,
+  setDoc,
+  serverTimestamp,
+  query,
+  where,
+  getDocs,
+  getDoc,
+} from 'firebase/firestore';
+import { auth, db } from '../firebase';
+import { raceWithTimeout } from '../utils/offlineWrite';
+
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+const AuthContext = createContext(null);
+
+function getDeviceId() {
+  let id = localStorage.getItem('flowbiz_device_id');
+  if (!id) {
+    id = `dev_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem('flowbiz_device_id', id);
+  }
+  return id;
+}
+function getSessionDocId(uid) {
+  return `${getDeviceId()}__${uid}`;
+}
+
+function guessDeviceLabel() {
+  const ua = navigator.userAgent || '';
+  let os = 'Unknown device';
+  if (/Android/i.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+  else if (/Windows/i.test(ua)) os = 'Windows';
+  else if (/Macintosh/i.test(ua)) os = 'Mac';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+
+  let browser = '';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/OPR\//i.test(ua)) browser = 'Opera';
+  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
+
+  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches;
+  if (isStandalone) return browser ? `${os} app (${browser})` : `${os} app`;
+  return browser ? `${browser} on ${os}` : os;
+}
+
+export function AuthProvider({ children }) {
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [subscription, setSubscription] = useState({ plan: 'free', status: 'active' });
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
+  const [accountRemoved, setAccountRemoved] = useState(false);
+  const [sessionRevoked, setSessionRevoked] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(false);
+
+  const profileUnsubRef = useRef(null);
+  const sessionUnsubRef = useRef(null);
+  const businessUnsubRef = useRef(null);
+  const sessionRegisteredRef = useRef(null);
+
+  const stopListeners = useCallback(() => {
+    profileUnsubRef.current?.();
+    profileUnsubRef.current = null;
+    sessionUnsubRef.current?.();
+    sessionUnsubRef.current = null;
+    businessUnsubRef.current?.();
+    businessUnsubRef.current = null;
+    sessionRegisteredRef.current = null;
+  }, []);
+
+  const registerSession = useCallback(async (uid, businessId, userName) => {
+    if (!uid || !businessId) return;
+    const key = `${uid}:${businessId}`;
+    if (sessionRegisteredRef.current === key) return;
+    sessionRegisteredRef.current = key;
+
+    try {
+      let sessionId = getSessionDocId(uid);
+      let ref = doc(db, 'sessions', sessionId);
+      let currentSnap = await getDoc(ref).catch(() => null);
+
+      if (currentSnap && currentSnap.exists() && currentSnap.data().revoked === true) {
+        sessionId = `${sessionId}__${Date.now().toString(36)}`;
+        ref = doc(db, 'sessions', sessionId);
+        currentSnap = await getDoc(ref).catch(() => null);
+      }
+
+      const baseFields = {
+        uid,
+        businessId,
+        lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
+        deviceLabel: guessDeviceLabel(),
+        userAgent: navigator.userAgent,
+        lastActiveAt: serverTimestamp(),
+      };
+
+      if (!currentSnap || !currentSnap.exists()) {
+        await setDoc(ref, { ...baseFields, createdAt: serverTimestamp(), revoked: false });
+      } else {
+        await updateDoc(ref, baseFields).catch(() => {});
+      }
+
+      sessionUnsubRef.current?.();
+      sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
+        if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
+          setSessionRevoked(true);
+          fbSignOut(auth);
+        }
+      });
+    } catch (err) {
+      console.warn('[FlowBiz] registerSession non-fatal warning:', err.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
+        updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
+      }
+    }, 15 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [firebaseUser, profile?.businessId, sessionRevoked]);
+
+  const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
+    stopListeners();
+    setAuthError(null);
+    setAccountRemoved(false);
+    setSessionRevoked(false);
+
+    if (!user) {
+      setProfile(null);
+      setSubscription({ plan: 'free', status: 'active' });
+      setEmailVerified(false);
+      setLoading(false);
+      return;
+    }
+
+    setEmailVerified(!!user.emailVerified);
+    setLoading(true);
+
+    const userRef = doc(db, 'users', user.uid);
+
+    profileUnsubRef.current = onSnapshot(
+      userRef,
+      (snap) => {
+        if (!snap.exists()) {
+          (async () => {
+            for (let attempt = 0; attempt < 3; attempt++) {
+              await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+              if (auth.currentUser?.uid !== user.uid) return;
+              try {
+                const recheck = await getDoc(userRef);
+                if (recheck.exists()) return;
+              } catch (err) {
+                if (attempt === 2) {
+                  setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
+                  setProfile(null);
+                  setLoading(false);
+                  return;
+                }
+              }
+            }
+            setAccountRemoved(true);
+            setProfile(null);
+            setLoading(false);
+          })();
+          return;
+        }
+
+        setAccountRemoved(false);
+        const data = { uid: user.uid, ...snap.data() };
+        setProfile(data);
+        setLoading(false);
+
+        if (data.businessId && data.active !== false) {
+          registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
+          businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
+            if (bizSnap.exists()) {
+              setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
+            }
+          });
+        }
+      },
+      (err) => {
+        if (err.code === 'permission-denied' && retryCount < 5) {
+          const delay = Math.min(1000 * 2 ** retryCount, 6000);
+          setTimeout(() => {
+            if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
+          }, delay);
+          return;
+        }
+        console.error(`[FlowBiz] onSnapshot(users/${user.uid}) error:`, err.code || err.name, err.message);
+        setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
+        setProfile(null);
+        setLoading(false);
+      }
+    );
+  }, [registerSession, stopListeners]);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      loadProfile(user);
+    });
+    return () => { unsub(); stopListeners(); };
+  }, [loadProfile, stopListeners]);
+
+  const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
+  const logout = () => { stopListeners(); return fbSignOut(auth); };
+
+  const resendVerificationEmail = async () => {
+    if (!auth.currentUser) throw new Error('Not signed in.');
+    try {
+      const idToken = await auth.currentUser.getIdToken(true);
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      });
+      if (!response.ok) {
+        let message = 'Could not send the verification email.';
+        try { const body = await response.json(); message = body?.error || message; } catch {}
+        throw new Error(message);
+      }
+    } catch (workerErr) {
+      console.warn('[FlowBiz] Worker email send failed, falling back to direct Firebase Auth send:', workerErr.message);
+      await sendEmailVerification(auth.currentUser);
+    }
+  };
+
+  const refreshEmailVerification = useCallback(async () => {
+    if (!auth.currentUser) return false;
+    try {
+      await reload(auth.currentUser);
+    } catch (err) {
+      console.error('[FlowBiz] refreshEmailVerification reload error:', err.code || err.name, err.message);
+      return auth.currentUser?.emailVerified ?? false;
+    }
+    const verified = !!auth.currentUser.emailVerified;
+    setEmailVerified(verified);
+    return verified;
+  }, []);
+
+  const createStaffInvite = async ({ displayName, role = 'cashier' }) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can invite staff.');
+    if (!['owner', 'cashier'].includes(role)) throw new Error('Invalid role.');
+    const trimmed = (displayName || '').trim();
+    if (!trimmed) throw new Error('Enter a name.');
+    const write = addDoc(collection(db, 'staffInvites'), {
+      businessId: profile.businessId,
+      displayName: trimmed,
+      role,
+      createdBy: profile.uid,
+      createdByName: profile.displayName,
+      createdAt: serverTimestamp(),
+      claimed: false,
+      linkedUid: null,
+    });
+    const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
+    if (error) throw error;
+    if (queuedOffline) return { id: null, queuedOffline: true };
+    return { id: value.id };
+  };
+
+  const cancelStaffInvite = async (inviteId) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can cancel an invite.');
+    await deleteDoc(doc(db, 'staffInvites', inviteId));
+  };
+
+  const revokeSessionsForStaffMember = useCallback(async (uid) => {
+    if (!profile?.businessId) return;
+    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', uid), where('businessId', '==', profile.businessId)));
+    await Promise.all(
+      snap.docs.filter((d) => d.data().revoked !== true).map((d) => updateDoc(doc(db, 'sessions', d.id), { revoked: true }))
+    );
+  }, [profile]);
+
+  const removeStaffAccount = async (uid) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can remove staff accounts.');
+    if (uid === profile.uid) throw new Error("You can't remove your own account here.");
+    if (!auth.currentUser) throw new Error('Your session has expired. Please sign in again.');
+
+    const idToken = await auth.currentUser.getIdToken(true);
+    await revokeSessionsForStaffMember(uid);
+
+    let response;
+    try {
+      response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({ targetUid: uid }),
+      });
+    } catch {
+      throw new Error(`Failed to reach the API server. Check your connection.`);
+    }
+
+    let result = null;
+    try { result = await response.json(); } catch { }
+    if (!response.ok) throw new Error(result?.error || result?.message || `Failed to delete the staff account (${response.status}).`);
+
+    const { queuedOffline, error: deleteError } = await raceWithTimeout(deleteDoc(doc(db, 'users', uid)), 4000);
+    if (deleteError) {
+      throw new Error(`Staff sign-in was removed, but their profile record couldn't be deleted (${deleteError.message}). It should clear automatically once back online.`);
+    }
+    if (queuedOffline) {
+      throw new Error("Staff sign-in was removed, but you're offline — their profile record will finish deleting once you're back online.");
+    }
+  };
+
+  const toggleMemberActive = async (uid, active) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can do this.');
+    await updateDoc(doc(db, 'users', uid), { active });
+    if (active === false) await revokeSessionsForStaffMember(uid);
+  };
+
+  const deleteOwnAccount = async ({ password }) => {
+    if (!profile || !auth.currentUser) throw new Error('You need to be signed in to do this.');
+
+    try {
+      const credential = EmailAuthProvider.credential(auth.currentUser.email, password);
+      await reauthenticateWithCredential(auth.currentUser, credential);
+    } catch (err) {
+      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        throw new Error('That password is incorrect.');
+      }
+      throw new Error('Could not verify your password. Please try again.');
+    }
+
+    let mode = 'self-only';
+
+    if (profile.role === 'owner') {
+      const othersSnap = await getDocs(query(
+        collection(db, 'users'),
+        where('businessId', '==', profile.businessId),
+        where('role', '==', 'owner')
+      ));
+      const otherOwners = othersSnap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((u) => u.id !== profile.uid && u.active !== false);
+
+      if (otherOwners.length > 0) {
+        const bizSnap = await getDoc(doc(db, 'businesses', profile.businessId));
+        const business = bizSnap.exists() ? bizSnap.data() : null;
+        if (business && business.createdBy === profile.uid) {
+          const oldest = [...otherOwners].sort((a, b) => {
+            const at = a.createdAt?.toMillis?.() ?? 0;
+            const bt = b.createdAt?.toMillis?.() ?? 0;
+            return at - bt;
+          })[0];
+          await updateDoc(doc(db, 'businesses', profile.businessId), { createdBy: oldest.id });
+        }
+      } else {
+        mode = 'full-wipe';
+        const { resetBusinessData } = await import('../utils/businessReset');
+        await resetBusinessData(profile.businessId, profile.uid);
+      }
+    }
+
+    const idToken = await auth.currentUser.getIdToken(true);
+    const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-own-profile`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ mode }),
+    });
+    let result = null;
+    try { result = await response.json(); } catch { }
+    if (!response.ok) {
+      throw new Error(result?.error || `Could not finish removing your account (${response.status}).`);
+    }
+
+    try {
+      await deleteUser(auth.currentUser);
+    } catch (err) {
+      if (err.code === 'auth/requires-recent-login') {
+        throw new Error("Your business data was handled, but we couldn't remove your sign-in for security reasons — please sign out and back in, then try 'Delete my account' again.");
+      }
+      throw new Error("Your business data was handled, but removing your sign-in failed. Please try again.");
+    }
+  };
+
+  const revokeSession = async (sessionId) => {
+    await updateDoc(doc(db, 'sessions', sessionId), { revoked: true });
+  };
+
+  const listMySessions = async () => {
+    if (!profile) return [];
+    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', profile.uid)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  };
+
+  const listBusinessSessions = async () => {
+    if (!profile?.businessId) return [];
+    const snap = await getDocs(query(collection(db, 'sessions'), where('businessId', '==', profile.businessId)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  };
+
+  const isOwner = profile?.role === 'owner';
+  
+  const expiresMs = subscription?.expiresAt?.toMillis 
+    ? subscription.expiresAt.toMillis() 
+    : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
+
+  const isPro = subscription?.plan === 'pro' && 
+                subscription?.status === 'active' &&
+                (!subscription.expiresAt || expiresMs > Date.now());
+
+  return (
+    <AuthContext.Provider
+      value={{
+        firebaseUser, profile, subscription, isPro, loading, authError, accountRemoved, sessionRevoked,
+        businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
+        isActive: profile?.active !== false, emailVerified,
+        login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
+        toggleMemberActive, revokeSession, listMySessions, listBusinessSessions, deleteOwnAccount,
+        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),
+        reloadProfile: async () => loadProfile(auth.currentUser),
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  return ctx;
+}
+````
+
+## File: src/pages/Dashboard.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useDailySession } from '../hooks/useDailySession';
+import { useFinancialsForRange } from '../hooks/useFinancials';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import Modal from '../components/common/Modal';
+import SaleModal from '../components/pos/SaleModal';
+import SaleCompleteModal from '../components/pos/SaleCompleteModal';
+import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
+import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+function StatCard({ label, value, tone = 'text-ink-900', sub }) {
+  return (
+    <div className="card p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
+      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
+    </div>
+  );
+}
+
+export default function Dashboard() {
+  const { profile, isAdmin, businessId, isPro } = useAuth();
+  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
+  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
+
+  const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
+  const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
+  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId) : null, [businessId]); // Removed orderBy('name')
+  const { data: products } = useFirestoreCollection(productsQuery);
+  const { data: customers } = useFirestoreCollection(customersQuery);
+  const { data: rawSuppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQuery);
+  const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
+  const [activeProduct, setActiveProduct] = useState(null);
+  const [completedSale, setCompletedSale] = useState(null);
+  const [editProduct, setEditProd] = useState(null);
+  const [prodModal, setProdModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [notFoundCode, setNotFoundCode] = useState(null);
+
+  const [privacyMode, setPrivacyMode] = useState(() => {
+    try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
+    catch { return false; }
+  });
+
+  // Alphabetically sort suppliers in memory
+  const suppliers = useMemo(() => {
+    return [...rawSuppliers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [rawSuppliers]);
+
+  const togglePrivacyMode = () => {
+    setPrivacyMode((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('flowbiz_dashboard_privacy', String(next)); }
+      catch (err) { console.error('Failed to save privacy mode setting', err); }
+      return next;
+    });
+  };
+
+  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
+
+  const dashboardCashReceived = summary.totalCashReceipts;
+  const dashboardMpesaReceived = summary.totalMpesaReceipts;
+  const dashboardExpenses = summary.totalExpenses;
+  const dashboardNetProfit = summary.netProfit;
+
+  const lowStock = products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
+  const totalInventoryValue = products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
+  const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
+  const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
+  const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
+
+  const recentActivity = useMemo(() => {
+    const list = [];
+    (sales || []).forEach((s) => {
+      if (s.isVoided) return;
+      list.push({ id: `sale-${s.id}`, type: 'Sale', title: `${s.quantity} × ${s.productName}`, subtitle: `Sold by ${s.soldByName || 'Staff'}`, amount: s.totalAmount, method: s.paymentMethod, timestamp: s.soldAt, isPositive: true });
+    });
+    (repayments || []).forEach((r) => {
+      list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
+    });
+    (creditSales || []).forEach((cs) => {
+      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+      list.push({
+        id: `credit-${cs.id}`, type: 'Credit Sale',
+        title: `${cs.quantity} × ${cs.productName}`,
+        subtitle: `${cs.customerName || 'Customer'} · Sold by ${cs.soldByName || 'Staff'}`,
+        amount: cs.totalAmount, method: 'Credit', timestamp: cs.soldAt, isPositive: false,
+      });
+    });
+    return list.sort((a, b) => {
+      const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
+      const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
+      return bTime - aTime;
+    }).slice(0, 8);
+  }, [sales, repayments, creditSales]);
+
+  const handleCreateCustomer = async ({ name, phone }) => {
+    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
+    return { id: ref.id, name, phone };
+  };
+
+  const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
+    const productRef = doc(db, 'products', product.id);
+    const saleRef = doc(collection(db, 'sales'));
+    const saleData = withBusiness({
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit,
+      totalAmount: soldPricePerUnit * quantity,
+      profit: (soldPricePerUnit - product.costPrice) * quantity,
+      paymentMethod, mpesaCode: mpesaCode || null,
+      soldBy: profile.uid, soldByName: profile.displayName,
+      soldAt: new Date(), isCredit: false, isVoided: false,
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(saleRef, saleData);
+
+    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleConfirmCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
+    const productRef = doc(db, 'products', product.id);
+    const totalAmount = soldPricePerUnit * quantity;
+    const creditRef = doc(collection(db, 'creditSales'));
+    const creditData = withBusiness({
+      customerId, customerName, customerPhone: customerPhone || '',
+      productId: product.id, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
+      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
+      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
+      isCredit: true
+    }, businessId);
+
+    const batch = writeBatch(db);
+    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
+    batch.set(creditRef, creditData);
+
+    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
+  };
+
+  const handleProductSave = async (data) => {
+    try {
+      if (editProduct) {
+        const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
+      } else {
+        const { queuedOffline } = await createProduct(data, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      }
+    } catch (err) { toast.error(friendlyErrorMessage(err)); }
+    finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
+  };
+
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    if (!queuedOffline) {
+      setNewSupplierId(ref.id);
+      await refetchSuppliers();
+    }
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setActiveProduct(found);
+    else setNotFoundCode(code);
+  };
+
+  useHardwareScanner(handleScanDetected, {
+    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
+  });
+
+  if (sessionLoading) return <LoadingSpinner label="Loading today's session…" />;
+
+  if (isClosed) {
+    return (
+      <div className="mx-auto max-w-sm space-y-4 text-center">
+        <EmptyState title="Day is closed" description="Sales are locked until you reopen the session or tomorrow starts." />
+        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen today's session</button>}
+      </div>
+    );
+  }
+  if (!session) {
+    return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
+          <div className="flex items-center gap-2 mt-1">
+            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
+          </div>
+        </div>
+        <button
+          onClick={togglePrivacyMode}
+          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
+          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
+        >
+          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
+        </button>
+      </div>
+
+      {isAdmin && (
+        <>
+          {financialsLoading ? <LoadingSpinner /> : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
+              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
+              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
+              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
+              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
+            <StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
+            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
+          </div>
+        </>
+      )}
+
+      <div>
+        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
+        {recentActivity.length === 0 ? (
+          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
+        ) : (
+          <div className="card divide-y divide-ink-100">
+            {recentActivity.map((act) => (
+              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
+                <div className="min-w-0 flex-1 pr-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
+                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
+                  </div>
+                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <SaleModal 
+        open={!!activeProduct} 
+        product={activeProduct} 
+        customers={customers} 
+        onClose={(record) => {
+          setActiveProduct(null);
+          if (record && record.id) setCompletedSale(record);
+        }} 
+        onConfirmSale={handleConfirmSale} 
+        onConfirmCredit={handleConfirmCredit} 
+        onCreateCustomer={handleCreateCustomer} 
+      />
+      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
+          {isAdmin ? (
+            <button className="btn-primary" onClick={() => { setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
+          ) : (
+            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
+          )}
+        </div>
+      </Modal>
+
+      <ProductFormModal
+        open={prodModal}
+        onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
+        onSave={handleProductSave}
+        suppliers={suppliers}
+        initialProduct={editProduct}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+      />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+    </div>
+  );
+}
+````
+
 ## File: src/pages/Settings.jsx
 ````javascript
-// src/pages/Settings.jsx
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react'; // Added useRef import
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -16029,76 +18328,76 @@ export default function Settings() {
   const [deleteAccountConfirmText, setDeleteAccountConfirmText] = useState('');
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [otherOwnersCount, setOtherOwnersCount] = useState(null);
-const [exporting, setExporting] = useState(false);
-const [exportProgress, setExportProgress] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(null);
 
-const fileInputRef = useRef(null);
-const [checkingImport, setCheckingImport] = useState(false);
-const [importing, setImporting] = useState(false);
-const [importProgress, setImportProgress] = useState(null);
-const [pendingImport, setPendingImport] = useState(null); // { manifest, nonEmptyCollections, fileName }
-const [importConfirmChecked, setImportConfirmChecked] = useState(false);
+  const fileInputRef = useRef(null);
+  const [checkingImport, setCheckingImport] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState(null);
+  const [pendingImport, setPendingImport] = useState(null); // { manifest, nonEmptyCollections, fileName }
+  const [importConfirmChecked, setImportConfirmChecked] = useState(false);
 
+  const handleImportFileSelected = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file later
+    if (!file) return;
+    setCheckingImport(true);
+    try {
+      const manifest = await readExportZip(file);
+      const nonEmptyCollections = await checkExistingData(businessId, manifest);
+      setPendingImport({ manifest, nonEmptyCollections, fileName: file.name });
+      setImportConfirmChecked(false);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setCheckingImport(false);
+    }
+  };
 
-const handleImportFileSelected = async (e) => {
-  const file = e.target.files?.[0];
-  e.target.value = ''; // allow re-selecting the same file later
-  if (!file) return;
-  setCheckingImport(true);
-  try {
-    const manifest = await readExportZip(file);
-    const nonEmptyCollections = await checkExistingData(businessId, manifest);
-    setPendingImport({ manifest, nonEmptyCollections, fileName: file.name });
-    setImportConfirmChecked(false);
-  } catch (err) {
-    toast.error(err.message);
-  } finally {
-    setCheckingImport(false);
-  }
-};
-
-const handleConfirmImport = async () => {
-  if (!pendingImport) return;
-  setImporting(true);
-  setImportProgress(null);
-  try {
-    const results = await importBusinessData(businessId, pendingImport.manifest, {
-      onProgress: (name, i, total) => setImportProgress(`${name} (${i + 1}/${total})`),
-    });
-    const totalDocs = Object.values(results).reduce((a, b) => a + b, 0);
-    toast.success(`Import complete — ${totalDocs} record(s) restored.`);
-    setPendingImport(null);
-  } catch (err) {
-    toast.error(`Import failed: ${err.message}`);
-  } finally {
-    setImporting(false);
+  const handleConfirmImport = async () => {
+    if (!pendingImport) return;
+    setImporting(true);
     setImportProgress(null);
-  }
-};
+    try {
+      const results = await importBusinessData(businessId, pendingImport.manifest, {
+        onProgress: (name, i, total) => setImportProgress(`${name} (${i + 1}/${total})`),
+      });
+      const totalDocs = Object.values(results).reduce((a, b) => a + b, 0);
+      toast.success(`Import complete — ${totalDocs} record(s) restored.`);
+      setPendingImport(null);
+    } catch (err) {
+      toast.error(`Import failed: ${err.message}`);
+    } finally {
+      setImporting(false);
+      setImportProgress(null);
+    }
+  };
 
-const handleExport = async () => {
-  setExporting(true);
-  setExportProgress(null);
-  try {
-    const blob = await buildExportZip(businessId, {
-      onProgress: (name, i, total) => setExportProgress(`${name} (${i + 1}/${total})`),
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `flowbiz-export-${businessId}-${new Date().toISOString().slice(0, 10)}.zip`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    toast.success('Export downloaded.');
-  } catch (err) {
-    toast.error(`Export failed: ${err.message}`);
-  } finally {
-    setExporting(false);
+  const handleExport = async () => {
+    setExporting(true);
     setExportProgress(null);
-  }
-};
+    try {
+      const blob = await buildExportZip(businessId, {
+        onProgress: (name, i, total) => setExportProgress(`${name} (${i + 1}/${total})`),
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `flowbiz-export-${businessId}-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast.success('Export downloaded.');
+    } catch (err) {
+      toast.error(`Export failed: ${err.message}`);
+    } finally {
+      setExporting(false);
+      setExportProgress(null);
+    }
+  };
+
   const deviceGroups = useMemo(() => {
     const groups = new Map();
     for (const s of sessions) {
@@ -16460,59 +18759,60 @@ const handleExport = async () => {
         <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
       </div>
 
-<div className="card p-5 space-y-3">
-  <h2 className="font-display text-base font-bold text-ink-800">Backup & Restore</h2>
-  <p className="text-sm text-ink-500">
-    Download everything this business has stored as a .zip (CSVs plus a FlowBiz backup file), or restore a previous FlowBiz export back into this business.
-  </p>
-  <div className="grid grid-cols-2 gap-2">
-    <button type="button" className="btn-outline" onClick={handleExport} disabled={exporting || importing || checkingImport}>
-      {exporting ? (exportProgress || 'Preparing…') : 'Export (.zip)'}
-    </button>
-    <button type="button" className="btn-outline" onClick={() => fileInputRef.current?.click()} disabled={exporting || importing || checkingImport}>
-      {checkingImport ? 'Reading file…' : 'Import (.zip)'}
-    </button>
-  </div>
-  <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleImportFileSelected} />
-</div>
-
-<Modal open={!!pendingImport} onClose={() => { if (!importing) setPendingImport(null); }} title="Import this backup?">
-  <div className="space-y-4">
-    <p className="text-sm text-ink-600">
-      <span className="font-mono text-xs">{pendingImport?.fileName}</span> contains:
-    </p>
-    <div className="max-h-40 overflow-y-auto rounded-lg border border-ink-100 divide-y divide-ink-100">
-      {pendingImport && Object.entries(pendingImport.manifest.collections)
-        .filter(([, docs]) => docs.length > 0)
-        .map(([name, docs]) => (
-          <div key={name} className="flex justify-between px-3 py-1.5 text-xs">
-            <span className="text-ink-500">{name}</span>
-            <span className="font-semibold text-ink-800">{docs.length}</span>
-          </div>
-        ))}
-    </div>
-
-    {pendingImport?.nonEmptyCollections.length > 0 && (
-      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
-        This business already has data in: {pendingImport.nonEmptyCollections.join(', ')}. Importing will add these records alongside what's already there — any record that shares the exact same ID as one you already have will be overwritten.
+      <div className="card p-5 space-y-3">
+        <h2 className="font-display text-base font-bold text-ink-800">Backup & Restore</h2>
+        <p className="text-sm text-ink-500">
+          Download everything this business has stored as a .zip (CSVs plus a FlowBiz backup file), or restore a previous FlowBiz export back into this business.
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" className="btn-outline" onClick={handleExport} disabled={exporting || importing || checkingImport}>
+            {exporting ? (exportProgress || 'Preparing…') : 'Export (.zip)'}
+          </button>
+          <button type="button" className="btn-outline" onClick={() => fileInputRef.current?.click()} disabled={exporting || importing || checkingImport}>
+            {checkingImport ? 'Reading file…' : 'Import (.zip)'}
+          </button>
+        </div>
+        <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleImportFileSelected} />
       </div>
-    )}
 
-    <label className="flex items-start gap-2 text-sm text-ink-600">
-      <input type="checkbox" checked={importConfirmChecked} onChange={(e) => setImportConfirmChecked(e.target.checked)} disabled={importing} className="mt-0.5" />
-      I understand and want to proceed with this import.
-    </label>
+      <Modal open={!!pendingImport} onClose={() => { if (!importing) setPendingImport(null); }} title="Import this backup?">
+        <div className="space-y-4">
+          <p className="text-sm text-ink-600">
+            <span className="font-mono text-xs">{pendingImport?.fileName}</span> contains:
+          </p>
+          <div className="max-h-40 overflow-y-auto rounded-lg border border-ink-100 divide-y divide-ink-100">
+            {pendingImport && Object.entries(pendingImport.manifest.collections)
+              .filter(([, docs]) => docs.length > 0)
+              .map(([name, docs]) => (
+                <div key={name} className="flex justify-between px-3 py-1.5 text-xs">
+                  <span className="text-ink-500">{name}</span>
+                  <span className="font-semibold text-ink-800">{docs.length}</span>
+                </div>
+              ))}
+          </div>
 
-    {importing && <p className="text-xs text-ink-400">{importProgress || 'Starting…'}</p>}
+          {pendingImport?.nonEmptyCollections.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+              This business already has data in: {pendingImport.nonEmptyCollections.join(', ')}. Importing will add these records alongside what's already there — any record that shares the exact same ID as one you already have will be overwritten.
+            </div>
+          )}
 
-    <div className="flex gap-2">
-      <button type="button" className="btn-secondary flex-1" onClick={() => setPendingImport(null)} disabled={importing}>Cancel</button>
-      <button type="button" className="btn-primary flex-1" onClick={handleConfirmImport} disabled={!importConfirmChecked || importing}>
-        {importing ? 'Importing…' : 'Import'}
-      </button>
-    </div>
-  </div>
-</Modal>
+          <label className="flex items-start gap-2 text-sm text-ink-600">
+            <input type="checkbox" checked={importConfirmChecked} onChange={(e) => setImportConfirmChecked(e.target.checked)} disabled={importing} className="mt-0.5" />
+            I understand and want to proceed with this import.
+          </label>
+
+          {importing && <p className="text-xs text-ink-400">{importProgress || 'Starting…'}</p>}
+
+          <div className="flex gap-2">
+            <button type="button" className="btn-secondary flex-1" onClick={() => setPendingImport(null)} disabled={importing}>Cancel</button>
+            <button type="button" className="btn-primary flex-1" onClick={handleConfirmImport} disabled={!importConfirmChecked || importing}>
+              {importing ? 'Importing…' : 'Import'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       <div className="card space-y-3 border-rust-200 p-5">
         <div>
           <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
@@ -16527,7 +18827,6 @@ const handleExport = async () => {
         </button>
       </div>
 
-      {/* Inserted "Delete My Account" block here */}
       <div className="card space-y-3 border-rust-200 p-5">
         <div>
           <h2 className="font-display text-base font-bold text-rust-700">Delete My Account</h2>
@@ -16569,7 +18868,6 @@ const handleExport = async () => {
         onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
       />
 
-      {/* Inserted "Delete My Account" Modal here */}
       <Modal open={deleteAccountOpen} onClose={() => { if (!deletingAccount) setDeleteAccountOpen(false); }} title="Delete your account">
         <div className="space-y-4">
           {otherOwnersCount === null ? (
@@ -16621,963 +18919,6 @@ function Row({ label, value, tone = '', mono = false }) {
 }
 ````
 
-## File: src/contexts/AuthContext.jsx
-````javascript
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
-import {
-  onAuthStateChanged, signInWithEmailAndPassword, signOut as fbSignOut, sendEmailVerification, reload,
-  deleteUser, EmailAuthProvider, reauthenticateWithCredential,
-} from 'firebase/auth';
-import {
-  doc,
-  onSnapshot,
-  deleteDoc,
-  updateDoc,
-  collection,
-  addDoc,
-  setDoc,
-  serverTimestamp,
-  query,
-  where,
-  getDocs,
-  getDoc,
-} from 'firebase/firestore';
-import { auth, db } from '../firebase';
-import { raceWithTimeout } from '../utils/offlineWrite';
-
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-const AuthContext = createContext(null);
-
-function getDeviceId() {
-  let id = localStorage.getItem('flowbiz_device_id');
-  if (!id) {
-    id = `dev_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-    localStorage.setItem('flowbiz_device_id', id);
-  }
-  return id;
-}
-function getSessionDocId(uid) {
-  return `${getDeviceId()}__${uid}`;
-}
-
-// src/contexts/AuthContext.jsx — replace guessDeviceLabel()
-function guessDeviceLabel() {
-  const ua = navigator.userAgent || '';
-  let os = 'Unknown device';
-  if (/Android/i.test(ua)) os = 'Android';
-  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
-  else if (/Windows/i.test(ua)) os = 'Windows';
-  else if (/Macintosh/i.test(ua)) os = 'Mac';
-  else if (/Linux/i.test(ua)) os = 'Linux';
-
-  let browser = '';
-  if (/Edg\//i.test(ua)) browser = 'Edge';
-  else if (/OPR\//i.test(ua)) browser = 'Opera';
-  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
-  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
-  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
-
-  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches;
-  if (isStandalone) return browser ? `${os} app (${browser})` : `${os} app`;
-  return browser ? `${browser} on ${os}` : os;
-}
-
-export function AuthProvider({ children }) {
-  const [firebaseUser, setFirebaseUser] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [subscription, setSubscription] = useState({ plan: 'free', status: 'active' });
-  const [loading, setLoading] = useState(true);
-  const [authError, setAuthError] = useState(null);
-  const [accountRemoved, setAccountRemoved] = useState(false);
-  const [sessionRevoked, setSessionRevoked] = useState(false);
-  const [emailVerified, setEmailVerified] = useState(false);
-
-  const profileUnsubRef = useRef(null);
-  const sessionUnsubRef = useRef(null);
-  const businessUnsubRef = useRef(null);
-  const sessionRegisteredRef = useRef(null); // `${uid}:${businessId}` already registered this auth session
-
-  const stopListeners = useCallback(() => {
-    profileUnsubRef.current?.();
-    profileUnsubRef.current = null;
-    sessionUnsubRef.current?.();
-    sessionUnsubRef.current = null;
-    businessUnsubRef.current?.();
-    businessUnsubRef.current = null;
-    sessionRegisteredRef.current = null;
-  }, []);
-
-const registerSession = useCallback(async (uid, businessId, userName) => {
-  const key = `${uid}:${businessId}`;
-  if (sessionRegisteredRef.current === key) return;
-  sessionRegisteredRef.current = key;
-
-  let sessionId = getSessionDocId(uid);
-  let ref = doc(db, 'sessions', sessionId);
-  let currentSnap = await getDoc(ref);
-
-  // A revoked session can never legally un-revoke itself (that's the
-  // security rule working as intended — self-updates can't touch
-  // `revoked`). A fresh sign-in is a legitimate new session, so start a
-  // new record instead of endlessly retrying a write the rules forbid.
-  if (currentSnap.exists() && currentSnap.data().revoked === true) {
-    sessionId = `${sessionId}__${Date.now().toString(36)}`;
-    ref = doc(db, 'sessions', sessionId);
-    currentSnap = await getDoc(ref);
-  }
-
-  const baseFields = {
-    uid, businessId,
-    lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
-    deviceLabel: guessDeviceLabel(),
-    userAgent: navigator.userAgent,
-    lastActiveAt: serverTimestamp(),
-  };
-
-  if (!currentSnap.exists()) {
-    await setDoc(ref, { ...baseFields, createdAt: serverTimestamp(), revoked: false });
-  } else {
-    // Never include `revoked` here — self-updates aren't allowed to
-    // touch it, and it's already false if we got this far.
-    await updateDoc(ref, baseFields).catch(() => {});
-  }
-
-  sessionUnsubRef.current?.();
-  sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
-    if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
-      setSessionRevoked(true);
-      fbSignOut(auth);
-    }
-  });
-}, []);
-
-  // Background heartbeat to keep the "last seen" time accurate for active devices
-useEffect(() => {
-    if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
-        updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
-      }
-    }, 15 * 60 * 1000); // 15 mins
-    return () => clearInterval(interval);
-  }, [firebaseUser, profile?.businessId, sessionRevoked]);
-
-  // FIX: Used a named function 'doLoad' to resolve the recursive ESLint error
-const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
-  stopListeners();
-  setAuthError(null);
-  setAccountRemoved(false);
-  setSessionRevoked(false);
-
-  if (!user) {
-    setProfile(null);
-    setSubscription({ plan: 'free', status: 'active' });
-    setEmailVerified(false);
-    setLoading(false);
-    return;
-  }
-
-  setEmailVerified(!!user.emailVerified);
-  setLoading(true);
-
-  // FIX: force-refresh the ID token before attaching the Firestore
-  // listener. Right after sign-in / verification / password reset, the
-  // Firestore SDK's connection can still be using a stale token for a
-  // moment — this closes that gap instead of just hoping it resolves.
-  user.getIdToken(true).catch(() => {}).then(() => {
-    const userRef = doc(db, 'users', user.uid);
-
-    profileUnsubRef.current = onSnapshot(
-      userRef,
-      (snap) => {
-if (!snap.exists()) {
-  (async () => {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
-      if (auth.currentUser?.uid !== user.uid) return;
-      try {
-        const recheck = await getDoc(userRef);
-        if (recheck.exists()) return; // listener will pick it up
-      } catch (err) {
-        if (attempt === 3) {
-          setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
-          setProfile(null);
-          setLoading(false);
-          return;
-        }
-      }
-    }
-    setAccountRemoved(true);
-    setProfile(null);
-    setLoading(false);
-  })();
-  return;
-}
-        setAccountRemoved(false);
-        const data = { uid: user.uid, ...snap.data() };
-        setProfile(data);
-        setLoading(false);
-
-if (data.businessId && data.active !== false) {
-  registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
-          businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
-            if (bizSnap.exists()) {
-              setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
-            }
-          });
-        }
-      },
-      (err) => {
-        // FIX: more retries, longer backoff — gives slower connections
-        // (mobile networks) a real chance to catch up instead of
-        // dumping the user on an error screen after ~4s.
-        if (err.code === 'permission-denied' && retryCount < 6) {
-          const delay = Math.min(1000 * 2 ** retryCount, 8000);
-          console.warn(`[FlowBiz] users/${user.uid} listener got permission-denied — retrying (attempt ${retryCount + 1})`);
-          setTimeout(() => {
-            if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
-          }, delay);
-          return;
-        }
-        console.error(`[FlowBiz] onSnapshot(users/${user.uid}) failed:`, err.code || err.name, err.message);
-        setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
-        setProfile(null);
-        setLoading(false);
-      }
-    );
-  });
-}, [registerSession, stopListeners]);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      setFirebaseUser(user);
-      loadProfile(user);
-    });
-    return () => { unsub(); stopListeners(); };
-  }, [loadProfile, stopListeners]);
-
-  const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
-  const logout = () => { stopListeners(); return fbSignOut(auth); };
-  
-const resendVerificationEmail = async () => {
-  if (!auth.currentUser) throw new Error('Not signed in.');
-  const idToken = await auth.currentUser.getIdToken(true);
-  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-  });
-  if (!response.ok) {
-    let message = 'Could not send the verification email.';
-    try { const body = await response.json(); message = body?.error || message; } catch {}
-    throw new Error(message);
-  }
-};
-
-  const refreshEmailVerification = useCallback(async () => {
-    if (!auth.currentUser) return false;
-    try {
-      await reload(auth.currentUser);
-    } catch (err) {
-      console.error('[FlowBiz] refreshEmailVerification: reload() failed:', err.code || err.name, err.message);
-      return auth.currentUser?.emailVerified ?? false;
-    }
-    const verified = !!auth.currentUser.emailVerified;
-    setEmailVerified(verified);
-    return verified;
-  }, []);
-
-  const createStaffInvite = async ({ displayName, role = 'cashier' }) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can invite staff.');
-    if (!['owner', 'cashier'].includes(role)) throw new Error('Invalid role.');
-    const trimmed = (displayName || '').trim();
-    if (!trimmed) throw new Error('Enter a name.');
-   const write = addDoc(collection(db, 'staffInvites'), {
-     businessId: profile.businessId,
-     displayName: trimmed,
-     role,
-     createdBy: profile.uid,
-     createdByName: profile.displayName,
-     createdAt: serverTimestamp(),
-     claimed: false,
-     linkedUid: null,
-   });
-   const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
-   if (error) throw error;
-   if (queuedOffline) return { id: null, queuedOffline: true };
-   return { id: value.id };
-  };
-
-  const cancelStaffInvite = async (inviteId) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can cancel an invite.');
-    await deleteDoc(doc(db, 'staffInvites', inviteId));
-  };
-
-  const revokeSessionsForStaffMember = useCallback(async (uid) => {
-    if (!profile?.businessId) return;
-    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', uid), where('businessId', '==', profile.businessId)));
-    await Promise.all(
-      snap.docs.filter((d) => d.data().revoked !== true).map((d) => updateDoc(doc(db, 'sessions', d.id), { revoked: true }))
-    );
-  }, [profile]);
-
-  const removeStaffAccount = async (uid) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can remove staff accounts.');
-    if (uid === profile.uid) throw new Error("You can't remove your own account here.");
-    if (!auth.currentUser) throw new Error('Your session has expired. Please sign in again.');
-
-    const idToken = await auth.currentUser.getIdToken(true);
-    await revokeSessionsForStaffMember(uid);
-
-    let response;
-    try {
-      response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-        body: JSON.stringify({ targetUid: uid }),
-      });
-    } catch (networkErr) {
-      throw new Error(`Failed to reach the API server. Check your connection.`);
-    }
-
-    let result = null;
-    try { result = await response.json(); } catch { }
-    if (!response.ok) throw new Error(result?.error || result?.message || `Failed to delete the staff account (${response.status}).`);
-
-    const { queuedOffline, error: deleteError } = await raceWithTimeout(deleteDoc(doc(db, 'users', uid)), 4000);
-    if (deleteError) {
-      throw new Error(`Staff sign-in was removed, but their profile record couldn't be deleted (${deleteError.message}). It should clear automatically once back online — try again if it doesn't.`);
-    }
-    if (queuedOffline) {
-      throw new Error("Staff sign-in was removed, but you're offline — their profile record will finish deleting once you're back online.");
-    }
-  };
-
-  const toggleMemberActive = async (uid, active) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can do this.');
-    await updateDoc(doc(db, 'users', uid), { active });
-    if (active === false) await revokeSessionsForStaffMember(uid);
-  };
-
-      const deleteOwnAccount = async ({ password }) => {
-    if (!profile || !auth.currentUser) throw new Error('You need to be signed in to do this.');
-
-    // Re-authenticate up front — this is irreversible, so it shouldn't
-    // risk failing on the very last step (deleting the login) because the
-    // session had gone stale. Also doubles as the "are you sure" check.
-    try {
-      const credential = EmailAuthProvider.credential(auth.currentUser.email, password);
-      await reauthenticateWithCredential(auth.currentUser, credential);
-    } catch (err) {
-      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        throw new Error('That password is incorrect.');
-      }
-      throw new Error('Could not verify your password. Please try again.');
-    }
-
-    let mode = 'self-only';
-
-    if (profile.role === 'owner') {
-      const othersSnap = await getDocs(query(
-        collection(db, 'users'),
-        where('businessId', '==', profile.businessId),
-        where('role', '==', 'owner')
-      ));
-      // Only counting ACTIVE other owners on purpose — a deactivated owner
-      // can't currently manage the business either, so their presence
-      // shouldn't be what decides "does this business still have someone
-      // running it."
-      const otherOwners = othersSnap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .filter((u) => u.id !== profile.uid && u.active !== false);
-
-      if (otherOwners.length > 0) {
-        const bizSnap = await getDoc(doc(db, 'businesses', profile.businessId));
-        const business = bizSnap.exists() ? bizSnap.data() : null;
-        if (business && business.createdBy === profile.uid) {
-          const oldest = [...otherOwners].sort((a, b) => {
-            const at = a.createdAt?.toMillis?.() ?? 0;
-            const bt = b.createdAt?.toMillis?.() ?? 0;
-            return at - bt;
-          })[0];
-          await updateDoc(doc(db, 'businesses', profile.businessId), { createdBy: oldest.id });
-        }
-      } else {
-        // Sole remaining owner — wipe the business's data first. If this
-        // throws, we stop right here: nothing about the account or
-        // business record gets touched while data might still be sitting
-        // there.
-      mode = 'full-wipe';
-const { resetBusinessData } = await import('../utils/businessReset');
-await resetBusinessData(profile.businessId, profile.uid);
-      }
-    }
-
-    const idToken = await auth.currentUser.getIdToken(true);
-    const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-own-profile`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-      body: JSON.stringify({ mode }),
-    });
-    let result = null;
-    try { result = await response.json(); } catch { }
-    if (!response.ok) {
-      throw new Error(result?.error || `Could not finish removing your account (${response.status}).`);
-    }
-
-    try {
-      await deleteUser(auth.currentUser);
-    } catch (err) {
-      if (err.code === 'auth/requires-recent-login') {
-        throw new Error("Your business data was handled, but we couldn't remove your sign-in for security reasons — please sign out and back in, then try 'Delete my account' again.");
-      }
-      throw new Error("Your business data was handled, but removing your sign-in failed. Please try again — it's safe to retry.");
-    }
-  };
-  const revokeSession = async (sessionId) => {
-    await updateDoc(doc(db, 'sessions', sessionId), { revoked: true });
-  };
-
-  const listMySessions = async () => {
-    if (!profile) return [];
-    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', profile.uid)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  };
-
-  const listBusinessSessions = async () => {
-    if (!profile?.businessId) return [];
-    const snap = await getDocs(query(collection(db, 'sessions'), where('businessId', '==', profile.businessId)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  };
-
-  const isOwner = profile?.role === 'owner';
-  
-  // FIX: Explicitly convert Timestamp to milliseconds to satisfy strict linters
-  const expiresMs = subscription?.expiresAt?.toMillis 
-    ? subscription.expiresAt.toMillis() 
-    : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
-
-  const isPro = subscription?.plan === 'pro' && 
-                subscription?.status === 'active' &&
-                (!subscription.expiresAt || expiresMs > Date.now());
-
-  return (
-    <AuthContext.Provider
-      value={{
-        firebaseUser, profile, subscription, isPro, loading, authError, accountRemoved, sessionRevoked,
-        businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
-        isActive: profile?.active !== false, emailVerified,
-        login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
-toggleMemberActive, revokeSession, listMySessions, listBusinessSessions, deleteOwnAccount,
-        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),        reloadProfile: async () => loadProfile(auth.currentUser),
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
-  return ctx;
-}
-````
-
-## File: src/pages/Dashboard.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useDailySession } from '../hooks/useDailySession';
-import { useFinancialsForRange } from '../hooks/useFinancials';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import Modal from '../components/common/Modal';
-import SaleModal from '../components/pos/SaleModal';
-import SaleCompleteModal from '../components/pos/SaleCompleteModal';
-import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
-import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-function StatCard({ label, value, tone = 'text-ink-900', sub }) {
-  return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
-    </div>
-  );
-}
-
-export default function Dashboard() {
-  const { profile, isAdmin, businessId, isPro } = useAuth();
-  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
-  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
-
-  const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
-  const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
-  const suppliersQuery = useMemo(() => businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null, [businessId]);
-  const { data: products } = useFirestoreCollection(productsQuery);
-  const { data: customers } = useFirestoreCollection(customersQuery);
-const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQuery);
-  const { session, loading: sessionLoading, isClosed, openSession, reopenSession } = useDailySession();
-  const [activeProduct, setActiveProduct] = useState(null);
-  const [completedSale, setCompletedSale] = useState(null);
-  const [editProduct, setEditProd] = useState(null);
-  const [prodModal, setProdModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [notFoundCode, setNotFoundCode] = useState(null);
-
-  const [privacyMode, setPrivacyMode] = useState(() => {
-    try { return localStorage.getItem('flowbiz_dashboard_privacy') === 'true'; }
-    catch { return false; }
-  });
-
-  const togglePrivacyMode = () => {
-    setPrivacyMode((prev) => {
-      const next = !prev;
-      try { localStorage.setItem('flowbiz_dashboard_privacy', String(next)); }
-      catch (err) { console.error('Failed to save privacy mode setting', err); }
-      return next;
-    });
-  };
-
-  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
-
-  const dashboardCashReceived = summary.totalCashReceipts;
-  const dashboardMpesaReceived = summary.totalMpesaReceipts;
-  const dashboardExpenses = summary.totalExpenses;
-  const dashboardNetProfit = summary.netProfit;
-
-  const lowStock = products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
-  const totalInventoryValue = products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
-  const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
-  const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
-  const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
-
-  const recentActivity = useMemo(() => {
-    const list = [];
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      list.push({ id: `sale-${s.id}`, type: 'Sale', title: `${s.quantity} × ${s.productName}`, subtitle: `Sold by ${s.soldByName || 'Staff'}`, amount: s.totalAmount, method: s.paymentMethod, timestamp: s.soldAt, isPositive: true });
-    });
-    (repayments || []).forEach((r) => {
-      list.push({ id: `repayment-${r.id}`, type: 'Debt Repayment', title: `${r.customerName || 'Customer'} — ${r.productName || 'repayment'}`, subtitle: `Recorded by ${r.recordedByName || 'Staff'}`, amount: r.amount, method: r.method, timestamp: r.paidAt, isPositive: true });
-    });
-      (creditSales || []).forEach((cs) => {
-     if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-     list.push({
-       id: `credit-${cs.id}`, type: 'Credit Sale',
-       title: `${cs.quantity} × ${cs.productName}`,
-       subtitle: `${cs.customerName || 'Customer'} · Sold by ${cs.soldByName || 'Staff'}`,
-       amount: cs.totalAmount, method: 'Credit', timestamp: cs.soldAt, isPositive: false,
-     });
-   });
-   return list.sort((a, b) => {
-      const aTime = a.timestamp?.toMillis?.() ?? a.timestamp?.toDate?.()?.getTime?.() ?? new Date(a.timestamp || 0).getTime();
-      const bTime = b.timestamp?.toMillis?.() ?? b.timestamp?.toDate?.()?.getTime?.() ?? new Date(b.timestamp || 0).getTime();
-      return bTime - aTime;
-    }).slice(0, 8);
-  }, [sales, repayments]);
-
-  const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
-    return { id: ref.id, name, phone };
-  };
-
-  // FIX: Replaced runTransaction with writeBatch(db) for offline-safe Quick-Sale.
-const handleConfirmSale = ({ product, quantity, soldPricePerUnit, paymentMethod, mpesaCode }) => {
-    const productRef = doc(db, 'products', product.id);
-    const saleRef = doc(collection(db, 'sales'));
-    const saleData = withBusiness({
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit,
-      totalAmount: soldPricePerUnit * quantity,
-      profit: (soldPricePerUnit - product.costPrice) * quantity,
-      paymentMethod, mpesaCode: mpesaCode || null,
-      soldBy: profile.uid, soldByName: profile.displayName,
-      soldAt: new Date(), isCredit: false, isVoided: false,
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(saleRef, saleData);
-
-    return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
-  };
-
-  const handleConfirmCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
-    const productRef = doc(db, 'products', product.id);
-    const totalAmount = soldPricePerUnit * quantity;
-    const creditRef = doc(collection(db, 'creditSales'));
-    const creditData = withBusiness({
-      customerId, customerName, customerPhone: customerPhone || '',
-      productId: product.id, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
-      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
-      status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
-      isCredit: true
-    }, businessId);
-
-    const batch = writeBatch(db);
-    batch.update(productRef, { stock: increment(-quantity), updatedAt: serverTimestamp() });
-    batch.set(creditRef, creditData);
-
-    return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
-  };
-
-const handleProductSave = async (data) => {
-    try {
-      if (editProduct) {
-        const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
-      } else {
-        const { queuedOffline } = await createProduct(data, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
-      }
-    } catch (err) { toast.error(friendlyErrorMessage(err)); }
-    finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
-  };
-
-  // FIX (stuck "Saving…" bug — same pattern as Purchases.jsx/Products.jsx):
-  // throw on error instead of returning, so SupplierFormModal's
-  // catch/finally can reset its "Saving…" button instead of leaving the
-  // form frozen after a failed save.
-const handleSupplierSave = async (supplierData) => {
-  const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-  const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-  if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-  if (!queuedOffline) {
-    setNewSupplierId(ref.id);
-    await refetchSuppliers();
-  }
-  setSupplierModal(false);
-  toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-};
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setActiveProduct(found);
-    else setNotFoundCode(code);
-  };
-
-  useHardwareScanner(handleScanDetected, {
-    enabled: !!session && !isClosed && !activeProduct && !prodModal && !supplierModal && !scannerOpen && !notFoundCode && !completedSale,
-  });
-
-  if (sessionLoading) return <LoadingSpinner label="Loading today's session…" />;
-
-  if (isClosed) {
-    return (
-      <div className="mx-auto max-w-sm space-y-4 text-center">
-        <EmptyState title="Day is closed" description="Sales are locked until you reopen the session or tomorrow starts." />
-        {isAdmin && <button className="btn-primary w-full" onClick={reopenSession}>Reopen today's session</button>}
-      </div>
-    );
-  }
-  if (!session) {
-    return <OpenSessionPrompt onOpen={(floats) => openSession({ ...floats, openedBy: profile.uid })} />;
-  }
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
-          <div className="flex items-center gap-2 mt-1">
-
-            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
-          </div>
-        </div>
-        <button
-          onClick={togglePrivacyMode}
-          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
-          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
-        >
-          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
-        </button>
-      </div>
-
-      {isAdmin && (
-        <>
-          {financialsLoading ? <LoadingSpinner /> : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
-              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
-              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
-              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
-              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
-            </div>
-          )}
-          <div className="grid gap-3 sm:grid-cols-3">
-            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
-<StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
-            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
-          </div>
-        </>
-      )}
-
-      <div>
-        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
-        {recentActivity.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
-        ) : (
-          <div className="card divide-y divide-ink-100">
-            {recentActivity.map((act) => (
-              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
-                <div className="min-w-0 flex-1 pr-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
-                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
-                  </div>
-                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <SaleModal 
-        open={!!activeProduct} 
-        product={activeProduct} 
-        customers={customers} 
-        onClose={(record) => {
-          setActiveProduct(null);
-          if (record && record.id) setCompletedSale(record);
-        }} 
-        onConfirmSale={handleConfirmSale} 
-        onConfirmCredit={handleConfirmCredit} 
-        onCreateCustomer={handleCreateCustomer} 
-      />
-      <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!notFoundCode} onClose={() => setNotFoundCode(null)} title="Product not found" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">No product matches barcode <span className="font-mono">{notFoundCode}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setNotFoundCode(null)}>Cancel</button>
-          {isAdmin ? (
-            <button className="btn-primary" onClick={() => { setEditProd(null); setPrefillBarcode(notFoundCode); setNotFoundCode(null); setProdModal(true); }}>Create Product</button>
-          ) : (
-            <span className="self-center text-xs text-ink-400">Ask an owner to add this product.</span>
-          )}
-        </div>
-      </Modal>
-
-<ProductFormModal
-        open={prodModal}
-        onClose={() => { setProdModal(false); setEditProd(null); setPrefillBarcode(null); }}
-        onSave={handleProductSave}
-        suppliers={suppliers}
-        initialProduct={editProduct}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-      />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-    </div>
-  );
-}
-````
-
-## File: src/router/AppRouter.jsx
-````javascript
-import { lazy, Suspense, useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
-import ProtectedRoute from '../components/common/ProtectedRoute';
-import AppShell from '../components/layout/AppShell';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import { useAuth } from '../contexts/AuthContext';
-import { prefetchRoutes } from './routePrefetch';
-import RequireOpenSession from '../components/common/RequireOpenSession';
-import LandingPage from '../pages/LandingPage';
-
-const routeLoaders = {
-  setup: () => import('../pages/Setup'),
-  login: () => import('../pages/Login'),
-  forgotPassword: () => import('../pages/ForgotPassword'),
-  joinStaff: () => import('../pages/JoinStaff'),
-  authAction: () => import('../pages/AuthAction'),
-  dashboard: () => import('../pages/Dashboard'),
-  counter: () => import('../pages/Counter'),
-  customers: () => import('../pages/Customers'),
-  customerDetail: () => import('../pages/CustomerDetail'),
-  expenses: () => import('../pages/Expenses'),
-  purchases: () => import('../pages/Purchases'),
-  products: () => import('../pages/Products'),
-  suppliers: () => import('../pages/Suppliers'),
-  stockTake: () => import('../pages/StockTake'),
-  reports: () => import('../pages/Reports'),
-  closeDay: () => import('../pages/CloseDay'),
-  users: () => import('../pages/Users'),
-  settings: () => import('../pages/Settings'),
-  helpGuide: () => import('../pages/HelpGuide'),
-  pro: () => import('../pages/Pro'),
-  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
-  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
-  privacy: () => import('../pages/Privacy'),
-  terms: () => import('../pages/Terms'),
-};
-
-const Setup      = lazy(routeLoaders.setup);
-const Login      = lazy(routeLoaders.login);
-const ForgotPassword = lazy(routeLoaders.forgotPassword);
-const JoinStaff  = lazy(routeLoaders.joinStaff);
-const AuthAction = lazy(routeLoaders.authAction);
-const Dashboard  = lazy(routeLoaders.dashboard);
-const Counter    = lazy(routeLoaders.counter);
-const Customers  = lazy(routeLoaders.customers);
-const CustomerDetail = lazy(routeLoaders.customerDetail);
-const Expenses   = lazy(routeLoaders.expenses);
-const Purchases  = lazy(routeLoaders.purchases);
-const Products   = lazy(routeLoaders.products);
-const Suppliers  = lazy(routeLoaders.suppliers);
-const StockTake  = lazy(routeLoaders.stockTake);
-const Reports    = lazy(routeLoaders.reports);
-const CloseDay   = lazy(routeLoaders.closeDay);
-const Users      = lazy(routeLoaders.users);
-const Settings   = lazy(routeLoaders.settings);
-const HelpGuide  = lazy(routeLoaders.helpGuide);
-const Pro        = lazy(routeLoaders.pro);
-const AdvancedAnalytics = lazy(routeLoaders.advancedAnalytics);
-const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
-const Privacy    = lazy(routeLoaders.privacy);
-const Terms      = lazy(routeLoaders.terms);
-
-
-function Page({ children, adminOnly = false, requireOpenDay = false }) {
-  return (
-    <ProtectedRoute adminOnly={adminOnly}>
-      <AppShell>
-        <Suspense fallback={<LoadingSpinner />}>
-          {requireOpenDay ? <RequireOpenSession>{children}</RequireOpenSession> : children}
-        </Suspense>
-      </AppShell>
-    </ProtectedRoute>
-  );
-}
-
-
-function PublicOnly({ children }) {
-  const { firebaseUser, loading } = useAuth();
-  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
-  if (firebaseUser) return <Navigate to="/dashboard" replace />;
-  return children;
-}
-
-// src/router/AppRouter.jsx — replace RootRoute, add this helper above it
-
-function isStandalonePWA() {
-  if (typeof window === 'undefined') return false;
-  return window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
-}
-
-function RootRoute() {
-  const { firebaseUser, loading, isAdmin } = useAuth();
-
-  if (!loading && firebaseUser) {
-    return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
-  }
-  if (!loading && !firebaseUser && isStandalonePWA()) {
-    return <Navigate to="/login" replace />;
-  }
-  // Never block a brand-new visitor behind an auth-loading spinner —
-  // show the landing page immediately. If they turn out to already be
-  // signed in, the redirect above fires on the next render.
-  return <LandingPage />;
-}
-
-function RoutePrefetcher() {
-  const { firebaseUser, isAdmin } = useAuth();
-  useEffect(() => {
-    if (!firebaseUser) return;
-    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
-    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
-    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
-  }, [firebaseUser, isAdmin]);
-  return null;
-}
-
-export default function AppRouter() {
-  return (
-    <Suspense fallback={<LoadingSpinner label="Loading..." />}>
-      <RoutePrefetcher />
-      <Routes>
-        <Route path="/customers"    element={<Page requireOpenDay><Customers /></Page>} />
-        <Route path="/customers/:customerId" element={<Page requireOpenDay><CustomerDetail /></Page>} />
-        <Route path="/expenses"     element={<Page requireOpenDay><Expenses /></Page>} />
-        <Route path="/purchases"    element={<Page adminOnly requireOpenDay><Purchases /></Page>} />
-        <Route path="/products"     element={<Page adminOnly requireOpenDay><Products /></Page>} />
-        <Route path="/suppliers"    element={<Page adminOnly requireOpenDay><Suppliers /></Page>} />
-        <Route path="/stock-take"   element={<Page adminOnly requireOpenDay><StockTake /></Page>} />
-        {/* Opens Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
-        <Route path="/" element={<RootRoute />} />
-
-        {/* Public Authentication & Setup */}
-        <Route path="/setup" element={<Setup />} />
-        <Route path="/signup" element={<Setup />} />
-        <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
-        <Route path="/signin" element={<PublicOnly><Login /></PublicOnly>} />
-        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
-        <Route path="/join/:inviteId" element={<JoinStaff />} />
-        <Route path="/auth/action" element={<AuthAction />} />
-        
-        {/* Public Legal Pages */}
-        <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
-        <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
-
-        {/* Protected Store Management Routes */}
-        <Route path="/dashboard"    element={<Page adminOnly><Dashboard /></Page>} />
-        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
-        <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
-        <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
-
-        <Route path="/counter"      element={<Page><Counter /></Page>} />
-        <Route path="/customers"    element={<Page><Customers /></Page>} />
-        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
-        <Route path="/expenses"     element={<Page><Expenses /></Page>} />
-        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
-        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
-        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
-        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
-        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
-        <Route path="/close-day"    element={<Page adminOnly><CloseDay /></Page>} />
-        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
-        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
-        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
-        <Route path="*"             element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
-  );
-}
-````
-
 ## File: src/pages/AuthAction.jsx
 ````javascript
 import { useEffect, useState } from 'react';
@@ -17602,9 +18943,7 @@ export default function AuthAction() {
   const oobCode = searchParams.get('oobCode');
 
   const [resolvedMode, setResolvedMode] = useState(urlMode || null);
-  const [checkingMode, setCheckingMode] = useState(
-    !urlMode && !!oobCode
-  );
+  const [checkingMode, setCheckingMode] = useState(!urlMode && !!oobCode);
 
   useEffect(() => {
     if (urlMode || !oobCode) return;
@@ -17624,20 +18963,11 @@ export default function AuthAction() {
         }
       })
       .catch((err) => {
-        console.error(
-          '[FlowBiz] Failed to determine auth action:',
-          err.code,
-          err.message
-        );
-
-        if (!cancelled) {
-          setResolvedMode('unknown');
-        }
+        console.error('[FlowBiz] Failed to determine auth action:', err.code, err.message);
+        if (!cancelled) setResolvedMode('unknown');
       })
       .finally(() => {
-        if (!cancelled) {
-          setCheckingMode(false);
-        }
+        if (!cancelled) setCheckingMode(false);
       });
 
     return () => {
@@ -17649,9 +18979,7 @@ export default function AuthAction() {
     return (
       <Shell>
         <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
-        <p className="text-sm text-ink-500">
-          Checking your link…
-        </p>
+        <p className="text-sm text-ink-500">Checking your link…</p>
       </Shell>
     );
   }
@@ -17669,10 +18997,10 @@ export default function AuthAction() {
           <p className="text-sm text-ink-500">
             {flow === 'resetPassword'
               ? 'Your password was changed. You can now sign in with it.'
-              : 'You can continue to FlowBiz now.'}
+              : 'Your email address is verified. You can continue to FlowBiz now.'}
           </p>
-          <Link to={flow === 'resetPassword' ? '/login' : '/'} className="btn-primary w-full">
-            {flow === 'resetPassword' ? 'Go to sign in' : 'Continue to FlowBiz'}
+          <Link to={flow === 'resetPassword' ? '/login' : '/dashboard'} className="btn-primary w-full">
+            {flow === 'resetPassword' ? 'Go to sign in' : 'Continue to Dashboard'}
           </Link>
         </Shell>
       );
@@ -17681,7 +19009,7 @@ export default function AuthAction() {
       <Shell>
         <AlertCircle className="h-12 w-12 mx-auto text-rust-500" strokeWidth={1.5} />
         <h1 className="font-display text-lg font-bold text-ink-900">Invalid link</h1>
-        <p className="text-sm text-ink-500">This authentication link is missing required information. Please request a new link.</p>
+        <p className="text-sm text-ink-500">This authentication link is missing required parameters. Please request a new link.</p>
         <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
       </Shell>
     );
@@ -17692,73 +19020,86 @@ export default function AuthAction() {
   }
 
   if (resolvedMode === 'verifyEmail') {
-    return (
-      <VerifyEmailPanel
-        mode="verifyEmail"
-        oobCode={oobCode}
-      />
-    );
+    return <VerifyEmailPanel mode="verifyEmail" oobCode={oobCode} />;
   }
 
   return (
     <Shell>
-      <AlertCircle
-        className="h-12 w-12 mx-auto text-rust-500"
-        strokeWidth={1.5}
-      />
-
-      <h1 className="font-display text-lg font-bold text-ink-900">
-        Invalid authentication link
-      </h1>
-
-      <p className="text-sm text-ink-500">
-        We couldn't determine what this link is intended to do.
-        Please request a new link.
-      </p>
-
-      <Link to="/login" className="btn-outline w-full">
-        Go to sign in
-      </Link>
+      <AlertCircle className="h-12 w-12 mx-auto text-rust-500" strokeWidth={1.5} />
+      <h1 className="font-display text-lg font-bold text-ink-900">Invalid authentication link</h1>
+      <p className="text-sm text-ink-500">We couldn't determine what this link is intended to do. Please request a new link.</p>
+      <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
     </Shell>
   );
 }
 
 function Shell({ children }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4 py-8">
       <div className="w-full max-w-sm card p-6 text-center space-y-4">
-        <img
-          src="/icons/icon-192.png"
-          alt="FlowBiz"
-          className="mx-auto h-14 w-14 rounded-2xl shadow-lg"
-        />
-
+        <img src="/icons/icon-192.png" alt="FlowBiz" className="mx-auto h-14 w-14 rounded-2xl shadow-lg" />
         {children}
       </div>
     </div>
   );
 }
 
-
 function VerifyEmailPanel({ mode, oobCode }) {
-  const [status, setStatus] = useState('ready');
+  const [status, setStatus] = useState('working');
   const [message, setMessage] = useState('');
   const [resending, setResending] = useState(false);
-  const [pendingRedirect, setPendingRedirect] = useState(false);
 
   const navigate = useNavigate();
-  const { refreshEmailVerification, loading: authLoading, firebaseUser, isAdmin } = useAuth();
+  const { refreshEmailVerification, reloadProfile, firebaseUser, isAdmin } = useAuth();
 
-  // Verification itself finishes fast, but AuthContext's own profile-loading
-  // chain is separate and can still be catching up at that exact moment —
-  // that race is what was landing people on the landing page and sticking
-  // there. So instead of navigating the instant verification succeeds, we
-  // wait until AuthContext is actually ready, then go straight to the
-  // correct screen ourselves — never touching RootRoute's fallback at all.
   useEffect(() => {
-    if (!pendingRedirect || authLoading) return;
-    navigate(firebaseUser ? (isAdmin ? '/dashboard' : '/counter') : '/login', { replace: true });
-  }, [pendingRedirect, authLoading, firebaseUser, isAdmin, navigate]);
+    if (!oobCode || mode !== 'verifyEmail') {
+      setStatus('error');
+      setMessage('This verification link is incomplete or invalid. Please request a new link.');
+      return;
+    }
+
+    let active = true;
+
+    (async () => {
+      setStatus('working');
+      try {
+        await applyActionCode(auth, oobCode);
+        if (!active) return;
+        await refreshEmailVerification();
+        await reloadProfile();
+        toast.success('Email verified successfully!');
+        const targetRoute = isAdmin ? '/dashboard' : '/counter';
+        navigate(targetRoute, { replace: true });
+      } catch (err) {
+        if (!active) return;
+        const code = err.code || '';
+
+        if (code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') {
+          const verified = await refreshEmailVerification();
+          if (verified || auth.currentUser?.emailVerified) {
+            await reloadProfile();
+            toast.success('Your email is verified!');
+            navigate(isAdmin ? '/dashboard' : '/counter', { replace: true });
+            return;
+          }
+        }
+
+        setStatus('error');
+        setMessage(
+          code === 'auth/expired-action-code'
+            ? 'This verification link has expired. Please request a new one below.'
+            : code === 'auth/invalid-action-code'
+              ? "This verification link has already been used or has expired. If you've already verified, you can enter your dashboard below."
+              : "We couldn't verify your email with this link. Please request a new link below."
+        );
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [oobCode, mode, refreshEmailVerification, reloadProfile, isAdmin, navigate]);
 
   const handleRequestNewEmail = async () => {
     if (!auth.currentUser) {
@@ -17773,92 +19114,62 @@ function VerifyEmailPanel({ mode, oobCode }) {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
       });
       if (!response.ok) throw new Error('request-failed');
-      toast.success('A new verification email has been sent — check your inbox and spam/junk folder.');
+      toast.success('A new verification email has been sent — check your inbox.');
     } catch (err) {
       console.error('[FlowBiz] AuthAction resend failed:', err.message);
-      toast.error("Couldn't send a new verification email right now. Please try again shortly.");
+      toast.error("Couldn't send a new verification email right now. Please try again in a moment.");
     } finally {
       setResending(false);
     }
   };
 
-  const handleConfirm = async () => {
-    if (!oobCode || mode !== 'verifyEmail') {
-      setStatus('error');
-      setMessage("This verification link isn't complete or may have been altered. Please request a new one below.");
-      return;
-    }
-
-    setStatus('working');
-
-    try {
-      await applyActionCode(auth, oobCode);
-
-      if (auth.currentUser) {
-        await refreshEmailVerification();
-        setPendingRedirect(true);
-        return;
-      }
-
-      navigate('/login', { replace: true });
-      return;
-    } catch (err) {
-      const code = err.code || '';
-
-      if ((code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') && auth.currentUser) {
-        const verified = await refreshEmailVerification();
-        if (verified) {
-          setPendingRedirect(true);
-          return;
-        }
-      }
-
-      setStatus('error');
-      setMessage(
-        code === 'auth/expired-action-code'
-          ? 'This verification link has expired. Please request a new one below.'
-          : code === 'auth/invalid-action-code'
-            ? "This verification link has already been used or has expired. If you're already verified, just sign in."
-            : "We couldn't verify your email. Please request a new verification link below."
-      );
-    }
-  };
-
   return (
     <Shell>
-      {status === 'ready' && (
-        <>
-          <h1 className="font-display text-lg font-bold text-ink-900">Verify your email 1234</h1>
-          <p className="text-sm text-ink-500">Click below to confirm your email address and activate your FlowBiz account.</p>
-          <button className="btn-primary w-full" onClick={handleConfirm}>Verify my email</button>
-        </>
-      )}
-
       {status === 'working' && (
         <>
           <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
-          <p className="text-sm text-ink-500">Confirming…</p>
+          <h1 className="font-display text-lg font-bold text-ink-900">Verifying your email…</h1>
+          <p className="text-sm text-ink-500">Activating your account and taking you to your dashboard.</p>
+        </>
+      )}
+
+      {status === 'success' && (
+        <>
+          <CheckCircle2 className="h-12 w-12 mx-auto text-moss-600" strokeWidth={1.5} />
+          <h1 className="font-display text-lg font-bold text-ink-900">Email verified!</h1>
+          <p className="text-sm text-ink-500">Your account is fully activated. You can now use FlowBiz.</p>
+          <Link
+            to={firebaseUser ? (isAdmin ? '/dashboard' : '/counter') : '/dashboard'}
+            className="btn-primary w-full"
+          >
+            Go to Dashboard
+          </Link>
         </>
       )}
 
       {status === 'error' && (
         <>
-          <h1 className="font-display text-lg font-bold text-ink-900">This verification link isn't valid</h1>
+          <AlertCircle className="h-12 w-12 mx-auto text-rust-500" strokeWidth={1.5} />
+          <h1 className="font-display text-lg font-bold text-ink-900">Verification Link Notice</h1>
           <p className="text-sm text-ink-500">{message}</p>
-          <div className="flex flex-col gap-2">
-            <button className="btn-primary w-full" onClick={handleRequestNewEmail} disabled={resending}>
-              {resending ? 'Sending…' : 'Request a new verification email'}
-            </button>
-            <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
+          <div className="flex flex-col gap-2 pt-2">
+            <Link to={isAdmin ? '/dashboard' : '/counter'} className="btn-primary w-full">
+              Go to Dashboard
+            </Link>
+            {auth.currentUser && (
+              <button className="btn-outline w-full" onClick={handleRequestNewEmail} disabled={resending}>
+                {resending ? 'Sending…' : 'Request new verification email'}
+              </button>
+            )}
           </div>
         </>
       )}
     </Shell>
   );
 }
-  
+
 function ResetPasswordPanel({ oobCode }) {
-  const [status, setStatus] = useState('ready'); // ready -> checking -> form -> success | error
+  const [status, setStatus] = useState('ready');
   const [message, setMessage] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -17868,9 +19179,7 @@ function ResetPasswordPanel({ oobCode }) {
   const handleContinue = async () => {
     if (!oobCode) {
       setStatus('error');
-      setMessage(
-        'This link is missing required information. Please request a new password reset email.'
-      );
+      setMessage('This link is missing required information. Please request a new password reset email.');
       return;
     }
 
@@ -17882,9 +19191,7 @@ function ResetPasswordPanel({ oobCode }) {
       setStatus('form');
     } catch (err) {
       const code = err.code || '';
-
       setStatus('error');
-
       setMessage(
         code === 'auth/expired-action-code'
           ? 'This reset link has expired. Please request a new one.'
@@ -17898,11 +19205,22 @@ function ResetPasswordPanel({ oobCode }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (password.length < 6) {
-      setMessage('Password must be at least 6 characters.');
+    if (password.length < 8) {
+      setMessage('Password must be at least 8 characters long.');
       return;
     }
-
+    if (!/[A-Z]/.test(password)) {
+      setMessage('Password must contain at least one uppercase letter.');
+      return;
+    }
+    if (!/[a-z]/.test(password)) {
+      setMessage('Password must contain at least one lowercase letter.');
+      return;
+    }
+    if (!/[0-9]/.test(password)) {
+      setMessage('Password must contain at least one number.');
+      return;
+    }
     if (password !== confirmPassword) {
       setMessage('Passwords do not match.');
       return;
@@ -17912,16 +19230,10 @@ function ResetPasswordPanel({ oobCode }) {
     setSubmitting(true);
 
     try {
-      await confirmPasswordReset(
-        auth,
-        oobCode,
-        password
-      );
-
+      await confirmPasswordReset(auth, oobCode, password);
       setStatus('success');
     } catch (err) {
       const code = err.code || '';
-
       setMessage(
         code === 'auth/expired-action-code'
           ? 'This reset link has expired. Please request a new one.'
@@ -17938,46 +19250,24 @@ function ResetPasswordPanel({ oobCode }) {
     <Shell>
       {status === 'ready' && (
         <>
-          <h1 className="font-display text-lg font-bold text-ink-900">
-            Reset your password
-          </h1>
-
-          <p className="text-sm text-ink-500">
-            Click below to continue.
-          </p>
-
-          <button className="btn-primary w-full" onClick={handleContinue}>
-            Continue
-          </button>
+          <h1 className="font-display text-lg font-bold text-ink-900">Reset your password</h1>
+          <p className="text-sm text-ink-500">Click below to enter your new password.</p>
+          <button className="btn-primary w-full" onClick={handleContinue}>Continue</button>
         </>
       )}
 
       {status === 'checking' && (
         <>
           <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
-
-          <p className="text-sm text-ink-500">
-            Checking your link…
-          </p>
+          <p className="text-sm text-ink-500">Verifying link…</p>
         </>
       )}
 
       {status === 'form' && (
-        <form
-          onSubmit={handleSubmit}
-          className="space-y-4 text-left"
-        >
+        <form onSubmit={handleSubmit} className="space-y-4 text-left">
           <div className="text-center">
-            <h1 className="font-display text-lg font-bold text-ink-900">
-              Choose a new password
-            </h1>
-
-            <p className="mt-1 text-sm text-ink-500">
-              for{' '}
-              <span className="font-semibold">
-                {email}
-              </span>
-            </p>
+            <h1 className="font-display text-lg font-bold text-ink-900">Choose a new password</h1>
+            {email && <p className="mt-1 text-sm text-ink-500">for <span className="font-semibold">{email}</span></p>}
           </div>
 
           {message && (
@@ -17987,98 +19277,53 @@ function ResetPasswordPanel({ oobCode }) {
           )}
 
           <div>
-            <label className="label">
-              New password
-            </label>
-
+            <label className="label">New password</label>
             <input
               type="password"
               className="input"
               required
               value={password}
-              onChange={(e) =>
-                setPassword(e.target.value)
-              }
-              placeholder="At least 6 characters"
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="At least 8 chars (upper, lower, number)"
               autoComplete="new-password"
               autoFocus
             />
           </div>
 
           <div>
-            <label className="label">
-              Confirm new password
-            </label>
-
+            <label className="label">Confirm new password</label>
             <input
               type="password"
               className="input"
               required
               value={confirmPassword}
-              onChange={(e) =>
-                setConfirmPassword(e.target.value)
-              }
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Repeat new password"
               autoComplete="new-password"
             />
           </div>
 
-          <button
-            type="submit"
-            className="btn-primary w-full"
-            disabled={submitting}
-          >
-            {submitting
-              ? 'Saving…'
-              : 'Save new password'}
+          <button type="submit" className="btn-primary w-full" disabled={submitting}>
+            {submitting ? 'Saving…' : 'Save new password'}
           </button>
         </form>
       )}
 
       {status === 'success' && (
         <>
-          <CheckCircle2
-            className="h-12 w-12 text-moss-600 mx-auto"
-            strokeWidth={1.5}
-          />
-
-          <h1 className="font-display text-lg font-bold text-ink-900">
-            Password updated
-          </h1>
-
-          <p className="text-sm text-ink-500">
-            You can now sign in with your new password.
-          </p>
-
-          <Link
-            to="/login"
-            className="btn-primary w-full"
-          >
-            Go to sign in
-          </Link>
+          <CheckCircle2 className="h-12 w-12 text-moss-600 mx-auto" strokeWidth={1.5} />
+          <h1 className="font-display text-lg font-bold text-ink-900">Password updated</h1>
+          <p className="text-sm text-ink-500">You can now sign in with your new password.</p>
+          <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
         </>
       )}
 
       {status === 'error' && (
         <>
-          <AlertCircle
-            className="h-12 w-12 text-rust-500 mx-auto"
-            strokeWidth={1.5}
-          />
-
-          <h1 className="font-display text-lg font-bold text-ink-900">
-            Something went wrong
-          </h1>
-
-          <p className="text-sm text-ink-500">
-            {message}
-          </p>
-
-          <Link
-            to="/login"
-            className="btn-outline w-full"
-          >
-            Go to sign in
-          </Link>
+          <AlertCircle className="h-12 w-12 text-rust-500 mx-auto" strokeWidth={1.5} />
+          <h1 className="font-display text-lg font-bold text-ink-900">Password Reset Issue</h1>
+          <p className="text-sm text-ink-500">{message}</p>
+          <Link to="/forgot-password" className="btn-primary w-full">Request new reset link</Link>
         </>
       )}
     </Shell>

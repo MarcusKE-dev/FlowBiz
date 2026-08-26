@@ -1,5 +1,5 @@
-// src/hooks/usePwaInstall.js
 import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 
 export function usePwaInstall() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
@@ -8,18 +8,15 @@ export function usePwaInstall() {
   const [isStandalone, setIsStandalone] = useState(false);
 
   useEffect(() => {
-    // Check if the app is already installed / running in standalone window
     const standalone =
       window.matchMedia?.('(display-mode: standalone)').matches ||
       window.navigator.standalone === true;
     setIsStandalone(standalone);
 
-    // Detect iOS devices (iPhone/iPad) because iOS does not support beforeinstallprompt
     const userAgent = (navigator.userAgent || '').toLowerCase();
     const isIosDevice = /iphone|ipad|ipod/.test(userAgent);
     setIsIOS(isIosDevice && !standalone);
 
-    // Capture the Chrome/Android install event
     const handleBeforeInstallPrompt = (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
@@ -34,7 +31,13 @@ export function usePwaInstall() {
   }, []);
 
   const promptInstall = async () => {
-    if (!deferredPrompt) return false;
+    if (!deferredPrompt) {
+      if (/iphone|ipad|ipod/.test((navigator.userAgent || '').toLowerCase())) {
+        return false;
+      }
+      toast('To install, tap your browser menu (⋮) and select "Install app" or "Add to Home screen".');
+      return false;
+    }
     deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
     setDeferredPrompt(null);

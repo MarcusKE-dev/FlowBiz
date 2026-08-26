@@ -2,9 +2,10 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 
 export const EXPORT_COLLECTIONS = [
-  'products', 'sales', 'creditSales', 'customers', 'suppliers', 'expenses',
-  'purchases', 'dailySessions', 'repayments', 'supplierPayments',
-  'stockAdjustments', 'refunds', 'debtPaymentReceipts', 'staffInvites',
+  'businessSettings',
+  'customers', 'suppliers', 'products', 'sales', 'creditSales', 'purchases',
+  'expenses', 'dailySessions', 'repayments', 'supplierPayments',
+  'stockAdjustments', 'refunds', 'debtPaymentReceipts', 'sharedDocuments', 'staffInvites',
 ];
 
 function timestampToIso(value) {
@@ -28,7 +29,7 @@ function flattenForCsv(docData) {
 function escapeCsvCell(value) {
   if (value === null || value === undefined) return '';
   let str = String(value);
-  if (/^[=+\-@\t\r]/.test(str)) str = "'" + str; // formula-injection guard, same rule csvExport.js already uses
+  if (/^[=+\-@\t\r]/.test(str)) str = "'" + str;
   if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
   return str;
 }
@@ -51,7 +52,11 @@ export async function exportBusinessData(businessId, { onProgress } = {}) {
     const name = EXPORT_COLLECTIONS[i];
     onProgress?.(name, i, EXPORT_COLLECTIONS.length);
 
-    const snap = await getDocs(query(collection(db, name), where('businessId', '==', businessId)));
+    const q = name === 'businessSettings'
+      ? query(collection(db, name), where('__name__', '==', businessId))
+      : query(collection(db, name), where('businessId', '==', businessId));
+
+    const snap = await getDocs(q);
     const docs = snap.docs.map((d) => {
       const jsonSafe = {};
       Object.entries(d.data()).forEach(([k, v]) => { jsonSafe[k] = timestampToIso(v); });

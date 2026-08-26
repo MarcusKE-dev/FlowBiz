@@ -105,10 +105,10 @@ export function computeFinancials({
   });
 
   const directSalesCostOfGoodsSold = activeSales.reduce((acc, s) => acc + getCostOfSale(s), 0);
-  const costOfGoodsSold = Math.max(0, directSalesCostOfGoodsSold + repaymentCogs - refundCogs);
+  const costOfGoodsSold = directSalesCostOfGoodsSold + repaymentCogs - refundCogs;
 
   const grossSalesRevenue = totalCashSales + totalMpesaSales + totalCreditSales;
-  const revenue = Math.max(0, totalCashSales + totalMpesaSales + repaymentRevenue - refundRevenue);
+  const revenue = totalCashSales + totalMpesaSales + repaymentRevenue - refundRevenue;
   const grossProfit = revenue - costOfGoodsSold;
 
   const filteredExpenses = (expenses || []).filter((expense) => !isExpenseExcluded(expense));
@@ -120,8 +120,8 @@ export function computeFinancials({
   const netProfit     = grossProfit - totalExpenses;
 
   // Realized net receipts by tender method
-  const totalCashReceipts  = Math.max(0, totalCashSales  + totalDebtRepaymentsCash  - totalRefundsCash);
-  const totalMpesaReceipts = Math.max(0, totalMpesaSales + totalDebtRepaymentsMpesa - totalRefundsMpesa);
+  const totalCashReceipts  = totalCashSales  + totalDebtRepaymentsCash  - totalRefundsCash;
+  const totalMpesaReceipts = totalMpesaSales + totalDebtRepaymentsMpesa - totalRefundsMpesa;
 
   const purchasePaymentsCash  = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash');
   const purchasePaymentsMpesa = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa');

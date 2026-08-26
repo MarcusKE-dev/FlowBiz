@@ -1,8 +1,7 @@
-// src/pages/Setup.jsx — replace the entire file
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
-import { doc, collection, writeBatch, setDoc, serverTimestamp } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
+import { doc, collection, writeBatch, serverTimestamp, getDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { auth, db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -11,25 +10,16 @@ const DEFAULT_CATEGORIES = ['Beverages', 'Hardware', 'Household', 'Personal Care
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
 export default function Setup() {
-  const { firebaseUser, loading: authLoading } = useAuth();
+  const { firebaseUser, profile, loading: authLoading } = useAuth();
   const navigate = useNavigate();
-  // Firestore rules can only see a doc created earlier IN THE SAME batch
-  // via getAfter() — a plain get()/exists() check (which is what
-  // businessSettings' write rule uses via isOwner()) only sees the
-  // pre-batch state. So the user profile must be written and committed
-  // FIRST, as its own step, before businessSettings is written.
   const creatingRef = useRef(false);
 
   useEffect(() => {
     if (authLoading) return;
-    // Bounce an already-signed-in visitor away — but never while THIS
-    // component's own signup flow is what just signed them in, or this
-    // fires the instant the Auth account is created and cuts the flow
-    // short before Firestore writes / the verification email are sent.
-    if (firebaseUser && !creatingRef.current) {
-      navigate('/', { replace: true });
+    if (firebaseUser && profile?.businessId && !creatingRef.current) {
+      navigate(profile.role === 'owner' ? '/dashboard' : '/counter', { replace: true });
     }
-  }, [firebaseUser, authLoading, navigate]);
+  }, [firebaseUser, profile, authLoading, navigate]);
 
   const [businessName, setBusinessName] = useState('');
   const [displayName, setDisplayName]   = useState('');
@@ -42,9 +32,10 @@ export default function Setup() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
+
     if (!businessName.trim()) { setError('Enter your business name.'); return; }
     if (!displayName.trim()) { setError('Enter your name.'); return; }
-      if (password.length < 8) {
+    if (password.length < 8) {
       setError('Password must be at least 8 characters long.');
       return;
     }
@@ -68,17 +59,44 @@ export default function Setup() {
     setSubmitting(true);
     creatingRef.current = true;
 
-    let cred;
+    let targetUser = null;
+
     try {
-      cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      targetUser = cred.user;
     } catch (err) {
+      if (err.code === 'auth/email-already-in-use') {
+        try {
+          const signInCred = await signInWithEmailAndPassword(auth, email.trim(), password);
+          const existingProfileSnap = await getDoc(doc(db, 'users', signInCred.user.uid));
+          if (existingProfileSnap.exists() && existingProfileSnap.data()?.businessId) {
+            setError('An account with this email already exists. Please sign in instead.');
+            creatingRef.current = false;
+            setSubmitting(false);
+            return;
+          }
+          targetUser = signInCred.user;
+        } catch {
+          setError('An account with this email already exists. Please sign in or use another email.');
+          creatingRef.current = false;
+          setSubmitting(false);
+          return;
+        }
+      } else {
+        const message =
+          err.code === 'auth/invalid-email' ? 'Please enter a valid email address.' :
+          err.code === 'auth/weak-password'  ? 'Password is too weak. Please choose a stronger password.' :
+          'Could not create your account. Please try again.';
+        setError(message);
+        creatingRef.current = false;
+        setSubmitting(false);
+        return;
+      }
+    }
+
+    if (!targetUser) {
+      setError('Failed to authenticate. Please try again.');
       creatingRef.current = false;
-      const message =
-        err.code === 'auth/email-already-in-use' ? 'An account with this email already exists.' :
-        err.code === 'auth/invalid-email'        ? 'Please enter a valid email address.' :
-        err.code === 'auth/weak-password'         ? 'Password is too weak.' :
-        'Could not create your account. Please try again.';
-      setError(message);
       setSubmitting(false);
       return;
     }
@@ -89,13 +107,13 @@ export default function Setup() {
       const batch = writeBatch(db);
       batch.set(doc(db, 'businesses', businessId), {
         name: businessName.trim(),
-        ownerIds: [cred.user.uid],
+        ownerIds: [targetUser.uid],
         createdAt: serverTimestamp(),
-        createdBy: cred.user.uid,
+        createdBy: targetUser.uid,
         subscription: { plan: 'free', status: 'active', expiresAt: null },
       });
-      batch.set(doc(db, 'users', cred.user.uid), {
-        uid: cred.user.uid,
+      batch.set(doc(db, 'users', targetUser.uid), {
+        uid: targetUser.uid,
         email: email.trim(),
         displayName: displayName.trim(),
         role: 'owner',
@@ -103,56 +121,45 @@ export default function Setup() {
         active: true,
         createdAt: serverTimestamp(),
       });
+      batch.set(doc(db, 'businessSettings', businessId), {
+        businessId,
+        shopName: businessName.trim(),
+        cashierCanRecordExpenses: true,
+        categories: DEFAULT_CATEGORIES,
+      });
       await batch.commit();
     } catch (err) {
-      console.error('[FlowBiz] Business setup failed — rolling back Auth account:', err.code || err.name, err.message);
-      try {
-        await deleteUser(cred.user);
-      } catch (rollbackErr) {
-        console.error('[FlowBiz] Rollback failed — an orphaned Auth account may remain:', rollbackErr);
-        setError('Something went wrong finishing setup, and we could not fully undo it. Please contact support before retrying with this email.');
-        creatingRef.current = false;
-        setSubmitting(false);
-        return;
-      }
-      setError('Something went wrong setting up your business. Please try again.');
+      console.error('[FlowBiz] Business setup write failed:', err.code || err.name, err.message);
+      setError('Something went wrong setting up your business records. Please try again.');
       creatingRef.current = false;
       setSubmitting(false);
       return;
     }
 
-    // Non-critical, so it doesn't roll back the whole account if it's
-    // ever slow or briefly fails — useSettings.js and ProductFormModal.jsx
-    // both already default gracefully when this doc doesn't exist yet.
     try {
-      await setDoc(doc(db, 'businessSettings', businessId), {
-        shopName: businessName.trim(),
-        cashierCanRecordExpenses: true,
-        categories: DEFAULT_CATEGORIES,
+      const idToken = await targetUser.getIdToken(true);
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
       });
+      if (!response.ok) throw new Error('worker-send-failed');
+      toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Please check your email to verify your account.`);
     } catch (err) {
-      console.error('[FlowBiz] businessSettings write failed (non-fatal):', err.code || err.name, err.message);
+      console.warn('[FlowBiz] Worker email send failed, attempting direct send:', err.message);
+      try {
+        await sendEmailVerification(targetUser);
+        toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Check your email to verify.`);
+      } catch {
+        toast.success(`Welcome to FlowBiz, ${displayName.trim()}!`);
+      }
     }
-
-try {
-  const idToken = await cred.user.getIdToken(true);
-  const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-  });
-  if (!response.ok) throw new Error('request-failed');
-  toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Check your email to verify your account.`);
-} catch (err) {
-  console.error('[FlowBiz] send-verification-email failed after setup:', err.message);
-  toast.success(`Welcome to FlowBiz, ${displayName.trim()}!`);
-}
 
     setSubmitting(false);
     navigate('/', { replace: true });
   };
 
-if (authLoading && !creatingRef.current) {
-      return (
+  if (authLoading && !creatingRef.current) {
+    return (
       <div className="flex min-h-screen items-center justify-center bg-ink-950">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
       </div>
@@ -160,25 +167,44 @@ if (authLoading && !creatingRef.current) {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4 py-8">
       <div className="w-full max-w-sm space-y-6">
         <div className="flex flex-col items-center text-center gap-3">
           <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
           <div>
             <h1 className="font-display text-2xl font-bold text-white">Create your business</h1>
-            <p className="text-sm text-ink-400">Set up FlowBiz in a couple of minutes.</p>
+            <p className="text-sm text-ink-400">Set up FlowBiz in under a minute.</p>
           </div>
         </div>
         <form onSubmit={handleSubmit} className="card space-y-4 p-6">
           {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-          <div><label className="label">Business name</label><input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="" disabled={submitting} /></div>
-          <div><label className="label">Your name</label><input className="input" required value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="Full name" disabled={submitting} /></div>
-          <div><label className="label">Email</label><input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="owner@yourbusiness.co.ke" autoComplete="username" disabled={submitting} /></div>
-          <div><label className="label">Password</label><input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="" autoComplete="new-password" disabled={submitting} /></div>
-          <div><label className="label">Confirm password</label><input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" disabled={submitting} /></div>
-          <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Setting up…' : 'Create business'}</button>
+          <div>
+            <label className="label">Business name</label>
+            <input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="e.g. Nairobi Smart Retail" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Your name</label>
+            <input className="input" required value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="e.g. John Kamau" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Email</label>
+            <input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="owner@yourbusiness.co.ke" autoComplete="username" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Password</label>
+            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 chars (upper, lower, number)" autoComplete="new-password" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Confirm password</label>
+            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="Repeat password" autoComplete="new-password" disabled={submitting} />
+          </div>
+          <button type="submit" className="btn-primary w-full" disabled={submitting}>
+            {submitting ? 'Setting up…' : 'Create business'}
+          </button>
         </form>
-        <p className="text-center text-sm text-ink-400">Already have an account? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link></p>
+        <p className="text-center text-sm text-ink-400">
+          Already have an account? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link>
+        </p>
       </div>
     </div>
   );

@@ -48,9 +48,6 @@ export async function checkActionCode() {
   return Promise.resolve({});
 }
 
-// FIX: ForgotPassword.jsx and AuthAction.jsx's reset-password panel now
-// import these. Unreachable in normal Demo Mode use — stubbed only so
-// the aliased 'firebase/auth' import never breaks the build.
 export async function sendPasswordResetEmail() {
   return Promise.resolve();
 }
@@ -62,3 +59,13 @@ export async function verifyPasswordResetCode() {
 export async function confirmPasswordReset() {
   return Promise.resolve();
 }
+
+export const EmailAuthProvider = {
+  credential: (email, password) => ({ email, password }),
+};
+
+export async function reauthenticateWithCredential() {
+  return Promise.resolve();
+}
+
+export function connectAuthEmulator() {}

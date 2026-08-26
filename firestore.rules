@@ -46,7 +46,8 @@ service cloud.firestore {
     // ── Businesses ──────────────────────────────────────────────────────
     match /businesses/{businessId} {
       allow get: if isStaff() && myBusinessId() == businessId;
-      allow create: if isSignedIn();
+      allow create: if isSignedIn()
+                    && request.resource.data.subscription.plan == 'free';
       allow update: if isOwner() && myBusinessId() == businessId
                     && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription']);
       allow delete: if false;
@@ -55,18 +56,20 @@ service cloud.firestore {
     match /barcodeIndex/{docId} {
       allow read: if isOwner() && owns(resource.data);
       allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && owns(request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
-      allow update: if false;
     }
 
     match /productCodeCounters/{businessId} {
       allow read, write: if isOwner() && myBusinessId() == businessId;
     }
 
-    match /businessSettings/{businessId} {
-      allow get: if isStaff() && myBusinessId() == businessId;
-      allow write: if isOwner() && myBusinessId() == businessId;
-    }
+match /businessSettings/{businessId} {
+  allow read: if isStaff() && myBusinessId() == businessId;
+  allow create: if isSignedIn() && request.resource.data.businessId == businessId;
+  allow update: if isOwner() && myBusinessId() == businessId;
+  allow delete: if false;
+}
 
     // ── Users & invites ─────────────────────────────────────────────────
     match /users/{userId} {
@@ -75,19 +78,21 @@ service cloud.firestore {
 
       allow create: if isSignedIn() && request.auth.uid == userId
                     && request.resource.data.role in ['owner', 'cashier']
+                    && request.resource.data.businessId is string
+                    && request.resource.data.businessId.size() > 0
                     && (
-                      (
-                        request.resource.data.role == 'owner'
-                        && !exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
-                        && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.createdBy == request.auth.uid
-                      )
+                      request.resource.data.role == 'owner'
                       ||
                       (
                         request.resource.data.claimedFromInviteId is string
                         && isValidInviteClaim(request.resource.data.claimedFromInviteId, request.resource.data.businessId, request.resource.data.role)
                       )
                     );
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow update: if (isOwner() && ownsUpdate(resource.data, request.resource.data))
+                    ||
+                    (isSignedIn() && request.auth.uid == userId
+                     && request.resource.data.role == resource.data.role
+                     && request.resource.data.businessId == resource.data.businessId);
       allow delete: if isOwner() && owns(resource.data) && userId != request.auth.uid;
     }
 
@@ -96,11 +101,13 @@ service cloud.firestore {
       allow list: if isOwner() && resource.data.businessId == myBusinessId();
       allow create: if isOwner() && request.resource.data.businessId == myBusinessId()
                     && request.resource.data.role in ['owner', 'cashier'];
-      allow update: if isSignedIn()
+      allow update: if (isOwner() && ownsUpdate(resource.data, request.resource.data))
+                    ||
+                    (isSignedIn()
                     && resource.data.claimed == false
                     && request.resource.data.claimed == true
                     && request.resource.data.linkedUid == request.auth.uid
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'linkedUid', 'claimedAt']);
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'linkedUid', 'claimedAt']));
       allow delete: if isOwner() && resource.data.businessId == myBusinessId();
     }
 
@@ -116,7 +123,7 @@ service cloud.firestore {
 
       allow update: if isSignedIn() && (
         (resource.data.uid == request.auth.uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent']))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent', 'lastUserName', 'uid', 'businessId']))
         ||
         (isOwner() && resource.data.businessId == myBusinessId()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked']))
@@ -173,7 +180,7 @@ service cloud.firestore {
     match /debtPaymentReceipts/{id} {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data);
-      allow update: if false;
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
@@ -181,7 +188,7 @@ service cloud.firestore {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data)
                     && request.resource.data.documentType in ['receipt', 'invoice', 'debtPaymentReceipt'];
-      allow update: if false;
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
@@ -223,7 +230,7 @@ service cloud.firestore {
     match /dailySessions/{id} {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow update: if isStaff() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
   }
