@@ -1,3 +1,4 @@
+// src/contexts/AuthContext.jsx
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import {
   onAuthStateChanged, signInWithEmailAndPassword, signOut as fbSignOut, sendEmailVerification, reload,
@@ -18,10 +19,30 @@ import {
   getDoc,
 } from 'firebase/firestore';
 import { auth, db } from '../firebase';
+import { isDemoMode, exitDemoMode } from '../demo/demoMode';
+import { DEMO_UID } from '../demo/localAuth';
+import { DEMO_BUSINESS_ID } from '../demo/seedData';
 import { raceWithTimeout } from '../utils/offlineWrite';
 
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 const AuthContext = createContext(null);
+
+const DEMO_USER = {
+  uid: DEMO_UID,
+  email: 'demo@flowbiz.app',
+  displayName: 'Demo Owner',
+  emailVerified: true,
+};
+
+const DEMO_PROFILE = {
+  uid: DEMO_UID,
+  email: 'demo@flowbiz.app',
+  displayName: 'Demo Owner',
+  role: 'owner',
+  businessId: DEMO_BUSINESS_ID,
+  active: true,
+  createdAt: new Date(),
+};
 
 function getDeviceId() {
   let id = localStorage.getItem('flowbiz_device_id');
@@ -31,6 +52,7 @@ function getDeviceId() {
   }
   return id;
 }
+
 function getSessionDocId(uid) {
   return `${getDeviceId()}__${uid}`;
 }
@@ -57,14 +79,16 @@ function guessDeviceLabel() {
 }
 
 export function AuthProvider({ children }) {
-  const [firebaseUser, setFirebaseUser] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [subscription, setSubscription] = useState({ plan: 'free', status: 'active' });
-  const [loading, setLoading] = useState(true);
+  const demoActive = isDemoMode();
+
+  const [firebaseUser, setFirebaseUser] = useState(demoActive ? DEMO_USER : null);
+  const [profile, setProfile] = useState(demoActive ? DEMO_PROFILE : null);
+  const [subscription, setSubscription] = useState(demoActive ? { plan: 'pro', status: 'active' } : { plan: 'free', status: 'active' });
+  const [loading, setLoading] = useState(!demoActive);
   const [authError, setAuthError] = useState(null);
   const [accountRemoved, setAccountRemoved] = useState(false);
   const [sessionRevoked, setSessionRevoked] = useState(false);
-  const [emailVerified, setEmailVerified] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(demoActive);
 
   const profileUnsubRef = useRef(null);
   const sessionUnsubRef = useRef(null);
@@ -82,7 +106,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const registerSession = useCallback(async (uid, businessId, userName) => {
-    if (!uid || !businessId) return;
+    if (isDemoMode() || !uid || !businessId) return;
     const key = `${uid}:${businessId}`;
     if (sessionRegisteredRef.current === key) return;
     sessionRegisteredRef.current = key;
@@ -125,22 +149,20 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
-  useEffect(() => {
-    if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
-        updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
-      }
-    }, 15 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [firebaseUser, profile?.businessId, sessionRevoked]);
-
   const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
     stopListeners();
     setAuthError(null);
     setAccountRemoved(false);
     setSessionRevoked(false);
+
+    if (isDemoMode()) {
+      setFirebaseUser(DEMO_USER);
+      setProfile(DEMO_PROFILE);
+      setSubscription({ plan: 'pro', status: 'active' });
+      setEmailVerified(true);
+      setLoading(false);
+      return;
+    }
 
     if (!user) {
       setProfile(null);
@@ -213,6 +235,15 @@ export function AuthProvider({ children }) {
   }, [registerSession, stopListeners]);
 
   useEffect(() => {
+    if (isDemoMode()) {
+      setFirebaseUser(DEMO_USER);
+      setProfile(DEMO_PROFILE);
+      setSubscription({ plan: 'pro', status: 'active' });
+      setEmailVerified(true);
+      setLoading(false);
+      return;
+    }
+
     const unsub = onAuthStateChanged(auth, (user) => {
       setFirebaseUser(user);
       loadProfile(user);
@@ -220,10 +251,19 @@ export function AuthProvider({ children }) {
     return () => { unsub(); stopListeners(); };
   }, [loadProfile, stopListeners]);
 
-  const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
-  const logout = () => { stopListeners(); return fbSignOut(auth); };
+  const login = (email, password) => {
+    exitDemoMode();
+    return signInWithEmailAndPassword(auth, email, password);
+  };
+
+  const logout = () => {
+    exitDemoMode();
+    stopListeners();
+    return fbSignOut(auth);
+  };
 
   const resendVerificationEmail = async () => {
+    if (isDemoMode()) return;
     if (!auth.currentUser) throw new Error('Not signed in.');
     try {
       const idToken = await auth.currentUser.getIdToken(true);
@@ -243,6 +283,7 @@ export function AuthProvider({ children }) {
   };
 
   const refreshEmailVerification = useCallback(async () => {
+    if (isDemoMode()) return true;
     if (!auth.currentUser) return false;
     try {
       await reload(auth.currentUser);
@@ -414,9 +455,11 @@ export function AuthProvider({ children }) {
     ? subscription.expiresAt.toMillis() 
     : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
 
-  const isPro = subscription?.plan === 'pro' && 
-                subscription?.status === 'active' &&
-                (!subscription.expiresAt || expiresMs > Date.now());
+  const isPro = isDemoMode() || (
+    subscription?.plan === 'pro' && 
+    subscription?.status === 'active' &&
+    (!subscription.expiresAt || expiresMs > Date.now())
+  );
 
   return (
     <AuthContext.Provider

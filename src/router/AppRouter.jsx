@@ -1,12 +1,15 @@
+// src/router/AppRouter.jsx
 import { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from '../components/common/ProtectedRoute';
 import AppShell from '../components/layout/AppShell';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import { useAuth } from '../contexts/AuthContext';
+import { isDemoMode } from '../demo/demoMode'; // <--- Added import
 import { prefetchRoutes } from './routePrefetch';
 import RequireOpenSession from '../components/common/RequireOpenSession';
 import LandingPage from '../pages/LandingPage';
+import DemoLanding from '../pages/DemoLanding';
 
 const routeLoaders = {
   setup: () => import('../pages/Setup'),
@@ -86,6 +89,11 @@ function isStandalonePWA() {
 
 function RootRoute() {
   const { firebaseUser, loading, isAdmin } = useAuth();
+  const demo = isDemoMode();
+
+  if (demo) {
+    return <Navigate to="/counter" replace />;
+  }
 
   if (!loading && firebaseUser) {
     return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
@@ -114,6 +122,9 @@ export default function AppRouter() {
       <Routes>
         {/* Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
         <Route path="/" element={<RootRoute />} />
+
+        {/* Dedicated Live Demo Entry (Zero sign-in prompt) */}
+        <Route path="/demo" element={<DemoLanding />} />
 
         {/* Public Authentication & Setup */}
         <Route path="/setup" element={<Setup />} />

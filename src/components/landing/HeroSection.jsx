@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom';
-import { ArrowRight, CheckCircle2, ShieldCheck } from 'lucide-react';
-import { PosSimulationMockup } from './PosSimulationMockup';
+import { ArrowRight, CheckCircle2, ShieldCheck, Play } from 'lucide-react';
 
 const HERO_PHOTO_URL = '/hero-photo.webp';
 
@@ -8,10 +7,10 @@ export function HeroSection() {
   return (
     <section className="relative overflow-hidden">
       
-      {/* Full-Bleed Hero Background Banner */}
-      <div className="relative min-h-[580px] lg:min-h-[680px] flex items-center bg-[#0d1f16]">
+      {/* Full-Bleed Hero Banner */}
+      <div className="relative min-h-[560px] lg:min-h-[620px] flex items-center bg-[#0d1f16]">
         
-        {/* 1. Base Background Photo */}
+        {/* Background Image */}
         <div className="absolute inset-0 z-0 overflow-hidden">
           <img
             src={HERO_PHOTO_URL}
@@ -23,7 +22,7 @@ export function HeroSection() {
           />
         </div>
 
-        {/* 2. Left-to-Right Blur & Gradient Overlay */}
+        {/* Gradient Overlay */}
         <div 
           className="absolute inset-0 z-1 pointer-events-none"
           style={{
@@ -31,7 +30,7 @@ export function HeroSection() {
           }}
         />
 
-        {/* 3. Soft blur mask on left for enhanced text clarity */}
+        {/* Soft Left Blur Mask */}
         <div 
           className="absolute inset-0 z-1 pointer-events-none hidden md:block"
           style={{
@@ -42,9 +41,9 @@ export function HeroSection() {
           }}
         />
 
-        {/* 4. Foreground Content Container */}
-        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24 w-full">
-          <div className="max-w-3xl space-y-6 text-white">
+        {/* Hero Content */}
+        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-20 w-full">
+          <div className="max-w-3xl space-y-6 text-white text-left">
 
             <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-black text-white tracking-tight leading-[1.08] drop-shadow-sm">
               Run your business with ease
@@ -96,14 +95,37 @@ export function HeroSection() {
 
       </div>
 
-      {/* Interactive POS Simulator Section with ID linked to header */}
-      <div id="live-simulator" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 md:py-24 scroll-mt-14">
-        <div className="text-center mb-6">
-          <h2 className="text-xl sm:text-2xl font-extrabold text-[#15171d] mt-1">
-            Live Point of Sale Simulator
-          </h2>
+      {/* Clean, Focused Live Demo Section */}
+      <div className="py-16 md:py-24 border-b border-[#e8eaed] bg-[#faf6ef]">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-8">
+          
+          {/* Centered Heading & Explanation */}
+          <div className="space-y-3 max-w-2xl mx-auto">
+            <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-[#15171d] tracking-tight">
+              Try FlowBiz Live in Your Browser
+            </h2>
+            <p className="text-sm sm:text-base md:text-lg text-[#5a6273] leading-relaxed">
+              Explore the fully interactive demo account with preloaded inventory, customers, and registers. Test sales, debt ledgers, and closing reconciliations with zero sign-up required.
+            </p>
+          </div>
+
+          {/* Action Button & Enlarged Subtext */}
+          <div className="pt-2 space-y-3">
+            <div>
+              <a
+                href="/demo/"
+                className="inline-flex items-center justify-center gap-2 bg-[#1a623c] hover:bg-[#144f30] text-white px-9 py-4 rounded-xl font-bold text-base transition-all shadow-md hover:shadow-lg"
+              >
+                <Play className="h-4 w-4 fill-current" />
+                <span>Launch Live Demo Account</span>
+              </a>
+            </div>
+            <p className="text-sm sm:text-base font-semibold text-[#5a6273]">
+              Instant access · Runs entirely in your browser · No login required
+            </p>
+          </div>
+
         </div>
-        <PosSimulationMockup />
       </div>
 
     </section>

@@ -1,16 +1,8 @@
 // src/demo/seedData.js
 import { seedDoc, seedCommit, clearAllDemoData, makeTimestamp } from './localFirestore';
 import { DEMO_UID } from './localAuth';
+import { todayKey } from '../utils/dateRanges';
 
-// MULTI-TENANT CHANGE: every collection in the real app is now scoped by
-// `businessId`, and `tenantQuery()` throws if it's ever called without
-// one. The demo dataset previously seeded documents with no businessId at
-// all — under the new architecture that would make every single page's
-// queries throw immediately on `npm run dev:demo`. This file now stamps
-// a fixed DEMO_BUSINESS_ID onto every seeded document, and the demo
-// user's own profile carries that same businessId + the new `role:
-// 'owner'` value (replacing the old `role: 'admin'`), exactly mirroring
-// what a real signed-up owner's profile looks like.
 export const DEMO_BUSINESS_ID = 'demo-business';
 
 const SUPPLIERS = [
@@ -56,6 +48,7 @@ const PRODUCTS = [
 function buildAndSeed() {
   const now = makeTimestamp(Date.now());
   const touched = new Set();
+  const today = todayKey();
 
   SUPPLIERS.forEach((s) => {
     const { id, ...data } = s;
@@ -67,9 +60,6 @@ function buildAndSeed() {
     const id = `demo_product_${i + 1}`;
     const internalCode = `FB-${String(i + 1).padStart(6, '0')}`;
     seedDoc('products', id, { ...p, businessId: DEMO_BUSINESS_ID, internalCode, deleted: false, createdAt: now, updatedAt: now });
-    // Flat, businessId-prefixed doc id — matches utils/products.js exactly,
-    // so a demo-seeded barcode round-trips through the same lookup code a
-    // real business's products do.
     seedDoc('barcodeIndex', `${DEMO_BUSINESS_ID}__${p.barcode}`, { businessId: DEMO_BUSINESS_ID, barcode: p.barcode, productId: id });
     touched.add('products');
     touched.add('barcodeIndex');
@@ -77,9 +67,6 @@ function buildAndSeed() {
   seedDoc('productCodeCounters', DEMO_BUSINESS_ID, { businessId: DEMO_BUSINESS_ID, lastNumber: PRODUCTS.length });
   touched.add('productCodeCounters');
 
-  // Business record + owner profile — mirrors exactly what Setup.jsx
-  // creates for a real signed-up owner, so nothing downstream needs to
-  // special-case Demo Mode.
   seedDoc('businesses', DEMO_BUSINESS_ID, {
     name: 'FlowBiz Demo Store',
     ownerIds: [DEMO_UID],
@@ -95,9 +82,6 @@ function buildAndSeed() {
   });
   touched.add('users');
 
-  // Replaces the old settings/general + settings/categories docs — see
-  // useSettings.js and ProductFormModal.jsx, both of which now read this
-  // single per-business document.
   seedDoc('businessSettings', DEMO_BUSINESS_ID, {
     shopName: 'FlowBiz Demo Store',
     cashierCanRecordExpenses: true,
@@ -105,21 +89,46 @@ function buildAndSeed() {
   });
   touched.add('businessSettings');
 
-  // Sales, purchases, expenses, credit sales, repayments, and daily
-  // sessions are intentionally left empty — those figures should come
-  // from actually using the app, per spec.
+  // Pre-seed an open shift session for today so Counter opens immediately
+  seedDoc('dailySessions', `${DEMO_BUSINESS_ID}_${today}`, {
+    businessId: DEMO_BUSINESS_ID,
+    date: today,
+    openingCashFloat: 2000,
+    openingMpesaFloat: 5000,
+    openedBy: DEMO_UID,
+    openedAt: now,
+    closedAt: null,
+    closedBy: null,
+  });
+  touched.add('dailySessions');
 
   seedCommit([...touched]);
 }
 
 export function seedDemoDataIfNeeded() {
-  if (localStorage.getItem('flowbiz_demo_seeded_v2') === 'true') return;
+  const today = todayKey();
+  const sessionDocId = `${DEMO_BUSINESS_ID}_${today}`;
+  if (localStorage.getItem('flowbiz_demo_seeded_v3') === 'true') {
+    // Ensure today's session is always open even across calendar days
+    seedDoc('dailySessions', sessionDocId, {
+      businessId: DEMO_BUSINESS_ID,
+      date: today,
+      openingCashFloat: 2000,
+      openingMpesaFloat: 5000,
+      openedBy: DEMO_UID,
+      openedAt: makeTimestamp(Date.now()),
+      closedAt: null,
+      closedBy: null,
+    });
+    seedCommit(['dailySessions']);
+    return;
+  }
   buildAndSeed();
-  localStorage.setItem('flowbiz_demo_seeded_v2', 'true');
+  localStorage.setItem('flowbiz_demo_seeded_v3', 'true');
 }
 
 export function resetDemoData() {
   clearAllDemoData();
   buildAndSeed();
-  localStorage.setItem('flowbiz_demo_seeded_v2', 'true');
+  localStorage.setItem('flowbiz_demo_seeded_v3', 'true');
 }
