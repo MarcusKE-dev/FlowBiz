@@ -6,6 +6,8 @@ import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// `defineConfig` accepts a function so we can read the active Vite `mode`
+// (set by the --mode flag on the CLI) and branch on it.
 export default defineConfig(({ mode }) => ({
   server: {
     watch: {
@@ -14,6 +16,20 @@ export default defineConfig(({ mode }) => ({
     },
   },
 
+  // DEMO MODE — this is what actually connects Demo Mode to the app.
+  // `npm run dev:demo` runs `vite --mode demo`. When mode is 'demo', every
+  // `import ... from 'firebase/firestore'` and `import ... from
+  // 'firebase/auth'` ANYWHERE in the codebase — every page, every hook,
+  // and src/firebase.js itself — is transparently redirected to our local,
+  // localStorage-backed implementations (src/demo/localFirestore.js and
+  // src/demo/localAuth.js) instead of the real Firebase SDK. No other file
+  // needs to know Demo Mode exists; they all just import from
+  // 'firebase/firestore' / 'firebase/auth' as normal and get whichever
+  // implementation matches how the dev server was started.
+  //
+  // `npm run dev` (no --mode) leaves `resolve.alias` empty, so it is
+  // 100% unaffected and behaves exactly as before — real Firebase, real
+  // Firestore, real Authentication.
   resolve: mode === 'demo' ? {
     alias: {
       'firebase/firestore': path.resolve(__dirname, 'src/demo/localFirestore.js'),
@@ -25,6 +41,7 @@ export default defineConfig(({ mode }) => ({
     react(),
 
     VitePWA({
+
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'favicon-32.png', 'favicon-16.png', 'icons/*.png'],
       manifest: {

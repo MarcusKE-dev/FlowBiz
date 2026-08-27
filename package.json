@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:demo": "vite --mode demo",
-    "build": "vite build && vite build --mode demo --outDir dist/demo --base /demo/",
+    "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },

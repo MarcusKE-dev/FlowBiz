@@ -1,18 +1,20 @@
-// src/components/landing/LandingFooter.jsx
 import { Link } from 'react-router-dom';
-import { Mail, Shield, FileText } from 'lucide-react';
+import { Mail, Shield, FileText, ArrowRight } from 'lucide-react';
 
 export function LandingFooter() {
   return (
     <footer className="bg-[#15171d] text-[#cfd3da] border-t border-[#2b303c] pt-14 pb-10 text-xs">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
         
+
+
         {/* Footer Navigation Columns */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
           
           {/* Brand Info */}
           <div className="space-y-4 md:col-span-2">
             <div className="flex items-center gap-3">
+             
               <span className="font-bold text-xl text-white tracking-tight">FlowBiz</span>
             </div>
             <p className="text-xs text-[#9aa2b1] max-w-sm leading-relaxed">
@@ -39,6 +41,11 @@ export function LandingFooter() {
                 </a>
               </li>
               <li>
+                <a href="#simulator" className="hover:text-white transition-colors">
+                  Live Simulator
+                </a>
+              </li>
+              <li>
                 <a href="#how-it-works" className="hover:text-white transition-colors">
                   How It Works
                 </a>
@@ -56,10 +63,11 @@ export function LandingFooter() {
             </ul>
           </div>
 
-          {/* Legal & Trust */}
+          {/* Legal & Trust: Tight Spacing, No Sign In */}
+       {/* Column 3: Legal & Compliance */}
           <div className="space-y-3">
             <span className="text-[11px] font-bold uppercase tracking-wider text-white block">
-              Trust &amp; Legal
+              Trust & Legal
             </span>
             <ul className="space-y-2">
               <li>
@@ -74,6 +82,7 @@ export function LandingFooter() {
                   Terms of Service
                 </Link>
               </li>
+             
             </ul>
           </div>
 
@@ -82,6 +91,7 @@ export function LandingFooter() {
         {/* Bottom Line */}
         <div className="pt-8 border-t border-[#2b303c] flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-[#767f8f]">
           <p>© {new Date().getFullYear()} FlowBiz. All rights reserved.</p>
+          
         </div>
 
       </div>
