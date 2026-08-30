@@ -96,14 +96,50 @@ export function HeroSection() {
 
       </div>
 
-      {/* Interactive POS Simulator Section with ID linked to header */}
-      <div id="live-simulator" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 md:py-24 scroll-mt-14">
-        <div className="text-center mb-6">
-          <h2 className="text-xl sm:text-2xl font-extrabold text-[#15171d] mt-1">
-            Live Point of Sale Simulator
-          </h2>
+      {/* Demo section — replaces the old embedded "Live Point of Sale
+          Simulator" (PosSimulationMockup is still imported above and used
+          nowhere else in the app, so it's left in place untouched in case
+          it's wanted again later).
+
+          The button below is a plain <a>, not a react-router <Link>, on
+          purpose: /demo/ is a SEPARATE build (see vite.config.js + 
+          package.json + public/_redirects) with its own local, offline
+          data store (src/demo/) instead of real Firebase. A <Link> would
+          do a client-side navigation and never actually leave this
+          bundle, which is exactly what caused real account data to leak
+          into "the demo" before — a plain <a> forces a full page load,
+          which is what lets Cloudflare correctly hand the request to the
+          separately-built demo app. */}
+
+      <div id="demo" className="py-16 md:py-24 border-t border-[#e8eaed] scroll-mt-14">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-8">
+          
+          {/* Heading and Paragraph with increased spacing */}
+          <div className="space-y-4 sm:space-y-5">
+            <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-[#15171d] tracking-tight">
+              See FlowBiz in action
+            </h2>
+            <p className="text-sm sm:text-base text-[#5a6273] leading-relaxed">
+              Explore a fully working FlowBiz account, preloaded with sample products, sales, and
+              customers. Try the POS counter, check the dashboard, and see how credit sales and
+              M-Pesa reconciliation work. <br className="hidden sm:inline" /> Nothing you do here ever touches a real business.
+            </p>
+          </div>
+
+          <div className="pt-2 flex flex-col items-center gap-2.5">
+            <a
+              href="/demo/"
+              className="inline-flex items-center justify-center gap-2 bg-[#1a623c] text-white px-8 py-3.5 rounded-xl font-bold text-sm hover:bg-[#144f30] transition-all shadow-sm"
+            >
+              <span>Try the Free Demo</span>
+              <ArrowRight className="h-4 w-4" />
+            </a>
+            <span className="text-xs text-[#767f8f]">
+              No sign-in needed &middot; Free demo trial &middot; Nothing is saved to a real account
+            </span>
+          </div>
+
         </div>
-        <PosSimulationMockup />
       </div>
 
     </section>

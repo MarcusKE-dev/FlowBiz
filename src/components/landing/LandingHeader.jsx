@@ -32,10 +32,10 @@ export function LandingHeader() {
                 Features
               </a>
               <a 
-                href="#live-simulator" 
+                href="#demo" 
                 className="hover:text-[#1a623c] transition-colors py-1 px-1"
               >
-                Live Simulator
+                Demo
               </a>
               <a 
                 href="#how-it-works" 
@@ -99,11 +99,11 @@ export function LandingHeader() {
             Features
           </a>
           <a
-            href="#live-simulator"
+            href="#demo"
             onClick={() => setMobileOpen(false)}
             className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
           >
-            Live Simulator
+            Demo
           </a>
           <a
             href="#how-it-works"

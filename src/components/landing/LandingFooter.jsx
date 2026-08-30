@@ -41,8 +41,8 @@ export function LandingFooter() {
                 </a>
               </li>
               <li>
-                <a href="#simulator" className="hover:text-white transition-colors">
-                  Live Simulator
+                <a href="#demo" className="hover:text-white transition-colors">
+                  Demo
                 </a>
               </li>
               <li>

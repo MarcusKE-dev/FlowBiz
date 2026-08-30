@@ -97,7 +97,7 @@ export default function AuthAction() {
   }
 
   if (resolvedMode === 'verifyEmail') {
-    return <VerifyEmailPanel mode="verifyEmail" oobCode={oobCode} />;
+    return <VerifyEmailPanel mode={resolvedMode} oobCode={oobCode} />;
   }
 
   return (
@@ -121,66 +121,94 @@ function Shell({ children }) {
   );
 }
 
+// FIX (round 2): this used to apply the verification code AUTOMATICALLY
+// the instant the page loaded, inside a useEffect. That is exactly what
+// broke things: many email apps and mail providers automatically open
+// links in an incoming email — to scan them for phishing, or to build a
+// link preview — before the person ever taps anything themselves. Since
+// a Firebase verification code can only be used once, that automatic
+// visit was silently burning the code, so the person's own, real click
+// then failed with "this link has already been used."
+//
+// The fix is to require an actual tap (a real click event) before
+// calling applyActionCode at all. Automated scanners/prefetchers load
+// pages, but they don't click buttons — so the code now stays valid
+// until the person genuinely interacts with it.
+//
+// This also matches what was actually wanted: land on the page, see
+// "Verify your email", tap it, land on the dashboard immediately — one
+// clear step, not an invisible auto-action that could fail silently.
 function VerifyEmailPanel({ mode, oobCode }) {
-  const [status, setStatus] = useState('working');
-  const [message, setMessage] = useState('');
+  const linkLooksValid = !!oobCode && mode === 'verifyEmail';
+
+  // 'confirm'    -> waiting for the person to tap "Verify email"
+  // 'working'    -> tap happened, applying the code now
+  // 'manual'     -> verified, but there's no live session on this device
+  //                 (the link was opened somewhere that isn't signed in)
+  // 'error'      -> something is genuinely wrong with the link
+  const [status, setStatus] = useState(linkLooksValid ? 'confirm' : 'error');
+  const [message, setMessage] = useState(
+    linkLooksValid ? '' : 'This verification link is incomplete or invalid. Please request a new link.'
+  );
   const [resending, setResending] = useState(false);
 
   const navigate = useNavigate();
-  const { refreshEmailVerification, reloadProfile, firebaseUser } = useAuth();
+  const { refreshEmailVerification, firebaseUser, loading: authLoading } = useAuth();
 
-  useEffect(() => {
-    if (!oobCode || mode !== 'verifyEmail') {
-      setStatus('error');
-      setMessage('This verification link is incomplete or invalid. Please request a new link.');
-      return;
-    }
+  const handleVerify = async () => {
+    setStatus('working');
+    try {
+      await applyActionCode(auth, oobCode);
 
-    let active = true;
+      if (auth.currentUser) {
+        // Signed in on this device — verify in place and go straight to
+        // the dashboard. FIX: this used to also call reloadProfile()
+        // here "to be safe" before navigating — but reloadProfile()
+        // doesn't actually wait for anything; it just restarts the
+        // profile listener and returns right away. By the time we know
+        // someone is signed in (AuthContext's own `loading` only clears
+        // AFTER their account profile has already arrived), the profile
+        // is already loaded — so that extra reload was pure risk: it
+        // could make the dashboard open a beat before the (needlessly)
+        // re-fetched profile was ready, which is exactly the "Loading
+        // Account Profile" screen that got stuck. Removing it fixes
+        // that.
+        await refreshEmailVerification();
+        toast.success('Email verified successfully! Welcome to FlowBiz.');
+        navigate('/dashboard', { replace: true });
+      } else {
+        setStatus('manual');
+      }
+    } catch (err) {
+      const code = err.code || '';
 
-    (async () => {
-      setStatus('working');
-      try {
-        await applyActionCode(auth, oobCode);
-        if (!active) return;
-
+      // The code can come back "already used" for reasons that have
+      // nothing to do with anything going wrong — see the note above
+      // about automatic link-scanning. If that happened, the account is
+      // actually already verified. So if this device has a live
+      // session, check the REAL status before showing an error for
+      // something that isn't actually a problem.
+      if (code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') {
         if (auth.currentUser) {
-          await refreshEmailVerification();
-          await reloadProfile();
-          toast.success('Email verified successfully! Welcome to FlowBiz.');
-          navigate('/dashboard', { replace: true });
-        } else {
-          setStatus('success');
-        }
-      } catch (err) {
-        if (!active) return;
-        const code = err.code || '';
-
-        if (code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') {
           const verified = await refreshEmailVerification();
-          if (verified || auth.currentUser?.emailVerified) {
-            await reloadProfile();
+          if (verified) {
             toast.success('Your email is verified!');
             navigate('/dashboard', { replace: true });
             return;
           }
         }
-
-        setStatus('error');
-        setMessage(
-          code === 'auth/expired-action-code'
-            ? 'This verification link has expired. Please request a new one below.'
-            : code === 'auth/invalid-action-code'
-              ? "This verification link has already been used or has expired. If you've already verified, you can enter your dashboard below."
-              : "We couldn't verify your email with this link. Please request a new link below."
-        );
       }
-    })();
 
-    return () => {
-      active = false;
-    };
-  }, [oobCode, mode, refreshEmailVerification, reloadProfile, navigate]);
+      setStatus('error');
+      setMessage(
+        code === 'auth/expired-action-code'
+          ? 'This verification link has expired. Please request a new one below.'
+          : code === 'auth/invalid-action-code'
+            ? "This verification link has already been used or has expired. If you've already verified, you can enter your dashboard below."
+            : "We couldn't verify your email with this link. Please request a new link below."
+      );
+    }
+  };
 
   const handleRequestNewEmail = async () => {
     if (!auth.currentUser) {
@@ -206,15 +234,25 @@ function VerifyEmailPanel({ mode, oobCode }) {
 
   return (
     <Shell>
+      {status === 'confirm' && (
+        <>
+          <h1 className="font-display text-lg font-bold text-ink-900">Verify your email</h1>
+          <p className="text-sm text-ink-500">Tap below to confirm your email address and open your dashboard.</p>
+          <button className="btn-primary w-full" onClick={handleVerify} disabled={authLoading}>
+            {authLoading ? 'Preparing…' : 'Verify email'}
+          </button>
+        </>
+      )}
+
       {status === 'working' && (
         <>
           <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
           <h1 className="font-display text-lg font-bold text-ink-900">Verifying your email…</h1>
-          <p className="text-sm text-ink-500">Activating your account and taking you to your dashboard.</p>
+          <p className="text-sm text-ink-500">Taking you to your dashboard.</p>
         </>
       )}
 
-      {status === 'success' && (
+      {status === 'manual' && (
         <>
           <CheckCircle2 className="h-12 w-12 mx-auto text-moss-600" strokeWidth={1.5} />
           <h1 className="font-display text-lg font-bold text-ink-900">Email verified!</h1>

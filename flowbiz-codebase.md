@@ -1228,11 +1228,6 @@ export async function handleProPrice() {
 }
 ````
 
-## File: public/_redirects
-````
-/* /index.html 200
-````
-
 ## File: public/favicon.svg
 ````xml
 <svg width="512" height="512" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
@@ -1278,6 +1273,7 @@ Disallow: /close-day
 Disallow: /users
 Disallow: /settings
 Disallow: /r/
+Disallow: /demo
 
 Sitemap: https://flowbiz.co.ke/sitemap.xml
 ````
@@ -1531,85 +1527,6 @@ export default function Modal({
         {children}
       </div>
     </div>
-  );
-}
-````
-
-## File: src/components/common/PwaInstallBanner.jsx
-````javascript
-import { useState } from 'react';
-import { Download, Share, PlusSquare, X } from 'lucide-react';
-import { usePwaInstall } from '../../hooks/usePwaInstall';
-
-export default function PwaInstallBanner() {
-  const { isInstallable, isIOS, isStandalone, promptInstall } = usePwaInstall();
-  const [dismissed, setDismissed] = useState(false);
-
-  // If already running in installed app mode or closed by user, don't show
-  if (isStandalone || dismissed) return null;
-
-  return (
-    <aside
-      aria-label="Install FlowBiz App"
-      className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md rounded-2xl border border-moss-200 bg-white p-4 shadow-2xl animate-fade-in"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <img
-            src="/icons/icon-96.png"
-            alt="FlowBiz App Icon"
-            className="h-11 w-11 rounded-xl shadow-xs shrink-0 object-cover"
-            onError={(e) => {
-              e.currentTarget.src = '/favicon.svg';
-            }}
-          />
-          <div>
-            <h4 className="font-display text-sm font-bold text-ink-900">
-              Install FlowBiz App
-            </h4>
-            <p className="text-xs text-ink-500">
-              Run your counter faster and work 100% offline.
-            </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => setDismissed(true)}
-          className="text-ink-400 hover:text-ink-700 p-1 min-h-[32px] min-w-[32px] flex items-center justify-center rounded-lg"
-          aria-label="Close install prompt"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
-      <div className="mt-3">
-        {/* Android & Desktop Chrome / Edge 1-Click Install Button */}
-        {isInstallable ? (
-          <button
-            type="button"
-            onClick={promptInstall}
-            className="btn-primary w-full !py-2 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
-          >
-            <Download className="h-4 w-4" /> Install Free App
-          </button>
-        ) : isIOS ? (
-          <div className="rounded-lg bg-[#faf6ef] p-2.5 text-[11px] text-ink-700 border border-ink-100">
-            <p className="font-semibold flex items-center flex-wrap gap-1">
-              Tap <Share className="h-3.5 w-3.5 text-moss-700 inline" /> Share, then select{' '}
-              <PlusSquare className="h-3.5 w-3.5 text-moss-700 inline" /> &quot;Add to Home Screen&quot;
-            </p>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={promptInstall}
-            className="btn-primary w-full !py-2 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
-          >
-            <Download className="h-4 w-4" /> Install Free App
-          </button>
-        )}
-      </div>
-    </aside>
   );
 }
 ````
@@ -3113,45 +3030,6 @@ Start free with the essentials. Upgrade to FlowBiz Pro when your business needs 
 }
 ````
 
-## File: src/components/layout/AppShell.jsx
-````javascript
-import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
-import Sidebar from './Sidebar';
-import BottomNav from './BottomNav';
-import TopHeader from './TopHeader';
-
-export default function AppShell({ children }) {
-  const location = useLocation();
-  const isCounterRoute = location.pathname.startsWith('/counter');
-
-  // The Counter page benefits from a wider working area (product grid +
-  // checkout panel side by side), so on desktop the sidebar collapses to
-  // a slim icon rail automatically the moment it's opened, and expands
-  // again on every other page. This never touches mobile — Sidebar is
-  // hidden below the lg breakpoint regardless of this state. A person
-  // can still override it manually at any time via the toggle at the
-  // bottom of the sidebar; navigating away and back to Counter resets it
-  // to collapsed again.
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(isCounterRoute);
-
-  useEffect(() => {
-    setSidebarCollapsed(isCounterRoute);
-  }, [isCounterRoute]);
-
-  return (
-    <div className="flex min-h-screen bg-sand">
-      <Sidebar collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed((v) => !v)} />
-      <div className="flex min-h-screen flex-1 flex-col overflow-hidden">
-        <TopHeader />
-        <main className="flex-1 overflow-y-auto px-4 pb-28 pt-4 sm:px-6 lg:pb-8">{children}</main>
-      </div>
-      <BottomNav />
-    </div>
-  );
-}
-````
-
 ## File: src/components/layout/navConfig.js
 ````javascript
 export const NAV_ITEMS = [
@@ -3340,429 +3218,6 @@ export const EXPENSE_CATEGORIES = ['Rent','Electricity','Transport','Wages','Air
 export const PAYMENT_METHODS = ['Cash','M-Pesa'];
 ````
 
-## File: src/demo/demoMode.js
-````javascript
-// src/demo/demoMode.js
-// The single source of truth for "are we in Demo Mode right now?". Every
-// other demo-aware piece of code (src/firebase.js, AuthContext, businessReset)
-// checks this instead of threading a prop/flag through the component tree.
-const FLAG_KEY = 'flowbiz_demo_mode';
-
-export function isDemoMode() {
-  try {
-    return localStorage.getItem(FLAG_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-export function enterDemoMode() {
-  try { localStorage.setItem(FLAG_KEY, 'true'); } catch { /* storage unavailable — ignore */ }
-}
-
-export function exitDemoMode() {
-  try { localStorage.removeItem(FLAG_KEY); } catch { /* storage unavailable — ignore */ }
-}
-````
-
-## File: src/demo/localFirestore.js
-````javascript
-// src/demo/localFirestore.js
-const STORAGE_PREFIX = 'flowbiz_demo_data:';
-
-const cache = new Map();
-const listeners = new Map();
-let idCounter = 0;
-
-function generateId() {
-  idCounter += 1;
-  return `demo_${Date.now().toString(36)}${idCounter.toString(36)}`;
-}
-
-function makeTimestamp(millis) {
-  return {
-    __ts: true,
-    millis,
-    toDate() { return new Date(millis); },
-    toMillis() { return millis; },
-  };
-}
-
-function reviver(key, value) {
-  if (value && typeof value === 'object' && value.__ts === true && typeof value.millis === 'number') {
-    return makeTimestamp(value.millis);
-  }
-  return value;
-}
-
-function ensureLoaded(name) {
-  if (!cache.has(name)) {
-    let obj = {};
-    try {
-      const raw = localStorage.getItem(STORAGE_PREFIX + name);
-      if (raw) obj = JSON.parse(raw, reviver);
-    } catch { }
-    cache.set(name, new Map(Object.entries(obj)));
-  }
-  return cache.get(name);
-}
-
-function getRaw(name, id) { return ensureLoaded(name).get(id) || null; }
-function writeRaw(name, id, data) { ensureLoaded(name).set(id, data); }
-function deleteRaw(name, id) { ensureLoaded(name).delete(id); }
-
-function persistTouched(names) {
-  names.forEach((name) => {
-    const map = ensureLoaded(name);
-    localStorage.setItem(STORAGE_PREFIX + name, JSON.stringify(Object.fromEntries(map)));
-  });
-}
-
-function subscribe(name, fn) {
-  if (!listeners.has(name)) listeners.set(name, new Set());
-  listeners.get(name).add(fn);
-  return () => listeners.get(name)?.delete(fn);
-}
-
-function notify(names) { names.forEach((name) => listeners.get(name)?.forEach((fn) => fn())); }
-
-function isSentinel(v, kind) { return !!v && typeof v === 'object' && v.__sentinel === kind; }
-
-function resolveWriteData(data, base) {
-  const out = base ? { ...base } : {};
-  Object.entries(data).forEach(([k, v]) => {
-    if (isSentinel(v, 'serverTimestamp')) out[k] = makeTimestamp(Date.now());
-    else if (isSentinel(v, 'increment')) out[k] = (typeof out[k] === 'number' ? out[k] : 0) + v.n;
-    else if (isSentinel(v, 'deleteField')) delete out[k];
-    else out[k] = v;
-  });
-  return out;
-}
-
-export function increment(n) { return { __sentinel: 'increment', n }; }
-export function serverTimestamp() { return { __sentinel: 'serverTimestamp' }; }
-export function deleteField() { return { __sentinel: 'deleteField' }; }
-
-export function collection(_db, name) { return { __type: 'collection', name }; }
-export function doc(a, b, c) {
-  if (a && a.__type === 'collection') {
-    return { __type: 'doc', name: a.name, id: b || generateId() };
-  }
-  return { __type: 'doc', name: b, id: c || generateId() };
-}
-
-function makeDocSnapshot(id, data) {
-  return { id, exists: () => !!data, data: () => (data ? { ...data } : undefined) };
-}
-
-function makeQuerySnapshot(rows) {
-  const docs = rows.map(([id, data]) => makeDocSnapshot(id, data));
-  return { docs, empty: docs.length === 0, size: docs.length, forEach(fn) { docs.forEach(fn); } };
-}
-
-function getField(data, docId, field) {
-  if (field === '__name__') return docId;
-  return data ? data[field] : undefined;
-}
-
-function toComparable(v) {
-  if (v && typeof v.toMillis === 'function') return v.toMillis();
-  if (v instanceof Date) return v.getTime();
-  return v;
-}
-
-function matchWhere(fieldVal, op, value) {
-  const a = toComparable(fieldVal);
-  const b = toComparable(value);
-  switch (op) {
-    case '==': return a === b;
-    case '!=': return a !== b;
-    case '>=': return a >= b;
-    case '<=': return a <= b;
-    case '>':  return a > b;
-    case '<':  return a < b;
-    case 'in': return Array.isArray(value) && value.includes(fieldVal);
-    case 'array-contains': return Array.isArray(fieldVal) && fieldVal.includes(value);
-    default: return true;
-  }
-}
-
-function compareField(a, b) {
-  const av = toComparable(a); const bv = toComparable(b);
-  if (av == null && bv == null) return 0;
-  if (av == null) return -1;
-  if (bv == null) return 1;
-  if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv);
-  return av < bv ? -1 : av > bv ? 1 : 0;
-}
-
-function runQuery(target) {
-  const name = target.__type === 'query' ? target.__collName : target.name;
-  let rows = [...ensureLoaded(name).entries()];
-  const constraints = target.__type === 'query' ? target.constraints : [];
-  constraints.filter((c) => c.kind === 'where').forEach((c) => {
-    rows = rows.filter(([id, data]) => matchWhere(getField(data, id, c.field), c.op, c.value));
-  });
-  const orderC = constraints.find((c) => c.kind === 'orderBy');
-  if (orderC) {
-    rows = [...rows].sort(
-      (a, b) => compareField(getField(a[1], a[0], orderC.field), getField(b[1], b[0], orderC.field)) * (orderC.dir === 'desc' ? -1 : 1)
-    );
-  }
-  const limitC = constraints.find((c) => c.kind === 'limit');
-  if (limitC) rows = rows.slice(0, limitC.n);
-  return rows;
-}
-
-export function query(collRef, ...constraints) {
-  return { __type: 'query', __collName: collRef.name, constraints };
-}
-export function where(field, op, value) { return { kind: 'where', field, op, value }; }
-export function orderBy(field, dir = 'asc') { return { kind: 'orderBy', field, dir }; }
-export function limit(n) { return { kind: 'limit', n }; }
-
-export async function addDoc(collRef, data) {
-  const id = generateId();
-  writeRaw(collRef.name, id, resolveWriteData(data, null));
-  persistTouched([collRef.name]);
-  notify([collRef.name]);
-  return { __type: 'doc', name: collRef.name, id };
-}
-export async function setDoc(ref, data, opts) {
-  const base = opts?.merge ? getRaw(ref.name, ref.id) : null;
-  writeRaw(ref.name, ref.id, resolveWriteData(data, base));
-  persistTouched([ref.name]);
-  notify([ref.name]);
-}
-export async function updateDoc(ref, data) {
-  const existing = getRaw(ref.name, ref.id);
-  if (!existing) throw new Error(`[demo] No document to update at ${ref.name}/${ref.id}`);
-  writeRaw(ref.name, ref.id, resolveWriteData(data, existing));
-  persistTouched([ref.name]);
-  notify([ref.name]);
-}
-export async function deleteDoc(ref) {
-  deleteRaw(ref.name, ref.id);
-  persistTouched([ref.name]);
-  notify([ref.name]);
-}
-export async function getDoc(ref) {
-  return makeDocSnapshot(ref.id, getRaw(ref.name, ref.id));
-}
-export async function getDocs(target) {
-  return makeQuerySnapshot(runQuery(target));
-}
-export function onSnapshot(target, onNext, onError) {
-  const isDocRef = target.__type === 'doc';
-  const key = isDocRef ? target.name : target.__collName;
-  const deliver = () => {
-    try {
-      if (isDocRef) onNext(makeDocSnapshot(target.id, getRaw(target.name, target.id)));
-      else onNext(makeQuerySnapshot(runQuery(target)));
-    } catch (err) {
-      onError?.(err);
-    }
-  };
-  const timer = setTimeout(deliver, 0);
-  const unsub = subscribe(key, deliver);
-  return () => { clearTimeout(timer); unsub(); };
-}
-
-export function writeBatch() {
-  const ops = [];
-  return {
-    set(ref, data, opts) { ops.push({ type: 'set', ref, data, opts }); },
-    update(ref, data) { ops.push({ type: 'update', ref, data }); },
-    delete(ref) { ops.push({ type: 'delete', ref }); },
-    async commit() {
-      const touched = new Set();
-      for (const op of ops) {
-        if (op.type === 'set') {
-          const base = op.opts?.merge ? getRaw(op.ref.name, op.ref.id) : null;
-          writeRaw(op.ref.name, op.ref.id, resolveWriteData(op.data, base));
-        } else if (op.type === 'update') {
-          const existing = getRaw(op.ref.name, op.ref.id) || {};
-          writeRaw(op.ref.name, op.ref.id, resolveWriteData(op.data, existing));
-        } else if (op.type === 'delete') {
-          deleteRaw(op.ref.name, op.ref.id);
-        }
-        touched.add(op.ref.name);
-      }
-      persistTouched([...touched]);
-      notify([...touched]);
-    },
-  };
-}
-
-export async function runTransaction(_db, updateFn) {
-  const touched = new Set();
-  const tx = {
-    async get(ref) { return makeDocSnapshot(ref.id, getRaw(ref.name, ref.id)); },
-    set(ref, data, opts) {
-      const base = opts?.merge ? getRaw(ref.name, ref.id) : null;
-      writeRaw(ref.name, ref.id, resolveWriteData(data, base));
-      touched.add(ref.name);
-    },
-    update(ref, data) {
-      const existing = getRaw(ref.name, ref.id) || {};
-      writeRaw(ref.name, ref.id, resolveWriteData(data, existing));
-      touched.add(ref.name);
-    },
-    delete(ref) { deleteRaw(ref.name, ref.id); touched.add(ref.name); },
-  };
-  const result = await updateFn(tx);
-  persistTouched([...touched]);
-  notify([...touched]);
-  return result;
-}
-
-export function initializeFirestore() { return { __demo: true }; }
-export function persistentLocalCache() { return {}; }
-export function persistentMultipleTabManager() { return {}; }
-export function connectFirestoreEmulator() {}
-
-export function seedDoc(name, id, data) { writeRaw(name, id, data); }
-export function seedCommit(names) { persistTouched(names); notify(names); }
-export function clearAllDemoData() {
-  Object.keys(localStorage)
-    .filter((k) => k.startsWith(STORAGE_PREFIX))
-    .forEach((k) => localStorage.removeItem(k));
-  const touched = [...cache.keys()];
-  cache.clear();
-  notify(touched);
-}
-export { makeTimestamp };
-````
-
-## File: src/demo/seedData.js
-````javascript
-// src/demo/seedData.js
-import { seedDoc, seedCommit, clearAllDemoData, makeTimestamp } from './localFirestore';
-import { DEMO_UID } from './localAuth';
-
-// MULTI-TENANT CHANGE: every collection in the real app is now scoped by
-// `businessId`, and `tenantQuery()` throws if it's ever called without
-// one. The demo dataset previously seeded documents with no businessId at
-// all — under the new architecture that would make every single page's
-// queries throw immediately on `npm run dev:demo`. This file now stamps
-// a fixed DEMO_BUSINESS_ID onto every seeded document, and the demo
-// user's own profile carries that same businessId + the new `role:
-// 'owner'` value (replacing the old `role: 'admin'`), exactly mirroring
-// what a real signed-up owner's profile looks like.
-export const DEMO_BUSINESS_ID = 'demo-business';
-
-const SUPPLIERS = [
-  {
-    id: 'sup_nairobi_electronics',
-    name: 'Nairobi Electronics Wholesale Ltd',
-    contactPerson: 'Peter Mwangi',
-    phone: '0722 445 108',
-    email: 'sales@nairobielectronics.co.ke',
-    address: 'River Road, Nairobi',
-    notes: 'Main supplier for accessories and cables.',
-  },
-  {
-    id: 'sup_techhub',
-    name: 'TechHub Distributors Kenya',
-    contactPerson: 'Grace Wanjiru',
-    phone: '0733 219 764',
-    email: 'orders@techhubke.com',
-    address: 'Kimathi Street, Nairobi',
-    notes: 'Supplies laptops, monitors, and peripherals.',
-  },
-];
-
-const PRODUCTS = [
-  { name: 'Wireless Mouse',            category: 'Electronics', costPrice: 650,   sellingPrice: 950,   stock: 40, lowStockThreshold: 8,  barcode: '6009880123451', supplierId: 'sup_nairobi_electronics' },
-  { name: 'Mechanical Keyboard',       category: 'Electronics', costPrice: 2800,  sellingPrice: 3999,  stock: 15, lowStockThreshold: 5,  barcode: '6009880123452', supplierId: 'sup_techhub' },
-  { name: 'USB Flash Disk 32GB',       category: 'Electronics', costPrice: 350,   sellingPrice: 599,   stock: 60, lowStockThreshold: 10, barcode: '6009880123453', supplierId: 'sup_nairobi_electronics' },
-  { name: 'External Hard Drive 1TB',   category: 'Electronics', costPrice: 4200,  sellingPrice: 5499,  stock: 12, lowStockThreshold: 4,  barcode: '6009880123454', supplierId: 'sup_techhub' },
-  { name: 'Power Bank 10000mAh',       category: 'Electronics', costPrice: 1100,  sellingPrice: 1699,  stock: 25, lowStockThreshold: 6,  barcode: '6009880123455', supplierId: 'sup_nairobi_electronics' },
-  { name: 'USB-C Charger 20W',         category: 'Electronics', costPrice: 550,   sellingPrice: 899,   stock: 4,  lowStockThreshold: 8,  barcode: '6009880123456', supplierId: 'sup_nairobi_electronics' },
-  { name: 'Phone Charger (Micro-USB)', category: 'Electronics', costPrice: 300,   sellingPrice: 549,   stock: 3,  lowStockThreshold: 8,  barcode: '6009880123457', supplierId: 'sup_nairobi_electronics' },
-  { name: 'HDMI Cable 1.5m',           category: 'Electronics', costPrice: 250,   sellingPrice: 449,   stock: 30, lowStockThreshold: 6,  barcode: '6009880123458', supplierId: 'sup_nairobi_electronics' },
-  { name: 'Monitor 24" LED',           category: 'Electronics', costPrice: 12500, sellingPrice: 15999, stock: 6,  lowStockThreshold: 3,  barcode: '6009880123459', supplierId: 'sup_techhub' },
-  { name: 'Laptop Stand',              category: 'Electronics', costPrice: 900,   sellingPrice: 1450,  stock: 18, lowStockThreshold: 5,  barcode: '6009880123460', supplierId: 'sup_techhub' },
-  { name: 'Bluetooth Speaker',         category: 'Electronics', costPrice: 1800,  sellingPrice: 2699,  stock: 2,  lowStockThreshold: 5,  barcode: '6009880123461', supplierId: 'sup_techhub' },
-  { name: 'Earbuds (Wireless)',        category: 'Electronics', costPrice: 1200,  sellingPrice: 1899,  stock: 22, lowStockThreshold: 6,  barcode: '6009880123462', supplierId: 'sup_nairobi_electronics' },
-  { name: 'Headphones (Over-ear)',     category: 'Electronics', costPrice: 2200,  sellingPrice: 3299,  stock: 10, lowStockThreshold: 4,  barcode: '6009880123463', supplierId: 'sup_techhub' },
-  { name: 'Extension Cable (4-way)',   category: 'Electronics', costPrice: 700,   sellingPrice: 1099,  stock: 20, lowStockThreshold: 5,  barcode: '6009880123464', supplierId: 'sup_nairobi_electronics' },
-  { name: 'Router (Wireless N)',       category: 'Electronics', costPrice: 2600,  sellingPrice: 3599,  stock: 9,  lowStockThreshold: 4,  barcode: '6009880123465', supplierId: 'sup_techhub' },
-  { name: 'Smart Watch',               category: 'Electronics', costPrice: 3500,  sellingPrice: 4999,  stock: 7,  lowStockThreshold: 3,  barcode: '6009880123466', supplierId: 'sup_techhub' },
-];
-
-function buildAndSeed() {
-  const now = makeTimestamp(Date.now());
-  const touched = new Set();
-
-  SUPPLIERS.forEach((s) => {
-    const { id, ...data } = s;
-    seedDoc('suppliers', id, { ...data, businessId: DEMO_BUSINESS_ID, createdAt: now });
-    touched.add('suppliers');
-  });
-
-  PRODUCTS.forEach((p, i) => {
-    const id = `demo_product_${i + 1}`;
-    const internalCode = `FB-${String(i + 1).padStart(6, '0')}`;
-    seedDoc('products', id, { ...p, businessId: DEMO_BUSINESS_ID, internalCode, deleted: false, createdAt: now, updatedAt: now });
-    // Flat, businessId-prefixed doc id — matches utils/products.js exactly,
-    // so a demo-seeded barcode round-trips through the same lookup code a
-    // real business's products do.
-    seedDoc('barcodeIndex', `${DEMO_BUSINESS_ID}__${p.barcode}`, { businessId: DEMO_BUSINESS_ID, barcode: p.barcode, productId: id });
-    touched.add('products');
-    touched.add('barcodeIndex');
-  });
-  seedDoc('productCodeCounters', DEMO_BUSINESS_ID, { businessId: DEMO_BUSINESS_ID, lastNumber: PRODUCTS.length });
-  touched.add('productCodeCounters');
-
-  // Business record + owner profile — mirrors exactly what Setup.jsx
-  // creates for a real signed-up owner, so nothing downstream needs to
-  // special-case Demo Mode.
-  seedDoc('businesses', DEMO_BUSINESS_ID, {
-    name: 'FlowBiz Demo Store',
-    ownerIds: [DEMO_UID],
-    createdAt: now,
-    createdBy: DEMO_UID,
-    subscription: { plan: 'free', status: 'active', expiry: null },
-  });
-  touched.add('businesses');
-
-  seedDoc('users', DEMO_UID, {
-    uid: DEMO_UID, email: 'demo@flowbiz.app', displayName: 'Demo Owner',
-    role: 'owner', businessId: DEMO_BUSINESS_ID, active: true, createdAt: now,
-  });
-  touched.add('users');
-
-  // Replaces the old settings/general + settings/categories docs — see
-  // useSettings.js and ProductFormModal.jsx, both of which now read this
-  // single per-business document.
-  seedDoc('businessSettings', DEMO_BUSINESS_ID, {
-    shopName: 'FlowBiz Demo Store',
-    cashierCanRecordExpenses: true,
-    categories: ['Groceries', 'Beverages', 'Electronics', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'],
-  });
-  touched.add('businessSettings');
-
-  // Sales, purchases, expenses, credit sales, repayments, and daily
-  // sessions are intentionally left empty — those figures should come
-  // from actually using the app, per spec.
-
-  seedCommit([...touched]);
-}
-
-export function seedDemoDataIfNeeded() {
-  if (localStorage.getItem('flowbiz_demo_seeded_v2') === 'true') return;
-  buildAndSeed();
-  localStorage.setItem('flowbiz_demo_seeded_v2', 'true');
-}
-
-export function resetDemoData() {
-  clearAllDemoData();
-  buildAndSeed();
-  localStorage.setItem('flowbiz_demo_seeded_v2', 'true');
-}
-````
-
 ## File: src/hooks/useOnlineStatus.js
 ````javascript
 import { useEffect, useState } from 'react';
@@ -3776,59 +3231,6 @@ export function useOnlineStatus() {
     return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
   }, []);
   return online;
-}
-````
-
-## File: src/hooks/usePwaInstall.js
-````javascript
-import { useState, useEffect } from 'react';
-import toast from 'react-hot-toast';
-
-export function usePwaInstall() {
-  const [deferredPrompt, setDeferredPrompt] = useState(null);
-  const [isInstallable, setIsInstallable] = useState(false);
-  const [isIOS, setIsIOS] = useState(false);
-  const [isStandalone, setIsStandalone] = useState(false);
-
-  useEffect(() => {
-    const standalone =
-      window.matchMedia?.('(display-mode: standalone)').matches ||
-      window.navigator.standalone === true;
-    setIsStandalone(standalone);
-
-    const userAgent = (navigator.userAgent || '').toLowerCase();
-    const isIosDevice = /iphone|ipad|ipod/.test(userAgent);
-    setIsIOS(isIosDevice && !standalone);
-
-    const handleBeforeInstallPrompt = (e) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      setIsInstallable(true);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    };
-  }, []);
-
-  const promptInstall = async () => {
-    if (!deferredPrompt) {
-      if (/iphone|ipad|ipod/.test((navigator.userAgent || '').toLowerCase())) {
-        return false;
-      }
-      toast('To install, tap your browser menu (⋮) and select "Install app" or "Add to Home screen".');
-      return false;
-    }
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    setDeferredPrompt(null);
-    setIsInstallable(false);
-    return outcome === 'accepted';
-  };
-
-  return { isInstallable, isIOS, isStandalone, promptInstall };
 }
 ````
 
@@ -3946,231 +3348,6 @@ export function exportToCSV(filename, rows) {
   link.href = url; link.setAttribute('download', filename);
   document.body.appendChild(link); link.click();
   document.body.removeChild(link); URL.revokeObjectURL(url);
-}
-````
-
-## File: src/utils/dataExport.js
-````javascript
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
-
-export const EXPORT_COLLECTIONS = [
-  'businessSettings',
-  'customers', 'suppliers', 'products', 'sales', 'creditSales', 'purchases',
-  'expenses', 'dailySessions', 'repayments', 'supplierPayments',
-  'stockAdjustments', 'refunds', 'debtPaymentReceipts', 'sharedDocuments', 'staffInvites',
-];
-
-function timestampToIso(value) {
-  if (value && typeof value.toDate === 'function') return value.toDate().toISOString();
-  if (value instanceof Date) return value.toISOString();
-  return value;
-}
-
-function flattenForCsv(docData) {
-  const flat = {};
-  Object.entries(docData).forEach(([key, value]) => {
-    if (Array.isArray(value) || (value && typeof value === 'object')) {
-      flat[key] = JSON.stringify(value);
-    } else {
-      flat[key] = value ?? '';
-    }
-  });
-  return flat;
-}
-
-function escapeCsvCell(value) {
-  if (value === null || value === undefined) return '';
-  let str = String(value);
-  if (/^[=+\-@\t\r]/.test(str)) str = "'" + str;
-  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
-  return str;
-}
-
-function rowsToCsv(rows) {
-  if (!rows || rows.length === 0) return '';
-  const headers = Array.from(rows.reduce((set, row) => { Object.keys(row).forEach((k) => set.add(k)); return set; }, new Set()));
-  const lines = [headers.join(',')];
-  rows.forEach((row) => lines.push(headers.map((h) => escapeCsvCell(row[h])).join(',')));
-  return lines.join('\n');
-}
-
-export async function exportBusinessData(businessId, { onProgress } = {}) {
-  if (!businessId) throw new Error('exportBusinessData() called with no businessId');
-
-  const manifest = { exportedAt: new Date().toISOString(), businessId, collections: {} };
-  const csvFiles = {};
-
-  for (let i = 0; i < EXPORT_COLLECTIONS.length; i++) {
-    const name = EXPORT_COLLECTIONS[i];
-    onProgress?.(name, i, EXPORT_COLLECTIONS.length);
-
-    const q = name === 'businessSettings'
-      ? query(collection(db, name), where('__name__', '==', businessId))
-      : query(collection(db, name), where('businessId', '==', businessId));
-
-    const snap = await getDocs(q);
-    const docs = snap.docs.map((d) => {
-      const jsonSafe = {};
-      Object.entries(d.data()).forEach(([k, v]) => { jsonSafe[k] = timestampToIso(v); });
-      return { id: d.id, ...jsonSafe };
-    });
-
-    manifest.collections[name] = docs;
-    csvFiles[name] = rowsToCsv(docs.map((d) => {
-      const { id, ...rest } = d;
-      return { id, ...flattenForCsv(rest) };
-    }));
-  }
-
-  return { manifest, csvFiles };
-}
-
-export async function buildExportZip(businessId, { onProgress } = {}) {
-  const { manifest, csvFiles } = await exportBusinessData(businessId, { onProgress });
-  const JSZip = (await import('jszip')).default;
-  const zip = new JSZip();
-
-  zip.file('flowbiz-export.json', JSON.stringify(manifest, null, 2));
-  const csvFolder = zip.folder('csv');
-  Object.entries(csvFiles).forEach(([name, csv]) => { if (csv) csvFolder.file(`${name}.csv`, csv); });
-
-  return zip.generateAsync({ type: 'blob' });
-}
-````
-
-## File: src/utils/dataImport.js
-````javascript
-import { doc, writeBatch, getDocs, query, collection, where, limit } from 'firebase/firestore';
-import { db } from '../firebase';
-
-export const IMPORT_COLLECTIONS = [
-  'businessSettings',
-  'customers', 'suppliers', 'products', 'sales', 'creditSales', 'purchases',
-  'expenses', 'dailySessions', 'repayments', 'supplierPayments',
-  'stockAdjustments', 'refunds', 'debtPaymentReceipts', 'sharedDocuments', 'staffInvites',
-];
-
-function isoToDate(value) {
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
-    const d = new Date(value);
-    if (!Number.isNaN(d.getTime())) return d;
-  }
-  return value;
-}
-
-function reviveValue(value) {
-  if (value === null || value === undefined) return value;
-  if (typeof value === 'string') return isoToDate(value);
-  if (Array.isArray(value)) return value.map(reviveValue);
-  if (typeof value === 'object' && !(value instanceof Date)) {
-    const obj = {};
-    for (const [k, v] of Object.entries(value)) {
-      obj[k] = reviveValue(v);
-    }
-    return obj;
-  }
-  return value;
-}
-
-function reviveDoc(data) {
-  const revived = {};
-  Object.entries(data).forEach(([k, v]) => { revived[k] = reviveValue(v); });
-  return revived;
-}
-
-export async function readExportZip(file) {
-  const JSZip = (await import('jszip')).default;
-  const zip = await JSZip.loadAsync(file);
-  const manifestFile = zip.file('flowbiz-export.json');
-  if (!manifestFile) throw new Error("That doesn't look like a FlowBiz export — flowbiz-export.json was not found in the zip archive.");
-  const text = await manifestFile.async('string');
-  let manifest;
-  try {
-    manifest = JSON.parse(text);
-  } catch {
-    throw new Error('flowbiz-export.json is not valid — the file may be corrupted.');
-  }
-  if (!manifest.collections || typeof manifest.collections !== 'object') {
-    throw new Error("That doesn't look like a valid FlowBiz export — missing collection data.");
-  }
-  return manifest;
-}
-
-export async function checkExistingData(businessId, manifest) {
-  if (!businessId) throw new Error('checkExistingData requires a businessId');
-  const nonEmpty = [];
-  for (const name of IMPORT_COLLECTIONS) {
-    if (!manifest.collections[name]?.length) continue;
-    try {
-      const q = name === 'businessSettings'
-        ? query(collection(db, name), where('__name__', '==', businessId), limit(1))
-        : query(collection(db, name), where('businessId', '==', businessId), limit(1));
-      const snap = await getDocs(q);
-      if (!snap.empty) nonEmpty.push(name);
-    } catch {
-      // Continue checking remaining collections
-    }
-  }
-  return nonEmpty;
-}
-
-function resolveTargetId(name, originalId, businessId, manifestBusinessId) {
-  if (name === 'businessSettings') return businessId;
-  if (name === 'dailySessions') {
-    const dateMatch = originalId.match(/(\d{4}-\d{2}-\d{2})$/);
-    if (dateMatch) return `${businessId}_${dateMatch[1]}`;
-  }
-  if (manifestBusinessId && manifestBusinessId !== businessId && originalId.startsWith(`${manifestBusinessId}_`)) {
-    return originalId.replace(`${manifestBusinessId}_`, `${businessId}_`);
-  }
-  return originalId;
-}
-
-export async function importBusinessData(businessId, manifest, { onProgress } = {}) {
-  if (!businessId) throw new Error('importBusinessData() called with no businessId');
-
-  const results = {};
-  const barcodeEntries = [];
-  const manifestBusinessId = manifest.businessId || null;
-
-  for (let i = 0; i < IMPORT_COLLECTIONS.length; i++) {
-    const name = IMPORT_COLLECTIONS[i];
-    const docs = manifest.collections[name] || [];
-    onProgress?.(name, i, IMPORT_COLLECTIONS.length);
-    if (docs.length === 0) { results[name] = 0; continue; }
-
-    let written = 0;
-    for (let start = 0; start < docs.length; start += 350) {
-      const chunk = docs.slice(start, start + 350);
-      const batch = writeBatch(db);
-      chunk.forEach((d) => {
-        const { id, ...rest } = d;
-        if (!id) return;
-        const revived = reviveDoc(rest);
-        revived.businessId = businessId;
-        const targetId = resolveTargetId(name, id, businessId, manifestBusinessId);
-        batch.set(doc(db, name, targetId), revived);
-        if (name === 'products' && revived.barcode) {
-          barcodeEntries.push({ businessId, barcode: revived.barcode, productId: targetId });
-        }
-      });
-      await batch.commit();
-      written += chunk.length;
-    }
-    results[name] = written;
-  }
-
-  for (let start = 0; start < barcodeEntries.length; start += 350) {
-    const chunk = barcodeEntries.slice(start, start + 350);
-    const batch = writeBatch(db);
-    chunk.forEach((entry) => {
-      batch.set(doc(db, 'barcodeIndex', `${businessId}__${entry.barcode}`), entry);
-    });
-    await batch.commit();
-  }
-
-  return results;
 }
 ````
 
@@ -4671,19 +3848,6 @@ Run the app once — Firestore prints console errors with direct auto-create lin
 }
 ````
 
-## File: storage.rules
-````
-rules_version = '2';
-service firebase.storage {
-  match /b/{bucket}/o {
-    match /businesses/{businessId}/{fileName} {
-      allow read: if true;
-      allow write: if request.auth != null && request.resource.size < 5 * 1024 * 1024;
-    }
-  }
-}
-````
-
 ## File: tailwind.config.js
 ````javascript
 /** @type {import('tailwindcss').Config} */
@@ -4721,106 +3885,6 @@ export default {
   },
   plugins: [],
 };
-````
-
-## File: vite.config.js
-````javascript
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import { VitePWA } from 'vite-plugin-pwa';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// `defineConfig` accepts a function so we can read the active Vite `mode`
-// (set by the --mode flag on the CLI) and branch on it.
-export default defineConfig(({ mode }) => ({
-  server: {
-    watch: {
-      usePolling: true,
-      interval: 100,
-    },
-  },
-
-  // DEMO MODE — this is what actually connects Demo Mode to the app.
-  // `npm run dev:demo` runs `vite --mode demo`. When mode is 'demo', every
-  // `import ... from 'firebase/firestore'` and `import ... from
-  // 'firebase/auth'` ANYWHERE in the codebase — every page, every hook,
-  // and src/firebase.js itself — is transparently redirected to our local,
-  // localStorage-backed implementations (src/demo/localFirestore.js and
-  // src/demo/localAuth.js) instead of the real Firebase SDK. No other file
-  // needs to know Demo Mode exists; they all just import from
-  // 'firebase/firestore' / 'firebase/auth' as normal and get whichever
-  // implementation matches how the dev server was started.
-  //
-  // `npm run dev` (no --mode) leaves `resolve.alias` empty, so it is
-  // 100% unaffected and behaves exactly as before — real Firebase, real
-  // Firestore, real Authentication.
-  resolve: mode === 'demo' ? {
-    alias: {
-      'firebase/firestore': path.resolve(__dirname, 'src/demo/localFirestore.js'),
-      'firebase/auth': path.resolve(__dirname, 'src/demo/localAuth.js'),
-    },
-  } : {},
-
-  plugins: [
-    react(),
-
-    VitePWA({
-
-      registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'favicon-32.png', 'favicon-16.png', 'icons/*.png'],
-      manifest: {
-        name: 'FlowBiz — Business Manager',
-        short_name: 'FlowBiz',
-        description: 'POS, inventory and finance management for Kenyan SMBs',
-        theme_color: '#1a623c',
-        background_color: '#faf6ef',
-        display: 'standalone',
-        orientation: 'natural',
-        start_url: '/',
-        scope: '/',
-        lang: 'en-KE',
-        categories: ['business', 'finance', 'productivity'],
-        icons: [
-          { src: 'icons/icon-72.png',  sizes: '72x72',   type: 'image/png' },
-          { src: 'icons/icon-96.png',  sizes: '96x96',   type: 'image/png' },
-          { src: 'icons/icon-128.png', sizes: '128x128', type: 'image/png' },
-          { src: 'icons/icon-144.png', sizes: '144x144', type: 'image/png' },
-          { src: 'icons/icon-152.png', sizes: '152x152', type: 'image/png' },
-          { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'icons/icon-384.png', sizes: '384x384', type: 'image/png' },
-          { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
-        ],
-        screenshots: [],
-      },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-cache',
-              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          {
-            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'gstatic-fonts-cache',
-              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
-      },
-    }),
-  ],
-}));
 ````
 
 ## File: cloudflare-worker/src/lib/firestore.js
@@ -5327,41 +4391,119 @@ export default function ConfirmDialog({ open, title, message, confirmLabel = 'Co
 }
 ````
 
-## File: src/components/common/WhatsAppFloatingButton.jsx
+## File: src/components/common/PwaInstallBanner.jsx
 ````javascript
-// src/components/common/WhatsAppFloatingButton.jsx
+// src/components/common/PwaInstallBanner.jsx
+import { useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import { Download, Share, PlusSquare, X } from 'lucide-react';
+import { usePwaInstall } from '../../hooks/usePwaInstall';
+import { isDemoMode } from '../../demo/demoMode';
 
-export default function WhatsAppFloatingButton({
-  phone = '254741104469',
-  message = 'Hello FlowBiz! I would like to inquire more about the POS system for my business.',
-}) {
-  const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+const DISMISSED_KEY = 'flowbiz_pwa_banner_dismissed';
+
+export default function PwaInstallBanner() {
+  const location = useLocation();
+  const { isInstallable, isIOS, isStandalone, promptInstall } = usePwaInstall();
+
+  // Read persisted dismissal state from localStorage
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(DISMISSED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleDismiss = () => {
+    setDismissed(true);
+    try {
+      localStorage.setItem(DISMISSED_KEY, 'true');
+    } catch {
+      // Ignore if localStorage is unavailable
+    }
+  };
+
+  const handleInstallClick = async () => {
+    const accepted = await promptInstall();
+    if (accepted) {
+      handleDismiss();
+    }
+  };
+
+  // Only allow on landing page ('/') and signup/setup pages ('/setup', '/signup')
+  const allowedPaths = ['/', '/setup', '/signup'];
+  const isAllowedPath = allowedPaths.includes(location.pathname);
+
+  // Never show this inside the Demo build: its PWA manifest is scoped to
+  // the real app's root ('/'), not '/demo/', so "installing" it here
+  // would point at the wrong app — and nobody needs to install a demo
+  // anyway. Otherwise unchanged: skipped in installed-app mode, once
+  // dismissed, or off the allowed pages.
+  if (isDemoMode() || isStandalone || dismissed || !isAllowedPath) return null;
 
   return (
-    <div className="group fixed bottom-5 right-5 z-40 flex items-center gap-2.5">
-      {/* Floating Tooltip on Desktop Hover */}
-      <span className="pointer-events-none hidden rounded-xl bg-[#15171d] px-3 py-1.5 text-xs font-bold text-white shadow-xl transition-all duration-200 opacity-0 translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 sm:inline-block whitespace-nowrap">
-        Chat with us
-      </span>
-
-      {/* Clean, Uniform Circular WhatsApp Button (No pulsing dot) */}
-      <a
-        href={whatsappUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Chat with FlowBiz on WhatsApp"
-        className="flex h-12 w-12 sm:h-13 sm:w-13 items-center justify-center rounded-full bg-[#25D366] text-white shadow-xl transition-all duration-300 hover:bg-[#20ba5a] hover:shadow-2xl hover:scale-105 active:scale-95 shrink-0"
-      >
-        {/* Centered Official WhatsApp SVG Icon */}
-        <svg
-          className="h-6 w-6 sm:h-7 sm:w-7 fill-current"
-          viewBox="0 0 24 24"
-          xmlns="http://www.w3.org/2000/svg"
+    <aside
+      aria-label="Install FlowBiz App"
+      className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md rounded-2xl border border-moss-200 bg-white p-4 shadow-2xl animate-fade-in"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <img
+            src="/icons/icon-96.png"
+            alt="FlowBiz App Icon"
+            className="h-11 w-11 rounded-xl shadow-xs shrink-0 object-cover"
+            onError={(e) => {
+              e.currentTarget.src = '/favicon.svg';
+            }}
+          />
+          <div>
+            <h4 className="font-display text-sm font-bold text-ink-900">
+              Install FlowBiz App
+            </h4>
+            <p className="text-xs text-ink-500">
+              Run your counter faster and work 100% offline.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleDismiss}
+          className="text-ink-400 hover:text-ink-700 p-1 min-h-[32px] min-w-[32px] flex items-center justify-center rounded-lg"
+          aria-label="Close install prompt"
         >
-          <path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2zm0 18.15c-1.48 0-2.93-.4-4.2-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.19 8.19 0 0 1-1.26-4.38c0-4.54 3.7-8.24 8.25-8.24 2.2 0 4.27.86 5.82 2.42a8.18 8.18 0 0 1 2.41 5.83c0 4.55-3.7 8.23-8.23 8.23zm4.52-6.16c-.25-.12-1.47-.72-1.7-.81-.23-.09-.39-.13-.56.12-.17.25-.64.81-.79.97-.14.17-.29.19-.54.06-.25-.12-1.05-.39-2-1.23-.74-.66-1.23-1.47-1.38-1.72-.14-.25-.02-.38.11-.5.11-.11.25-.29.37-.43.12-.15.17-.25.25-.42.08-.17.04-.31-.02-.43s-.56-1.34-.76-1.84c-.2-.48-.41-.42-.56-.43h-.48c-.17 0-.43.06-.66.31-.22.25-.86.84-.86 2.05s.88 2.38 1 2.55c.13.17 1.73 2.65 4.2 3.71.59.25 1.05.41 1.41.52.59.19 1.13.16 1.56.1.48-.07 1.47-.6 1.68-1.18.21-.58.21-1.07.15-1.18-.07-.1-.23-.17-.48-.29z" />
-        </svg>
-      </a>
-    </div>
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="mt-3">
+        {/* Android & Desktop Chrome / Edge 1-Click Install Button */}
+        {isInstallable ? (
+          <button
+            type="button"
+            onClick={handleInstallClick}
+            className="btn-primary w-full !py-2 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
+          >
+            <Download className="h-4 w-4" /> Install Free App
+          </button>
+        ) : isIOS ? (
+          <div className="rounded-lg bg-[#faf6ef] p-2.5 text-[11px] text-ink-700 border border-ink-100">
+            <p className="font-semibold flex items-center flex-wrap gap-1">
+              Tap <Share className="h-3.5 w-3.5 text-moss-700 inline" /> Share, then select{' '}
+              <PlusSquare className="h-3.5 w-3.5 text-moss-700 inline" /> &quot;Add to Home Screen&quot;
+            </p>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={handleInstallClick}
+            className="btn-primary w-full !py-2 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
+          >
+            <Download className="h-4 w-4" /> Install Free App
+          </button>
+        )}
+      </div>
+    </aside>
   );
 }
 ````
@@ -5662,121 +4804,6 @@ export default function RepaymentModal({ open, customer, totalOwed, onClose, onS
 }
 ````
 
-## File: src/components/landing/HeroSection.jsx
-````javascript
-import { Link } from 'react-router-dom';
-import { ArrowRight, CheckCircle2, ShieldCheck } from 'lucide-react';
-import { PosSimulationMockup } from './PosSimulationMockup';
-
-const HERO_PHOTO_URL = '/hero-photo.webp';
-
-export function HeroSection() {
-  return (
-    <section className="relative overflow-hidden">
-      
-      {/* Full-Bleed Hero Background Banner */}
-      <div className="relative min-h-[580px] lg:min-h-[680px] flex items-center bg-[#0d1f16]">
-        
-        {/* 1. Base Background Photo */}
-        <div className="absolute inset-0 z-0 overflow-hidden">
-          <img
-            src={HERO_PHOTO_URL}
-            alt="Retail shop owner managing inventory and POS"
-            className="w-full h-full object-cover object-center lg:object-right"
-            onError={(e) => {
-              e.currentTarget.style.opacity = '0.25';
-            }}
-          />
-        </div>
-
-        {/* 2. Left-to-Right Blur & Gradient Overlay */}
-        <div 
-          className="absolute inset-0 z-1 pointer-events-none"
-          style={{
-            background: 'linear-gradient(to right, rgba(13, 31, 22, 0.96) 0%, rgba(13, 31, 22, 0.88) 42%, rgba(13, 31, 22, 0.35) 70%, rgba(13, 31, 22, 0.02) 100%)',
-          }}
-        />
-
-        {/* 3. Soft blur mask on left for enhanced text clarity */}
-        <div 
-          className="absolute inset-0 z-1 pointer-events-none hidden md:block"
-          style={{
-            maskImage: 'linear-gradient(to right, black 25%, transparent 65%)',
-            WebkitMaskImage: 'linear-gradient(to right, black 25%, transparent 65%)',
-            backdropFilter: 'blur(8px)',
-            WebkitBackdropFilter: 'blur(8px)',
-          }}
-        />
-
-        {/* 4. Foreground Content Container */}
-        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24 w-full">
-          <div className="max-w-3xl space-y-6 text-white">
-
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-black text-white tracking-tight leading-[1.08] drop-shadow-sm">
-              Run your business with ease
-            </h1>
-
-            <p className="text-base sm:text-lg lg:text-xl text-[#d1dcd4] font-normal leading-relaxed max-w-2xl">
-              Sell <strong className="text-white font-semibold">faster</strong>, know what you have in{' '}
-              <strong className="text-white font-semibold">stock</strong>, and keep your business running
-              even while <strong className="text-white font-semibold">offline</strong>, then see how it’s doing when you’re <strong className="text-white font-semibold">online.</strong>
-            </p>
-
-            <div className="pt-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5">
-              <Link
-                to="/setup"
-                className="bg-[#1a623c] text-white px-8 py-4 rounded-xl text-base font-bold shadow-lg hover:bg-[#144f30] transition-all flex items-center justify-center gap-2 border border-[#348a58]"
-              >
-                <span>Get Started Free</span>
-                <ArrowRight className="h-5 w-5" />
-              </Link>
-              <Link
-                to="/login"
-                className="bg-white/10 backdrop-blur-md border border-white/30 text-white px-7 py-4 rounded-xl text-base font-bold hover:bg-white/20 transition-all flex items-center justify-center"
-              >
-                Sign In to Counter
-              </Link>
-            </div>
-
-            <div className="pt-6 border-t border-white/15 grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-xs sm:text-sm font-semibold text-[#e1ece4]">
-              <span className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
-                Works 100% Offline
-              </span>
-              <span className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
-                M-Pesa Till Reconciled
-              </span>
-              <span className="flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4 text-[#a3e6ba] shrink-0" />
-                Customer Reminders
-              </span>
-              <span className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
-                No POS Hardware Required
-              </span>
-            </div>
-
-          </div>
-        </div>
-
-      </div>
-
-      {/* Interactive POS Simulator Section with ID linked to header */}
-      <div id="live-simulator" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 md:py-24 scroll-mt-14">
-        <div className="text-center mb-6">
-          <h2 className="text-xl sm:text-2xl font-extrabold text-[#15171d] mt-1">
-            Live Point of Sale Simulator
-          </h2>
-        </div>
-        <PosSimulationMockup />
-      </div>
-
-    </section>
-  );
-}
-````
-
 ## File: src/components/landing/HowItWorks.jsx
 ````javascript
 import { Link } from 'react-router-dom';
@@ -5860,106 +4887,41 @@ export function HowItWorks() {
 }
 ````
 
-## File: src/components/landing/LandingFooter.jsx
+## File: src/components/layout/AppShell.jsx
 ````javascript
-import { Link } from 'react-router-dom';
-import { Mail, Shield, FileText, ArrowRight } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import Sidebar from './Sidebar';
+import BottomNav from './BottomNav';
+import TopHeader from './TopHeader';
 
-export function LandingFooter() {
+export default function AppShell({ children }) {
+  const location = useLocation();
+  const isCounterRoute = location.pathname.startsWith('/counter');
+
+  // The Counter page benefits from a wider working area (product grid +
+  // checkout panel side by side), so on desktop the sidebar collapses to
+  // a slim icon rail automatically the moment it's opened, and expands
+  // again on every other page. This never touches mobile — Sidebar is
+  // hidden below the lg breakpoint regardless of this state. A person
+  // can still override it manually at any time via the toggle at the
+  // bottom of the sidebar; navigating away and back to Counter resets it
+  // to collapsed again.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(isCounterRoute);
+
+  useEffect(() => {
+    setSidebarCollapsed(isCounterRoute);
+  }, [isCounterRoute]);
+
   return (
-    <footer className="bg-[#15171d] text-[#cfd3da] border-t border-[#2b303c] pt-14 pb-10 text-xs">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
-        
-
-
-        {/* Footer Navigation Columns */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-          
-          {/* Brand Info */}
-          <div className="space-y-4 md:col-span-2">
-            <div className="flex items-center gap-3">
-             
-              <span className="font-bold text-xl text-white tracking-tight">FlowBiz</span>
-            </div>
-            <p className="text-xs text-[#9aa2b1] max-w-sm leading-relaxed">
-              The offline-first Point of Sale, inventory intelligence, and cash-flow management platform purpose-built for Kenyan retailers and small businesses.
-            </p>
-            <div className="flex items-center gap-2 text-[11px] text-[#767f8f]">
-              <span>Nairobi, Kenya</span>
-              <span>·</span>
-              <a href="mailto:support@flowbiz.co.ke" className="hover:text-white transition-colors flex items-center gap-1">
-                <Mail className="h-3 w-3" /> support@flowbiz.co.ke
-              </a>
-            </div>
-          </div>
-
-          {/* Application Navigation */}
-          <div className="space-y-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-white block">
-              Application
-            </span>
-            <ul className="space-y-2 text-[#9aa2b1]">
-              <li>
-                <a href="#features" className="hover:text-white transition-colors">
-                  POS Features
-                </a>
-              </li>
-              <li>
-                <a href="#simulator" className="hover:text-white transition-colors">
-                  Live Simulator
-                </a>
-              </li>
-              <li>
-                <a href="#how-it-works" className="hover:text-white transition-colors">
-                  How It Works
-                </a>
-              </li>
-              <li>
-                <a href="#pricing" className="hover:text-white transition-colors">
-                  Pricing
-                </a>
-              </li>
-              <li>
-                <a href="#faq" className="hover:text-white transition-colors">
-                  FAQ
-                </a>
-              </li>
-            </ul>
-          </div>
-
-          {/* Legal & Trust: Tight Spacing, No Sign In */}
-       {/* Column 3: Legal & Compliance */}
-          <div className="space-y-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-white block">
-              Trust & Legal
-            </span>
-            <ul className="space-y-2">
-              <li>
-                <Link to="/privacy" className="hover:text-white transition-colors flex items-center gap-1.5">
-                  <Shield className="h-3.5 w-3.5 text-[#54b67c]" />
-                  Privacy Policy (KDPA 2019)
-                </Link>
-              </li>
-              <li>
-                <Link to="/terms" className="hover:text-white transition-colors flex items-center gap-1.5">
-                  <FileText className="h-3.5 w-3.5 text-[#54b67c]" />
-                  Terms of Service
-                </Link>
-              </li>
-             
-            </ul>
-          </div>
-
-        </div>
-
-        {/* Bottom Line */}
-        <div className="pt-8 border-t border-[#2b303c] flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-[#767f8f]">
-          <p>© {new Date().getFullYear()} FlowBiz. All rights reserved.</p>
-          
-        </div>
-
+    <div className="flex min-h-screen bg-sand">
+      <Sidebar collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed((v) => !v)} />
+      <div className="flex min-h-screen flex-1 flex-col overflow-hidden">
+        <TopHeader />
+        <main className="flex-1 overflow-y-auto px-4 pb-28 pt-4 sm:px-6 lg:pb-8">{children}</main>
       </div>
-    </footer>
+      <BottomNav />
+    </div>
   );
 }
 ````
@@ -6322,6 +5284,275 @@ const handleConfirm = async () => {
 }
 ````
 
+## File: src/demo/localFirestore.js
+````javascript
+// src/demo/localFirestore.js
+const STORAGE_PREFIX = 'flowbiz_demo_data:';
+
+const cache = new Map();
+const listeners = new Map();
+let idCounter = 0;
+
+function generateId() {
+  idCounter += 1;
+  return `demo_${Date.now().toString(36)}${idCounter.toString(36)}`;
+}
+
+function makeTimestamp(millis) {
+  return {
+    __ts: true,
+    millis,
+    toDate() { return new Date(millis); },
+    toMillis() { return millis; },
+  };
+}
+
+function reviver(key, value) {
+  if (value && typeof value === 'object' && value.__ts === true && typeof value.millis === 'number') {
+    return makeTimestamp(value.millis);
+  }
+  return value;
+}
+
+function ensureLoaded(name) {
+  if (!cache.has(name)) {
+    let obj = {};
+    try {
+      const raw = localStorage.getItem(STORAGE_PREFIX + name);
+      if (raw) obj = JSON.parse(raw, reviver);
+    } catch { }
+    cache.set(name, new Map(Object.entries(obj)));
+  }
+  return cache.get(name);
+}
+
+function getRaw(name, id) { return ensureLoaded(name).get(id) || null; }
+function writeRaw(name, id, data) { ensureLoaded(name).set(id, data); }
+function deleteRaw(name, id) { ensureLoaded(name).delete(id); }
+
+function persistTouched(names) {
+  names.forEach((name) => {
+    const map = ensureLoaded(name);
+    localStorage.setItem(STORAGE_PREFIX + name, JSON.stringify(Object.fromEntries(map)));
+  });
+}
+
+function subscribe(name, fn) {
+  if (!listeners.has(name)) listeners.set(name, new Set());
+  listeners.get(name).add(fn);
+  return () => listeners.get(name)?.delete(fn);
+}
+
+function notify(names) { names.forEach((name) => listeners.get(name)?.forEach((fn) => fn())); }
+
+function isSentinel(v, kind) { return !!v && typeof v === 'object' && v.__sentinel === kind; }
+
+function resolveWriteData(data, base) {
+  const out = base ? { ...base } : {};
+  Object.entries(data).forEach(([k, v]) => {
+    if (isSentinel(v, 'serverTimestamp')) out[k] = makeTimestamp(Date.now());
+    else if (isSentinel(v, 'increment')) out[k] = (typeof out[k] === 'number' ? out[k] : 0) + v.n;
+    else if (isSentinel(v, 'deleteField')) delete out[k];
+    else out[k] = v;
+  });
+  return out;
+}
+
+export function increment(n) { return { __sentinel: 'increment', n }; }
+export function serverTimestamp() { return { __sentinel: 'serverTimestamp' }; }
+export function deleteField() { return { __sentinel: 'deleteField' }; }
+
+export function collection(_db, name) { return { __type: 'collection', name }; }
+export function doc(a, b, c) {
+  if (a && a.__type === 'collection') {
+    return { __type: 'doc', name: a.name, id: b || generateId() };
+  }
+  return { __type: 'doc', name: b, id: c || generateId() };
+}
+
+function makeDocSnapshot(id, data) {
+  return { id, exists: () => !!data, data: () => (data ? { ...data } : undefined) };
+}
+
+function makeQuerySnapshot(rows) {
+  const docs = rows.map(([id, data]) => makeDocSnapshot(id, data));
+  return { docs, empty: docs.length === 0, size: docs.length, forEach(fn) { docs.forEach(fn); } };
+}
+
+function getField(data, docId, field) {
+  if (field === '__name__') return docId;
+  return data ? data[field] : undefined;
+}
+
+function toComparable(v) {
+  if (v && typeof v.toMillis === 'function') return v.toMillis();
+  if (v instanceof Date) return v.getTime();
+  return v;
+}
+
+function matchWhere(fieldVal, op, value) {
+  const a = toComparable(fieldVal);
+  const b = toComparable(value);
+  switch (op) {
+    case '==': return a === b;
+    case '!=': return a !== b;
+    case '>=': return a >= b;
+    case '<=': return a <= b;
+    case '>':  return a > b;
+    case '<':  return a < b;
+    case 'in': return Array.isArray(value) && value.includes(fieldVal);
+    case 'array-contains': return Array.isArray(fieldVal) && fieldVal.includes(value);
+    default: return true;
+  }
+}
+
+function compareField(a, b) {
+  const av = toComparable(a); const bv = toComparable(b);
+  if (av == null && bv == null) return 0;
+  if (av == null) return -1;
+  if (bv == null) return 1;
+  if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv);
+  return av < bv ? -1 : av > bv ? 1 : 0;
+}
+
+function runQuery(target) {
+  const name = target.__type === 'query' ? target.__collName : target.name;
+  let rows = [...ensureLoaded(name).entries()];
+  const constraints = target.__type === 'query' ? target.constraints : [];
+  constraints.filter((c) => c.kind === 'where').forEach((c) => {
+    rows = rows.filter(([id, data]) => matchWhere(getField(data, id, c.field), c.op, c.value));
+  });
+  const orderC = constraints.find((c) => c.kind === 'orderBy');
+  if (orderC) {
+    rows = [...rows].sort(
+      (a, b) => compareField(getField(a[1], a[0], orderC.field), getField(b[1], b[0], orderC.field)) * (orderC.dir === 'desc' ? -1 : 1)
+    );
+  }
+  const limitC = constraints.find((c) => c.kind === 'limit');
+  if (limitC) rows = rows.slice(0, limitC.n);
+  return rows;
+}
+
+export function query(collRef, ...constraints) {
+  return { __type: 'query', __collName: collRef.name, constraints };
+}
+export function where(field, op, value) { return { kind: 'where', field, op, value }; }
+export function orderBy(field, dir = 'asc') { return { kind: 'orderBy', field, dir }; }
+export function limit(n) { return { kind: 'limit', n }; }
+
+export async function addDoc(collRef, data) {
+  const id = generateId();
+  writeRaw(collRef.name, id, resolveWriteData(data, null));
+  persistTouched([collRef.name]);
+  notify([collRef.name]);
+  return { __type: 'doc', name: collRef.name, id };
+}
+export async function setDoc(ref, data, opts) {
+  const base = opts?.merge ? getRaw(ref.name, ref.id) : null;
+  writeRaw(ref.name, ref.id, resolveWriteData(data, base));
+  persistTouched([ref.name]);
+  notify([ref.name]);
+}
+export async function updateDoc(ref, data) {
+  const existing = getRaw(ref.name, ref.id);
+  if (!existing) throw new Error(`[demo] No document to update at ${ref.name}/${ref.id}`);
+  writeRaw(ref.name, ref.id, resolveWriteData(data, existing));
+  persistTouched([ref.name]);
+  notify([ref.name]);
+}
+export async function deleteDoc(ref) {
+  deleteRaw(ref.name, ref.id);
+  persistTouched([ref.name]);
+  notify([ref.name]);
+}
+export async function getDoc(ref) {
+  return makeDocSnapshot(ref.id, getRaw(ref.name, ref.id));
+}
+export async function getDocs(target) {
+  return makeQuerySnapshot(runQuery(target));
+}
+export function onSnapshot(target, onNext, onError) {
+  const isDocRef = target.__type === 'doc';
+  const key = isDocRef ? target.name : target.__collName;
+  const deliver = () => {
+    try {
+      if (isDocRef) onNext(makeDocSnapshot(target.id, getRaw(target.name, target.id)));
+      else onNext(makeQuerySnapshot(runQuery(target)));
+    } catch (err) {
+      onError?.(err);
+    }
+  };
+  const timer = setTimeout(deliver, 0);
+  const unsub = subscribe(key, deliver);
+  return () => { clearTimeout(timer); unsub(); };
+}
+
+export function writeBatch() {
+  const ops = [];
+  return {
+    set(ref, data, opts) { ops.push({ type: 'set', ref, data, opts }); },
+    update(ref, data) { ops.push({ type: 'update', ref, data }); },
+    delete(ref) { ops.push({ type: 'delete', ref }); },
+    async commit() {
+      const touched = new Set();
+      for (const op of ops) {
+        if (op.type === 'set') {
+          const base = op.opts?.merge ? getRaw(op.ref.name, op.ref.id) : null;
+          writeRaw(op.ref.name, op.ref.id, resolveWriteData(op.data, base));
+        } else if (op.type === 'update') {
+          const existing = getRaw(op.ref.name, op.ref.id) || {};
+          writeRaw(op.ref.name, op.ref.id, resolveWriteData(op.data, existing));
+        } else if (op.type === 'delete') {
+          deleteRaw(op.ref.name, op.ref.id);
+        }
+        touched.add(op.ref.name);
+      }
+      persistTouched([...touched]);
+      notify([...touched]);
+    },
+  };
+}
+
+export async function runTransaction(_db, updateFn) {
+  const touched = new Set();
+  const tx = {
+    async get(ref) { return makeDocSnapshot(ref.id, getRaw(ref.name, ref.id)); },
+    set(ref, data, opts) {
+      const base = opts?.merge ? getRaw(ref.name, ref.id) : null;
+      writeRaw(ref.name, ref.id, resolveWriteData(data, base));
+      touched.add(ref.name);
+    },
+    update(ref, data) {
+      const existing = getRaw(ref.name, ref.id) || {};
+      writeRaw(ref.name, ref.id, resolveWriteData(data, existing));
+      touched.add(ref.name);
+    },
+    delete(ref) { deleteRaw(ref.name, ref.id); touched.add(ref.name); },
+  };
+  const result = await updateFn(tx);
+  persistTouched([...touched]);
+  notify([...touched]);
+  return result;
+}
+
+export function initializeFirestore() { return { __demo: true }; }
+export function persistentLocalCache() { return {}; }
+export function persistentMultipleTabManager() { return {}; }
+export function connectFirestoreEmulator() {}
+
+export function seedDoc(name, id, data) { writeRaw(name, id, data); }
+export function seedCommit(names) { persistTouched(names); notify(names); }
+export function clearAllDemoData() {
+  Object.keys(localStorage)
+    .filter((k) => k.startsWith(STORAGE_PREFIX))
+    .forEach((k) => localStorage.removeItem(k));
+  const touched = [...cache.keys()];
+  cache.clear();
+  notify(touched);
+}
+export { makeTimestamp };
+````
+
 ## File: src/hooks/useDailySession.js
 ````javascript
 import { useEffect, useState, useCallback } from 'react';
@@ -6553,6 +5784,59 @@ export function useHardwareScanner(onScan, { enabled = true, maxIntervalMs = 80,
 }
 ````
 
+## File: src/hooks/usePwaInstall.js
+````javascript
+import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
+
+export function usePwaInstall() {
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [isInstallable, setIsInstallable] = useState(false);
+  const [isIOS, setIsIOS] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
+
+  useEffect(() => {
+    const standalone =
+      window.matchMedia?.('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true;
+    setIsStandalone(standalone);
+
+    const userAgent = (navigator.userAgent || '').toLowerCase();
+    const isIosDevice = /iphone|ipad|ipod/.test(userAgent);
+    setIsIOS(isIosDevice && !standalone);
+
+    const handleBeforeInstallPrompt = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const promptInstall = async () => {
+    if (!deferredPrompt) {
+      if (/iphone|ipad|ipod/.test((navigator.userAgent || '').toLowerCase())) {
+        return false;
+      }
+      toast('To install, tap your browser menu (⋮) and select "Install app" or "Add to Home screen".');
+      return false;
+    }
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    setDeferredPrompt(null);
+    setIsInstallable(false);
+    return outcome === 'accepted';
+  };
+
+  return { isInstallable, isIOS, isStandalone, promptInstall };
+}
+````
+
 ## File: src/hooks/useSettings.js
 ````javascript
 import { useEffect, useState } from 'react';
@@ -6674,6 +5958,253 @@ export function roundMoney(amount) {
   const v = Number(amount);
   if (!Number.isFinite(v)) return 0;
   return Math.round((v + Number.EPSILON) * 100) / 100;
+}
+````
+
+## File: src/utils/dataExport.js
+````javascript
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../firebase';
+
+export const EXPORT_COLLECTIONS = [
+  'businessSettings',
+  'customers', 'suppliers', 'products', 'sales', 'creditSales', 'purchases',
+  'expenses', 'dailySessions', 'repayments', 'supplierPayments',
+  'stockAdjustments', 'refunds', 'debtPaymentReceipts', 'sharedDocuments', 'staffInvites',
+];
+
+function timestampToIso(value) {
+  if (value && typeof value.toDate === 'function') return value.toDate().toISOString();
+  if (value instanceof Date) return value.toISOString();
+  return value;
+}
+
+function flattenForCsv(docData) {
+  const flat = {};
+  Object.entries(docData).forEach(([key, value]) => {
+    if (Array.isArray(value) || (value && typeof value === 'object')) {
+      flat[key] = JSON.stringify(value);
+    } else {
+      flat[key] = value ?? '';
+    }
+  });
+  return flat;
+}
+
+function escapeCsvCell(value) {
+  if (value === null || value === undefined) return '';
+  let str = String(value);
+  if (/^[=+\-@\t\r]/.test(str)) str = "'" + str;
+  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+  return str;
+}
+
+function rowsToCsv(rows) {
+  if (!rows || rows.length === 0) return '';
+  const headers = Array.from(rows.reduce((set, row) => { Object.keys(row).forEach((k) => set.add(k)); return set; }, new Set()));
+  const lines = [headers.join(',')];
+  rows.forEach((row) => lines.push(headers.map((h) => escapeCsvCell(row[h])).join(',')));
+  return lines.join('\n');
+}
+
+export async function exportBusinessData(businessId, { onProgress } = {}) {
+  if (!businessId) throw new Error('exportBusinessData() called with no businessId');
+
+  const manifest = { exportedAt: new Date().toISOString(), businessId, collections: {} };
+  const csvFiles = {};
+
+  for (let i = 0; i < EXPORT_COLLECTIONS.length; i++) {
+    const name = EXPORT_COLLECTIONS[i];
+    onProgress?.(name, i, EXPORT_COLLECTIONS.length);
+
+    const q = name === 'businessSettings'
+      ? query(collection(db, name), where('__name__', '==', businessId))
+      : query(collection(db, name), where('businessId', '==', businessId));
+
+    const snap = await getDocs(q);
+    const docs = snap.docs.map((d) => {
+      const jsonSafe = {};
+      Object.entries(d.data()).forEach(([k, v]) => { jsonSafe[k] = timestampToIso(v); });
+      return { id: d.id, ...jsonSafe };
+    });
+
+    manifest.collections[name] = docs;
+    csvFiles[name] = rowsToCsv(docs.map((d) => {
+      const { id, ...rest } = d;
+      return { id, ...flattenForCsv(rest) };
+    }));
+  }
+
+  return { manifest, csvFiles };
+}
+
+export async function buildExportZip(businessId, { onProgress } = {}) {
+  const { manifest, csvFiles } = await exportBusinessData(businessId, { onProgress });
+  const JSZip = (await import('jszip')).default;
+  const zip = new JSZip();
+
+  zip.file('flowbiz-export.json', JSON.stringify(manifest, null, 2));
+  const csvFolder = zip.folder('csv');
+  Object.entries(csvFiles).forEach(([name, csv]) => { if (csv) csvFolder.file(`${name}.csv`, csv); });
+
+  return zip.generateAsync({ type: 'blob' });
+}
+````
+
+## File: src/utils/dataImport.js
+````javascript
+import { doc, writeBatch, getDocs, query, collection, where, limit } from 'firebase/firestore';
+import { db } from '../firebase';
+
+export const IMPORT_COLLECTIONS = [
+  'businessSettings',
+  'customers', 'suppliers', 'products', 'sales', 'creditSales', 'purchases',
+  'expenses', 'dailySessions', 'repayments', 'supplierPayments',
+  'stockAdjustments', 'refunds', 'debtPaymentReceipts', 'sharedDocuments', 'staffInvites',
+];
+
+function isoToDate(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return value;
+}
+
+function reviveValue(value) {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') return isoToDate(value);
+  if (Array.isArray(value)) return value.map(reviveValue);
+  if (typeof value === 'object' && !(value instanceof Date)) {
+    const obj = {};
+    for (const [k, v] of Object.entries(value)) {
+      obj[k] = reviveValue(v);
+    }
+    return obj;
+  }
+  return value;
+}
+
+function reviveDoc(data) {
+  const revived = {};
+  Object.entries(data).forEach(([k, v]) => { revived[k] = reviveValue(v); });
+  return revived;
+}
+
+export async function readExportZip(file) {
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(file);
+  const manifestFile = zip.file('flowbiz-export.json');
+  if (!manifestFile) throw new Error("That doesn't look like a FlowBiz export — flowbiz-export.json was not found in the zip archive.");
+  const text = await manifestFile.async('string');
+  let manifest;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    throw new Error('flowbiz-export.json is not valid — the file may be corrupted.');
+  }
+  if (!manifest.collections || typeof manifest.collections !== 'object') {
+    throw new Error("That doesn't look like a valid FlowBiz export — missing collection data.");
+  }
+  return manifest;
+}
+
+export async function checkExistingData(businessId, manifest) {
+  if (!businessId) throw new Error('checkExistingData requires a businessId');
+  const nonEmpty = [];
+  for (const name of IMPORT_COLLECTIONS) {
+    if (!manifest.collections[name]?.length) continue;
+    try {
+      if (name === 'businessSettings') {
+        const snap = await getDocs(query(collection(db, name), where('__name__', '==', businessId), limit(1)));
+        if (!snap.empty) nonEmpty.push(name);
+      } else {
+        const snap = await getDocs(query(collection(db, name), where('businessId', '==', businessId), limit(1)));
+        if (!snap.empty) nonEmpty.push(name);
+      }
+    } catch {
+      // Continue checking remaining collections
+    }
+  }
+  return nonEmpty;
+}
+
+function resolveTargetId(name, originalId, businessId, manifestBusinessId) {
+  if (name === 'businessSettings') return businessId;
+  if (name === 'dailySessions') {
+    const dateMatch = originalId.match(/(\d{4}-\d{2}-\d{2})$/);
+    if (dateMatch) return `${businessId}_${dateMatch[1]}`;
+  }
+  if (manifestBusinessId && manifestBusinessId !== businessId) {
+    if (originalId.startsWith(`${manifestBusinessId}_`)) {
+      return originalId.replace(`${manifestBusinessId}_`, `${businessId}_`);
+    }
+    return `${businessId}_${originalId}`;
+  }
+  return originalId;
+}
+
+export async function importBusinessData(businessId, manifest, { onProgress } = {}) {
+  if (!businessId) throw new Error('importBusinessData() called with no businessId');
+
+  const results = {};
+  const barcodeEntries = [];
+  const manifestBusinessId = manifest.businessId || null;
+  const isCrossTenant = Boolean(manifestBusinessId && manifestBusinessId !== businessId);
+
+  for (let i = 0; i < IMPORT_COLLECTIONS.length; i++) {
+    const name = IMPORT_COLLECTIONS[i];
+    const docs = manifest.collections[name] || [];
+    onProgress?.(name, i, IMPORT_COLLECTIONS.length);
+    if (docs.length === 0) { results[name] = 0; continue; }
+
+    let written = 0;
+    for (let start = 0; start < docs.length; start += 350) {
+      const chunk = docs.slice(start, start + 350);
+      const batch = writeBatch(db);
+      chunk.forEach((d) => {
+        const { id, ...rest } = d;
+        if (!id) return;
+        const revived = reviveDoc(rest);
+        revived.businessId = businessId;
+
+        // Remap cross-references if restoring across different business IDs
+        if (isCrossTenant) {
+          if (revived.productId) revived.productId = resolveTargetId('products', revived.productId, businessId, manifestBusinessId);
+          if (revived.supplierId) revived.supplierId = resolveTargetId('suppliers', revived.supplierId, businessId, manifestBusinessId);
+          if (revived.customerId) revived.customerId = resolveTargetId('customers', revived.customerId, businessId, manifestBusinessId);
+          if (revived.creditSaleId) revived.creditSaleId = resolveTargetId('creditSales', revived.creditSaleId, businessId, manifestBusinessId);
+          if (Array.isArray(revived.items)) {
+            revived.items = revived.items.map((item) => ({
+              ...item,
+              productId: item.productId ? resolveTargetId('products', item.productId, businessId, manifestBusinessId) : item.productId,
+            }));
+          }
+        }
+
+        const targetId = resolveTargetId(name, id, businessId, manifestBusinessId);
+        batch.set(doc(db, name, targetId), revived);
+
+        if (name === 'products' && revived.barcode && String(revived.barcode).trim()) {
+          barcodeEntries.push({ businessId, barcode: String(revived.barcode).trim(), productId: targetId });
+        }
+      });
+      await batch.commit();
+      written += chunk.length;
+    }
+    results[name] = written;
+  }
+
+  for (let start = 0; start < barcodeEntries.length; start += 350) {
+    const chunk = barcodeEntries.slice(start, start + 350);
+    const batch = writeBatch(db);
+    chunk.forEach((entry) => {
+      batch.set(doc(db, 'barcodeIndex', `${businessId}__${entry.barcode}`), entry);
+    });
+    await batch.commit();
+  }
+
+  return results;
 }
 ````
 
@@ -6938,6 +6469,19 @@ Fixed:
 | `src/pages/Dashboard.jsx` | `handleSupplierSave` throws on error (consistency fix). |
 ````
 
+## File: storage.rules
+````
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /businesses/{businessId}/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null && request.resource.size < 5 * 1024 * 1024;
+    }
+  }
+}
+````
+
 ## File: cloudflare-worker/src/lib/identityToolkit.js
 ````javascript
 // src/lib/identityToolkit.js
@@ -7020,154 +6564,48 @@ export async function deleteAuthUser(env, uid) {
 }
 ````
 
-## File: src/components/landing/LandingHeader.jsx
-````javascript
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Menu, X, ArrowRight } from 'lucide-react';
+## File: public/_redirects
+````
+/demo    /demo/index.html  200
+/demo/*  /demo/index.html  200
+/*       /index.html        200
+````
 
-export function LandingHeader() {
-  const [mobileOpen, setMobileOpen] = useState(false);
+## File: src/components/common/WhatsAppFloatingButton.jsx
+````javascript
+// src/components/common/WhatsAppFloatingButton.jsx
+
+export default function WhatsAppFloatingButton({
+  phone = '254741104469',
+  message = 'Hello FlowBiz! I would like to inquire more about the POS system for my business.',
+}) {
+  const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
 
   return (
-    <header className="sticky top-0 z-50 bg-[#faf6ef]/95 backdrop-blur-md border-b border-[#e8eaed] h-14 flex items-center">
-      <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="relative flex items-center justify-between h-full">
-          
-          {/* Left: Brand Logo */}
-          <Link to="/" className="flex items-center gap-2.5 shrink-0 z-10 leading-none">
-            <div className="flex flex-col justify-center">
-              <span className="font-extrabold text-lg text-[#15171d] tracking-tight leading-none">
-                FlowBiz
-              </span>
-              <span className="text-[8px] font-bold text-[#1a623c] uppercase tracking-wider leading-none mt-1">
-                Business Manager
-              </span>
-            </div>
-          </Link>
+    <div className="group fixed bottom-5 right-5 z-40 flex items-center gap-2.5">
+      {/* Floating Tooltip on Desktop Hover */}
+      <span className="pointer-events-none hidden rounded-xl bg-[#15171d] px-3 py-1.5 text-xs font-bold text-white shadow-xl transition-all duration-200 opacity-0 translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 sm:inline-block whitespace-nowrap">
+        Chat with us
+      </span>
 
-          {/* Center: Desktop Navigation Links */}
-          <nav className="hidden lg:flex absolute inset-0 items-center justify-center pointer-events-none">
-            <div className="flex items-center gap-6 xl:gap-8 text-xs sm:text-sm font-semibold text-[#5a6273] pointer-events-auto leading-none">
-              <a 
-                href="#features" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                Features
-              </a>
-              <a 
-                href="#live-simulator" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                Live Simulator
-              </a>
-              <a 
-                href="#how-it-works" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                How It Works
-              </a>
-              <a 
-                href="#pricing" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                Pricing
-              </a>
-              <a 
-                href="#faq" 
-                className="hover:text-[#1a623c] transition-colors py-1 px-1"
-              >
-                FAQ
-              </a>
-            </div>
-          </nav>
-
-          {/* Right: Action Buttons */}
-          <div className="hidden sm:flex items-center gap-2.5 shrink-0 z-10 leading-none">
-            <Link
-              to="/login"
-              className="text-xs sm:text-sm font-bold text-[#363b48] hover:text-[#15171d] px-3 py-2 rounded-lg hover:bg-white transition-colors"
-            >
-              Sign In
-            </Link>
-            <Link
-              to="/setup"
-              className="bg-[#1a623c] text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-bold hover:bg-[#144f30] transition-colors shadow-xs flex items-center gap-1.5 whitespace-nowrap"
-            >
-              <span>Get Started</span>
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-          </div>
-
-          {/* Mobile Menu Button */}
-          <button
-            type="button"
-            onClick={() => setMobileOpen(!mobileOpen)}
-            className="lg:hidden p-1.5 rounded-lg text-[#5a6273] hover:text-[#15171d] hover:bg-white z-10"
-            aria-label="Toggle Menu"
-          >
-            {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
-
-        </div>
-      </div>
-
-      {/* Mobile Dropdown */}
-      {mobileOpen && (
-        <div className="lg:hidden absolute top-full left-0 right-0 border-b border-[#e8eaed] bg-white px-6 py-4 space-y-3 shadow-lg">
-          <a
-            href="#features"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            Features
-          </a>
-          <a
-            href="#live-simulator"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            Live Simulator
-          </a>
-          <a
-            href="#how-it-works"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            How It Works
-          </a>
-          <a
-            href="#pricing"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            Pricing
-          </a>
-          <a
-            href="#faq"
-            onClick={() => setMobileOpen(false)}
-            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
-          >
-            FAQ
-          </a>
-          <div className="pt-2.5 border-t border-[#e8eaed] flex flex-col gap-2">
-            <Link
-              to="/login"
-              className="w-full text-center py-2.5 border border-[#cfd3da] rounded-xl text-sm font-bold text-[#15171d]"
-            >
-              Sign In
-            </Link>
-            <Link
-              to="/setup"
-              className="w-full text-center py-3 bg-[#1a623c] text-white rounded-xl text-sm font-bold shadow-md hover:bg-[#144f30] transition-all flex items-center justify-center gap-2"
-            >
-              <span>Get Started Free</span>
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-          </div>
-        </div>
-      )}
-    </header>
+      {/* Clean, Uniform Circular WhatsApp Button (No pulsing dot) */}
+      <a
+        href={whatsappUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Chat with FlowBiz on WhatsApp"
+        className="flex h-12 w-12 sm:h-13 sm:w-13 items-center justify-center rounded-full bg-[#25D366] text-white shadow-xl transition-all duration-300 hover:bg-[#20ba5a] hover:shadow-2xl hover:scale-105 active:scale-95 shrink-0"
+      >
+        {/* Centered Official WhatsApp SVG Icon */}
+        <svg
+          className="h-6 w-6 sm:h-7 sm:w-7 fill-current"
+          viewBox="0 0 24 24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2zm0 18.15c-1.48 0-2.93-.4-4.2-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.19 8.19 0 0 1-1.26-4.38c0-4.54 3.7-8.24 8.25-8.24 2.2 0 4.27.86 5.82 2.42a8.18 8.18 0 0 1 2.41 5.83c0 4.55-3.7 8.23-8.23 8.23zm4.52-6.16c-.25-.12-1.47-.72-1.7-.81-.23-.09-.39-.13-.56.12-.17.25-.64.81-.79.97-.14.17-.29.19-.54.06-.25-.12-1.05-.39-2-1.23-.74-.66-1.23-1.47-1.38-1.72-.14-.25-.02-.38.11-.5.11-.11.25-.29.37-.43.12-.15.17-.25.25-.42.08-.17.04-.31-.02-.43s-.56-1.34-.76-1.84c-.2-.48-.41-.42-.56-.43h-.48c-.17 0-.43.06-.66.31-.22.25-.86.84-.86 2.05s.88 2.38 1 2.55c.13.17 1.73 2.65 4.2 3.71.59.25 1.05.41 1.41.52.59.19 1.13.16 1.56.1.48-.07 1.47-.6 1.68-1.18.21-.58.21-1.07.15-1.18-.07-.1-.23-.17-.48-.29z" />
+        </svg>
+      </a>
+    </div>
   );
 }
 ````
@@ -7329,79 +6767,158 @@ export default function SupplierFormModal({ open, onClose, onSave, initialSuppli
 }
 ````
 
-## File: src/demo/localAuth.js
+## File: src/demo/demoMode.js
 ````javascript
-export const DEMO_UID = 'demo-admin';
+// src/demo/demoMode.js
+// The single source of truth for "are we in Demo Mode right now?". Every
+// other demo-aware piece of code (src/firebase.js, AuthContext, businessReset)
+// checks this instead of threading a prop/flag through the component tree.
+const FLAG_KEY = 'flowbiz_demo_mode';
 
-const DEMO_USER = {
-  uid: DEMO_UID,
-  email: 'demo@flowbiz.app',
-  displayName: 'Demo Owner',
-  emailVerified: true,
-};
-
-export function getAuth() {
-  return { __demo: true, currentUser: DEMO_USER };
+export function isDemoMode() {
+  try {
+    return localStorage.getItem(FLAG_KEY) === 'true';
+  } catch {
+    return false;
+  }
 }
 
-export function onAuthStateChanged(_auth, callback) {
-  const timer = setTimeout(() => callback(DEMO_USER), 0);
-  return () => clearTimeout(timer);
+export function enterDemoMode() {
+  try { localStorage.setItem(FLAG_KEY, 'true'); } catch { /* storage unavailable — ignore */ }
 }
 
-export async function signInWithEmailAndPassword() {
-  return { user: DEMO_USER };
+export function exitDemoMode() {
+  try { localStorage.removeItem(FLAG_KEY); } catch { /* storage unavailable — ignore */ }
+}
+````
+
+## File: src/demo/seedData.js
+````javascript
+// src/demo/seedData.js
+import { seedDoc, seedCommit, clearAllDemoData, makeTimestamp } from './localFirestore';
+import { DEMO_UID } from './localAuth';
+
+// MULTI-TENANT CHANGE: every collection in the real app is now scoped by
+// `businessId`, and `tenantQuery()` throws if it's ever called without
+// one. The demo dataset previously seeded documents with no businessId at
+// all — under the new architecture that would make every single page's
+// queries throw immediately on `npm run dev:demo`. This file now stamps
+// a fixed DEMO_BUSINESS_ID onto every seeded document, and the demo
+// user's own profile carries that same businessId + the new `role:
+// 'owner'` value (replacing the old `role: 'admin'`), exactly mirroring
+// what a real signed-up owner's profile looks like.
+export const DEMO_BUSINESS_ID = 'demo-business';
+
+const SUPPLIERS = [
+  {
+    id: 'sup_nairobi_electronics',
+    name: 'Nairobi Electronics Wholesale Ltd',
+    contactPerson: 'Peter Mwangi',
+    phone: '0722 445 108',
+    email: 'sales@nairobielectronics.co.ke',
+    address: 'River Road, Nairobi',
+    notes: 'Main supplier for accessories and cables.',
+  },
+  {
+    id: 'sup_techhub',
+    name: 'TechHub Distributors Kenya',
+    contactPerson: 'Grace Wanjiru',
+    phone: '0733 219 764',
+    email: 'orders@techhubke.com',
+    address: 'Kimathi Street, Nairobi',
+    notes: 'Supplies laptops, monitors, and peripherals.',
+  },
+];
+
+const PRODUCTS = [
+  { name: 'Wireless Mouse',            category: 'Electronics', costPrice: 650,   sellingPrice: 950,   stock: 40, lowStockThreshold: 8,  barcode: '6009880123451', supplierId: 'sup_nairobi_electronics' },
+  { name: 'Mechanical Keyboard',       category: 'Electronics', costPrice: 2800,  sellingPrice: 3999,  stock: 15, lowStockThreshold: 5,  barcode: '6009880123452', supplierId: 'sup_techhub' },
+  { name: 'USB Flash Disk 32GB',       category: 'Electronics', costPrice: 350,   sellingPrice: 599,   stock: 60, lowStockThreshold: 10, barcode: '6009880123453', supplierId: 'sup_nairobi_electronics' },
+  { name: 'External Hard Drive 1TB',   category: 'Electronics', costPrice: 4200,  sellingPrice: 5499,  stock: 12, lowStockThreshold: 4,  barcode: '6009880123454', supplierId: 'sup_techhub' },
+  { name: 'Power Bank 10000mAh',       category: 'Electronics', costPrice: 1100,  sellingPrice: 1699,  stock: 25, lowStockThreshold: 6,  barcode: '6009880123455', supplierId: 'sup_nairobi_electronics' },
+  { name: 'USB-C Charger 20W',         category: 'Electronics', costPrice: 550,   sellingPrice: 899,   stock: 4,  lowStockThreshold: 8,  barcode: '6009880123456', supplierId: 'sup_nairobi_electronics' },
+  { name: 'Phone Charger (Micro-USB)', category: 'Electronics', costPrice: 300,   sellingPrice: 549,   stock: 3,  lowStockThreshold: 8,  barcode: '6009880123457', supplierId: 'sup_nairobi_electronics' },
+  { name: 'HDMI Cable 1.5m',           category: 'Electronics', costPrice: 250,   sellingPrice: 449,   stock: 30, lowStockThreshold: 6,  barcode: '6009880123458', supplierId: 'sup_nairobi_electronics' },
+  { name: 'Monitor 24" LED',           category: 'Electronics', costPrice: 12500, sellingPrice: 15999, stock: 6,  lowStockThreshold: 3,  barcode: '6009880123459', supplierId: 'sup_techhub' },
+  { name: 'Laptop Stand',              category: 'Electronics', costPrice: 900,   sellingPrice: 1450,  stock: 18, lowStockThreshold: 5,  barcode: '6009880123460', supplierId: 'sup_techhub' },
+  { name: 'Bluetooth Speaker',         category: 'Electronics', costPrice: 1800,  sellingPrice: 2699,  stock: 2,  lowStockThreshold: 5,  barcode: '6009880123461', supplierId: 'sup_techhub' },
+  { name: 'Earbuds (Wireless)',        category: 'Electronics', costPrice: 1200,  sellingPrice: 1899,  stock: 22, lowStockThreshold: 6,  barcode: '6009880123462', supplierId: 'sup_nairobi_electronics' },
+  { name: 'Headphones (Over-ear)',     category: 'Electronics', costPrice: 2200,  sellingPrice: 3299,  stock: 10, lowStockThreshold: 4,  barcode: '6009880123463', supplierId: 'sup_techhub' },
+  { name: 'Extension Cable (4-way)',   category: 'Electronics', costPrice: 700,   sellingPrice: 1099,  stock: 20, lowStockThreshold: 5,  barcode: '6009880123464', supplierId: 'sup_nairobi_electronics' },
+  { name: 'Router (Wireless N)',       category: 'Electronics', costPrice: 2600,  sellingPrice: 3599,  stock: 9,  lowStockThreshold: 4,  barcode: '6009880123465', supplierId: 'sup_techhub' },
+  { name: 'Smart Watch',               category: 'Electronics', costPrice: 3500,  sellingPrice: 4999,  stock: 7,  lowStockThreshold: 3,  barcode: '6009880123466', supplierId: 'sup_techhub' },
+];
+
+function buildAndSeed() {
+  const now = makeTimestamp(Date.now());
+  const touched = new Set();
+
+  SUPPLIERS.forEach((s) => {
+    const { id, ...data } = s;
+    seedDoc('suppliers', id, { ...data, businessId: DEMO_BUSINESS_ID, createdAt: now });
+    touched.add('suppliers');
+  });
+
+  PRODUCTS.forEach((p, i) => {
+    const id = `demo_product_${i + 1}`;
+    const internalCode = `FB-${String(i + 1).padStart(6, '0')}`;
+    seedDoc('products', id, { ...p, businessId: DEMO_BUSINESS_ID, internalCode, deleted: false, createdAt: now, updatedAt: now });
+    // Flat, businessId-prefixed doc id — matches utils/products.js exactly,
+    // so a demo-seeded barcode round-trips through the same lookup code a
+    // real business's products do.
+    seedDoc('barcodeIndex', `${DEMO_BUSINESS_ID}__${p.barcode}`, { businessId: DEMO_BUSINESS_ID, barcode: p.barcode, productId: id });
+    touched.add('products');
+    touched.add('barcodeIndex');
+  });
+  seedDoc('productCodeCounters', DEMO_BUSINESS_ID, { businessId: DEMO_BUSINESS_ID, lastNumber: PRODUCTS.length });
+  touched.add('productCodeCounters');
+
+  // Business record + owner profile — mirrors exactly what Setup.jsx
+  // creates for a real signed-up owner, so nothing downstream needs to
+  // special-case Demo Mode.
+  seedDoc('businesses', DEMO_BUSINESS_ID, {
+    name: 'FlowBiz Demo Store',
+    ownerIds: [DEMO_UID],
+    createdAt: now,
+    createdBy: DEMO_UID,
+    subscription: { plan: 'free', status: 'active', expiry: null },
+  });
+  touched.add('businesses');
+
+  seedDoc('users', DEMO_UID, {
+    uid: DEMO_UID, email: 'demo@flowbiz.app', displayName: 'Demo Owner',
+    role: 'owner', businessId: DEMO_BUSINESS_ID, active: true, createdAt: now,
+  });
+  touched.add('users');
+
+  // Replaces the old settings/general + settings/categories docs — see
+  // useSettings.js and ProductFormModal.jsx, both of which now read this
+  // single per-business document.
+  seedDoc('businessSettings', DEMO_BUSINESS_ID, {
+    shopName: 'FlowBiz Demo Store',
+    cashierCanRecordExpenses: true,
+    categories: ['Groceries', 'Beverages', 'Electronics', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'],
+  });
+  touched.add('businessSettings');
+
+  // Sales, purchases, expenses, credit sales, repayments, and daily
+  // sessions are intentionally left empty — those figures should come
+  // from actually using the app, per spec.
+
+  seedCommit([...touched]);
 }
 
-export async function signOut() {
-  return Promise.resolve();
+export function seedDemoDataIfNeeded() {
+  if (localStorage.getItem('flowbiz_demo_seeded_v2') === 'true') return;
+  buildAndSeed();
+  localStorage.setItem('flowbiz_demo_seeded_v2', 'true');
 }
 
-export async function createUserWithEmailAndPassword() {
-  throw new Error('Account creation is not available in Demo Mode.');
+export function resetDemoData() {
+  clearAllDemoData();
+  buildAndSeed();
+  localStorage.setItem('flowbiz_demo_seeded_v2', 'true');
 }
-
-export async function sendEmailVerification() {
-  return Promise.resolve();
-}
-
-export async function reload() {
-  return Promise.resolve();
-}
-
-export async function deleteUser() {
-  return Promise.resolve();
-}
-
-export async function applyActionCode() {
-  return Promise.resolve();
-}
-
-export async function checkActionCode() {
-  return Promise.resolve({});
-}
-
-export async function sendPasswordResetEmail() {
-  return Promise.resolve();
-}
-
-export async function verifyPasswordResetCode() {
-  return Promise.resolve(DEMO_USER.email);
-}
-
-export async function confirmPasswordReset() {
-  return Promise.resolve();
-}
-
-export const EmailAuthProvider = {
-  credential: (email, password) => ({ email, password }),
-};
-
-export async function reauthenticateWithCredential() {
-  return Promise.resolve();
-}
-
-export function connectAuthEmulator() {}
 ````
 
 ## File: src/pages/Expenses.jsx
@@ -9524,404 +9041,6 @@ export async function updateCustomer(customerId, data, businessId) {
 }
 ````
 
-## File: src/utils/financials.js
-````javascript
-// src/utils/financials.js
-function sumBy(rows, field) {
-  return rows.reduce((acc, row) => acc + (Number(row[field]) || 0), 0);
-}
-
-function getCostOfSale(row) {
-  if (row && typeof row.costOfGoodsSold === 'number' && Number.isFinite(row.costOfGoodsSold)) {
-    return row.costOfGoodsSold;
-  }
-  const costPerUnit = Number(row?.costPricePerUnit) || 0;
-  const quantity = Number(row?.quantity) || 0;
-  return costPerUnit * quantity;
-}
-
-export function isExpenseExcluded(expense) {
-  const category = String(expense?.category || '').toLowerCase();
-  const description = String(expense?.description || '').toLowerCase();
-  return (
-    category === 'stock purchase' ||
-    category === 'supplier payment' ||
-    description.includes('stock purchase') ||
-    description.includes('supplier payment')
-  );
-}
-
-function isCreditSaleReversed(creditSale) {
-  return creditSale?.status === 'cancelled' || creditSale?.status === 'refunded';
-}
-
-function recognizeRepayment(repayment, creditSaleById) {
-  const amount = Number(repayment?.amount) || 0;
-  const creditSale = creditSaleById.get(repayment?.creditSaleId);
-  if (!creditSale) {
-    return { revenue: amount, cogs: 0 };
-  }
-  const totalAmount = Number(creditSale.totalAmount) || 0;
-  const totalCost = getCostOfSale(creditSale);
-  const ratio = totalAmount > 0 ? amount / totalAmount : 0;
-  const cogs = totalCost * ratio;
-  return { revenue: amount, cogs };
-}
-
-function recognizeRefund(refund, creditSaleById) {
-  const amount = Number(refund?.amount) || 0;
-  const creditSale = creditSaleById.get(refund?.creditSaleId);
-  if (!creditSale) {
-    return { revenue: amount, cogs: 0 };
-  }
-  const totalAmount = Number(creditSale.totalAmount) || 0;
-  const totalCost = getCostOfSale(creditSale);
-  const ratio = totalAmount > 0 ? amount / totalAmount : 0;
-  const cogs = totalCost * ratio;
-  return { revenue: amount, cogs };
-}
-
-export function computeFinancials({
-  sales = [],
-  creditSales = [],
-  allCreditSales = null,
-  expenses = [],
-  debtRepayments = [],
-  purchases = [],
-  supplierPayments = [],
-  refunds = [],
-} = {}) {
-  const activeSales = (sales || []).filter((sale) => !sale?.isVoided);
-  const activeCreditSales = (creditSales || []).filter((cs) => !isCreditSaleReversed(cs));
-
-  const cashSales  = activeSales.filter(s => s.paymentMethod === 'Cash');
-  const mpesaSales = activeSales.filter(s => s.paymentMethod === 'M-Pesa');
-  const totalCashSales  = sumBy(cashSales,  'totalAmount');
-  const totalMpesaSales = sumBy(mpesaSales, 'totalAmount');
-
-  const totalCreditSales = sumBy(activeCreditSales, 'totalAmount');
-
-  const cashRepayments  = debtRepayments.filter(r => r.method === 'Cash');
-  const mpesaRepayments = debtRepayments.filter(r => r.method === 'M-Pesa');
-  const totalDebtRepaymentsCash  = sumBy(cashRepayments,  'amount');
-  const totalDebtRepaymentsMpesa = sumBy(mpesaRepayments, 'amount');
-  const totalDebtRepayments = totalDebtRepaymentsCash + totalDebtRepaymentsMpesa;
-
-  const cashRefunds  = (refunds || []).filter(r => r.method === 'Cash');
-  const mpesaRefunds = (refunds || []).filter(r => r.method === 'M-Pesa');
-  const totalRefundsCash  = sumBy(cashRefunds,  'amount');
-  const totalRefundsMpesa = sumBy(mpesaRefunds, 'amount');
-  const totalRefunds = totalRefundsCash + totalRefundsMpesa;
-
-  const creditSaleSource = allCreditSales || creditSales || [];
-  const creditSaleById = new Map(creditSaleSource.map((cs) => [cs.id, cs]));
-
-  let repaymentRevenue = 0;
-  let repaymentCogs = 0;
-  (debtRepayments || []).forEach((r) => {
-    const { revenue, cogs } = recognizeRepayment(r, creditSaleById);
-    repaymentRevenue += revenue;
-    repaymentCogs += cogs;
-  });
-
-  let refundRevenue = 0;
-  let refundCogs = 0;
-  (refunds || []).forEach((ref) => {
-    const { revenue, cogs } = recognizeRefund(ref, creditSaleById);
-    refundRevenue += revenue;
-    refundCogs += cogs;
-  });
-
-  const directSalesCostOfGoodsSold = activeSales.reduce((acc, s) => acc + getCostOfSale(s), 0);
-  const costOfGoodsSold = directSalesCostOfGoodsSold + repaymentCogs - refundCogs;
-
-  const grossSalesRevenue = totalCashSales + totalMpesaSales + totalCreditSales;
-  const revenue = totalCashSales + totalMpesaSales + repaymentRevenue - refundRevenue;
-  const grossProfit = revenue - costOfGoodsSold;
-
-  const filteredExpenses = (expenses || []).filter((expense) => !isExpenseExcluded(expense));
-  const cashExpenses  = filteredExpenses.filter(e => e.paymentMethod === 'Cash');
-  const mpesaExpenses = filteredExpenses.filter(e => e.paymentMethod === 'M-Pesa');
-  const totalExpensesCash  = sumBy(cashExpenses,  'amount');
-  const totalExpensesMpesa = sumBy(mpesaExpenses, 'amount');
-  const totalExpenses = totalExpensesCash + totalExpensesMpesa;
-  const netProfit     = grossProfit - totalExpenses;
-
-  // Realized net receipts by tender method
-  const totalCashReceipts  = totalCashSales  + totalDebtRepaymentsCash  - totalRefundsCash;
-  const totalMpesaReceipts = totalMpesaSales + totalDebtRepaymentsMpesa - totalRefundsMpesa;
-
-  const purchasePaymentsCash  = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash');
-  const purchasePaymentsMpesa = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa');
-  const supplierPaymentsCash  = (supplierPayments || []).filter((p) => p.method === 'Cash');
-  const supplierPaymentsMpesa = (supplierPayments || []).filter((p) => p.method === 'M-Pesa');
-
-  const totalCashOutflows  = sumBy(purchasePaymentsCash,  'totalCost') + sumBy(supplierPaymentsCash,  'amount') + totalRefundsCash;
-  const totalMpesaOutflows = sumBy(purchasePaymentsMpesa, 'totalCost') + sumBy(supplierPaymentsMpesa, 'amount') + totalRefundsMpesa;
-
-  return {
-    grossSalesRevenue, totalCashSales, totalMpesaSales, totalCreditSales,
-    revenue, costOfGoodsSold, grossProfit,
-    totalCashReceipts, totalMpesaReceipts,
-    totalDebtRepaymentsCash, totalDebtRepaymentsMpesa, totalDebtRepayments,
-    totalExpensesCash, totalExpensesMpesa, totalExpenses, netProfit,
-    totalRefundsCash, totalRefundsMpesa, totalRefunds,
-    totalCashOutflows, totalMpesaOutflows,
-  };
-}
-
-export function computeExpectedTillBalances({
-  openingCashFloat = 0, openingMpesaFloat = 0,
-  totalCashSales = 0, totalMpesaSales = 0,
-  totalDebtRepaymentsCash = 0, totalDebtRepaymentsMpesa = 0,
-  totalExpensesCash = 0, totalExpensesMpesa = 0,
-  totalCashOutflows = 0, totalMpesaOutflows = 0,
-}) {
-  return {
-    expectedCashAtClose:  Number(openingCashFloat)  + totalCashSales  + totalDebtRepaymentsCash  - totalExpensesCash - totalCashOutflows,
-    expectedMpesaAtClose: Number(openingMpesaFloat) + totalMpesaSales + totalDebtRepaymentsMpesa - totalExpensesMpesa - totalMpesaOutflows,
-  };
-}
-
-export function computeSupplierBalances(purchases = [], supplierPayments = [], suppliers = []) {
-  const balanceById = {};
-
-  (purchases || []).forEach((p) => {
-    if (p?.paymentStatus !== 'pending_supplier_credit' || !p?.supplierId) return;
-    balanceById[p.supplierId] = (balanceById[p.supplierId] || 0) + (Number(p.totalCost) || 0);
-  });
-
-  (supplierPayments || []).forEach((sp) => {
-    if (!sp?.supplierId || balanceById[sp.supplierId] === undefined) return;
-    balanceById[sp.supplierId] -= Number(sp.amount) || 0;
-  });
-
-  const nameById = {};
-  (suppliers || []).forEach((s) => { nameById[s.id] = s.name; });
-
-  return Object.entries(balanceById)
-    .filter(([, balance]) => (Number(balance) || 0) > 0.005)
-    .map(([supplierId, balance]) => ({
-      supplierId,
-      supplierName:
-        nameById[supplierId] ||
-        (purchases || []).find((p) => p.supplierId === supplierId)?.supplierName ||
-        'Unknown supplier',
-      balance,
-    }))
-    .sort((a, b) => b.balance - a.balance);
-}
-````
-
-## File: src/utils/financials.test.js
-````javascript
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { computeFinancials, computeExpectedTillBalances, computeSupplierBalances } from './financials.js';
-
-test('1. Cash Sale creates immediate revenue, COGS, gross profit, and cash receipts', () => {
-  const sale = {
-    id: 's1',
-    totalAmount: 1500,
-    costPricePerUnit: 1000,
-    quantity: 1,
-    paymentMethod: 'Cash',
-    isVoided: false,
-  };
-  const summary = computeFinancials({ sales: [sale] });
-
-  assert.equal(summary.revenue, 1500);
-  assert.equal(summary.costOfGoodsSold, 1000);
-  assert.equal(summary.grossProfit, 500);
-  assert.equal(summary.totalCashReceipts, 1500);
-  assert.equal(summary.totalMpesaReceipts, 0);
-});
-
-test('2. Unpaid Credit Sale contributes zero revenue, COGS, and profit', () => {
-  const creditSale = {
-    id: 'c1',
-    costPricePerUnit: 2000,
-    quantity: 1,
-    totalAmount: 3000,
-    status: 'pending',
-    amountPaid: 0,
-  };
-  const summary = computeFinancials({
-    creditSales: [creditSale],
-    allCreditSales: [creditSale],
-  });
-
-  assert.equal(summary.totalCreditSales, 3000);
-  assert.equal(summary.revenue, 0);
-  assert.equal(summary.costOfGoodsSold, 0);
-  assert.equal(summary.grossProfit, 0);
-  assert.equal(summary.netProfit, 0);
-});
-
-test('3. Partial Debt Repayment recognizes proportional revenue and COGS', () => {
-  const creditSale = {
-    id: 'c1',
-    costPricePerUnit: 2000,
-    quantity: 1,
-    totalAmount: 3000,
-    status: 'partial',
-    amountPaid: 1000,
-  };
-  const summary = computeFinancials({
-    creditSales: [creditSale],
-    allCreditSales: [creditSale],
-    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 1000, method: 'Cash' }],
-  });
-
-  assert.equal(summary.revenue, 1000);
-  assert.equal(Math.round(summary.costOfGoodsSold * 100) / 100, 666.67);
-  assert.equal(Math.round(summary.grossProfit * 100) / 100, 333.33);
-  assert.equal(summary.totalCashReceipts, 1000);
-});
-
-test('4. Full Debt Repayment recognizes full revenue and COGS', () => {
-  const creditSale = {
-    id: 'c1',
-    costPricePerUnit: 2000,
-    quantity: 1,
-    totalAmount: 3000,
-    status: 'paid',
-    amountPaid: 3000,
-  };
-  const summary = computeFinancials({
-    allCreditSales: [creditSale],
-    debtRepayments: [
-      { id: 'r1', creditSaleId: 'c1', amount: 1000, method: 'Cash' },
-      { id: 'r2', creditSaleId: 'c1', amount: 2000, method: 'M-Pesa' },
-    ],
-  });
-
-  assert.equal(summary.revenue, 3000);
-  assert.equal(summary.costOfGoodsSold, 2000);
-  assert.equal(summary.grossProfit, 1000);
-  assert.equal(summary.totalCashReceipts, 1000);
-  assert.equal(summary.totalMpesaReceipts, 2000);
-});
-
-test('5. Net Refund Exceeding Sales correctly produces negative net revenue and profit without zero-clamping', () => {
-  const creditSale = {
-    id: 'c1',
-    costPricePerUnit: 3000,
-    quantity: 1,
-    totalAmount: 5000,
-    status: 'refunded',
-  };
-  const summary = computeFinancials({
-    sales: [{ totalAmount: 1000, costPricePerUnit: 600, quantity: 1, paymentMethod: 'Cash', isVoided: false }],
-    allCreditSales: [creditSale],
-    refunds: [{ id: 'ref1', creditSaleId: 'c1', amount: 5000, method: 'Cash' }],
-  });
-
-  assert.equal(summary.revenue, -4000);
-  assert.equal(summary.costOfGoodsSold, -2400);
-  assert.equal(summary.grossProfit, -1600);
-  assert.equal(summary.totalCashReceipts, -4000);
-});
-
-test('6. Expected Till Balances maintain exact cash and M-Pesa float reconciliation', () => {
-  const balances = computeExpectedTillBalances({
-    openingCashFloat: 2000,
-    openingMpesaFloat: 5000,
-    totalCashSales: 4500,
-    totalMpesaSales: 8000,
-    totalDebtRepaymentsCash: 1500,
-    totalDebtRepaymentsMpesa: 2000,
-    totalExpensesCash: 800,
-    totalExpensesMpesa: 500,
-    totalCashOutflows: 1200, // stock purchases + supplier payments + refunds
-    totalMpesaOutflows: 0,
-  });
-
-  // Expected Cash: 2000 + 4500 + 1500 - 800 - 1200 = 6000
-  assert.equal(balances.expectedCashAtClose, 6000);
-  // Expected M-Pesa: 5000 + 8000 + 2000 - 500 - 0 = 14500
-  assert.equal(balances.expectedMpesaAtClose, 14500);
-});
-
-test('7. Supplier balance aggregation correctly matches purchases and payments', () => {
-  const purchases = [
-    { supplierId: 's1', totalCost: 10000, paymentStatus: 'pending_supplier_credit' },
-    { supplierId: 's1', totalCost: 5000, paymentStatus: 'pending_supplier_credit' },
-    { supplierId: 's2', totalCost: 8000, paymentStatus: 'paid' },
-  ];
-  const payments = [
-    { supplierId: 's1', amount: 6000 },
-  ];
-  const suppliers = [
-    { id: 's1', name: 'Wholesaler Alpha' },
-    { id: 's2', name: 'Wholesaler Beta' },
-  ];
-
-  const balances = computeSupplierBalances(purchases, payments, suppliers);
-  assert.equal(balances.length, 1);
-  assert.equal(balances[0].supplierId, 's1');
-  assert.equal(balances[0].balance, 9000);
-});
-
-test('8. Multi-item cart sale uses costOfGoodsSold aggregate properly', () => {
-  const multiSale = {
-    id: 's_multi',
-    totalAmount: 2250,
-    costOfGoodsSold: 1320,
-    profit: 930,
-    quantity: 6,
-    paymentMethod: 'Cash',
-    isVoided: false,
-    items: [
-      { productId: 'p1', productName: 'Book', quantity: 3, unitPrice: 500, costPrice: 300, lineTotal: 1500, lineCost: 900 },
-      { productId: 'p2', productName: 'Storybook', quantity: 2, unitPrice: 350, costPrice: 200, lineTotal: 700, lineCost: 400 },
-      { productId: 'p3', productName: 'Pen', quantity: 1, unitPrice: 50, costPrice: 20, lineTotal: 50, lineCost: 20 },
-    ]
-  };
-  const summary = computeFinancials({ sales: [multiSale] });
-  assert.equal(summary.revenue, 2250);
-  assert.equal(summary.costOfGoodsSold, 1320);
-  assert.equal(summary.grossProfit, 930);
-});
-
-test('9. Voided sales are excluded from active calculations', () => {
-  const voidedSale = {
-    id: 's_void',
-    totalAmount: 5000,
-    costPricePerUnit: 3000,
-    quantity: 1,
-    paymentMethod: 'Cash',
-    isVoided: true,
-  };
-  const validSale = {
-    id: 's_valid',
-    totalAmount: 2000,
-    costPricePerUnit: 1200,
-    quantity: 1,
-    paymentMethod: 'Cash',
-    isVoided: false,
-  };
-  const summary = computeFinancials({ sales: [voidedSale, validSale] });
-  assert.equal(summary.revenue, 2000);
-  assert.equal(summary.costOfGoodsSold, 1200);
-  assert.equal(summary.grossProfit, 800);
-  assert.equal(summary.totalCashReceipts, 2000);
-});
-
-test('10. Expenses exclude supplier payments and stock purchases to prevent double-counting', () => {
-  const expenses = [
-    { id: 'e1', category: 'Rent', amount: 15000, paymentMethod: 'Cash' },
-    { id: 'e2', category: 'Electricity', amount: 2500, paymentMethod: 'M-Pesa' },
-    { id: 'e3', category: 'Supplier Payment', description: 'Supplier payment to Alpha', amount: 6000, paymentMethod: 'Cash' },
-    { id: 'e4', category: 'Other', description: 'Stock Purchase direct', amount: 4000, paymentMethod: 'Cash' },
-  ];
-  const summary = computeFinancials({ expenses });
-  assert.equal(summary.totalExpenses, 17500);
-  assert.equal(summary.totalExpensesCash, 15000);
-  assert.equal(summary.totalExpensesMpesa, 2500);
-});
-````
-
 ## File: src/utils/offlineWrite.js
 ````javascript
 // src/utils/offlineWrite.js — full file (small, and every call site depends on this exact contract)
@@ -10158,68 +9277,6 @@ export async function restoreProduct(productId, barcode, businessId) {
 }
 ````
 
-## File: src/main.jsx
-````javascript
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
-import './index.css';
-import App from './App.jsx';
-import toast from 'react-hot-toast';
-import { registerSW } from 'virtual:pwa-register';
-import { enterDemoMode, exitDemoMode } from './demo/demoMode';
-import { seedDemoDataIfNeeded } from './demo/seedData';
-
-// `import.meta.env.MODE` is 'demo' only when started via `npm run dev:demo`
-// (vite --mode demo). The actual Firebase-vs-local-storage routing is
-// decided at build time by vite.config.js's module aliasing — this block
-// just does the two things that still need to happen at runtime once we
-// know we're in Demo Mode:
-//
-//  1. Seed realistic sample data on first load (no-ops on later loads —
-//     see seedDemoDataIfNeeded's own localStorage check).
-//  2. Flip the flag in src/demo/demoMode.js, so the parts of the UI that
-//     need to know "are we in Demo Mode?" for display purposes only (the
-//     Demo badge in TopHeader, choosing which Business Reset to run in
-//     Settings) read it correctly. This flag has NO bearing on whether
-//     Firebase is actually used — that's the aliasing above — it's purely
-//     cosmetic/UI state.
-//
-// The `else` branch matters too: without it, a browser that previously ran
-// `npm run dev:demo` would keep the demo flag set to true even after
-// switching back to `npm run dev`, incorrectly showing the Demo badge (and
-// routing Settings' Business Reset to the wrong implementation) in
-// Production Mode.
-if (import.meta.env.MODE === 'demo') {
-  enterDemoMode();
-  seedDemoDataIfNeeded();
-} else {
-  exitDemoMode();
-}
-
-if (import.meta.env.MODE !== 'demo') {
-  const updateSW = registerSW({
-    onRegisteredSW(swUrl, registration) {
-      if (!registration) return;
-      setInterval(() => {
-        if (document.visibilityState === 'visible') registration.update().catch(() => {});
-      }, 60 * 1000);
-    },
- onNeedRefresh() {
-  updateSW(true);
-},
-    onOfflineReady() {},
-  });
-}
-createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
-  </StrictMode>
-);
-````
-
 ## File: firebase.json
 ````json
 {
@@ -10245,357 +9302,371 @@ createRoot(document.getElementById('root')).render(
 }
 ````
 
-## File: package.json
-````json
-{
-  "name": "flowbiz",
-  "private": true,
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "dev:demo": "vite --mode demo",
-    "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+## File: vite.config.js
+````javascript
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { VitePWA } from 'vite-plugin-pwa';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// `defineConfig` accepts a function so we can read the active Vite `mode`
+// (set by the --mode flag on the CLI) and branch on it.
+export default defineConfig(({ mode }) => ({
+  // DEMO BUILD OUTPUT — `npm run build` now runs the normal build AND a
+  // second pass with `--mode demo` (see package.json). The demo pass is
+  // served from the `/demo/` sub-path of the SAME deployed site (see
+  // public/_redirects), so every asset URL it emits (JS, CSS, etc.) must
+  // be prefixed with `/demo/` — that's what `base` does below. The real
+  // build keeps `base: '/'`, exactly as before, so nothing changes for it.
+  base: mode === 'demo' ? '/demo/' : '/',
+
+  build: {
+    // Writes the demo build into a SUBFOLDER of the real build's own
+    // output folder. One `dist/` directory ends up holding both apps —
+    // dist/index.html (real) and dist/demo/index.html (demo) — ready to
+    // deploy as a single Cloudflare Pages site with no extra config.
+    outDir: mode === 'demo' ? 'dist/demo' : 'dist',
   },
-  "dependencies": {
-    "@zxing/browser": "^0.2.1",
-    "@zxing/library": "^0.23.0",
-    "firebase": "^12.15.0",
-    "jspdf": "^2.5.1",
-    "lucide-react": "^1.22.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-hot-toast": "^2.4.1",
-    "react-icons": "^5.7.0",
-    "jszip": "^3.10.1",
-    "react-router-dom": "^6.30.0"
+
+  server: {
+    watch: {
+      usePolling: true,
+      interval: 100,
+    },
   },
-  "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.2",
-    "autoprefixer": "^10.4.20",
-    "eslint": "^10.5.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.3",
-    "globals": "^17.6.0",
-    "postcss": "^8.4.49",
-    "tailwindcss": "^3.4.17",
-    "vite": "^8.1.0",
-    "vite-plugin-pwa": "^1.3.0"
-  }
-}
+
+  // DEMO MODE — this is what actually connects Demo Mode to the app.
+  // `npm run dev:demo` runs `vite --mode demo`. When mode is 'demo', every
+  // `import ... from 'firebase/firestore'` and `import ... from
+  // 'firebase/auth'` ANYWHERE in the codebase — every page, every hook,
+  // and src/firebase.js itself — is transparently redirected to our local,
+  // localStorage-backed implementations (src/demo/localFirestore.js and
+  // src/demo/localAuth.js) instead of the real Firebase SDK. No other file
+  // needs to know Demo Mode exists; they all just import from
+  // 'firebase/firestore' / 'firebase/auth' as normal and get whichever
+  // implementation matches how the app was built. This is also what makes
+  // the deployed demo airtight: the demo build's JavaScript never contains
+  // the real Firebase SDK at all, so there is no code path in it that
+  // could ever read or write real Firestore data or a real account's
+  // cached data — the isolation happens at build time, not by trusting a
+  // runtime flag.
+  //
+  // `npm run build` / `npm run dev` (no --mode) leaves `resolve.alias`
+  // empty, so it is 100% unaffected and behaves exactly as before — real
+  // Firebase, real Firestore, real Authentication.
+  resolve: mode === 'demo' ? {
+    alias: {
+      'firebase/firestore': path.resolve(__dirname, 'src/demo/localFirestore.js'),
+      'firebase/auth': path.resolve(__dirname, 'src/demo/localAuth.js'),
+    },
+  } : {},
+
+  plugins: [
+    react(),
+
+    VitePWA({
+
+      registerType: 'autoUpdate',
+      includeAssets: ['favicon.svg', 'favicon-32.png', 'favicon-16.png', 'icons/*.png'],
+      manifest: {
+        name: 'FlowBiz — Business Manager',
+        short_name: 'FlowBiz',
+        description: 'POS, inventory and finance management for Kenyan SMBs',
+        theme_color: '#1a623c',
+        background_color: '#faf6ef',
+        display: 'standalone',
+        orientation: 'natural',
+        start_url: '/',
+        scope: '/',
+        lang: 'en-KE',
+        categories: ['business', 'finance', 'productivity'],
+        icons: [
+          { src: 'icons/icon-72.png',  sizes: '72x72',   type: 'image/png' },
+          { src: 'icons/icon-96.png',  sizes: '96x96',   type: 'image/png' },
+          { src: 'icons/icon-128.png', sizes: '128x128', type: 'image/png' },
+          { src: 'icons/icon-144.png', sizes: '144x144', type: 'image/png' },
+          { src: 'icons/icon-152.png', sizes: '152x152', type: 'image/png' },
+          { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'icons/icon-384.png', sizes: '384x384', type: 'image/png' },
+          { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+        ],
+        screenshots: [],
+      },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'google-fonts-cache',
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'gstatic-fonts-cache',
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
+      },
+    }),
+  ],
+}));
 ````
 
-## File: src/components/common/ProtectedRoute.jsx
+## File: src/components/landing/HeroSection.jsx
 ````javascript
-import { useEffect, useState } from 'react';
-import { Navigate, Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { useAuth } from '../../contexts/AuthContext';
-import { isDemoMode } from '../../demo/demoMode';
-import LoadingSpinner from './LoadingSpinner';
-import { Ban, AlertCircle, RefreshCw, Store } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ArrowRight, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { PosSimulationMockup } from './PosSimulationMockup';
 
-export default function ProtectedRoute({ children, adminOnly = false }) {
-  const {
-    firebaseUser, profile, loading, authError, accountRemoved, sessionRevoked,
-    isAdmin, isActive, emailVerified, logout, reloadProfile, resendVerificationEmail,
-    refreshEmailVerification,
-  } = useAuth();
-  const demo = isDemoMode();
+const HERO_PHOTO_URL = '/hero-photo.webp';
 
-  useEffect(() => {
-    if (authError) console.error('ProtectedRoute captured authError:', authError);
-  }, [authError]);
-
-  useEffect(() => {
-    if (demo || !firebaseUser || emailVerified) return;
-
-    const handleFocus = () => { refreshEmailVerification(); };
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') refreshEmailVerification();
-    };
-
-    window.addEventListener('focus', handleFocus);
-    document.addEventListener('visibilitychange', handleVisibility);
-
-    const pollId = setInterval(() => {
-      if (document.visibilityState === 'visible') refreshEmailVerification();
-    }, 5000);
-
-    return () => {
-      window.removeEventListener('focus', handleFocus);
-      document.removeEventListener('visibilitychange', handleVisibility);
-      clearInterval(pollId);
-    };
-  }, [demo, firebaseUser, emailVerified, refreshEmailVerification]);
-
-  const [checkingVerification, setCheckingVerification] = useState(false);
-  const [resending, setResending] = useState(false);
-  const [resendCooldown, setResendCooldown] = useState(0);
-
-  useEffect(() => {
-    if (resendCooldown <= 0) return;
-    const t = setTimeout(() => setResendCooldown((s) => s - 1), 1000);
-    return () => clearTimeout(t);
-  }, [resendCooldown]);
-  
-  if (loading) return <LoadingSpinner label="Checking your session…" />;
-
-  if (sessionRevoked) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
-        <div className="card max-w-sm w-full p-6 text-center space-y-4">
-          <h2 className="font-display text-lg font-bold text-ink-900">This device was signed out</h2>
-          <p className="text-sm text-ink-500">An owner revoked access for this device from Settings → Device Management.</p>
-          <button className="btn-primary w-full" onClick={() => (window.location.href = '/login')}>Go to sign in</button>
-        </div>
-      </div>
-    );
-  }
-
-  if (!firebaseUser) return <Navigate to="/login" replace />;
-
-  if (!profile) {
-    if (accountRemoved) {
-      return (
-        <div className="flex min-h-screen items-center justify-center bg-sand p-6">
-          <div className="card max-w-sm w-full p-6 text-center space-y-4">
-            <Store className="h-12 w-12 mx-auto text-moss-600" strokeWidth={1.5} />
-            <h2 className="font-display text-lg font-bold text-ink-900">Business Setup Required</h2>
-            <p className="text-sm text-ink-500">
-              You are signed in as <span className="font-semibold text-ink-700">{firebaseUser.email}</span>, but your business workspace is not configured yet.
-            </p>
-            <div className="flex flex-col gap-2">
-              <Link to="/setup" className="btn-primary w-full">Set Up Business Now</Link>
-              <button className="btn-outline w-full" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out</button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
-        <div className="card max-w-md w-full p-6 text-center space-y-4">
-          <AlertCircle className="h-12 w-12 mx-auto text-amber-500" strokeWidth={1.5} />
-          <h2 className="font-display text-lg font-bold text-ink-900">Loading Account Profile</h2>
-          <p className="text-sm text-ink-500">
-            Connecting to your business workspace. If this takes more than a few moments, click below.
-          </p>
-          <div className="flex flex-col gap-2">
-            <button className="btn-primary w-full flex items-center justify-center gap-2" onClick={reloadProfile}>
-              <RefreshCw className="h-4 w-4" /> Reload Profile
-            </button>
-            <Link to="/setup" className="btn-outline w-full">Set Up / Reconfigure Business</Link>
-            <button className="text-xs text-ink-400 hover:underline pt-1" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out</button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!isActive) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
-        <div className="card max-w-sm p-6 text-center space-y-3">
-          <Ban className="h-10 w-10 mx-auto text-rust-500" strokeWidth={1.5} />
-          <h2 className="font-display text-lg font-bold text-ink-900">Account deactivated</h2>
-          <p className="text-sm text-ink-500">Contact your business owner to regain access.</p>
-          <button className="btn-outline w-full" onClick={logout}>Sign Out</button>
-        </div>
-      </div>
-    );
-  }
-
-  if (!demo && !emailVerified) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
-        <div className="card max-w-sm w-full p-6 text-center space-y-4">
-          <h2 className="font-display text-lg font-bold text-ink-900">Verify your email</h2>
-          <p className="text-sm text-ink-500">
-            We sent a verification link to <span className="font-semibold text-ink-800">{firebaseUser.email}</span>. Please check your inbox (and spam/junk folder) and click the link to activate your account.
-          </p>
-          <div className="flex flex-col gap-2">
-            <button
-              className="btn-primary w-full"
-              disabled={checkingVerification}
-              onClick={async () => {
-                setCheckingVerification(true);
-                try {
-                  const verified = await refreshEmailVerification();
-                  if (!verified) toast.error("Not verified yet — check your inbox and click the link, then try again.");
-                  else toast.success("Email verified! Welcome.");
-                } finally {
-                  setCheckingVerification(false);
-                }
-              }}
-            >
-              {checkingVerification ? 'Checking…' : "I've verified — check now"}
-            </button>
-            <button
-              className="btn-outline w-full"
-              disabled={resending || resendCooldown > 0}
-              onClick={async () => {
-                setResending(true);
-                try {
-                  await resendVerificationEmail();
-                  toast.success('Verification email sent — check your inbox.');
-                  setResendCooldown(60);
-                } catch (err) {
-                  console.error('[FlowBiz] resendVerificationEmail error:', err.message);
-                  toast.error(
-                    err.code === 'auth/too-many-requests'
-                      ? 'Too many attempts. Please wait a minute before requesting another email.'
-                      : "Couldn't send the verification email. Please try again shortly."
-                  );
-                  setResendCooldown(60);
-                } finally {
-                  setResending(false);
-                }
-              }}
-            >
-              {resending ? 'Sending…' : resendCooldown > 0 ? `Resend available in ${resendCooldown}s` : 'Resend verification email'}
-            </button>
-            <button className="text-xs text-ink-400 hover:underline" onClick={logout}>Sign out</button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (adminOnly && !isAdmin) return <Navigate to="/counter" replace />;
-  return children;
-}
-````
-
-## File: src/components/layout/Sidebar.jsx
-````javascript
-import { NavLink } from 'react-router-dom';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import * as Lucide from 'lucide-react';
-import { NAV_ITEMS } from './navConfig';
-import { useAuth } from '../../contexts/AuthContext';
-import { useSettings } from '../../hooks/useSettings';
-
-const Icon = ({ name, className = 'h-5 w-5' }) => {
-  const C = Lucide[name] || Lucide.Circle;
-  return <C className={className} strokeWidth={1.75} />;
-};
-
-// `collapsed` and `onToggleCollapse` are optional — any existing caller
-// that renders <Sidebar /> with no props keeps behaving exactly as
-// before (always expanded, no toggle button rendered).
-export default function Sidebar({ collapsed = false, onToggleCollapse }) {
-  const { isAdmin } = useAuth();
-  const { settings } = useSettings();
-  const items = NAV_ITEMS
-    .filter((item) => !item.adminOnly || isAdmin)
-    .filter((item) => item.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses);
-
+export function HeroSection() {
   return (
-    <aside
-      className={`hidden shrink-0 flex-col border-r border-ink-100 bg-white transition-[width] duration-200 lg:flex ${
-        collapsed ? 'w-[68px]' : 'w-60'
-      }`}
-    >
-      <nav className="flex-1 space-y-0.5 overflow-y-auto px-2.5 py-3">
-        {items.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.to === '/'}
-            title={collapsed ? item.label : undefined}
-            className={({ isActive }) =>
-              `flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors ${
-                collapsed ? 'justify-center px-0' : 'px-3'
-              } ${isActive ? 'bg-moss-50 text-moss-800' : 'text-ink-500 hover:bg-ink-50 hover:text-ink-800'}`
-            }
-          >
-            <Icon name={item.icon} />
-            {!collapsed && item.label}
-          </NavLink>
-        ))}
-      </nav>
-
-      {onToggleCollapse && (
-        <div className="border-t border-ink-100 p-2">
-          <button
-            type="button"
-            onClick={onToggleCollapse}
-            className={`flex w-full items-center gap-2 rounded-lg py-2 text-xs font-semibold text-ink-400 transition-colors hover:bg-ink-50 hover:text-ink-700 ${
-              collapsed ? 'justify-center px-0' : 'px-3'
-            }`}
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {collapsed ? (
-              <ChevronRight className="h-4 w-4" strokeWidth={1.75} />
-            ) : (
-              <ChevronLeft className="h-4 w-4" strokeWidth={1.75} />
-            )}
-            {!collapsed && 'Collapse'}
-          </button>
+    <section className="relative overflow-hidden">
+      
+      {/* Full-Bleed Hero Background Banner */}
+      <div className="relative min-h-[580px] lg:min-h-[680px] flex items-center bg-[#0d1f16]">
+        
+        {/* 1. Base Background Photo */}
+        <div className="absolute inset-0 z-0 overflow-hidden">
+          <img
+            src={HERO_PHOTO_URL}
+            alt="Retail shop owner managing inventory and POS"
+            className="w-full h-full object-cover object-center lg:object-right"
+            onError={(e) => {
+              e.currentTarget.style.opacity = '0.25';
+            }}
+          />
         </div>
-      )}
-    </aside>
+
+        {/* 2. Left-to-Right Blur & Gradient Overlay */}
+        <div 
+          className="absolute inset-0 z-1 pointer-events-none"
+          style={{
+            background: 'linear-gradient(to right, rgba(13, 31, 22, 0.96) 0%, rgba(13, 31, 22, 0.88) 42%, rgba(13, 31, 22, 0.35) 70%, rgba(13, 31, 22, 0.02) 100%)',
+          }}
+        />
+
+        {/* 3. Soft blur mask on left for enhanced text clarity */}
+        <div 
+          className="absolute inset-0 z-1 pointer-events-none hidden md:block"
+          style={{
+            maskImage: 'linear-gradient(to right, black 25%, transparent 65%)',
+            WebkitMaskImage: 'linear-gradient(to right, black 25%, transparent 65%)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+          }}
+        />
+
+        {/* 4. Foreground Content Container */}
+        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24 w-full">
+          <div className="max-w-3xl space-y-6 text-white">
+
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-black text-white tracking-tight leading-[1.08] drop-shadow-sm">
+              Run your business with ease
+            </h1>
+
+            <p className="text-base sm:text-lg lg:text-xl text-[#d1dcd4] font-normal leading-relaxed max-w-2xl">
+              Sell <strong className="text-white font-semibold">faster</strong>, know what you have in{' '}
+              <strong className="text-white font-semibold">stock</strong>, and keep your business running
+              even while <strong className="text-white font-semibold">offline</strong>, then see how it’s doing when you’re <strong className="text-white font-semibold">online.</strong>
+            </p>
+
+            <div className="pt-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5">
+              <Link
+                to="/setup"
+                className="bg-[#1a623c] text-white px-8 py-4 rounded-xl text-base font-bold shadow-lg hover:bg-[#144f30] transition-all flex items-center justify-center gap-2 border border-[#348a58]"
+              >
+                <span>Get Started Free</span>
+                <ArrowRight className="h-5 w-5" />
+              </Link>
+              <Link
+                to="/login"
+                className="bg-white/10 backdrop-blur-md border border-white/30 text-white px-7 py-4 rounded-xl text-base font-bold hover:bg-white/20 transition-all flex items-center justify-center"
+              >
+                Sign In to Counter
+              </Link>
+            </div>
+
+            <div className="pt-6 border-t border-white/15 grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-xs sm:text-sm font-semibold text-[#e1ece4]">
+              <span className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
+                Works 100% Offline
+              </span>
+              <span className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
+                M-Pesa Till Reconciled
+              </span>
+              <span className="flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-[#a3e6ba] shrink-0" />
+                Customer Reminders
+              </span>
+              <span className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
+                No POS Hardware Required
+              </span>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+
+      {/* Demo section — replaces the old embedded "Live Point of Sale
+          Simulator" (PosSimulationMockup is still imported above and used
+          nowhere else in the app, so it's left in place untouched in case
+          it's wanted again later).
+
+          The button below is a plain <a>, not a react-router <Link>, on
+          purpose: /demo/ is a SEPARATE build (see vite.config.js + 
+          package.json + public/_redirects) with its own local, offline
+          data store (src/demo/) instead of real Firebase. A <Link> would
+          do a client-side navigation and never actually leave this
+          bundle, which is exactly what caused real account data to leak
+          into "the demo" before — a plain <a> forces a full page load,
+          which is what lets Cloudflare correctly hand the request to the
+          separately-built demo app. */}
+      <div id="demo" className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-16 md:py-24 scroll-mt-14">
+        <div className="rounded-3xl border border-[#e8eaed] bg-white px-6 py-12 sm:px-14 sm:py-16 text-center space-y-6 shadow-sm">
+          <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-[#15171d] tracking-tight">
+            See FlowBiz in action
+          </h2>
+          <p className="text-sm sm:text-base text-[#5a6273] max-w-xl mx-auto leading-relaxed">
+            Explore a fully working FlowBiz account, preloaded with sample products, sales, and
+            customers. Try the POS counter, check the dashboard, and see how credit sales and
+            M-Pesa reconciliation work — nothing you do here ever touches a real business.
+          </p>
+          <div className="pt-2 flex flex-col items-center gap-3">
+            <a
+              href="/demo/"
+              className="inline-flex items-center justify-center gap-2 bg-[#1a623c] text-white px-8 py-4 rounded-xl text-base font-bold shadow-md hover:bg-[#144f30] transition-all"
+            >
+              <span>Try the Free Demo</span>
+              <ArrowRight className="h-5 w-5" />
+            </a>
+            <span className="text-xs font-semibold text-[#767f8f]">
+              No sign-in needed &middot; Free demo trial &middot; Nothing is saved to a real account
+            </span>
+          </div>
+        </div>
+      </div>
+
+    </section>
   );
 }
 ````
 
-## File: src/components/layout/TopHeader.jsx
+## File: src/components/landing/LandingFooter.jsx
 ````javascript
-import { useAuth } from '../../contexts/AuthContext';
-import ConnectivityIndicator from '../common/ConnectivityIndicator';
-import { isDemoMode } from '../../demo/demoMode';
 import { Link } from 'react-router-dom';
+import { Mail, Shield, FileText, ArrowRight } from 'lucide-react';
 
-export default function TopHeader() {
-  const { profile, logout, isAdmin, isPro } = useAuth();
-  const demo = isDemoMode();
-
+export function LandingFooter() {
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-ink-100 bg-sand/95 px-4 py-2 backdrop-blur sm:px-6 safe-top">
+    <footer className="bg-[#15171d] text-[#cfd3da] border-t border-[#2b303c] pt-14 pb-10 text-xs">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+        
 
-      <div className="flex min-w-0 items-center gap-3">
-{isAdmin && !demo && (
-  <Link
-    to="/pro"
-    className={`inline-flex shrink-0 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
-      isPro
-        ? 'bg-amber-100 text-amber-800'
-        : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'
-    }`}
-  >
-    {isPro ? 'Pro Activated' : 'FlowBiz Pro'}
-  </Link>
-)}
-        <div className="hidden truncate text-sm text-ink-500 lg:block">
-          Welcome, <span className="font-semibold text-ink-800">{profile?.displayName}</span>
+
+        {/* Footer Navigation Columns */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+          
+          {/* Brand Info */}
+          <div className="space-y-4 md:col-span-2">
+            <div className="flex items-center gap-3">
+             
+              <span className="font-bold text-xl text-white tracking-tight">FlowBiz</span>
+            </div>
+            <p className="text-xs text-[#9aa2b1] max-w-sm leading-relaxed">
+              The offline-first Point of Sale, inventory intelligence, and cash-flow management platform purpose-built for Kenyan retailers and small businesses.
+            </p>
+            <div className="flex items-center gap-2 text-[11px] text-[#767f8f]">
+              <span>Nairobi, Kenya</span>
+              <span>·</span>
+              <a href="mailto:support@flowbiz.co.ke" className="hover:text-white transition-colors flex items-center gap-1">
+                <Mail className="h-3 w-3" /> support@flowbiz.co.ke
+              </a>
+            </div>
+          </div>
+
+          {/* Application Navigation */}
+          <div className="space-y-3">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-white block">
+              Application
+            </span>
+            <ul className="space-y-2 text-[#9aa2b1]">
+              <li>
+                <a href="#features" className="hover:text-white transition-colors">
+                  POS Features
+                </a>
+              </li>
+              <li>
+                <a href="#demo" className="hover:text-white transition-colors">
+                  Demo
+                </a>
+              </li>
+              <li>
+                <a href="#how-it-works" className="hover:text-white transition-colors">
+                  How It Works
+                </a>
+              </li>
+              <li>
+                <a href="#pricing" className="hover:text-white transition-colors">
+                  Pricing
+                </a>
+              </li>
+              <li>
+                <a href="#faq" className="hover:text-white transition-colors">
+                  FAQ
+                </a>
+              </li>
+            </ul>
+          </div>
+
+          {/* Legal & Trust: Tight Spacing, No Sign In */}
+       {/* Column 3: Legal & Compliance */}
+          <div className="space-y-3">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-white block">
+              Trust & Legal
+            </span>
+            <ul className="space-y-2">
+              <li>
+                <Link to="/privacy" className="hover:text-white transition-colors flex items-center gap-1.5">
+                  <Shield className="h-3.5 w-3.5 text-[#54b67c]" />
+                  Privacy Policy (KDPA 2019)
+                </Link>
+              </li>
+              <li>
+                <Link to="/terms" className="hover:text-white transition-colors flex items-center gap-1.5">
+                  <FileText className="h-3.5 w-3.5 text-[#54b67c]" />
+                  Terms of Service
+                </Link>
+              </li>
+             
+            </ul>
+          </div>
+
         </div>
+
+        {/* Bottom Line */}
+        <div className="pt-8 border-t border-[#2b303c] flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-[#767f8f]">
+          <p>© {new Date().getFullYear()} FlowBiz. All rights reserved.</p>
+          
+        </div>
+
       </div>
-      <div className="flex items-center gap-2">
-        {demo && (
-          <span className="badge bg-amber-100 text-amber-800" title="Sample data only — nothing here touches Firebase">
-            Demo
-          </span>
-        )}
-        <ConnectivityIndicator />
-        {/* FIX: was checking profile?.role === 'admin', a role value that
-            no longer exists anywhere in this app — every owner was
-            showing as "Cashier" here. This app's actual roles are
-            'owner' and 'cashier'. */}
-        <span className={`badge hidden sm:inline-flex ${profile?.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>
-          {profile?.role === 'owner' ? 'Owner' : 'Cashier'}
-        </span>
-        {!demo && (
-          <button onClick={logout} className="btn-outline !px-3 !py-1.5 text-xs !min-h-0">Sign out</button>
-        )}
-      </div>
-    </header>
+    </footer>
   );
 }
 ````
@@ -10708,6 +9779,81 @@ export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemo
     </div>
   );
 }
+````
+
+## File: src/demo/localAuth.js
+````javascript
+export const DEMO_UID = 'demo-admin';
+
+const DEMO_USER = {
+  uid: DEMO_UID,
+  email: 'demo@flowbiz.app',
+  displayName: 'Demo Owner',
+  emailVerified: true,
+};
+
+export function getAuth() {
+  return { __demo: true, currentUser: DEMO_USER };
+}
+
+export function onAuthStateChanged(_auth, callback) {
+  const timer = setTimeout(() => callback(DEMO_USER), 0);
+  return () => clearTimeout(timer);
+}
+
+export async function signInWithEmailAndPassword() {
+  return { user: DEMO_USER };
+}
+
+export async function signOut() {
+  return Promise.resolve();
+}
+
+export async function createUserWithEmailAndPassword() {
+  throw new Error('Account creation is not available in Demo Mode.');
+}
+
+export async function sendEmailVerification() {
+  return Promise.resolve();
+}
+
+export async function reload() {
+  return Promise.resolve();
+}
+
+export async function deleteUser() {
+  return Promise.resolve();
+}
+
+export async function applyActionCode() {
+  return Promise.resolve();
+}
+
+export async function checkActionCode() {
+  return Promise.resolve({});
+}
+
+export async function sendPasswordResetEmail() {
+  return Promise.resolve();
+}
+
+export async function verifyPasswordResetCode() {
+  return Promise.resolve(DEMO_USER.email);
+}
+
+export async function confirmPasswordReset() {
+  return Promise.resolve();
+}
+
+export const EmailAuthProvider = {
+  credential: (email, password) => ({ email, password }),
+};
+
+export async function reauthenticateWithCredential() {
+  return Promise.resolve();
+}
+
+export function connectAuthEmulator() {}
 ````
 
 ## File: src/hooks/useCameraScanner.js
@@ -11827,224 +10973,402 @@ export default function InventoryIntelligence() {
 }
 ````
 
-## File: src/pages/JoinStaff.jsx
+## File: src/utils/financials.js
 ````javascript
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, deleteUser, sendEmailVerification } from 'firebase/auth';
-import { doc, getDoc, writeBatch } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { auth, db } from '../firebase';
-
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-
-export function validatePassword(password) {
-  if (password.length < 8) return 'Password must be at least 8 characters long.';
-  if (!/[A-Z]/.test(password)) return 'Password must contain at least one uppercase letter.';
-  if (!/[a-z]/.test(password)) return 'Password must contain at least one lowercase letter.';
-  if (!/[0-9]/.test(password)) return 'Password must contain at least one number.';
-  return null;
+// src/utils/financials.js
+function sumBy(rows, field) {
+  return rows.reduce((acc, row) => acc + (Number(row[field]) || 0), 0);
 }
 
-export default function JoinStaff() {
-  const { inviteId } = useParams();
-  const navigate = useNavigate();
-
-  const [checking, setChecking] = useState(true);
-  const [invite, setInvite]     = useState(null);
-  const [notFound, setNotFound] = useState(false);
-
-  const [email, setEmail]                     = useState('');
-  const [password, setPassword]               = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [submitting, setSubmitting]           = useState(false);
-  const [error, setError]                     = useState(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const snap = await getDoc(doc(db, 'staffInvites', inviteId));
-        if (cancelled) return;
-        if (!snap.exists()) {
-          setNotFound(true);
-          setChecking(false);
-          return;
-        }
-        setInvite({ id: snap.id, ...snap.data() });
-      } catch {
-        setNotFound(true);
-      } finally {
-        if (!cancelled) setChecking(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [inviteId]);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
-
-    const passwordError = validatePassword(password);
-    if (passwordError) {
-      setError(passwordError);
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
-
-    setSubmitting(true);
-
-    let freshSnap;
-    try {
-      freshSnap = await getDoc(doc(db, 'staffInvites', inviteId));
-      if (!freshSnap.exists()) throw new Error('This invite is no longer valid.');
-      if (freshSnap.data().claimed) throw new Error('This invite has already been used.');
-    } catch (validationErr) {
-      setError(validationErr.message || 'This invite could not be validated. Please try again.');
-      setSubmitting(false);
-      return;
-    }
-    const { businessId, role, displayName } = freshSnap.data();
-
-    let targetUser = null;
-    let isNewAuthUser = false;
-
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-      targetUser = cred.user;
-      isNewAuthUser = true;
-    } catch (authErr) {
-      if (authErr.code === 'auth/email-already-in-use') {
-        try {
-          const signInCred = await signInWithEmailAndPassword(auth, email.trim(), password);
-          targetUser = signInCred.user;
-        } catch {
-          setError('An account with this email already exists. Please verify your password or use a different email.');
-          setSubmitting(false);
-          return;
-        }
-      } else {
-        const message =
-          authErr.code === 'auth/invalid-email'  ? 'Please enter a valid email address.' :
-          authErr.code === 'auth/weak-password'   ? 'Password should be at least 8 characters with upper, lower, and numbers.' :
-          'Could not create your account. Please try again.';
-        setError(message);
-        setSubmitting(false);
-        return;
-      }
-    }
-
-    try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'users', targetUser.uid), {
-        uid: targetUser.uid,
-        email: email.trim(),
-        displayName,
-        role,
-        businessId,
-        active: true,
-        createdAt: new Date(),
-        claimedFromInviteId: inviteId,
-      });
-      batch.update(doc(db, 'staffInvites', inviteId), {
-        claimed: true,
-        linkedUid: targetUser.uid,
-        claimedAt: new Date(),
-      });
-      await batch.commit();
-    } catch (dbErr) {
-      console.error('[JoinStaff] Firestore write failed:', dbErr);
-      if (isNewAuthUser) {
-        try { await deleteUser(targetUser); } catch {}
-      }
-      setError('Something went wrong completing your signup. Please contact your business owner.');
-      setSubmitting(false);
-      return;
-    }
-
-    try {
-      const idToken = await targetUser.getIdToken(true);
-      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-      });
-      if (!response.ok) throw new Error('send-verification-failed');
-      toast.success(`Welcome, ${displayName}! Please check your email to verify your account.`);
-    } catch {
-      try { await sendEmailVerification(targetUser); } catch {}
-      toast.success(`Welcome, ${displayName}! Your account is ready.`);
-    }
-
-    setSubmitting(false);
-    navigate('/', { replace: true });
-  };
-
-  if (checking) return <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4"><p className="text-sm text-ink-400">Checking invite…</p></div>;
-
-  if (notFound || !invite) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-        <div className="w-full max-w-sm card p-6 text-center space-y-3">
-          <div className="text-3xl">🔗</div>
-          <h1 className="font-display text-lg font-bold text-ink-900">Invite not found</h1>
-          <p className="text-sm text-ink-500">This link may be invalid or was cancelled by the business owner.</p>
-          <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
-        </div>
-      </div>
-    );
+function getCostOfSale(row) {
+  if (row && typeof row.costOfGoodsSold === 'number' && Number.isFinite(row.costOfGoodsSold)) {
+    return row.costOfGoodsSold;
   }
+  const costPerUnit = Number(row?.costPricePerUnit) || 0;
+  const quantity = Number(row?.quantity) || 0;
+  return costPerUnit * quantity;
+}
 
-  if (invite.claimed) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-        <div className="w-full max-w-sm card p-6 text-center space-y-3">
-          <div className="text-3xl">✅</div>
-          <h1 className="font-display text-lg font-bold text-ink-900">Invite Already Claimed</h1>
-          <p className="text-sm text-ink-500">This invite link has already been used. Please sign in with your email and password.</p>
-          <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
-        </div>
-      </div>
-    );
-  }
-
-  const roleLabel = invite.role === 'owner' ? 'an owner' : 'a cashier';
-
+export function isExpenseExcluded(expense) {
+  const category = String(expense?.category || '').toLowerCase();
+  const description = String(expense?.description || '').toLowerCase();
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4 py-8">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-white">Welcome, {invite.displayName}</h1>
-            <p className="text-sm text-ink-400">You have been invited as {roleLabel}.</p>
-          </div>
-        </div>
-        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
-          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-
-          <div>
-            <label className="label">Your email</label>
-            <input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" autoComplete="username" />
-          </div>
-          <div>
-            <label className="label">Choose a password</label>
-            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 chars (upper, lower, number)" autoComplete="new-password" />
-          </div>
-          <div>
-            <label className="label">Confirm password</label>
-            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="Repeat password" autoComplete="new-password" />
-          </div>
-          <button type="submit" className="btn-primary w-full" disabled={submitting}>
-            {submitting ? 'Setting up…' : 'Create my sign-in'}
-          </button>
-        </form>
-      </div>
-    </div>
+    category === 'stock purchase' ||
+    category === 'supplier payment' ||
+    description.includes('stock purchase') ||
+    description.includes('supplier payment')
   );
 }
+
+function isCreditSaleReversed(creditSale) {
+  return creditSale?.status === 'cancelled' || creditSale?.status === 'refunded';
+}
+
+function recognizeRepayment(repayment, creditSaleById) {
+  const amount = Number(repayment?.amount) || 0;
+  const creditSale = creditSaleById.get(repayment?.creditSaleId);
+  if (!creditSale) {
+    return { revenue: amount, cogs: 0 };
+  }
+  const totalAmount = Number(creditSale.totalAmount) || 0;
+  const totalCost = getCostOfSale(creditSale);
+  const ratio = totalAmount > 0 ? amount / totalAmount : 0;
+  const cogs = totalCost * ratio;
+  return { revenue: amount, cogs };
+}
+
+function recognizeRefund(refund, creditSaleById) {
+  const amount = Number(refund?.amount) || 0;
+  const creditSale = creditSaleById.get(refund?.creditSaleId);
+  if (!creditSale) {
+    return { revenue: amount, cogs: 0 };
+  }
+  const totalAmount = Number(creditSale.totalAmount) || 0;
+  const totalCost = getCostOfSale(creditSale);
+  const ratio = totalAmount > 0 ? amount / totalAmount : 0;
+  const cogs = totalCost * ratio;
+  return { revenue: amount, cogs };
+}
+
+export function computeFinancials({
+  sales = [],
+  creditSales = [],
+  allCreditSales = null,
+  expenses = [],
+  debtRepayments = [],
+  purchases = [],
+  supplierPayments = [],
+  refunds = [],
+} = {}) {
+  const activeSales = (sales || []).filter((sale) => !sale?.isVoided);
+  const activeCreditSales = (creditSales || []).filter((cs) => !isCreditSaleReversed(cs));
+
+  const cashSales  = activeSales.filter(s => s.paymentMethod === 'Cash');
+  const mpesaSales = activeSales.filter(s => s.paymentMethod === 'M-Pesa');
+  const totalCashSales  = sumBy(cashSales,  'totalAmount');
+  const totalMpesaSales = sumBy(mpesaSales, 'totalAmount');
+
+  const totalCreditSales = sumBy(activeCreditSales, 'totalAmount');
+
+  const cashRepayments  = debtRepayments.filter(r => r.method === 'Cash');
+  const mpesaRepayments = debtRepayments.filter(r => r.method === 'M-Pesa');
+  const totalDebtRepaymentsCash  = sumBy(cashRepayments,  'amount');
+  const totalDebtRepaymentsMpesa = sumBy(mpesaRepayments, 'amount');
+  const totalDebtRepayments = totalDebtRepaymentsCash + totalDebtRepaymentsMpesa;
+
+  const cashRefunds  = (refunds || []).filter(r => r.method === 'Cash');
+  const mpesaRefunds = (refunds || []).filter(r => r.method === 'M-Pesa');
+  const totalRefundsCash  = sumBy(cashRefunds,  'amount');
+  const totalRefundsMpesa = sumBy(mpesaRefunds, 'amount');
+  const totalRefunds = totalRefundsCash + totalRefundsMpesa;
+
+  const creditSaleSource = allCreditSales || creditSales || [];
+  const creditSaleById = new Map(creditSaleSource.map((cs) => [cs.id, cs]));
+
+  let repaymentRevenue = 0;
+  let repaymentCogs = 0;
+  (debtRepayments || []).forEach((r) => {
+    const { revenue, cogs } = recognizeRepayment(r, creditSaleById);
+    repaymentRevenue += revenue;
+    repaymentCogs += cogs;
+  });
+
+  let refundRevenue = 0;
+  let refundCogs = 0;
+  (refunds || []).forEach((ref) => {
+    const { revenue, cogs } = recognizeRefund(ref, creditSaleById);
+    refundRevenue += revenue;
+    refundCogs += cogs;
+  });
+
+  const directSalesCostOfGoodsSold = activeSales.reduce((acc, s) => acc + getCostOfSale(s), 0);
+  const costOfGoodsSold = directSalesCostOfGoodsSold + repaymentCogs - refundCogs;
+
+  const grossSalesRevenue = totalCashSales + totalMpesaSales + totalCreditSales;
+  const revenue = totalCashSales + totalMpesaSales + repaymentRevenue - refundRevenue;
+  const grossProfit = revenue - costOfGoodsSold;
+
+  const filteredExpenses = (expenses || []).filter((expense) => !isExpenseExcluded(expense));
+  const cashExpenses  = filteredExpenses.filter(e => e.paymentMethod === 'Cash');
+  const mpesaExpenses = filteredExpenses.filter(e => e.paymentMethod === 'M-Pesa');
+  const totalExpensesCash  = sumBy(cashExpenses,  'amount');
+  const totalExpensesMpesa = sumBy(mpesaExpenses, 'amount');
+  const totalExpenses = totalExpensesCash + totalExpensesMpesa;
+  const netProfit     = grossProfit - totalExpenses;
+
+  // Realized net receipts by tender method
+  const totalCashReceipts  = totalCashSales  + totalDebtRepaymentsCash  - totalRefundsCash;
+  const totalMpesaReceipts = totalMpesaSales + totalDebtRepaymentsMpesa - totalRefundsMpesa;
+
+  const purchasePaymentsCash  = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash');
+  const purchasePaymentsMpesa = (purchases || []).filter((p) => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa');
+  const supplierPaymentsCash  = (supplierPayments || []).filter((p) => p.method === 'Cash');
+  const supplierPaymentsMpesa = (supplierPayments || []).filter((p) => p.method === 'M-Pesa');
+
+  const totalCashOutflows  = sumBy(purchasePaymentsCash,  'totalCost') + sumBy(supplierPaymentsCash,  'amount') + totalRefundsCash;
+  const totalMpesaOutflows = sumBy(purchasePaymentsMpesa, 'totalCost') + sumBy(supplierPaymentsMpesa, 'amount') + totalRefundsMpesa;
+
+  return {
+    grossSalesRevenue, totalCashSales, totalMpesaSales, totalCreditSales,
+    revenue, costOfGoodsSold, grossProfit,
+    totalCashReceipts, totalMpesaReceipts,
+    totalDebtRepaymentsCash, totalDebtRepaymentsMpesa, totalDebtRepayments,
+    totalExpensesCash, totalExpensesMpesa, totalExpenses, netProfit,
+    totalRefundsCash, totalRefundsMpesa, totalRefunds,
+    totalCashOutflows, totalMpesaOutflows,
+  };
+}
+
+export function computeExpectedTillBalances({
+  openingCashFloat = 0, openingMpesaFloat = 0,
+  totalCashSales = 0, totalMpesaSales = 0,
+  totalDebtRepaymentsCash = 0, totalDebtRepaymentsMpesa = 0,
+  totalExpensesCash = 0, totalExpensesMpesa = 0,
+  totalCashOutflows = 0, totalMpesaOutflows = 0,
+}) {
+  return {
+    expectedCashAtClose:  Number(openingCashFloat)  + totalCashSales  + totalDebtRepaymentsCash  - totalExpensesCash - totalCashOutflows,
+    expectedMpesaAtClose: Number(openingMpesaFloat) + totalMpesaSales + totalDebtRepaymentsMpesa - totalExpensesMpesa - totalMpesaOutflows,
+  };
+}
+
+export function computeSupplierBalances(purchases = [], supplierPayments = [], suppliers = []) {
+  const balanceById = {};
+
+  (purchases || []).forEach((p) => {
+    if (p?.paymentStatus !== 'pending_supplier_credit' || !p?.supplierId) return;
+    balanceById[p.supplierId] = (balanceById[p.supplierId] || 0) + (Number(p.totalCost) || 0);
+  });
+
+  (supplierPayments || []).forEach((sp) => {
+    if (!sp?.supplierId || balanceById[sp.supplierId] === undefined) return;
+    balanceById[sp.supplierId] -= Number(sp.amount) || 0;
+  });
+
+  const nameById = {};
+  (suppliers || []).forEach((s) => { nameById[s.id] = s.name; });
+
+  return Object.entries(balanceById)
+    .filter(([, balance]) => (Number(balance) || 0) > 0.005)
+    .map(([supplierId, balance]) => ({
+      supplierId,
+      supplierName:
+        nameById[supplierId] ||
+        (purchases || []).find((p) => p.supplierId === supplierId)?.supplierName ||
+        'Unknown supplier',
+      balance,
+    }))
+    .sort((a, b) => b.balance - a.balance);
+}
+````
+
+## File: src/utils/financials.test.js
+````javascript
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { computeFinancials, computeExpectedTillBalances, computeSupplierBalances } from './financials.js';
+
+test('1. Cash Sale creates immediate revenue, COGS, gross profit, and cash receipts', () => {
+  const sale = {
+    id: 's1',
+    totalAmount: 1500,
+    costPricePerUnit: 1000,
+    quantity: 1,
+    paymentMethod: 'Cash',
+    isVoided: false,
+  };
+  const summary = computeFinancials({ sales: [sale] });
+
+  assert.equal(summary.revenue, 1500);
+  assert.equal(summary.costOfGoodsSold, 1000);
+  assert.equal(summary.grossProfit, 500);
+  assert.equal(summary.totalCashReceipts, 1500);
+  assert.equal(summary.totalMpesaReceipts, 0);
+});
+
+test('2. Unpaid Credit Sale contributes zero revenue, COGS, and profit', () => {
+  const creditSale = {
+    id: 'c1',
+    costPricePerUnit: 2000,
+    quantity: 1,
+    totalAmount: 3000,
+    status: 'pending',
+    amountPaid: 0,
+  };
+  const summary = computeFinancials({
+    creditSales: [creditSale],
+    allCreditSales: [creditSale],
+  });
+
+  assert.equal(summary.totalCreditSales, 3000);
+  assert.equal(summary.revenue, 0);
+  assert.equal(summary.costOfGoodsSold, 0);
+  assert.equal(summary.grossProfit, 0);
+  assert.equal(summary.netProfit, 0);
+});
+
+test('3. Partial Debt Repayment recognizes proportional revenue and COGS', () => {
+  const creditSale = {
+    id: 'c1',
+    costPricePerUnit: 2000,
+    quantity: 1,
+    totalAmount: 3000,
+    status: 'partial',
+    amountPaid: 1000,
+  };
+  const summary = computeFinancials({
+    creditSales: [creditSale],
+    allCreditSales: [creditSale],
+    debtRepayments: [{ id: 'r1', creditSaleId: 'c1', amount: 1000, method: 'Cash' }],
+  });
+
+  assert.equal(summary.revenue, 1000);
+  assert.equal(Math.round(summary.costOfGoodsSold * 100) / 100, 666.67);
+  assert.equal(Math.round(summary.grossProfit * 100) / 100, 333.33);
+  assert.equal(summary.totalCashReceipts, 1000);
+});
+
+test('4. Full Debt Repayment recognizes full revenue and COGS', () => {
+  const creditSale = {
+    id: 'c1',
+    costPricePerUnit: 2000,
+    quantity: 1,
+    totalAmount: 3000,
+    status: 'paid',
+    amountPaid: 3000,
+  };
+  const summary = computeFinancials({
+    allCreditSales: [creditSale],
+    debtRepayments: [
+      { id: 'r1', creditSaleId: 'c1', amount: 1000, method: 'Cash' },
+      { id: 'r2', creditSaleId: 'c1', amount: 2000, method: 'M-Pesa' },
+    ],
+  });
+
+  assert.equal(summary.revenue, 3000);
+  assert.equal(summary.costOfGoodsSold, 2000);
+  assert.equal(summary.grossProfit, 1000);
+  assert.equal(summary.totalCashReceipts, 1000);
+  assert.equal(summary.totalMpesaReceipts, 2000);
+});
+
+test('5. Net Refund Exceeding Sales correctly produces negative net revenue and profit without zero-clamping', () => {
+  const creditSale = {
+    id: 'c1',
+    costPricePerUnit: 3000,
+    quantity: 1,
+    totalAmount: 5000,
+    status: 'refunded',
+  };
+  const summary = computeFinancials({
+    sales: [{ totalAmount: 1000, costPricePerUnit: 600, quantity: 1, paymentMethod: 'Cash', isVoided: false }],
+    allCreditSales: [creditSale],
+    refunds: [{ id: 'ref1', creditSaleId: 'c1', amount: 5000, method: 'Cash' }],
+  });
+
+  assert.equal(summary.revenue, -4000);
+  assert.equal(summary.costOfGoodsSold, -2400);
+  assert.equal(summary.grossProfit, -1600);
+  assert.equal(summary.totalCashReceipts, -4000);
+});
+
+test('6. Expected Till Balances maintain exact cash and M-Pesa float reconciliation', () => {
+  const balances = computeExpectedTillBalances({
+    openingCashFloat: 2000,
+    openingMpesaFloat: 5000,
+    totalCashSales: 4500,
+    totalMpesaSales: 8000,
+    totalDebtRepaymentsCash: 1500,
+    totalDebtRepaymentsMpesa: 2000,
+    totalExpensesCash: 800,
+    totalExpensesMpesa: 500,
+    totalCashOutflows: 1200, // stock purchases + supplier payments + refunds
+    totalMpesaOutflows: 0,
+  });
+
+  // Expected Cash: 2000 + 4500 + 1500 - 800 - 1200 = 6000
+  assert.equal(balances.expectedCashAtClose, 6000);
+  // Expected M-Pesa: 5000 + 8000 + 2000 - 500 - 0 = 14500
+  assert.equal(balances.expectedMpesaAtClose, 14500);
+});
+
+test('7. Supplier balance aggregation correctly matches purchases and payments', () => {
+  const purchases = [
+    { supplierId: 's1', totalCost: 10000, paymentStatus: 'pending_supplier_credit' },
+    { supplierId: 's1', totalCost: 5000, paymentStatus: 'pending_supplier_credit' },
+    { supplierId: 's2', totalCost: 8000, paymentStatus: 'paid' },
+  ];
+  const payments = [
+    { supplierId: 's1', amount: 6000 },
+  ];
+  const suppliers = [
+    { id: 's1', name: 'Wholesaler Alpha' },
+    { id: 's2', name: 'Wholesaler Beta' },
+  ];
+
+  const balances = computeSupplierBalances(purchases, payments, suppliers);
+  assert.equal(balances.length, 1);
+  assert.equal(balances[0].supplierId, 's1');
+  assert.equal(balances[0].balance, 9000);
+});
+
+test('8. Multi-item cart sale uses costOfGoodsSold aggregate properly', () => {
+  const multiSale = {
+    id: 's_multi',
+    totalAmount: 2250,
+    costOfGoodsSold: 1320,
+    profit: 930,
+    quantity: 6,
+    paymentMethod: 'Cash',
+    isVoided: false,
+    items: [
+      { productId: 'p1', productName: 'Book', quantity: 3, unitPrice: 500, costPrice: 300, lineTotal: 1500, lineCost: 900 },
+      { productId: 'p2', productName: 'Storybook', quantity: 2, unitPrice: 350, costPrice: 200, lineTotal: 700, lineCost: 400 },
+      { productId: 'p3', productName: 'Pen', quantity: 1, unitPrice: 50, costPrice: 20, lineTotal: 50, lineCost: 20 },
+    ]
+  };
+  const summary = computeFinancials({ sales: [multiSale] });
+  assert.equal(summary.revenue, 2250);
+  assert.equal(summary.costOfGoodsSold, 1320);
+  assert.equal(summary.grossProfit, 930);
+});
+
+test('9. Voided sales are excluded from active calculations', () => {
+  const voidedSale = {
+    id: 's_void',
+    totalAmount: 5000,
+    costPricePerUnit: 3000,
+    quantity: 1,
+    paymentMethod: 'Cash',
+    isVoided: true,
+  };
+  const validSale = {
+    id: 's_valid',
+    totalAmount: 2000,
+    costPricePerUnit: 1200,
+    quantity: 1,
+    paymentMethod: 'Cash',
+    isVoided: false,
+  };
+  const summary = computeFinancials({ sales: [voidedSale, validSale] });
+  assert.equal(summary.revenue, 2000);
+  assert.equal(summary.costOfGoodsSold, 1200);
+  assert.equal(summary.grossProfit, 800);
+  assert.equal(summary.totalCashReceipts, 2000);
+});
+
+test('10. Expenses exclude supplier payments and stock purchases to prevent double-counting', () => {
+  const expenses = [
+    { id: 'e1', category: 'Rent', amount: 15000, paymentMethod: 'Cash' },
+    { id: 'e2', category: 'Electricity', amount: 2500, paymentMethod: 'M-Pesa' },
+    { id: 'e3', category: 'Supplier Payment', description: 'Supplier payment to Alpha', amount: 6000, paymentMethod: 'Cash' },
+    { id: 'e4', category: 'Other', description: 'Stock Purchase direct', amount: 4000, paymentMethod: 'Cash' },
+  ];
+  const summary = computeFinancials({ expenses });
+  assert.equal(summary.totalExpenses, 17500);
+  assert.equal(summary.totalExpensesCash, 15000);
+  assert.equal(summary.totalExpensesMpesa, 2500);
+});
 ````
 
 ## File: cloudflare-worker/src/routes/paystackInitialize.js
@@ -12217,6 +11541,414 @@ export default {
     return new Response(response.body, { status: response.status, headers });
   },
 };
+````
+
+## File: src/components/common/ProtectedRoute.jsx
+````javascript
+import { useEffect, useState } from 'react';
+import { Navigate, Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { useAuth } from '../../contexts/AuthContext';
+import { isDemoMode } from '../../demo/demoMode';
+import LoadingSpinner from './LoadingSpinner';
+import { Ban, AlertCircle, RefreshCw, Store } from 'lucide-react';
+
+export default function ProtectedRoute({ children, adminOnly = false }) {
+  const {
+    firebaseUser, profile, loading, authError, accountRemoved, sessionRevoked,
+    isAdmin, isActive, emailVerified, logout, reloadProfile, resendVerificationEmail,
+    refreshEmailVerification,
+  } = useAuth();
+  const demo = isDemoMode();
+
+  useEffect(() => {
+    if (authError) console.error('ProtectedRoute captured authError:', authError);
+  }, [authError]);
+
+  useEffect(() => {
+    if (demo || !firebaseUser || emailVerified) return;
+
+    const handleFocus = () => { refreshEmailVerification(); };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshEmailVerification();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    const pollId = setInterval(() => {
+      if (document.visibilityState === 'visible') refreshEmailVerification();
+    }, 5000);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      clearInterval(pollId);
+    };
+  }, [demo, firebaseUser, emailVerified, refreshEmailVerification]);
+
+  const [checkingVerification, setCheckingVerification] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setTimeout(() => setResendCooldown((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendCooldown]);
+  
+  if (loading) return <LoadingSpinner label="Checking your session…" />;
+
+  if (sessionRevoked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+        <div className="card max-w-sm w-full p-6 text-center space-y-4">
+          <h2 className="font-display text-lg font-bold text-ink-900">This device was signed out</h2>
+          <p className="text-sm text-ink-500">An owner revoked access for this device from Settings → Device Management.</p>
+          <button className="btn-primary w-full" onClick={() => (window.location.href = '/login')}>Go to sign in</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!firebaseUser) return <Navigate to="/login" replace />;
+
+  if (!profile) {
+    if (accountRemoved) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+          <div className="card max-w-sm w-full p-6 text-center space-y-4">
+            <Store className="h-12 w-12 mx-auto text-moss-600" strokeWidth={1.5} />
+            <h2 className="font-display text-lg font-bold text-ink-900">Business Setup Required</h2>
+            <p className="text-sm text-ink-500">
+              You are signed in as <span className="font-semibold text-ink-700">{firebaseUser.email}</span>, but your business workspace is not configured yet.
+            </p>
+            <div className="flex flex-col gap-2">
+              <Link to="/setup" className="btn-primary w-full">Set Up Business Now</Link>
+              <button className="btn-outline w-full" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+        <div className="card max-w-md w-full p-6 text-center space-y-4">
+          <AlertCircle className="h-12 w-12 mx-auto text-amber-500" strokeWidth={1.5} />
+          <h2 className="font-display text-lg font-bold text-ink-900">Loading Account Profile</h2>
+          <p className="text-sm text-ink-500">
+            Connecting to your business workspace. If this takes more than a few moments, click below.
+          </p>
+          <div className="flex flex-col gap-2">
+            <button className="btn-primary w-full flex items-center justify-center gap-2" onClick={reloadProfile}>
+              <RefreshCw className="h-4 w-4" /> Reload Profile
+            </button>
+            <Link to="/setup" className="btn-outline w-full">Set Up / Reconfigure Business</Link>
+            <button className="text-xs text-ink-400 hover:underline pt-1" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isActive) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+        <div className="card max-w-sm p-6 text-center space-y-3">
+          <Ban className="h-10 w-10 mx-auto text-rust-500" strokeWidth={1.5} />
+          <h2 className="font-display text-lg font-bold text-ink-900">Account deactivated</h2>
+          <p className="text-sm text-ink-500">Contact your business owner to regain access.</p>
+          <button className="btn-outline w-full" onClick={logout}>Sign Out</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!demo && !emailVerified) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+        <div className="card max-w-sm w-full p-6 text-center space-y-4">
+          <h2 className="font-display text-lg font-bold text-ink-900">Verify your email</h2>
+          <p className="text-sm text-ink-500">
+            We sent a verification link to <span className="font-semibold text-ink-800">{firebaseUser.email}</span>. Please check your inbox (and spam/junk folder) and click the link to activate your account.
+          </p>
+          <div className="flex flex-col gap-2">
+            <button
+              className="btn-primary w-full"
+              disabled={checkingVerification}
+              onClick={async () => {
+                setCheckingVerification(true);
+                try {
+                  const verified = await refreshEmailVerification();
+                  if (!verified) toast.error("Not verified yet — check your inbox and click the link, then try again.");
+                  else toast.success("Email verified! Welcome.");
+                } finally {
+                  setCheckingVerification(false);
+                }
+              }}
+            >
+              {checkingVerification ? 'Checking…' : "I've verified — check now"}
+            </button>
+            <button
+              className="btn-outline w-full"
+              disabled={resending || resendCooldown > 0}
+              onClick={async () => {
+                setResending(true);
+                try {
+                  await resendVerificationEmail();
+                  toast.success('Verification email sent — check your inbox.');
+                  setResendCooldown(60);
+                } catch (err) {
+                  console.error('[FlowBiz] resendVerificationEmail error:', err.message);
+                  toast.error(
+                    err.code === 'auth/too-many-requests'
+                      ? 'Too many attempts. Please wait a minute before requesting another email.'
+                      : "Couldn't send the verification email. Please try again shortly."
+                  );
+                  setResendCooldown(60);
+                } finally {
+                  setResending(false);
+                }
+              }}
+            >
+              {resending ? 'Sending…' : resendCooldown > 0 ? `Resend available in ${resendCooldown}s` : 'Resend verification email'}
+            </button>
+            <button className="text-xs text-ink-400 hover:underline" onClick={logout}>Sign out</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (adminOnly && !isAdmin) return <Navigate to="/counter" replace />;
+  return children;
+}
+````
+
+## File: src/components/landing/LandingHeader.jsx
+````javascript
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Menu, X, ArrowRight } from 'lucide-react';
+
+export function LandingHeader() {
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  return (
+    <header className="sticky top-0 z-50 bg-[#faf6ef]/95 backdrop-blur-md border-b border-[#e8eaed] h-14 flex items-center">
+      <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="relative flex items-center justify-between h-full">
+          
+          {/* Left: Brand Logo */}
+          <Link to="/" className="flex items-center gap-2.5 shrink-0 z-10 leading-none">
+            <div className="flex flex-col justify-center">
+              <span className="font-extrabold text-lg text-[#15171d] tracking-tight leading-none">
+                FlowBiz
+              </span>
+              <span className="text-[8px] font-bold text-[#1a623c] uppercase tracking-wider leading-none mt-1">
+                Business Manager
+              </span>
+            </div>
+          </Link>
+
+          {/* Center: Desktop Navigation Links */}
+          <nav className="hidden lg:flex absolute inset-0 items-center justify-center pointer-events-none">
+            <div className="flex items-center gap-6 xl:gap-8 text-xs sm:text-sm font-semibold text-[#5a6273] pointer-events-auto leading-none">
+              <a 
+                href="#features" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                Features
+              </a>
+              <a 
+                href="#demo" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                Demo
+              </a>
+              <a 
+                href="#how-it-works" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                How It Works
+              </a>
+              <a 
+                href="#pricing" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                Pricing
+              </a>
+              <a 
+                href="#faq" 
+                className="hover:text-[#1a623c] transition-colors py-1 px-1"
+              >
+                FAQ
+              </a>
+            </div>
+          </nav>
+
+          {/* Right: Action Buttons */}
+          <div className="hidden sm:flex items-center gap-2.5 shrink-0 z-10 leading-none">
+            <Link
+              to="/login"
+              className="text-xs sm:text-sm font-bold text-[#363b48] hover:text-[#15171d] px-3 py-2 rounded-lg hover:bg-white transition-colors"
+            >
+              Sign In
+            </Link>
+            <Link
+              to="/setup"
+              className="bg-[#1a623c] text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-bold hover:bg-[#144f30] transition-colors shadow-xs flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <span>Get Started</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+
+          {/* Mobile Menu Button */}
+          <button
+            type="button"
+            onClick={() => setMobileOpen(!mobileOpen)}
+            className="lg:hidden p-1.5 rounded-lg text-[#5a6273] hover:text-[#15171d] hover:bg-white z-10"
+            aria-label="Toggle Menu"
+          >
+            {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
+
+        </div>
+      </div>
+
+      {/* Mobile Dropdown */}
+      {mobileOpen && (
+        <div className="lg:hidden absolute top-full left-0 right-0 border-b border-[#e8eaed] bg-white px-6 py-4 space-y-3 shadow-lg">
+          <a
+            href="#features"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            Features
+          </a>
+          <a
+            href="#demo"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            Demo
+          </a>
+          <a
+            href="#how-it-works"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            How It Works
+          </a>
+          <a
+            href="#pricing"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            Pricing
+          </a>
+          <a
+            href="#faq"
+            onClick={() => setMobileOpen(false)}
+            className="block text-sm font-semibold py-1 text-[#363b48] hover:text-[#1a623c]"
+          >
+            FAQ
+          </a>
+          <div className="pt-2.5 border-t border-[#e8eaed] flex flex-col gap-2">
+            <Link
+              to="/login"
+              className="w-full text-center py-2.5 border border-[#cfd3da] rounded-xl text-sm font-bold text-[#15171d]"
+            >
+              Sign In
+            </Link>
+            <Link
+              to="/setup"
+              className="w-full text-center py-3 bg-[#1a623c] text-white rounded-xl text-sm font-bold shadow-md hover:bg-[#144f30] transition-all flex items-center justify-center gap-2"
+            >
+              <span>Get Started Free</span>
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
+        </div>
+      )}
+    </header>
+  );
+}
+````
+
+## File: src/components/layout/Sidebar.jsx
+````javascript
+import { NavLink } from 'react-router-dom';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+import * as Lucide from 'lucide-react';
+import { NAV_ITEMS } from './navConfig';
+import { useAuth } from '../../contexts/AuthContext';
+import { useSettings } from '../../hooks/useSettings';
+
+const Icon = ({ name, className = 'h-5 w-5' }) => {
+  const C = Lucide[name] || Lucide.Circle;
+  return <C className={className} strokeWidth={1.75} />;
+};
+
+// `collapsed` and `onToggleCollapse` are optional — any existing caller
+// that renders <Sidebar /> with no props keeps behaving exactly as
+// before (always expanded, no toggle button rendered).
+export default function Sidebar({ collapsed = false, onToggleCollapse }) {
+  const { isAdmin } = useAuth();
+  const { settings } = useSettings();
+  const items = NAV_ITEMS
+    .filter((item) => !item.adminOnly || isAdmin)
+    .filter((item) => item.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses);
+
+  return (
+    <aside
+      className={`hidden shrink-0 flex-col border-r border-ink-100 bg-white transition-[width] duration-200 lg:flex ${
+        collapsed ? 'w-[68px]' : 'w-60'
+      }`}
+    >
+      <nav className="flex-1 space-y-0.5 overflow-y-auto px-2.5 py-3">
+        {items.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.to === '/'}
+            title={collapsed ? item.label : undefined}
+            className={({ isActive }) =>
+              `flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors ${
+                collapsed ? 'justify-center px-0' : 'px-3'
+              } ${isActive ? 'bg-moss-50 text-moss-800' : 'text-ink-500 hover:bg-ink-50 hover:text-ink-800'}`
+            }
+          >
+            <Icon name={item.icon} />
+            {!collapsed && item.label}
+          </NavLink>
+        ))}
+      </nav>
+
+      {onToggleCollapse && (
+        <div className="border-t border-ink-100 p-2">
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className={`flex w-full items-center gap-2 rounded-lg py-2 text-xs font-semibold text-ink-400 transition-colors hover:bg-ink-50 hover:text-ink-700 ${
+              collapsed ? 'justify-center px-0' : 'px-3'
+            }`}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {collapsed ? (
+              <ChevronRight className="h-4 w-4" strokeWidth={1.75} />
+            ) : (
+              <ChevronLeft className="h-4 w-4" strokeWidth={1.75} />
+            )}
+            {!collapsed && 'Collapse'}
+          </button>
+        </div>
+      )}
+    </aside>
+  );
+}
 ````
 
 ## File: src/components/products/ProductFormModal.jsx
@@ -13126,6 +12858,226 @@ export default function AdvancedAnalytics() {
 }
 ````
 
+## File: src/pages/JoinStaff.jsx
+````javascript
+import { useEffect, useState } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, deleteUser, sendEmailVerification } from 'firebase/auth';
+import { doc, getDoc, writeBatch } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { auth, db } from '../firebase';
+
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+
+export function validatePassword(password) {
+  if (password.length < 8) return 'Password must be at least 8 characters long.';
+  if (!/[A-Z]/.test(password)) return 'Password must contain at least one uppercase letter.';
+  if (!/[a-z]/.test(password)) return 'Password must contain at least one lowercase letter.';
+  if (!/[0-9]/.test(password)) return 'Password must contain at least one number.';
+  return null;
+}
+
+export default function JoinStaff() {
+  const { inviteId } = useParams();
+  const navigate = useNavigate();
+
+  const [checking, setChecking] = useState(true);
+  const [invite, setInvite]     = useState(null);
+  const [notFound, setNotFound] = useState(false);
+
+  const [email, setEmail]                     = useState('');
+  const [password, setPassword]               = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submitting, setSubmitting]           = useState(false);
+  const [error, setError]                     = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'staffInvites', inviteId));
+        if (cancelled) return;
+        if (!snap.exists()) {
+          setNotFound(true);
+          setChecking(false);
+          return;
+        }
+        setInvite({ id: snap.id, ...snap.data() });
+      } catch {
+        setNotFound(true);
+      } finally {
+        if (!cancelled) setChecking(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [inviteId]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setSubmitting(true);
+
+    let freshSnap;
+    try {
+      freshSnap = await getDoc(doc(db, 'staffInvites', inviteId));
+      if (!freshSnap.exists()) throw new Error('This invite is no longer valid.');
+      if (freshSnap.data().claimed) throw new Error('This invite has already been used.');
+    } catch (validationErr) {
+      setError(validationErr.message || 'This invite could not be validated. Please try again.');
+      setSubmitting(false);
+      return;
+    }
+    const { businessId, role, displayName } = freshSnap.data();
+
+    let targetUser = null;
+    let isNewAuthUser = false;
+
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      targetUser = cred.user;
+      isNewAuthUser = true;
+    } catch (authErr) {
+      if (authErr.code === 'auth/email-already-in-use') {
+        try {
+          const signInCred = await signInWithEmailAndPassword(auth, email.trim(), password);
+          targetUser = signInCred.user;
+        } catch {
+          setError('An account with this email already exists. Please verify your password or use a different email.');
+          setSubmitting(false);
+          return;
+        }
+      } else {
+        const message =
+          authErr.code === 'auth/invalid-email'  ? 'Please enter a valid email address.' :
+          authErr.code === 'auth/weak-password'   ? 'Password should be at least 8 characters with upper, lower, and numbers.' :
+          'Could not create your account. Please try again.';
+        setError(message);
+        setSubmitting(false);
+        return;
+      }
+    }
+
+    try {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'users', targetUser.uid), {
+        uid: targetUser.uid,
+        email: email.trim(),
+        displayName,
+        role,
+        businessId,
+        active: true,
+        createdAt: new Date(),
+        claimedFromInviteId: inviteId,
+      });
+      batch.update(doc(db, 'staffInvites', inviteId), {
+        claimed: true,
+        linkedUid: targetUser.uid,
+        claimedAt: new Date(),
+      });
+      await batch.commit();
+    } catch (dbErr) {
+      console.error('[JoinStaff] Firestore write failed:', dbErr);
+      if (isNewAuthUser) {
+        try { await deleteUser(targetUser); } catch {}
+      }
+      setError('Something went wrong completing your signup. Please contact your business owner.');
+      setSubmitting(false);
+      return;
+    }
+
+    try {
+      const idToken = await targetUser.getIdToken(true);
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      });
+      if (!response.ok) throw new Error('send-verification-failed');
+      toast.success(`Welcome, ${displayName}! Please check your email to verify your account.`);
+    } catch {
+      try { await sendEmailVerification(targetUser); } catch {}
+      toast.success(`Welcome, ${displayName}! Your account is ready.`);
+    }
+
+    setSubmitting(false);
+    navigate('/', { replace: true });
+  };
+
+  if (checking) return <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4"><p className="text-sm text-ink-400">Checking invite…</p></div>;
+
+  if (notFound || !invite) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+        <div className="w-full max-w-sm card p-6 text-center space-y-3">
+          <div className="text-3xl">🔗</div>
+          <h1 className="font-display text-lg font-bold text-ink-900">Invite not found</h1>
+          <p className="text-sm text-ink-500">This link may be invalid or was cancelled by the business owner.</p>
+          <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (invite.claimed) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+        <div className="w-full max-w-sm card p-6 text-center space-y-3">
+          <div className="text-3xl">✅</div>
+          <h1 className="font-display text-lg font-bold text-ink-900">Invite Already Claimed</h1>
+          <p className="text-sm text-ink-500">This invite link has already been used. Please sign in with your email and password.</p>
+          <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
+        </div>
+      </div>
+    );
+  }
+
+  const roleLabel = invite.role === 'owner' ? 'an owner' : 'a cashier';
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4 py-8">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="flex flex-col items-center text-center gap-3">
+          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
+          <div>
+            <h1 className="font-display text-2xl font-bold text-white">Welcome, {invite.displayName}</h1>
+            <p className="text-sm text-ink-400">You have been invited as {roleLabel}.</p>
+          </div>
+        </div>
+        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
+          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
+
+          <div>
+            <label className="label">Your email</label>
+            <input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" autoComplete="username" />
+          </div>
+          <div>
+            <label className="label">Choose a password</label>
+            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 chars (upper, lower, number)" autoComplete="new-password" />
+          </div>
+          <div>
+            <label className="label">Confirm password</label>
+            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="Repeat password" autoComplete="new-password" />
+          </div>
+          <button type="submit" className="btn-primary w-full" disabled={submitting}>
+            {submitting ? 'Setting up…' : 'Create my sign-in'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+````
+
 ## File: src/pages/Login.jsx
 ````javascript
 import { useEffect, useState } from 'react';
@@ -13745,245 +13697,77 @@ export function buildDebtPaymentReceiptMessage({
 }
 ````
 
-## File: firestore.rules
-````
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
+## File: src/main.jsx
+````javascript
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import './index.css';
+import App from './App.jsx';
+import toast from 'react-hot-toast';
+import { registerSW } from 'virtual:pwa-register';
+import { enterDemoMode, exitDemoMode } from './demo/demoMode';
+import { seedDemoDataIfNeeded } from './demo/seedData';
 
-    // ── Helpers ─────────────────────────────────────────────────────────
-    function isSignedIn() { return request.auth != null; }
-
-    function hasProfile() {
-      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
-    }
-
-    function myProfile() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
-
-    function isActive() {
-      let data = myProfile();
-      return !('active' in data) || data.active != false;
-    }
-
-    function isStaff() {
-      return hasProfile() && isActive();
-    }
-
-    function myBusinessId() {
-      return myProfile().businessId;
-    }
-
-    function isOwner() {
-      return isStaff() && myProfile().role == 'owner';
-    }
-
-    function owns(data) {
-      return isStaff() && data.businessId == myBusinessId();
-    }
-
-    function ownsUpdate(existing, incoming) {
-      return owns(existing) && owns(incoming);
-    }
-
-    function isValidInviteClaim(inviteId, businessId, role) {
-      let invite = get(/databases/$(database)/documents/staffInvites/$(inviteId)).data;
-      return invite.claimed == false && invite.businessId == businessId && invite.role == role;
-    }
-
-    // ── Businesses ──────────────────────────────────────────────────────
-    match /businesses/{businessId} {
-      allow get: if isStaff() && myBusinessId() == businessId;
-      allow create: if isSignedIn()
-                    && request.resource.data.subscription.plan == 'free';
-      allow update: if isOwner() && myBusinessId() == businessId
-                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription']);
-      allow delete: if false;
-    }
-
-    match /barcodeIndex/{docId} {
-      allow read: if isOwner() && owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && owns(request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /productCodeCounters/{businessId} {
-      allow read, write: if isOwner() && myBusinessId() == businessId;
-    }
-
-    match /businessSettings/{businessId} {
-      allow get: if isStaff() && myBusinessId() == businessId;
-      allow create: if isSignedIn() && request.resource.data.businessId == businessId;
-      allow update: if isOwner() && myBusinessId() == businessId;
-      allow delete: if false;
-    }
-
-    // ── Users & invites ─────────────────────────────────────────────────
-    match /users/{userId} {
-      allow get: if isSignedIn() && request.auth.uid == userId;
-      allow list: if isOwner() && resource.data.businessId == myBusinessId();
-
-      allow create: if isSignedIn() && request.auth.uid == userId
-                    && request.resource.data.role in ['owner', 'cashier']
-                    && request.resource.data.businessId is string
-                    && request.resource.data.businessId.size() > 0
-                    && (
-                      request.resource.data.role == 'owner'
-                      ||
-                      (
-                        request.resource.data.claimedFromInviteId is string
-                        && isValidInviteClaim(request.resource.data.claimedFromInviteId, request.resource.data.businessId, request.resource.data.role)
-                      )
-                    );
-      allow update: if (isOwner() && ownsUpdate(resource.data, request.resource.data))
-                    ||
-                    (isSignedIn() && request.auth.uid == userId
-                     && request.resource.data.role == resource.data.role
-                     && request.resource.data.businessId == resource.data.businessId);
-      allow delete: if isOwner() && owns(resource.data) && userId != request.auth.uid;
-    }
-
-    match /staffInvites/{inviteId} {
-      allow get: if true;
-      allow list: if isOwner() && resource.data.businessId == myBusinessId();
-      allow create: if isOwner() && request.resource.data.businessId == myBusinessId()
-                    && request.resource.data.role in ['owner', 'cashier'];
-      allow update: if (isOwner() && ownsUpdate(resource.data, request.resource.data))
-                    ||
-                    (isSignedIn()
-                    && resource.data.claimed == false
-                    && request.resource.data.claimed == true
-                    && request.resource.data.linkedUid == request.auth.uid
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'linkedUid', 'claimedAt']));
-      allow delete: if isOwner() && resource.data.businessId == myBusinessId();
-    }
-
-    // ── Device sessions ───────────────────────────────────────────────
-    match /sessions/{sessionId} {
-      allow create: if isStaff() && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == myBusinessId();
-
-      allow read: if isSignedIn() && (
-        resource == null || 
-        resource.data.uid == request.auth.uid || 
-        (isStaff() && resource.data.businessId == myBusinessId())
-      );
-
-      allow update: if isSignedIn() && (
-        (resource.data.uid == request.auth.uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent', 'lastUserName', 'uid', 'businessId']))
-        ||
-        (isOwner() && resource.data.businessId == myBusinessId()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked']))
-      );
-      allow delete: if isOwner() && resource.data.businessId == myBusinessId();
-    }
-
-    // ── Business operational data ──────────────────────────────────────
-    match /products/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data) && (
-        isOwner() ||
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt'])
-      );
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /suppliers/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /sales/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /customers/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /creditSales/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /repayments/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /debtPaymentReceipts/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /sharedDocuments/{token} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data)
-                    && request.resource.data.documentType in ['receipt', 'invoice', 'debtPaymentReceipt'];
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /refunds/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /expenses/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /purchases/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /supplierPayments/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /stockAdjustments/{id} {
-      allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-
-    match /dailySessions/{id} {
-      allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isStaff() && ownsUpdate(resource.data, request.resource.data);
-      allow delete: if isOwner() && owns(resource.data);
-    }
-  }
+// `import.meta.env.MODE` is 'demo' only when this bundle was built via
+// `vite build --mode demo` (see package.json's "build" script, which now
+// runs that as a second pass alongside the normal build — output lands at
+// dist/demo/, served from the /demo/ sub-path in production). The actual
+// Firebase-vs-local-storage routing is decided at BUILD time by
+// vite.config.js's module aliasing — this block just does the two things
+// that still need to happen at runtime once we know we're in Demo Mode:
+//
+//  1. Seed realistic sample data on first load (no-ops on later loads —
+//     see seedDemoDataIfNeeded's own localStorage check).
+//  2. Flip the flag in src/demo/demoMode.js, so the parts of the UI that
+//     need to know "are we in Demo Mode?" for display purposes only (the
+//     minimal Demo header, choosing which Business Reset to run in
+//     Settings, hiding the PWA install prompt) read it correctly. This
+//     flag has NO bearing on whether Firebase is actually used — that's
+//     the build-time aliasing above — it's purely cosmetic/UI state.
+//
+// The `else` branch matters too: without it, a browser that previously
+// visited the demo build would keep the demo flag set to true even after
+// navigating to the real site, incorrectly showing demo-only UI there.
+// Since /demo/ and / share one origin (and therefore one localStorage),
+// each bundle must actively assert its own truth on every load rather
+// than trusting whatever the other bundle left behind.
+if (import.meta.env.MODE === 'demo') {
+  enterDemoMode();
+  seedDemoDataIfNeeded();
+} else {
+  exitDemoMode();
 }
+
+if (import.meta.env.MODE !== 'demo') {
+  const updateSW = registerSW({
+    onRegisteredSW(swUrl, registration) {
+      if (!registration) return;
+      setInterval(() => {
+        if (document.visibilityState === 'visible') registration.update().catch(() => {});
+      }, 60 * 1000);
+    },
+ onNeedRefresh() {
+  updateSW(true);
+},
+    onOfflineReady() {},
+  });
+}
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    {/* The demo build is served from /demo/ (see vite.config.js's `base`
+        and public/_redirects) rather than from the site root. `basename`
+        tells react-router that every route in this app lives under that
+        prefix, so internal navigation (Link to="/dashboard", etc.) still
+        works unchanged everywhere in the codebase — it just produces
+        /demo/dashboard in the address bar instead of /dashboard. The real
+        build passes `undefined`, which is BrowserRouter's default and
+        behaves exactly as before. */}
+    <BrowserRouter basename={import.meta.env.MODE === 'demo' ? '/demo' : undefined}>
+      <App />
+    </BrowserRouter>
+  </StrictMode>
+);
 ````
 
 ## File: index.html
@@ -14098,6 +13882,51 @@ service cloud.firestore {
 </html>
 ````
 
+## File: package.json
+````json
+{
+  "name": "flowbiz",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:demo": "vite --mode demo",
+    "build": "vite build && vite build --mode demo",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@zxing/browser": "^0.2.1",
+    "@zxing/library": "^0.23.0",
+    "firebase": "^12.15.0",
+    "jspdf": "^2.5.1",
+    "lucide-react": "^1.22.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-hot-toast": "^2.4.1",
+    "react-icons": "^5.7.0",
+    "jszip": "^3.10.1",
+    "react-router-dom": "^6.30.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^10.5.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.6.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "vite": "^8.1.0",
+    "vite-plugin-pwa": "^1.3.0"
+  }
+}
+````
+
 ## File: cloudflare-worker/wrangler.toml
 ````toml
 name = "flowbiz-api"
@@ -14118,6 +13947,67 @@ FIREBASE_PROJECT_ID = "swiftstock-bc6a3"
 ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://flowbiz.pages.dev,https://flowbiz.co.ke"
 PAYSTACK_CALLBACK_URL = "https://flowbiz.pages.dev/pro"
 APP_BASE_URL = "https://flowbiz.co.ke"
+````
+
+## File: src/components/layout/TopHeader.jsx
+````javascript
+import { useAuth } from '../../contexts/AuthContext';
+import ConnectivityIndicator from '../common/ConnectivityIndicator';
+import { isDemoMode } from '../../demo/demoMode';
+import { Link } from 'react-router-dom';
+
+export default function TopHeader() {
+  const { profile, logout, isAdmin, isPro } = useAuth();
+  const demo = isDemoMode();
+
+  // Demo Mode gets its own minimal header — just a "Demo" label, a way
+  // out (Exit Demo), and a way to become a real customer (Sign Up).
+  // Both links use a plain <a>, not react-router's <Link>: the demo is a
+  // separately-built app living at the /demo/ sub-path, so these need to
+  // leave that bundle entirely and load the real site fresh, rather than
+  // try to client-side-route to a page this bundle doesn't have.
+  if (demo) {
+    return (
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-ink-100 bg-sand/95 px-4 py-2 backdrop-blur sm:px-6 safe-top">
+        <span className="badge bg-amber-100 text-amber-800">Demo</span>
+        <div className="flex items-center gap-2">
+          <a href="/" className="btn-outline !px-3 !py-1.5 text-xs !min-h-0">Exit Demo</a>
+          <a href="/setup" className="btn-primary !px-3 !py-1.5 text-xs !min-h-0">Sign Up</a>
+        </div>
+      </header>
+    );
+  }
+
+  return (
+    <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-ink-100 bg-sand/95 px-4 py-2 backdrop-blur sm:px-6 safe-top">
+
+      <div className="flex min-w-0 items-center gap-3">
+{isAdmin && (
+  <Link
+    to="/pro"
+    className={`inline-flex shrink-0 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+      isPro
+        ? 'bg-amber-100 text-amber-800'
+        : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'
+    }`}
+  >
+    {isPro ? 'Pro Activated' : 'FlowBiz Pro'}
+  </Link>
+)}
+        <div className="hidden truncate text-sm text-ink-500 lg:block">
+          Welcome, <span className="font-semibold text-ink-800">{profile?.displayName}</span>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <ConnectivityIndicator />
+        <span className={`badge hidden sm:inline-flex ${profile?.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>
+          {profile?.role === 'owner' ? 'Owner' : 'Cashier'}
+        </span>
+        <button onClick={logout} className="btn-outline !px-3 !py-1.5 text-xs !min-h-0">Sign out</button>
+      </div>
+    </header>
+  );
+}
 ````
 
 ## File: src/components/pos/SaleCompleteModal.jsx
@@ -14723,6 +14613,247 @@ export default function StockTake() {
       />
     </div>
   );
+}
+````
+
+## File: firestore.rules
+````
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ─────────────────────────────────────────────────────────
+    function isSignedIn() { return request.auth != null; }
+
+    function hasProfile() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActive() {
+      let data = myProfile();
+      return !('active' in data) || data.active != false;
+    }
+
+    function isStaff() {
+      return hasProfile() && isActive();
+    }
+
+    function myBusinessId() {
+      return myProfile().businessId;
+    }
+
+    function isOwner() {
+      return isStaff() && myProfile().role == 'owner';
+    }
+
+    function owns(data) {
+      return isStaff() && data.businessId == myBusinessId();
+    }
+
+    function ownsUpdate(existing, incoming) {
+      return owns(existing) && owns(incoming);
+    }
+
+    function isValidInviteClaim(inviteId, businessId, role) {
+      let invite = get(/databases/$(database)/documents/staffInvites/$(inviteId)).data;
+      return invite.claimed == false && invite.businessId == businessId && invite.role == role;
+    }
+
+    // ── Businesses ──────────────────────────────────────────────────────
+    match /businesses/{businessId} {
+      allow get: if isStaff() && myBusinessId() == businessId;
+      allow create: if isSignedIn()
+                    && request.resource.data.subscription.plan == 'free';
+      allow update: if isOwner() && myBusinessId() == businessId
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription']);
+      allow delete: if false;
+    }
+
+    match /barcodeIndex/{docId} {
+      allow read: if isOwner() && owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && owns(request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /productCodeCounters/{businessId} {
+      allow read, write: if isOwner() && myBusinessId() == businessId;
+    }
+
+match /businessSettings/{businessId} {
+  allow read: if isStaff() && myBusinessId() == businessId;
+  allow create: if isSignedIn() && request.resource.data.businessId == businessId;
+  allow update: if isOwner() && myBusinessId() == businessId;
+  allow delete: if false;
+}
+
+    // ── Users & invites ─────────────────────────────────────────────────
+    match /users/{userId} {
+      allow get: if isSignedIn() && request.auth.uid == userId;
+      allow list: if isOwner() && resource.data.businessId == myBusinessId();
+
+      allow create: if isSignedIn() && request.auth.uid == userId
+                    && request.resource.data.role in ['owner', 'cashier']
+                    && request.resource.data.businessId is string
+                    && request.resource.data.businessId.size() > 0
+                    && (
+                      request.resource.data.role == 'owner'
+                      ||
+                      (
+                        request.resource.data.claimedFromInviteId is string
+                        && isValidInviteClaim(request.resource.data.claimedFromInviteId, request.resource.data.businessId, request.resource.data.role)
+                      )
+                    );
+      allow update: if (isOwner() && ownsUpdate(resource.data, request.resource.data))
+                    ||
+                    (isSignedIn() && request.auth.uid == userId
+                     && request.resource.data.role == resource.data.role
+                     && request.resource.data.businessId == resource.data.businessId);
+      allow delete: if isOwner() && owns(resource.data) && userId != request.auth.uid;
+    }
+
+    match /staffInvites/{inviteId} {
+      allow get: if true;
+      allow list: if isOwner() && resource.data.businessId == myBusinessId();
+      allow create: if isOwner() && request.resource.data.businessId == myBusinessId()
+                    && request.resource.data.role in ['owner', 'cashier'];
+      allow update: if (isOwner() && ownsUpdate(resource.data, request.resource.data))
+                    ||
+                    (isSignedIn()
+                    && resource.data.claimed == false
+                    && request.resource.data.claimed == true
+                    && request.resource.data.linkedUid == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'linkedUid', 'claimedAt']));
+      allow delete: if isOwner() && resource.data.businessId == myBusinessId();
+    }
+
+    // ── Device sessions ───────────────────────────────────────────────
+    match /sessions/{sessionId} {
+      allow create: if isStaff() && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == myBusinessId();
+
+      allow read: if isSignedIn() && (
+        resource == null || 
+        resource.data.uid == request.auth.uid || 
+        (isStaff() && resource.data.businessId == myBusinessId())
+      );
+
+      allow update: if isSignedIn() && (
+        (resource.data.uid == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt', 'deviceLabel', 'userAgent', 'lastUserName', 'uid', 'businessId']))
+        ||
+        (isOwner() && resource.data.businessId == myBusinessId()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked']))
+      );
+      allow delete: if isOwner() && resource.data.businessId == myBusinessId();
+    }
+
+    // ── Business operational data ──────────────────────────────────────
+    match /products/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if ownsUpdate(resource.data, request.resource.data) && (
+        isOwner() ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt'])
+      );
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /suppliers/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /sales/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /customers/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /creditSales/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /repayments/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /debtPaymentReceipts/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /sharedDocuments/{token} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data)
+                    && request.resource.data.documentType in ['receipt', 'invoice', 'debtPaymentReceipt'];
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /refunds/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /expenses/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /purchases/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /supplierPayments/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /stockAdjustments/{id} {
+      allow read: if owns(resource.data);
+      allow create: if isOwner() && owns(request.resource.data);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    match /dailySessions/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update: if isStaff() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+  }
 }
 ````
 
@@ -15707,6 +15838,490 @@ export default function Pro() {
         
         Built for Kenyan shops pay in KES via M-Pesa or card, powered by Paystack.
       </div>
+    </div>
+  );
+}
+````
+
+## File: src/pages/Products.jsx
+````javascript
+import { useMemo, useState } from 'react';
+import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { Pencil, Trash2, TrendingUp } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ErrorBanner from '../components/common/ErrorBanner';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import Modal from '../components/common/Modal';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+export default function Products() {
+  const { businessId } = useAuth();
+  const productsQ = useMemo(
+    () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
+    [businessId]
+  );
+  const suppliersQ = useMemo(() => (businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null), [businessId]);
+  const { data: products, loading, error } = useFirestoreCollection(productsQ);
+  const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
+  
+  const [search, setSearch] = useState('');
+  const [modal, setModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [pendingDel, setPendingDel] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanFoundProduct, setScanFoundProduct] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const filtered = products.filter(
+    (p) =>
+      p.name.toLowerCase().includes(search.toLowerCase()) ||
+      (p.category && p.category.toLowerCase().includes(search.toLowerCase())) ||
+      (p.barcode && p.barcode.includes(search.trim())) ||
+      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
+  );
+  
+  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
+
+  const closeFormModal = () => {
+    setModal(false);
+    setEditing(null);
+    setPrefillBarcode(null);
+  };
+
+  const handleSave = async (data) => {
+    try {
+      if (editing) {
+        const { queuedOffline } = await updateProduct(editing.id, data, editing.barcode, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
+      } else {
+        const { queuedOffline } = await createProduct(data, businessId);
+        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
+      }
+      closeFormModal();
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+      throw err;
+    }
+  };
+
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    if (!queuedOffline) {
+      setNewSupplierId(ref.id);
+      await refetchSuppliers();
+    }
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const handleDel = async () => {
+    setDeleting(true);
+    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id, pendingDel.barcode, businessId), 4000);
+    setDeleting(false);
+    if (error) { toast.error(friendlyErrorMessage(error)); return; }
+    toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
+    setPendingDel(null);
+  };
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) setScanFoundProduct(found);
+    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
+  };
+
+  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
+        <div className="flex gap-2">
+          <Link to="/inventory-intelligence" className="btn-outline">
+            <TrendingUp className="h-4 w-4" /> Intelligence
+          </Link>
+          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
+        </div>
+      </div>
+      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <ErrorBanner message={error} />
+      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
+        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
+      ) : (
+        <>
+          <div className="space-y-2.5 sm:hidden">
+            {filtered.map((p) => (
+              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
+                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
+                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
+                  <div className="space-x-3">
+                    <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
+                    <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
+                  </div>
+                  <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden sm:block card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
+                </thead>
+                <tbody className="divide-y divide-ink-100">
+                  {filtered.map((p) => (
+                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
+                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
+                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
+                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
+                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
+                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
+                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1">
+                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
+        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
+          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
+        </div>
+      </Modal>
+
+      <ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+      <ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />
+    </div>
+  );
+}
+````
+
+## File: src/pages/Purchases.jsx
+````javascript
+import { useEffect, useMemo, useState } from 'react';
+import { doc, writeBatch, increment, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
+import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { findProductByCode } from '../utils/scannerService';
+import { createProduct } from '../utils/products';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
+import ProductFormModal from '../components/products/ProductFormModal';
+import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import ScannerModal from '../components/scanner/ScannerModal';
+import ScanFab from '../components/scanner/ScanFab';
+import { formatKES } from '../utils/currency';
+import { formatDateTime } from '../utils/dateRanges';
+import { raceWithTimeout } from '../utils/offlineWrite';
+import { friendlyErrorMessage } from '../utils/errorMessages';
+
+const empty = { supplierId: '', productId: '', quantity: '', costPricePerUnit: '', paymentStatus: 'paid', paymentMethod: 'Cash', mpesaCode: '' };
+
+export default function Purchases() {
+  const { profile, businessId } = useAuth();
+  const productsQ = useMemo(() => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null), [businessId]);
+  const suppliersQ = useMemo(() => (businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null), [businessId]);
+  const purchasesQ = useMemo(() => (businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt', 'desc'), limit(50)) : null), [businessId]);
+
+  const { data: products } = useFirestoreCollection(productsQ);
+  const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
+  const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
+
+  const [form, setForm] = useState(empty);
+  const [busy, setBusy] = useState(false);
+  const [productModal, setProductModal] = useState(false);
+  const [supplierModal, setSupplierModal] = useState(false);
+  const [newSupplierId, setNewSupplierId] = useState(null);
+  const [prefillBarcode, setPrefillBarcode] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const set = (f) => (e) => setForm((p) => ({ ...p, [f]: e.target.value }));
+
+  useEffect(() => {
+    if (newSupplierId) setForm((p) => ({ ...p, supplierId: newSupplierId }));
+  }, [newSupplierId]);
+
+  const selProd = products.find((p) => p.id === form.productId);
+  const selSupp = suppliers.find((s) => s.id === form.supplierId);
+  const totalCost = (Number(form.quantity) || 0) * (Number(form.costPricePerUnit) || 0);
+
+  const handleScanDetected = (code) => {
+    setScannerOpen(false);
+    const found = findProductByCode(products, code);
+    if (found) {
+      setForm((p) => ({ ...p, productId: found.id, costPricePerUnit: found.costPrice || p.costPricePerUnit }));
+      toast.success(`Selected ${found.name}`);
+    } else {
+      setPrefillBarcode(code);
+      setProductModal(true);
+    }
+  };
+
+  useHardwareScanner(handleScanDetected, { enabled: !productModal && !supplierModal && !scannerOpen });
+
+  const handle = async (e) => {
+    e.preventDefault();
+    if (!form.supplierId) {
+      toast.error('Please select a supplier.');
+      return;
+    }
+    if (!form.productId) {
+      toast.error('Please select a product.');
+      return;
+    }
+    if (!form.quantity || !form.costPricePerUnit) {
+      toast.error('Enter quantity and cost price.');
+      return;
+    }
+    if (form.paymentStatus === 'paid' && form.paymentMethod === 'M-Pesa' && !form.mpesaCode.trim()) {
+      toast.error('Enter M-Pesa transaction code.');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const qty = Number(form.quantity);
+      const cost = Number(form.costPricePerUnit);
+      const total = qty * cost;
+      const batch = writeBatch(db);
+
+      // Links the selected supplier to the product
+      const productRef = doc(db, 'products', form.productId);
+      const productUpdates = {
+        stock: increment(qty),
+        costPrice: cost,
+        updatedAt: serverTimestamp(),
+      };
+      if (form.supplierId) {
+        productUpdates.supplierId = form.supplierId;
+      }
+      batch.update(productRef, productUpdates);
+
+      const purchRef = doc(collection(db, 'purchases'));
+      batch.set(
+        purchRef,
+        withBusiness(
+          {
+            supplierId: form.supplierId,
+            supplierName: selSupp?.name || '',
+            productId: form.productId,
+            productName: selProd?.name || '',
+            quantity: qty,
+            costPricePerUnit: cost,
+            totalCost: total,
+            purchasedBy: profile.uid,
+            purchasedByName: profile.displayName,
+            purchasedAt: new Date(),
+            paymentStatus: form.paymentStatus === 'paid' ? 'paid' : 'pending_supplier_credit',
+            paymentMethod: form.paymentStatus === 'paid' ? form.paymentMethod : null,
+            mpesaCode: form.paymentStatus === 'paid' && form.paymentMethod === 'M-Pesa' ? form.mpesaCode.trim() : null,
+          },
+          businessId
+        )
+      );
+
+      const commit = batch.commit();
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      if (error) throw error;
+
+      toast.success(queuedOffline ? "Purchase queued offline — it'll sync soon." : 'Purchase recorded and stock updated');
+      if (queuedOffline) commit.catch((err) => toast.error(`A purchase from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+
+      setForm(empty);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSupplierSave = async (supplierData) => {
+    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
+    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
+    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
+    if (!queuedOffline) {
+      setNewSupplierId(ref.id);
+      await refetchSuppliers();
+    }
+    setSupplierModal(false);
+    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+  };
+
+  const hasSuppliers = suppliers && suppliers.length > 0;
+  const hasProducts = products && products.length > 0;
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4">
+      <h1 className="font-display text-xl font-bold text-ink-900">Record Purchase</h1>
+      <form onSubmit={handle} className="card space-y-3 p-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Supplier</label>
+            <select className="input" value={form.supplierId} onChange={set('supplierId')} required>
+              <option value="" disabled>{hasSuppliers ? '— Select Supplier —' : '— None (No Suppliers) —'}</option>
+              {hasSuppliers && suppliers.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+            <button type="button" className="mt-2 text-sm font-semibold text-moss-700 hover:underline" onClick={() => setSupplierModal(true)}>+ Add new supplier</button>
+          </div>
+          <div>
+            <label className="label">Product</label>
+            <select className="input" value={form.productId} onChange={set('productId')} required>
+              <option value="" disabled>{hasProducts ? '— Select Product —' : '— None (No Products) —'}</option>
+              {hasProducts && products.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <button type="button" className="mt-2 text-sm font-semibold text-moss-700 hover:underline" onClick={() => { setPrefillBarcode(null); setProductModal(true); }}>+ Add new product</button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Qty received</label>
+            <input type="number" min="1" className="input" value={form.quantity} onChange={set('quantity')} required />
+          </div>
+          <div>
+            <label className="label">Cost / unit (KES)</label>
+            <input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required />
+          </div>
+        </div>
+        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm text-ink-600">
+          Total cost: <span className="font-semibold text-ink-900">{formatKES(totalCost)}</span>
+        </div>
+        <div>
+          <label className="label">Payment status</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => setForm((p) => ({ ...p, paymentStatus: 'paid' }))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus === 'paid' ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}>Paid now</button>
+            <button type="button" onClick={() => setForm((p) => ({ ...p, paymentStatus: 'credit' }))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus === 'credit' ? 'border-rust-500 bg-rust-50 text-rust-700' : 'border-ink-200 text-ink-500'}`}>On credit</button>
+          </div>
+        </div>
+        {form.paymentStatus === 'paid' && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Paid via</label>
+              <select className="input" value={form.paymentMethod} onChange={set('paymentMethod')}>
+                <option value="Cash">Cash</option>
+                <option value="M-Pesa">M-Pesa</option>
+              </select>
+            </div>
+            {form.paymentMethod === 'M-Pesa' && (
+              <div>
+                <label className="label">M-Pesa code</label>
+                <input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} placeholder="e.g. QWE1234567" required />
+              </div>
+            )}
+          </div>
+        )}
+        <button type="submit" className="btn-primary w-full" disabled={busy}>
+          {busy ? 'Saving…' : 'Record purchase'}
+        </button>
+      </form>
+      <h2 className="font-display text-sm font-bold text-ink-800">Recent purchases</h2>
+
+      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
+      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
+
+      <ProductFormModal
+        open={productModal}
+        onClose={() => { setProductModal(false); setPrefillBarcode(null); }}
+        prefillSupplierId={form.supplierId || null}
+        onSave={async (data) => {
+          try {
+            const { id, queuedOffline } = await createProduct(data, businessId);
+            setForm((p) => ({
+              ...p,
+              productId: id,
+              supplierId: data.supplierId || p.supplierId || '',
+              costPricePerUnit: data.costPrice || p.costPricePerUnit,
+            }));
+            setProductModal(false);
+            setPrefillBarcode(null);
+            toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added and selected');
+          } catch (err) {
+            toast.error(friendlyErrorMessage(err));
+            throw err;
+          }
+        }}
+        suppliers={suppliers}
+        prefillBarcode={prefillBarcode}
+        onAddSupplier={() => setSupplierModal(true)}
+        newSupplierId={newSupplierId}
+        productCount={products.length}
+        simplifiedForPurchase
+      />
+      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
+      {loading ? (
+        <LoadingSpinner />
+      ) : purchases.length === 0 ? (
+        <EmptyState title="No purchases yet" />
+      ) : (
+        <div className="card divide-y divide-ink-100">
+          {purchases.map((p) => (
+            <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
+              <div>
+                <p className="font-medium text-ink-700">{p.quantity} × {p.productName}</p>
+                <p className="text-xs text-ink-400">{p.supplierName || 'Supplier'} · {formatDateTime(p.purchasedAt)}</p>
+              </div>
+              <div className="text-right">
+                <p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p>
+                <span className={`badge ${p.paymentStatus === 'paid' ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>
+                  {p.paymentStatus === 'paid' ? 'Paid' : 'On credit'}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -16871,1094 +17486,6 @@ export default function Counter() {
 }
 ````
 
-## File: src/pages/Products.jsx
-````javascript
-import { useMemo, useState } from 'react';
-import { orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import { Pencil, Trash2, TrendingUp } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, withBusiness, tenantCollection } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct, updateProduct, softDeleteProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ErrorBanner from '../components/common/ErrorBanner';
-import ConfirmDialog from '../components/common/ConfirmDialog';
-import Modal from '../components/common/Modal';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-export default function Products() {
-  const { businessId } = useAuth();
-  const productsQ = useMemo(
-    () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
-    [businessId]
-  );
-  const suppliersQ = useMemo(() => (businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null), [businessId]);
-  const { data: products, loading, error } = useFirestoreCollection(productsQ);
-  const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
-  
-  const [search, setSearch] = useState('');
-  const [modal, setModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [editing, setEditing] = useState(null);
-  const [pendingDel, setPendingDel] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [scanFoundProduct, setScanFoundProduct] = useState(null);
-  const [deleting, setDeleting] = useState(false);
-
-  const filtered = products.filter(
-    (p) =>
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      (p.category && p.category.toLowerCase().includes(search.toLowerCase())) ||
-      (p.barcode && p.barcode.includes(search.trim())) ||
-      (p.internalCode && p.internalCode.toLowerCase().includes(search.toLowerCase()))
-  );
-  
-  const suppName = (id) => suppliers.find((s) => s.id === id)?.name || '—';
-
-  const closeFormModal = () => {
-    setModal(false);
-    setEditing(null);
-    setPrefillBarcode(null);
-  };
-
-  const handleSave = async (data) => {
-    try {
-      if (editing) {
-        const { queuedOffline } = await updateProduct(editing.id, data, editing.barcode, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
-      } else {
-        const { queuedOffline } = await createProduct(data, businessId);
-        toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
-      }
-      closeFormModal();
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err));
-      throw err;
-    }
-  };
-
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    if (!queuedOffline) {
-      setNewSupplierId(ref.id);
-      await refetchSuppliers();
-    }
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
-
-  const handleDel = async () => {
-    setDeleting(true);
-    const { queuedOffline, error } = await raceWithTimeout(softDeleteProduct(pendingDel.id, pendingDel.barcode, businessId), 4000);
-    setDeleting(false);
-    if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Archived offline — it'll sync later." : 'Product archived');
-    setPendingDel(null);
-  };
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) setScanFoundProduct(found);
-    else { setEditing(null); setPrefillBarcode(code); setModal(true); }
-  };
-
-  useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
-
-  return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
-        <div className="flex gap-2">
-          <Link to="/inventory-intelligence" className="btn-outline">
-            <TrendingUp className="h-4 w-4" /> Intelligence
-          </Link>
-          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
-        </div>
-      </div>
-      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      <ErrorBanner message={error} />
-      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
-        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
-      ) : (
-        <>
-          <div className="space-y-2.5 sm:hidden">
-            {filtered.map((p) => (
-              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
-                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
-                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
-                  <div className="space-x-3">
-                    <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
-                    <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
-                  </div>
-                  <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="hidden sm:block card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {filtered.map((p) => (
-                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
-                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
-                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
-                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
-                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
-                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
-                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <Modal open={!!scanFoundProduct} onClose={() => setScanFoundProduct(null)} title="Barcode already registered" widthClass="max-w-xs">
-        <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
-          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
-        </div>
-      </Modal>
-
-      <ProductFormModal open={modal} onClose={closeFormModal} onSave={handleSave} suppliers={suppliers} initialProduct={editing} prefillBarcode={prefillBarcode} onAddSupplier={() => setSupplierModal(true)} newSupplierId={newSupplierId} productCount={products.length} />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-      <ConfirmDialog open={!!pendingDel} title="Archive this product?" message={`"${pendingDel?.name}" will be moved to Archived Data. You can restore it later from Settings.`} confirmLabel={deleting ? "Archiving..." : "Archive"} confirmDisabled={deleting} danger onConfirm={handleDel} onCancel={() => setPendingDel(null)} />
-    </div>
-  );
-}
-````
-
-## File: src/pages/Purchases.jsx
-````javascript
-import { useEffect, useMemo, useState } from 'react';
-import { doc, writeBatch, increment, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
-import { createProduct } from '../utils/products';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import EmptyState from '../components/common/EmptyState';
-import ProductFormModal from '../components/products/ProductFormModal';
-import SupplierFormModal from '../components/suppliers/SupplierFormModal';
-import ScannerModal from '../components/scanner/ScannerModal';
-import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
-import { formatDateTime } from '../utils/dateRanges';
-import { raceWithTimeout } from '../utils/offlineWrite';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-
-const empty = { supplierId: '', productId: '', quantity: '', costPricePerUnit: '', paymentStatus: 'paid', paymentMethod: 'Cash', mpesaCode: '' };
-
-export default function Purchases() {
-  const { profile, businessId } = useAuth();
-  const productsQ = useMemo(() => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null), [businessId]);
-  const suppliersQ = useMemo(() => (businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null), [businessId]);
-  const purchasesQ = useMemo(() => (businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt', 'desc'), limit(50)) : null), [businessId]);
-
-  const { data: products } = useFirestoreCollection(productsQ);
-  const { data: suppliers, refetch: refetchSuppliers } = useFirestoreCollection(suppliersQ);
-  const { data: purchases, loading } = useFirestoreCollection(purchasesQ);
-
-  const [form, setForm] = useState(empty);
-  const [busy, setBusy] = useState(false);
-  const [productModal, setProductModal] = useState(false);
-  const [supplierModal, setSupplierModal] = useState(false);
-  const [newSupplierId, setNewSupplierId] = useState(null);
-  const [prefillBarcode, setPrefillBarcode] = useState(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const set = (f) => (e) => setForm((p) => ({ ...p, [f]: e.target.value }));
-
-  useEffect(() => {
-    if (newSupplierId) setForm((p) => ({ ...p, supplierId: newSupplierId }));
-  }, [newSupplierId]);
-
-  const selProd = products.find((p) => p.id === form.productId);
-  const selSupp = suppliers.find((s) => s.id === form.supplierId);
-  const totalCost = (Number(form.quantity) || 0) * (Number(form.costPricePerUnit) || 0);
-
-  const handleScanDetected = (code) => {
-    setScannerOpen(false);
-    const found = findProductByCode(products, code);
-    if (found) {
-      setForm((p) => ({ ...p, productId: found.id, costPricePerUnit: found.costPrice || p.costPricePerUnit }));
-      toast.success(`Selected ${found.name}`);
-    } else {
-      setPrefillBarcode(code);
-      setProductModal(true);
-    }
-  };
-
-  useHardwareScanner(handleScanDetected, { enabled: !productModal && !supplierModal && !scannerOpen });
-
-  const handle = async (e) => {
-    e.preventDefault();
-    if (!form.supplierId) {
-      toast.error('Please select a supplier.');
-      return;
-    }
-    if (!form.productId) {
-      toast.error('Please select a product.');
-      return;
-    }
-    if (!form.quantity || !form.costPricePerUnit) {
-      toast.error('Enter quantity and cost price.');
-      return;
-    }
-    if (form.paymentStatus === 'paid' && form.paymentMethod === 'M-Pesa' && !form.mpesaCode.trim()) {
-      toast.error('Enter M-Pesa transaction code.');
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const qty = Number(form.quantity);
-      const cost = Number(form.costPricePerUnit);
-      const total = qty * cost;
-      const batch = writeBatch(db);
-
-      // Links the selected supplier to the product
-      const productRef = doc(db, 'products', form.productId);
-      const productUpdates = {
-        stock: increment(qty),
-        costPrice: cost,
-        updatedAt: serverTimestamp(),
-      };
-      if (form.supplierId) {
-        productUpdates.supplierId = form.supplierId;
-      }
-      batch.update(productRef, productUpdates);
-
-      const purchRef = doc(collection(db, 'purchases'));
-      batch.set(
-        purchRef,
-        withBusiness(
-          {
-            supplierId: form.supplierId,
-            supplierName: selSupp?.name || '',
-            productId: form.productId,
-            productName: selProd?.name || '',
-            quantity: qty,
-            costPricePerUnit: cost,
-            totalCost: total,
-            purchasedBy: profile.uid,
-            purchasedByName: profile.displayName,
-            purchasedAt: new Date(),
-            paymentStatus: form.paymentStatus === 'paid' ? 'paid' : 'pending_supplier_credit',
-            paymentMethod: form.paymentStatus === 'paid' ? form.paymentMethod : null,
-            mpesaCode: form.paymentStatus === 'paid' && form.paymentMethod === 'M-Pesa' ? form.mpesaCode.trim() : null,
-          },
-          businessId
-        )
-      );
-
-      const commit = batch.commit();
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
-      if (error) throw error;
-
-      toast.success(queuedOffline ? "Purchase queued offline — it'll sync soon." : 'Purchase recorded and stock updated');
-      if (queuedOffline) commit.catch((err) => toast.error(`A purchase from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
-
-      setForm(empty);
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleSupplierSave = async (supplierData) => {
-    const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
-    const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
-    if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    if (!queuedOffline) {
-      setNewSupplierId(ref.id);
-      await refetchSuppliers();
-    }
-    setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
-  };
-
-  const hasSuppliers = suppliers && suppliers.length > 0;
-  const hasProducts = products && products.length > 0;
-
-  return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <h1 className="font-display text-xl font-bold text-ink-900">Record Purchase</h1>
-      <form onSubmit={handle} className="card space-y-3 p-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">Supplier</label>
-            <select className="input" value={form.supplierId} onChange={set('supplierId')} required>
-              <option value="" disabled>{hasSuppliers ? '— Select Supplier —' : '— None (No Suppliers) —'}</option>
-              {hasSuppliers && suppliers.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-            <button type="button" className="mt-2 text-sm font-semibold text-moss-700 hover:underline" onClick={() => setSupplierModal(true)}>+ Add new supplier</button>
-          </div>
-          <div>
-            <label className="label">Product</label>
-            <select className="input" value={form.productId} onChange={set('productId')} required>
-              <option value="" disabled>{hasProducts ? '— Select Product —' : '— None (No Products) —'}</option>
-              {hasProducts && products.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            <button type="button" className="mt-2 text-sm font-semibold text-moss-700 hover:underline" onClick={() => { setPrefillBarcode(null); setProductModal(true); }}>+ Add new product</button>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">Qty received</label>
-            <input type="number" min="1" className="input" value={form.quantity} onChange={set('quantity')} required />
-          </div>
-          <div>
-            <label className="label">Cost / unit (KES)</label>
-            <input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required />
-          </div>
-        </div>
-        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm text-ink-600">
-          Total cost: <span className="font-semibold text-ink-900">{formatKES(totalCost)}</span>
-        </div>
-        <div>
-          <label className="label">Payment status</label>
-          <div className="grid grid-cols-2 gap-2">
-            <button type="button" onClick={() => setForm((p) => ({ ...p, paymentStatus: 'paid' }))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus === 'paid' ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}>Paid now</button>
-            <button type="button" onClick={() => setForm((p) => ({ ...p, paymentStatus: 'credit' }))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus === 'credit' ? 'border-rust-500 bg-rust-50 text-rust-700' : 'border-ink-200 text-ink-500'}`}>On credit</button>
-          </div>
-        </div>
-        {form.paymentStatus === 'paid' && (
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Paid via</label>
-              <select className="input" value={form.paymentMethod} onChange={set('paymentMethod')}>
-                <option value="Cash">Cash</option>
-                <option value="M-Pesa">M-Pesa</option>
-              </select>
-            </div>
-            {form.paymentMethod === 'M-Pesa' && (
-              <div>
-                <label className="label">M-Pesa code</label>
-                <input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} placeholder="e.g. QWE1234567" required />
-              </div>
-            )}
-          </div>
-        )}
-        <button type="submit" className="btn-primary w-full" disabled={busy}>
-          {busy ? 'Saving…' : 'Record purchase'}
-        </button>
-      </form>
-      <h2 className="font-display text-sm font-bold text-ink-800">Recent purchases</h2>
-
-      <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
-      <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
-
-      <ProductFormModal
-        open={productModal}
-        onClose={() => { setProductModal(false); setPrefillBarcode(null); }}
-        prefillSupplierId={form.supplierId || null}
-        onSave={async (data) => {
-          try {
-            const { id, queuedOffline } = await createProduct(data, businessId);
-            setForm((p) => ({
-              ...p,
-              productId: id,
-              supplierId: data.supplierId || p.supplierId || '',
-              costPricePerUnit: data.costPrice || p.costPricePerUnit,
-            }));
-            setProductModal(false);
-            setPrefillBarcode(null);
-            toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added and selected');
-          } catch (err) {
-            toast.error(friendlyErrorMessage(err));
-            throw err;
-          }
-        }}
-        suppliers={suppliers}
-        prefillBarcode={prefillBarcode}
-        onAddSupplier={() => setSupplierModal(true)}
-        newSupplierId={newSupplierId}
-        productCount={products.length}
-        simplifiedForPurchase
-      />
-      <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-      {loading ? (
-        <LoadingSpinner />
-      ) : purchases.length === 0 ? (
-        <EmptyState title="No purchases yet" />
-      ) : (
-        <div className="card divide-y divide-ink-100">
-          {purchases.map((p) => (
-            <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
-              <div>
-                <p className="font-medium text-ink-700">{p.quantity} × {p.productName}</p>
-                <p className="text-xs text-ink-400">{p.supplierName || 'Supplier'} · {formatDateTime(p.purchasedAt)}</p>
-              </div>
-              <div className="text-right">
-                <p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p>
-                <span className={`badge ${p.paymentStatus === 'paid' ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>
-                  {p.paymentStatus === 'paid' ? 'Paid' : 'On credit'}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-````
-
-## File: src/router/AppRouter.jsx
-````javascript
-import { lazy, Suspense, useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
-import ProtectedRoute from '../components/common/ProtectedRoute';
-import AppShell from '../components/layout/AppShell';
-import LoadingSpinner from '../components/common/LoadingSpinner';
-import { useAuth } from '../contexts/AuthContext';
-import { prefetchRoutes } from './routePrefetch';
-import RequireOpenSession from '../components/common/RequireOpenSession';
-import LandingPage from '../pages/LandingPage';
-
-const routeLoaders = {
-  setup: () => import('../pages/Setup'),
-  login: () => import('../pages/Login'),
-  forgotPassword: () => import('../pages/ForgotPassword'),
-  joinStaff: () => import('../pages/JoinStaff'),
-  authAction: () => import('../pages/AuthAction'),
-  dashboard: () => import('../pages/Dashboard'),
-  counter: () => import('../pages/Counter'),
-  customers: () => import('../pages/Customers'),
-  customerDetail: () => import('../pages/CustomerDetail'),
-  expenses: () => import('../pages/Expenses'),
-  purchases: () => import('../pages/Purchases'),
-  products: () => import('../pages/Products'),
-  suppliers: () => import('../pages/Suppliers'),
-  stockTake: () => import('../pages/StockTake'),
-  reports: () => import('../pages/Reports'),
-  closeDay: () => import('../pages/CloseDay'),
-  users: () => import('../pages/Users'),
-  settings: () => import('../pages/Settings'),
-  helpGuide: () => import('../pages/HelpGuide'),
-  pro: () => import('../pages/Pro'),
-  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
-  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
-  privacy: () => import('../pages/Privacy'),
-  terms: () => import('../pages/Terms'),
-};
-
-const Setup                 = lazy(routeLoaders.setup);
-const Login                 = lazy(routeLoaders.login);
-const ForgotPassword         = lazy(routeLoaders.forgotPassword);
-const JoinStaff             = lazy(routeLoaders.joinStaff);
-const AuthAction            = lazy(routeLoaders.authAction);
-const Dashboard             = lazy(routeLoaders.dashboard);
-const Counter               = lazy(routeLoaders.counter);
-const Customers             = lazy(routeLoaders.customers);
-const CustomerDetail        = lazy(routeLoaders.customerDetail);
-const Expenses              = lazy(routeLoaders.expenses);
-const Purchases             = lazy(routeLoaders.purchases);
-const Products              = lazy(routeLoaders.products);
-const Suppliers             = lazy(routeLoaders.suppliers);
-const StockTake             = lazy(routeLoaders.stockTake);
-const Reports               = lazy(routeLoaders.reports);
-const CloseDay              = lazy(routeLoaders.closeDay);
-const Users                 = lazy(routeLoaders.users);
-const Settings              = lazy(routeLoaders.settings);
-const HelpGuide             = lazy(routeLoaders.helpGuide);
-const Pro                   = lazy(routeLoaders.pro);
-const AdvancedAnalytics     = lazy(routeLoaders.advancedAnalytics);
-const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
-const Privacy               = lazy(routeLoaders.privacy);
-const Terms                 = lazy(routeLoaders.terms);
-
-function Page({ children, adminOnly = false, requireOpenDay = false }) {
-  return (
-    <ProtectedRoute adminOnly={adminOnly}>
-      <AppShell>
-        <Suspense fallback={<LoadingSpinner />}>
-          {requireOpenDay ? <RequireOpenSession>{children}</RequireOpenSession> : children}
-        </Suspense>
-      </AppShell>
-    </ProtectedRoute>
-  );
-}
-
-function PublicOnly({ children }) {
-  const { firebaseUser, loading } = useAuth();
-  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
-  if (firebaseUser) return <Navigate to="/dashboard" replace />;
-  return children;
-}
-
-function isStandalonePWA() {
-  if (typeof window === 'undefined') return false;
-  return window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
-}
-
-function RootRoute() {
-  const { firebaseUser, loading, isAdmin } = useAuth();
-
-  if (!loading && firebaseUser) {
-    return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
-  }
-  if (!loading && !firebaseUser && isStandalonePWA()) {
-    return <Navigate to="/login" replace />;
-  }
-  return <LandingPage />;
-}
-
-function RoutePrefetcher() {
-  const { firebaseUser, isAdmin } = useAuth();
-  useEffect(() => {
-    if (!firebaseUser) return;
-    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
-    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
-    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
-  }, [firebaseUser, isAdmin]);
-  return null;
-}
-
-export default function AppRouter() {
-  return (
-    <Suspense fallback={<LoadingSpinner label="Loading..." />}>
-      <RoutePrefetcher />
-      <Routes>
-        {/* Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
-        <Route path="/" element={<RootRoute />} />
-
-        {/* Public Authentication & Setup */}
-        <Route path="/setup" element={<Setup />} />
-        <Route path="/signup" element={<Setup />} />
-        <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
-        <Route path="/signin" element={<PublicOnly><Login /></PublicOnly>} />
-        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
-        <Route path="/join/:inviteId" element={<JoinStaff />} />
-        <Route path="/auth/action" element={<AuthAction />} />
-        
-        {/* Public Legal Pages */}
-        <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
-        <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
-
-        {/* Protected Store Management Routes */}
-        <Route path="/dashboard"    element={<Page adminOnly><Dashboard /></Page>} />
-        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
-        <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
-        <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
-
-        <Route path="/counter"      element={<Page><Counter /></Page>} />
-        <Route path="/customers"    element={<Page><Customers /></Page>} />
-        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
-        <Route path="/expenses"     element={<Page requireOpenDay><Expenses /></Page>} />
-        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
-        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
-        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
-        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
-        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
-        <Route path="/close-day"    element={<Page adminOnly requireOpenDay><CloseDay /></Page>} />
-        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
-        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
-        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
-        <Route path="*"             element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
-  );
-}
-````
-
-## File: src/contexts/AuthContext.jsx
-````javascript
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
-import {
-  onAuthStateChanged, signInWithEmailAndPassword, signOut as fbSignOut, sendEmailVerification, reload,
-  deleteUser, EmailAuthProvider, reauthenticateWithCredential,
-} from 'firebase/auth';
-import {
-  doc,
-  onSnapshot,
-  deleteDoc,
-  updateDoc,
-  collection,
-  addDoc,
-  setDoc,
-  serverTimestamp,
-  query,
-  where,
-  getDocs,
-  getDoc,
-} from 'firebase/firestore';
-import { auth, db } from '../firebase';
-import { raceWithTimeout } from '../utils/offlineWrite';
-
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-const AuthContext = createContext(null);
-
-function getDeviceId() {
-  let id = localStorage.getItem('flowbiz_device_id');
-  if (!id) {
-    id = `dev_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-    localStorage.setItem('flowbiz_device_id', id);
-  }
-  return id;
-}
-function getSessionDocId(uid) {
-  return `${getDeviceId()}__${uid}`;
-}
-
-function guessDeviceLabel() {
-  const ua = navigator.userAgent || '';
-  let os = 'Unknown device';
-  if (/Android/i.test(ua)) os = 'Android';
-  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
-  else if (/Windows/i.test(ua)) os = 'Windows';
-  else if (/Macintosh/i.test(ua)) os = 'Mac';
-  else if (/Linux/i.test(ua)) os = 'Linux';
-
-  let browser = '';
-  if (/Edg\//i.test(ua)) browser = 'Edge';
-  else if (/OPR\//i.test(ua)) browser = 'Opera';
-  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
-  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
-  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
-
-  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches;
-  if (isStandalone) return browser ? `${os} app (${browser})` : `${os} app`;
-  return browser ? `${browser} on ${os}` : os;
-}
-
-export function AuthProvider({ children }) {
-  const [firebaseUser, setFirebaseUser] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [subscription, setSubscription] = useState({ plan: 'free', status: 'active' });
-  const [loading, setLoading] = useState(true);
-  const [authError, setAuthError] = useState(null);
-  const [accountRemoved, setAccountRemoved] = useState(false);
-  const [sessionRevoked, setSessionRevoked] = useState(false);
-  const [emailVerified, setEmailVerified] = useState(false);
-
-  const profileUnsubRef = useRef(null);
-  const sessionUnsubRef = useRef(null);
-  const businessUnsubRef = useRef(null);
-  const sessionRegisteredRef = useRef(null);
-
-  const stopListeners = useCallback(() => {
-    profileUnsubRef.current?.();
-    profileUnsubRef.current = null;
-    sessionUnsubRef.current?.();
-    sessionUnsubRef.current = null;
-    businessUnsubRef.current?.();
-    businessUnsubRef.current = null;
-    sessionRegisteredRef.current = null;
-  }, []);
-
-  const registerSession = useCallback(async (uid, businessId, userName) => {
-    if (!uid || !businessId) return;
-    const key = `${uid}:${businessId}`;
-    if (sessionRegisteredRef.current === key) return;
-    sessionRegisteredRef.current = key;
-
-    try {
-      let sessionId = getSessionDocId(uid);
-      let ref = doc(db, 'sessions', sessionId);
-      let currentSnap = await getDoc(ref).catch(() => null);
-
-      if (currentSnap && currentSnap.exists() && currentSnap.data().revoked === true) {
-        sessionId = `${sessionId}__${Date.now().toString(36)}`;
-        ref = doc(db, 'sessions', sessionId);
-        currentSnap = await getDoc(ref).catch(() => null);
-      }
-
-      const baseFields = {
-        uid,
-        businessId,
-        lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
-        deviceLabel: guessDeviceLabel(),
-        userAgent: navigator.userAgent,
-        lastActiveAt: serverTimestamp(),
-      };
-
-      if (!currentSnap || !currentSnap.exists()) {
-        await setDoc(ref, { ...baseFields, createdAt: serverTimestamp(), revoked: false });
-      } else {
-        await updateDoc(ref, baseFields).catch(() => {});
-      }
-
-      sessionUnsubRef.current?.();
-      sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
-        if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
-          setSessionRevoked(true);
-          fbSignOut(auth);
-        }
-      });
-    } catch (err) {
-      console.warn('[FlowBiz] registerSession non-fatal warning:', err.message);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
-        updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
-      }
-    }, 15 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [firebaseUser, profile?.businessId, sessionRevoked]);
-
-  const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
-    stopListeners();
-    setAuthError(null);
-    setAccountRemoved(false);
-    setSessionRevoked(false);
-
-    if (!user) {
-      setProfile(null);
-      setSubscription({ plan: 'free', status: 'active' });
-      setEmailVerified(false);
-      setLoading(false);
-      return;
-    }
-
-    setEmailVerified(!!user.emailVerified);
-    setLoading(true);
-
-    const userRef = doc(db, 'users', user.uid);
-
-    profileUnsubRef.current = onSnapshot(
-      userRef,
-      (snap) => {
-        if (!snap.exists()) {
-          (async () => {
-            for (let attempt = 0; attempt < 3; attempt++) {
-              await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
-              if (auth.currentUser?.uid !== user.uid) return;
-              try {
-                const recheck = await getDoc(userRef);
-                if (recheck.exists()) return;
-              } catch (err) {
-                if (attempt === 2) {
-                  setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
-                  setProfile(null);
-                  setLoading(false);
-                  return;
-                }
-              }
-            }
-            setAccountRemoved(true);
-            setProfile(null);
-            setLoading(false);
-          })();
-          return;
-        }
-
-        setAccountRemoved(false);
-        const data = { uid: user.uid, ...snap.data() };
-        setProfile(data);
-        setLoading(false);
-
-        if (data.businessId && data.active !== false) {
-          registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
-          businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
-            if (bizSnap.exists()) {
-              setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
-            }
-          });
-        }
-      },
-      (err) => {
-        if (err.code === 'permission-denied' && retryCount < 5) {
-          const delay = Math.min(1000 * 2 ** retryCount, 6000);
-          setTimeout(() => {
-            if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
-          }, delay);
-          return;
-        }
-        console.error(`[FlowBiz] onSnapshot(users/${user.uid}) error:`, err.code || err.name, err.message);
-        setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
-        setProfile(null);
-        setLoading(false);
-      }
-    );
-  }, [registerSession, stopListeners]);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      setFirebaseUser(user);
-      loadProfile(user);
-    });
-    return () => { unsub(); stopListeners(); };
-  }, [loadProfile, stopListeners]);
-
-  const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
-  const logout = () => { stopListeners(); return fbSignOut(auth); };
-
-  const resendVerificationEmail = async () => {
-    if (!auth.currentUser) throw new Error('Not signed in.');
-    try {
-      const idToken = await auth.currentUser.getIdToken(true);
-      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-      });
-      if (!response.ok) {
-        let message = 'Could not send the verification email.';
-        try { const body = await response.json(); message = body?.error || message; } catch {}
-        throw new Error(message);
-      }
-    } catch (workerErr) {
-      console.warn('[FlowBiz] Worker email send failed, falling back to direct Firebase Auth send:', workerErr.message);
-      await sendEmailVerification(auth.currentUser);
-    }
-  };
-
-  const refreshEmailVerification = useCallback(async () => {
-    if (!auth.currentUser) return false;
-    try {
-      await reload(auth.currentUser);
-    } catch (err) {
-      console.error('[FlowBiz] refreshEmailVerification reload error:', err.code || err.name, err.message);
-      return auth.currentUser?.emailVerified ?? false;
-    }
-    const verified = !!auth.currentUser.emailVerified;
-    setEmailVerified(verified);
-    return verified;
-  }, []);
-
-  const createStaffInvite = async ({ displayName, role = 'cashier' }) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can invite staff.');
-    if (!['owner', 'cashier'].includes(role)) throw new Error('Invalid role.');
-    const trimmed = (displayName || '').trim();
-    if (!trimmed) throw new Error('Enter a name.');
-    const write = addDoc(collection(db, 'staffInvites'), {
-      businessId: profile.businessId,
-      displayName: trimmed,
-      role,
-      createdBy: profile.uid,
-      createdByName: profile.displayName,
-      createdAt: serverTimestamp(),
-      claimed: false,
-      linkedUid: null,
-    });
-    const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
-    if (error) throw error;
-    if (queuedOffline) return { id: null, queuedOffline: true };
-    return { id: value.id };
-  };
-
-  const cancelStaffInvite = async (inviteId) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can cancel an invite.');
-    await deleteDoc(doc(db, 'staffInvites', inviteId));
-  };
-
-  const revokeSessionsForStaffMember = useCallback(async (uid) => {
-    if (!profile?.businessId) return;
-    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', uid), where('businessId', '==', profile.businessId)));
-    await Promise.all(
-      snap.docs.filter((d) => d.data().revoked !== true).map((d) => updateDoc(doc(db, 'sessions', d.id), { revoked: true }))
-    );
-  }, [profile]);
-
-  const removeStaffAccount = async (uid) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can remove staff accounts.');
-    if (uid === profile.uid) throw new Error("You can't remove your own account here.");
-    if (!auth.currentUser) throw new Error('Your session has expired. Please sign in again.');
-
-    const idToken = await auth.currentUser.getIdToken(true);
-    await revokeSessionsForStaffMember(uid);
-
-    let response;
-    try {
-      response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-        body: JSON.stringify({ targetUid: uid }),
-      });
-    } catch {
-      throw new Error(`Failed to reach the API server. Check your connection.`);
-    }
-
-    let result = null;
-    try { result = await response.json(); } catch { }
-    if (!response.ok) throw new Error(result?.error || result?.message || `Failed to delete the staff account (${response.status}).`);
-
-    const { queuedOffline, error: deleteError } = await raceWithTimeout(deleteDoc(doc(db, 'users', uid)), 4000);
-    if (deleteError) {
-      throw new Error(`Staff sign-in was removed, but their profile record couldn't be deleted (${deleteError.message}). It should clear automatically once back online.`);
-    }
-    if (queuedOffline) {
-      throw new Error("Staff sign-in was removed, but you're offline — their profile record will finish deleting once you're back online.");
-    }
-  };
-
-  const toggleMemberActive = async (uid, active) => {
-    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can do this.');
-    await updateDoc(doc(db, 'users', uid), { active });
-    if (active === false) await revokeSessionsForStaffMember(uid);
-  };
-
-  const deleteOwnAccount = async ({ password }) => {
-    if (!profile || !auth.currentUser) throw new Error('You need to be signed in to do this.');
-
-    try {
-      const credential = EmailAuthProvider.credential(auth.currentUser.email, password);
-      await reauthenticateWithCredential(auth.currentUser, credential);
-    } catch (err) {
-      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        throw new Error('That password is incorrect.');
-      }
-      throw new Error('Could not verify your password. Please try again.');
-    }
-
-    let mode = 'self-only';
-
-    if (profile.role === 'owner') {
-      const othersSnap = await getDocs(query(
-        collection(db, 'users'),
-        where('businessId', '==', profile.businessId),
-        where('role', '==', 'owner')
-      ));
-      const otherOwners = othersSnap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .filter((u) => u.id !== profile.uid && u.active !== false);
-
-      if (otherOwners.length > 0) {
-        const bizSnap = await getDoc(doc(db, 'businesses', profile.businessId));
-        const business = bizSnap.exists() ? bizSnap.data() : null;
-        if (business && business.createdBy === profile.uid) {
-          const oldest = [...otherOwners].sort((a, b) => {
-            const at = a.createdAt?.toMillis?.() ?? 0;
-            const bt = b.createdAt?.toMillis?.() ?? 0;
-            return at - bt;
-          })[0];
-          await updateDoc(doc(db, 'businesses', profile.businessId), { createdBy: oldest.id });
-        }
-      } else {
-        mode = 'full-wipe';
-        const { resetBusinessData } = await import('../utils/businessReset');
-        await resetBusinessData(profile.businessId, profile.uid);
-      }
-    }
-
-    const idToken = await auth.currentUser.getIdToken(true);
-    const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-own-profile`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-      body: JSON.stringify({ mode }),
-    });
-    let result = null;
-    try { result = await response.json(); } catch { }
-    if (!response.ok) {
-      throw new Error(result?.error || `Could not finish removing your account (${response.status}).`);
-    }
-
-    try {
-      await deleteUser(auth.currentUser);
-    } catch (err) {
-      if (err.code === 'auth/requires-recent-login') {
-        throw new Error("Your business data was handled, but we couldn't remove your sign-in for security reasons — please sign out and back in, then try 'Delete my account' again.");
-      }
-      throw new Error("Your business data was handled, but removing your sign-in failed. Please try again.");
-    }
-  };
-
-  const revokeSession = async (sessionId) => {
-    await updateDoc(doc(db, 'sessions', sessionId), { revoked: true });
-  };
-
-  const listMySessions = async () => {
-    if (!profile) return [];
-    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', profile.uid)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  };
-
-  const listBusinessSessions = async () => {
-    if (!profile?.businessId) return [];
-    const snap = await getDocs(query(collection(db, 'sessions'), where('businessId', '==', profile.businessId)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  };
-
-  const isOwner = profile?.role === 'owner';
-  
-  const expiresMs = subscription?.expiresAt?.toMillis 
-    ? subscription.expiresAt.toMillis() 
-    : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
-
-  const isPro = subscription?.plan === 'pro' && 
-                subscription?.status === 'active' &&
-                (!subscription.expiresAt || expiresMs > Date.now());
-
-  return (
-    <AuthContext.Provider
-      value={{
-        firebaseUser, profile, subscription, isPro, loading, authError, accountRemoved, sessionRevoked,
-        businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
-        isActive: profile?.active !== false, emailVerified,
-        login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
-        toggleMemberActive, revokeSession, listMySessions, listBusinessSessions, deleteOwnAccount,
-        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),
-        reloadProfile: async () => loadProfile(auth.currentUser),
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
-  return ctx;
-}
-````
-
 ## File: src/pages/Dashboard.jsx
 ````javascript
 import { useMemo, useState } from 'react';
@@ -18919,9 +18446,613 @@ function Row({ label, value, tone = '', mono = false }) {
 }
 ````
 
+## File: src/router/AppRouter.jsx
+````javascript
+import { lazy, Suspense, useEffect } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import ProtectedRoute from '../components/common/ProtectedRoute';
+import AppShell from '../components/layout/AppShell';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import { useAuth } from '../contexts/AuthContext';
+import { prefetchRoutes } from './routePrefetch';
+import RequireOpenSession from '../components/common/RequireOpenSession';
+import LandingPage from '../pages/LandingPage';
+
+const routeLoaders = {
+  setup: () => import('../pages/Setup'),
+  login: () => import('../pages/Login'),
+  forgotPassword: () => import('../pages/ForgotPassword'),
+  joinStaff: () => import('../pages/JoinStaff'),
+  authAction: () => import('../pages/AuthAction'),
+  dashboard: () => import('../pages/Dashboard'),
+  counter: () => import('../pages/Counter'),
+  customers: () => import('../pages/Customers'),
+  customerDetail: () => import('../pages/CustomerDetail'),
+  expenses: () => import('../pages/Expenses'),
+  purchases: () => import('../pages/Purchases'),
+  products: () => import('../pages/Products'),
+  suppliers: () => import('../pages/Suppliers'),
+  stockTake: () => import('../pages/StockTake'),
+  reports: () => import('../pages/Reports'),
+  closeDay: () => import('../pages/CloseDay'),
+  users: () => import('../pages/Users'),
+  settings: () => import('../pages/Settings'),
+  helpGuide: () => import('../pages/HelpGuide'),
+  pro: () => import('../pages/Pro'),
+  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
+  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
+  privacy: () => import('../pages/Privacy'),
+  terms: () => import('../pages/Terms'),
+};
+
+const Setup                 = lazy(routeLoaders.setup);
+const Login                 = lazy(routeLoaders.login);
+const ForgotPassword         = lazy(routeLoaders.forgotPassword);
+const JoinStaff             = lazy(routeLoaders.joinStaff);
+const AuthAction            = lazy(routeLoaders.authAction);
+const Dashboard             = lazy(routeLoaders.dashboard);
+const Counter               = lazy(routeLoaders.counter);
+const Customers             = lazy(routeLoaders.customers);
+const CustomerDetail        = lazy(routeLoaders.customerDetail);
+const Expenses              = lazy(routeLoaders.expenses);
+const Purchases             = lazy(routeLoaders.purchases);
+const Products              = lazy(routeLoaders.products);
+const Suppliers             = lazy(routeLoaders.suppliers);
+const StockTake             = lazy(routeLoaders.stockTake);
+const Reports               = lazy(routeLoaders.reports);
+const CloseDay              = lazy(routeLoaders.closeDay);
+const Users                 = lazy(routeLoaders.users);
+const Settings              = lazy(routeLoaders.settings);
+const HelpGuide             = lazy(routeLoaders.helpGuide);
+const Pro                   = lazy(routeLoaders.pro);
+const AdvancedAnalytics     = lazy(routeLoaders.advancedAnalytics);
+const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
+const Privacy               = lazy(routeLoaders.privacy);
+const Terms                 = lazy(routeLoaders.terms);
+
+function Page({ children, adminOnly = false, requireOpenDay = false }) {
+  return (
+    <ProtectedRoute adminOnly={adminOnly}>
+      <AppShell>
+        <Suspense fallback={<LoadingSpinner />}>
+          {requireOpenDay ? <RequireOpenSession>{children}</RequireOpenSession> : children}
+        </Suspense>
+      </AppShell>
+    </ProtectedRoute>
+  );
+}
+
+function PublicOnly({ children }) {
+  const { firebaseUser, loading } = useAuth();
+  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
+  if (firebaseUser) return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
+function isStandalonePWA() {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+function RootRoute() {
+  const { firebaseUser, loading, isAdmin } = useAuth();
+
+  if (!loading && firebaseUser) {
+    return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
+  }
+  if (!loading && !firebaseUser && isStandalonePWA()) {
+    return <Navigate to="/login" replace />;
+  }
+  return <LandingPage />;
+}
+
+function RoutePrefetcher() {
+  const { firebaseUser, isAdmin } = useAuth();
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
+    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
+    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
+  }, [firebaseUser, isAdmin]);
+  return null;
+}
+
+export default function AppRouter() {
+  return (
+    <Suspense fallback={<LoadingSpinner label="Loading..." />}>
+      <RoutePrefetcher />
+      <Routes>
+        {/* Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
+        <Route path="/" element={<RootRoute />} />
+
+        {/* Public Authentication & Setup */}
+        <Route path="/setup" element={<Setup />} />
+        <Route path="/signup" element={<Setup />} />
+        <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
+        <Route path="/signin" element={<PublicOnly><Login /></PublicOnly>} />
+        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
+        <Route path="/join/:inviteId" element={<JoinStaff />} />
+        <Route path="/auth/action" element={<AuthAction />} />
+        
+        {/* Public Legal Pages */}
+        <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
+        <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
+
+        {/* Protected Store Management Routes */}
+        <Route path="/dashboard"    element={<Page adminOnly><Dashboard /></Page>} />
+        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
+        <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
+        <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
+
+        <Route path="/counter"      element={<Page><Counter /></Page>} />
+        <Route path="/customers"    element={<Page><Customers /></Page>} />
+        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
+        <Route path="/expenses"     element={<Page requireOpenDay><Expenses /></Page>} />
+        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
+        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
+        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
+        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
+        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
+        <Route path="/close-day"    element={<Page adminOnly requireOpenDay><CloseDay /></Page>} />
+        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
+        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
+        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
+        <Route path="*"             element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
+  );
+}
+````
+
+## File: src/contexts/AuthContext.jsx
+````javascript
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import {
+  onAuthStateChanged, signInWithEmailAndPassword, signOut as fbSignOut, sendEmailVerification, reload,
+  deleteUser, EmailAuthProvider, reauthenticateWithCredential,
+} from 'firebase/auth';
+import {
+  doc,
+  onSnapshot,
+  deleteDoc,
+  updateDoc,
+  collection,
+  addDoc,
+  setDoc,
+  serverTimestamp,
+  query,
+  where,
+  getDocs,
+  getDoc,
+} from 'firebase/firestore';
+import { auth, db } from '../firebase';
+import { raceWithTimeout } from '../utils/offlineWrite';
+
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+const AuthContext = createContext(null);
+
+function getDeviceId() {
+  let id = localStorage.getItem('flowbiz_device_id');
+  if (!id) {
+    id = `dev_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem('flowbiz_device_id', id);
+  }
+  return id;
+}
+function getSessionDocId(uid) {
+  return `${getDeviceId()}__${uid}`;
+}
+
+function guessDeviceLabel() {
+  const ua = navigator.userAgent || '';
+  let os = 'Unknown device';
+  if (/Android/i.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+  else if (/Windows/i.test(ua)) os = 'Windows';
+  else if (/Macintosh/i.test(ua)) os = 'Mac';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+
+  let browser = '';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/OPR\//i.test(ua)) browser = 'Opera';
+  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
+
+  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches;
+  if (isStandalone) return browser ? `${os} app (${browser})` : `${os} app`;
+  return browser ? `${browser} on ${os}` : os;
+}
+
+export function AuthProvider({ children }) {
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [subscription, setSubscription] = useState({ plan: 'free', status: 'active' });
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
+  const [accountRemoved, setAccountRemoved] = useState(false);
+  const [sessionRevoked, setSessionRevoked] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(false);
+
+  const profileUnsubRef = useRef(null);
+  const sessionUnsubRef = useRef(null);
+  const businessUnsubRef = useRef(null);
+  const sessionRegisteredRef = useRef(null);
+
+  const stopListeners = useCallback(() => {
+    profileUnsubRef.current?.();
+    profileUnsubRef.current = null;
+    sessionUnsubRef.current?.();
+    sessionUnsubRef.current = null;
+    businessUnsubRef.current?.();
+    businessUnsubRef.current = null;
+    sessionRegisteredRef.current = null;
+  }, []);
+
+  const registerSession = useCallback(async (uid, businessId, userName) => {
+    if (!uid || !businessId) return;
+    const key = `${uid}:${businessId}`;
+    if (sessionRegisteredRef.current === key) return;
+    sessionRegisteredRef.current = key;
+
+    try {
+      let sessionId = getSessionDocId(uid);
+      let ref = doc(db, 'sessions', sessionId);
+      let currentSnap = await getDoc(ref).catch(() => null);
+
+      if (currentSnap && currentSnap.exists() && currentSnap.data().revoked === true) {
+        sessionId = `${sessionId}__${Date.now().toString(36)}`;
+        ref = doc(db, 'sessions', sessionId);
+        currentSnap = await getDoc(ref).catch(() => null);
+      }
+
+      const baseFields = {
+        uid,
+        businessId,
+        lastUserName: userName || auth.currentUser?.displayName || auth.currentUser?.email || 'Unknown',
+        deviceLabel: guessDeviceLabel(),
+        userAgent: navigator.userAgent,
+        lastActiveAt: serverTimestamp(),
+      };
+
+      if (!currentSnap || !currentSnap.exists()) {
+        await setDoc(ref, { ...baseFields, createdAt: serverTimestamp(), revoked: false });
+      } else {
+        await updateDoc(ref, baseFields).catch(() => {});
+      }
+
+      sessionUnsubRef.current?.();
+      sessionUnsubRef.current = onSnapshot(ref, (sessionSnap) => {
+        if (sessionSnap.exists() && sessionSnap.data().revoked === true) {
+          setSessionRevoked(true);
+          fbSignOut(auth);
+        }
+      });
+    } catch (err) {
+      console.warn('[FlowBiz] registerSession non-fatal warning:', err.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!firebaseUser || !profile?.businessId || sessionRevoked) return;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        const ref = doc(db, 'sessions', getSessionDocId(firebaseUser.uid));
+        updateDoc(ref, { lastActiveAt: serverTimestamp() }).catch(() => {});
+      }
+    }, 15 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [firebaseUser, profile?.businessId, sessionRevoked]);
+
+  const loadProfile = useCallback(function doLoad(user, retryCount = 0) {
+    stopListeners();
+    setAuthError(null);
+    setAccountRemoved(false);
+    setSessionRevoked(false);
+
+    if (!user) {
+      setProfile(null);
+      setSubscription({ plan: 'free', status: 'active' });
+      setEmailVerified(false);
+      setLoading(false);
+      return;
+    }
+
+    setEmailVerified(!!user.emailVerified);
+    setLoading(true);
+
+    const userRef = doc(db, 'users', user.uid);
+
+    profileUnsubRef.current = onSnapshot(
+      userRef,
+      (snap) => {
+        if (!snap.exists()) {
+          (async () => {
+            for (let attempt = 0; attempt < 3; attempt++) {
+              await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+              if (auth.currentUser?.uid !== user.uid) return;
+              try {
+                const recheck = await getDoc(userRef);
+                if (recheck.exists()) return;
+              } catch (err) {
+                if (attempt === 2) {
+                  setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
+                  setProfile(null);
+                  setLoading(false);
+                  return;
+                }
+              }
+            }
+            setAccountRemoved(true);
+            setProfile(null);
+            setLoading(false);
+          })();
+          return;
+        }
+
+        setAccountRemoved(false);
+        const data = { uid: user.uid, ...snap.data() };
+        setProfile(data);
+        setLoading(false);
+
+        if (data.businessId && data.active !== false) {
+          registerSession(user.uid, data.businessId, data.displayName).catch(console.error);
+          businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
+            if (bizSnap.exists()) {
+              setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
+            }
+          });
+        }
+      },
+      (err) => {
+        if (err.code === 'permission-denied' && retryCount < 5) {
+          const delay = Math.min(1000 * 2 ** retryCount, 6000);
+          setTimeout(() => {
+            if (auth.currentUser?.uid === user.uid) doLoad(user, retryCount + 1);
+          }, delay);
+          return;
+        }
+        console.error(`[FlowBiz] onSnapshot(users/${user.uid}) error:`, err.code || err.name, err.message);
+        setAuthError(`${err.code || err.name || 'unknown'}: ${err.message}`);
+        setProfile(null);
+        setLoading(false);
+      }
+    );
+  }, [registerSession, stopListeners]);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      loadProfile(user);
+    });
+    return () => { unsub(); stopListeners(); };
+  }, [loadProfile, stopListeners]);
+
+  const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
+  const logout = () => { stopListeners(); return fbSignOut(auth); };
+
+  const resendVerificationEmail = async () => {
+    if (!auth.currentUser) throw new Error('Not signed in.');
+    try {
+      const idToken = await auth.currentUser.getIdToken(true);
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      });
+      if (!response.ok) {
+        let message = 'Could not send the verification email.';
+        try { const body = await response.json(); message = body?.error || message; } catch {}
+        throw new Error(message);
+      }
+    } catch (workerErr) {
+      console.warn('[FlowBiz] Worker email send failed, falling back to direct Firebase Auth send:', workerErr.message);
+      await sendEmailVerification(auth.currentUser);
+    }
+  };
+
+  const refreshEmailVerification = useCallback(async () => {
+    if (!auth.currentUser) return false;
+    try {
+      await reload(auth.currentUser);
+    } catch (err) {
+      console.error('[FlowBiz] refreshEmailVerification reload error:', err.code || err.name, err.message);
+      return auth.currentUser?.emailVerified ?? false;
+    }
+    const verified = !!auth.currentUser.emailVerified;
+    setEmailVerified(verified);
+    return verified;
+  }, []);
+
+  const createStaffInvite = async ({ displayName, role = 'cashier' }) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can invite staff.');
+    if (!['owner', 'cashier'].includes(role)) throw new Error('Invalid role.');
+    const trimmed = (displayName || '').trim();
+    if (!trimmed) throw new Error('Enter a name.');
+    const write = addDoc(collection(db, 'staffInvites'), {
+      businessId: profile.businessId,
+      displayName: trimmed,
+      role,
+      createdBy: profile.uid,
+      createdByName: profile.displayName,
+      createdAt: serverTimestamp(),
+      claimed: false,
+      linkedUid: null,
+    });
+    const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
+    if (error) throw error;
+    if (queuedOffline) return { id: null, queuedOffline: true };
+    return { id: value.id };
+  };
+
+  const cancelStaffInvite = async (inviteId) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can cancel an invite.');
+    await deleteDoc(doc(db, 'staffInvites', inviteId));
+  };
+
+  const revokeSessionsForStaffMember = useCallback(async (uid) => {
+    if (!profile?.businessId) return;
+    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', uid), where('businessId', '==', profile.businessId)));
+    await Promise.all(
+      snap.docs.filter((d) => d.data().revoked !== true).map((d) => updateDoc(doc(db, 'sessions', d.id), { revoked: true }))
+    );
+  }, [profile]);
+
+  const removeStaffAccount = async (uid) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can remove staff accounts.');
+    if (uid === profile.uid) throw new Error("You can't remove your own account here.");
+    if (!auth.currentUser) throw new Error('Your session has expired. Please sign in again.');
+
+    const idToken = await auth.currentUser.getIdToken(true);
+    await revokeSessionsForStaffMember(uid);
+
+    let response;
+    try {
+      response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-staff`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({ targetUid: uid }),
+      });
+    } catch {
+      throw new Error(`Failed to reach the API server. Check your connection.`);
+    }
+
+    let result = null;
+    try { result = await response.json(); } catch { }
+    if (!response.ok) throw new Error(result?.error || result?.message || `Failed to delete the staff account (${response.status}).`);
+
+    const { queuedOffline, error: deleteError } = await raceWithTimeout(deleteDoc(doc(db, 'users', uid)), 4000);
+    if (deleteError) {
+      throw new Error(`Staff sign-in was removed, but their profile record couldn't be deleted (${deleteError.message}). It should clear automatically once back online.`);
+    }
+    if (queuedOffline) {
+      throw new Error("Staff sign-in was removed, but you're offline — their profile record will finish deleting once you're back online.");
+    }
+  };
+
+  const toggleMemberActive = async (uid, active) => {
+    if (!profile || profile.role !== 'owner') throw new Error('Only an owner can do this.');
+    await updateDoc(doc(db, 'users', uid), { active });
+    if (active === false) await revokeSessionsForStaffMember(uid);
+  };
+
+  const deleteOwnAccount = async ({ password }) => {
+    if (!profile || !auth.currentUser) throw new Error('You need to be signed in to do this.');
+
+    try {
+      const credential = EmailAuthProvider.credential(auth.currentUser.email, password);
+      await reauthenticateWithCredential(auth.currentUser, credential);
+    } catch (err) {
+      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        throw new Error('That password is incorrect.');
+      }
+      throw new Error('Could not verify your password. Please try again.');
+    }
+
+    let mode = 'self-only';
+
+    if (profile.role === 'owner') {
+      const othersSnap = await getDocs(query(
+        collection(db, 'users'),
+        where('businessId', '==', profile.businessId),
+        where('role', '==', 'owner')
+      ));
+      const otherOwners = othersSnap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((u) => u.id !== profile.uid && u.active !== false);
+
+      if (otherOwners.length > 0) {
+        const bizSnap = await getDoc(doc(db, 'businesses', profile.businessId));
+        const business = bizSnap.exists() ? bizSnap.data() : null;
+        if (business && business.createdBy === profile.uid) {
+          const oldest = [...otherOwners].sort((a, b) => {
+            const at = a.createdAt?.toMillis?.() ?? 0;
+            const bt = b.createdAt?.toMillis?.() ?? 0;
+            return at - bt;
+          })[0];
+          await updateDoc(doc(db, 'businesses', profile.businessId), { createdBy: oldest.id });
+        }
+      } else {
+        mode = 'full-wipe';
+        const { resetBusinessData } = await import('../utils/businessReset');
+        await resetBusinessData(profile.businessId, profile.uid);
+      }
+    }
+
+    const idToken = await auth.currentUser.getIdToken(true);
+    const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/delete-own-profile`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ mode }),
+    });
+    let result = null;
+    try { result = await response.json(); } catch { }
+    if (!response.ok) {
+      throw new Error(result?.error || `Could not finish removing your account (${response.status}).`);
+    }
+
+    try {
+      await deleteUser(auth.currentUser);
+    } catch (err) {
+      if (err.code === 'auth/requires-recent-login') {
+        throw new Error("Your business data was handled, but we couldn't remove your sign-in for security reasons — please sign out and back in, then try 'Delete my account' again.");
+      }
+      throw new Error("Your business data was handled, but removing your sign-in failed. Please try again.");
+    }
+  };
+
+  const revokeSession = async (sessionId) => {
+    await updateDoc(doc(db, 'sessions', sessionId), { revoked: true });
+  };
+
+  const listMySessions = async () => {
+    if (!profile) return [];
+    const snap = await getDocs(query(collection(db, 'sessions'), where('uid', '==', profile.uid)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  };
+
+  const listBusinessSessions = async () => {
+    if (!profile?.businessId) return [];
+    const snap = await getDocs(query(collection(db, 'sessions'), where('businessId', '==', profile.businessId)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  };
+
+  const isOwner = profile?.role === 'owner';
+  
+  const expiresMs = subscription?.expiresAt?.toMillis 
+    ? subscription.expiresAt.toMillis() 
+    : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
+
+  const isPro = subscription?.plan === 'pro' && 
+                subscription?.status === 'active' &&
+                (!subscription.expiresAt || expiresMs > Date.now());
+
+  return (
+    <AuthContext.Provider
+      value={{
+        firebaseUser, profile, subscription, isPro, loading, authError, accountRemoved, sessionRevoked,
+        businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
+        isActive: profile?.active !== false, emailVerified,
+        login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
+        toggleMemberActive, revokeSession, listMySessions, listBusinessSessions, deleteOwnAccount,
+        currentSessionId: firebaseUser ? getSessionDocId(firebaseUser.uid) : getDeviceId(),
+        reloadProfile: async () => loadProfile(auth.currentUser),
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  return ctx;
+}
+````
+
 ## File: src/pages/AuthAction.jsx
 ````javascript
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import {
   applyActionCode,
@@ -19020,7 +19151,7 @@ export default function AuthAction() {
   }
 
   if (resolvedMode === 'verifyEmail') {
-    return <VerifyEmailPanel mode="verifyEmail" oobCode={oobCode} />;
+    return <VerifyEmailPanel mode={resolvedMode} oobCode={oobCode} />;
   }
 
   return (
@@ -19050,7 +19181,20 @@ function VerifyEmailPanel({ mode, oobCode }) {
   const [resending, setResending] = useState(false);
 
   const navigate = useNavigate();
-  const { refreshEmailVerification, reloadProfile, firebaseUser, isAdmin } = useAuth();
+  // FIX: previously this read `auth.currentUser` directly, the instant the
+  // component mounted. Firebase Auth restores an existing sign-in from
+  // IndexedDB ASYNCHRONOUSLY on page load — so on the very first render,
+  // `auth.currentUser` can still be `null` even when the person IS signed
+  // in on this device (they just signed up moments earlier in Setup.jsx).
+  // That race is exactly what sent people to the manual "Sign in to
+  // Dashboard" screen (re-entering email + password) even when they never
+  // needed to. `firebaseUser` and `loading` below come from AuthContext,
+  // which tracks the SAME underlying Firebase session via its own
+  // onAuthStateChanged listener — waiting for `loading` to settle before
+  // checking `firebaseUser` means we only decide once we know the real
+  // answer, not a stale first guess.
+  const { refreshEmailVerification, reloadProfile, firebaseUser, loading: authLoading } = useAuth();
+  const ranRef = useRef(false);
 
   useEffect(() => {
     if (!oobCode || mode !== 'verifyEmail') {
@@ -19059,29 +19203,45 @@ function VerifyEmailPanel({ mode, oobCode }) {
       return;
     }
 
+    if (authLoading) return; // still resolving whether this device has a live session — wait
+    if (ranRef.current) return; // run the verify-and-decide sequence exactly once
+    ranRef.current = true;
+
     let active = true;
 
     (async () => {
-      setStatus('working');
       try {
         await applyActionCode(auth, oobCode);
         if (!active) return;
-        await refreshEmailVerification();
-        await reloadProfile();
-        toast.success('Email verified successfully!');
-        const targetRoute = isAdmin ? '/dashboard' : '/counter';
-        navigate(targetRoute, { replace: true });
+
+        if (firebaseUser) {
+          // Signed in on this device (the normal case, right after Setup)
+          // — verify in place and go straight to the dashboard. No sign-in
+          // page, no re-entering email/password.
+          await refreshEmailVerification();
+          await reloadProfile();
+          toast.success('Email verified successfully! Welcome to FlowBiz.');
+          navigate('/dashboard', { replace: true });
+        } else {
+          // Genuinely no session on this device (e.g. the link was opened
+          // in a different app/browser that doesn't share storage with the
+          // one they signed up in) — there's no secure way to skip signing
+          // in from here, so show the confirmation + a sign-in link.
+          setStatus('success');
+        }
       } catch (err) {
         if (!active) return;
         const code = err.code || '';
 
         if (code === 'auth/invalid-action-code' || code === 'auth/expired-action-code') {
-          const verified = await refreshEmailVerification();
-          if (verified || auth.currentUser?.emailVerified) {
-            await reloadProfile();
-            toast.success('Your email is verified!');
-            navigate(isAdmin ? '/dashboard' : '/counter', { replace: true });
-            return;
+          if (firebaseUser) {
+            const verified = await refreshEmailVerification();
+            if (verified || firebaseUser?.emailVerified) {
+              await reloadProfile();
+              toast.success('Your email is verified!');
+              navigate('/dashboard', { replace: true });
+              return;
+            }
           }
         }
 
@@ -19099,7 +19259,7 @@ function VerifyEmailPanel({ mode, oobCode }) {
     return () => {
       active = false;
     };
-  }, [oobCode, mode, refreshEmailVerification, reloadProfile, isAdmin, navigate]);
+  }, [oobCode, mode, authLoading, firebaseUser, refreshEmailVerification, reloadProfile, navigate]);
 
   const handleRequestNewEmail = async () => {
     if (!auth.currentUser) {
@@ -19137,12 +19297,12 @@ function VerifyEmailPanel({ mode, oobCode }) {
         <>
           <CheckCircle2 className="h-12 w-12 mx-auto text-moss-600" strokeWidth={1.5} />
           <h1 className="font-display text-lg font-bold text-ink-900">Email verified!</h1>
-          <p className="text-sm text-ink-500">Your account is fully activated. You can now use FlowBiz.</p>
+          <p className="text-sm text-ink-500">Your account is fully activated. You can now sign in to your dashboard.</p>
           <Link
-            to={firebaseUser ? (isAdmin ? '/dashboard' : '/counter') : '/dashboard'}
+            to="/login"
             className="btn-primary w-full"
           >
-            Go to Dashboard
+            Sign in to Dashboard
           </Link>
         </>
       )}
@@ -19153,8 +19313,8 @@ function VerifyEmailPanel({ mode, oobCode }) {
           <h1 className="font-display text-lg font-bold text-ink-900">Verification Link Notice</h1>
           <p className="text-sm text-ink-500">{message}</p>
           <div className="flex flex-col gap-2 pt-2">
-            <Link to={isAdmin ? '/dashboard' : '/counter'} className="btn-primary w-full">
-              Go to Dashboard
+            <Link to={firebaseUser ? '/dashboard' : '/login'} className="btn-primary w-full">
+              {firebaseUser ? 'Go to Dashboard' : 'Sign In'}
             </Link>
             {auth.currentUser && (
               <button className="btn-outline w-full" onClick={handleRequestNewEmail} disabled={resending}>

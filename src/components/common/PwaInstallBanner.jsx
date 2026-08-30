@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Download, Share, PlusSquare, X } from 'lucide-react';
 import { usePwaInstall } from '../../hooks/usePwaInstall';
+import { isDemoMode } from '../../demo/demoMode';
 
 const DISMISSED_KEY = 'flowbiz_pwa_banner_dismissed';
 
@@ -39,8 +40,12 @@ export default function PwaInstallBanner() {
   const allowedPaths = ['/', '/setup', '/signup'];
   const isAllowedPath = allowedPaths.includes(location.pathname);
 
-  // If running in installed app mode, permanently dismissed, or not on an allowed path, do not render
-  if (isStandalone || dismissed || !isAllowedPath) return null;
+  // Never show this inside the Demo build: its PWA manifest is scoped to
+  // the real app's root ('/'), not '/demo/', so "installing" it here
+  // would point at the wrong app — and nobody needs to install a demo
+  // anyway. Otherwise unchanged: skipped in installed-app mode, once
+  // dismissed, or off the allowed pages.
+  if (isDemoMode() || isStandalone || dismissed || !isAllowedPath) return null;
 
   return (
     <aside

@@ -77,7 +77,7 @@ finally {
       <div className="w-full max-w-sm space-y-6">
         <div className="flex flex-col items-center text-center gap-3">
           <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div><h1 className="font-display text-2xl font-bold text-white">FlowBiz</h1><p className="text-sm text-ink-400">Business Manager</p></div>
+          <div><p className="text-sm text-ink-400">Business Manager</p></div>
         </div>
         <form onSubmit={handle} className="card space-y-4 p-6">
           {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}

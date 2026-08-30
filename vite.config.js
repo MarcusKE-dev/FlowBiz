@@ -9,6 +9,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // `defineConfig` accepts a function so we can read the active Vite `mode`
 // (set by the --mode flag on the CLI) and branch on it.
 export default defineConfig(({ mode }) => ({
+  // DEMO BUILD OUTPUT — `npm run build` now runs the normal build AND a
+  // second pass with `--mode demo` (see package.json). The demo pass is
+  // served from the `/demo/` sub-path of the SAME deployed site (see
+  // public/_redirects), so every asset URL it emits (JS, CSS, etc.) must
+  // be prefixed with `/demo/` — that's what `base` does below. The real
+  // build keeps `base: '/'`, exactly as before, so nothing changes for it.
+  base: mode === 'demo' ? '/demo/' : '/',
+
+  build: {
+    // Writes the demo build into a SUBFOLDER of the real build's own
+    // output folder. One `dist/` directory ends up holding both apps —
+    // dist/index.html (real) and dist/demo/index.html (demo) — ready to
+    // deploy as a single Cloudflare Pages site with no extra config.
+    outDir: mode === 'demo' ? 'dist/demo' : 'dist',
+  },
+
   server: {
     watch: {
       usePolling: true,
@@ -25,11 +41,16 @@ export default defineConfig(({ mode }) => ({
   // src/demo/localAuth.js) instead of the real Firebase SDK. No other file
   // needs to know Demo Mode exists; they all just import from
   // 'firebase/firestore' / 'firebase/auth' as normal and get whichever
-  // implementation matches how the dev server was started.
+  // implementation matches how the app was built. This is also what makes
+  // the deployed demo airtight: the demo build's JavaScript never contains
+  // the real Firebase SDK at all, so there is no code path in it that
+  // could ever read or write real Firestore data or a real account's
+  // cached data — the isolation happens at build time, not by trusting a
+  // runtime flag.
   //
-  // `npm run dev` (no --mode) leaves `resolve.alias` empty, so it is
-  // 100% unaffected and behaves exactly as before — real Firebase, real
-  // Firestore, real Authentication.
+  // `npm run build` / `npm run dev` (no --mode) leaves `resolve.alias`
+  // empty, so it is 100% unaffected and behaves exactly as before — real
+  // Firebase, real Firestore, real Authentication.
   resolve: mode === 'demo' ? {
     alias: {
       'firebase/firestore': path.resolve(__dirname, 'src/demo/localFirestore.js'),
