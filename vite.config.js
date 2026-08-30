@@ -91,6 +91,20 @@ export default defineConfig(({ mode }) => ({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+        // FIX: this service worker is registered at scope '/', which
+        // covers the ENTIRE site — including /demo/, even though that's
+        // a completely separate app served from its own build. Without
+        // this line, the FIRST visit to /demo/ works fine (this service
+        // worker hasn't installed yet), but once it's active it silently
+        // intercepts every later navigation to /demo/* and answers with
+        // its own cached copy of the REAL app instead of ever letting
+        // the browser reach the demo build. The real app then finds no
+        // /demo route and immediately redirects to '/' — which is
+        // exactly "works once, then just reloads the landing page."
+        // Excluding /demo/* here means those navigations are left alone
+        // and go to the network as normal, where Cloudflare correctly
+        // serves the separately-built demo app.
+        navigateFallbackDenylist: [/^\/demo($|\/)/],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
