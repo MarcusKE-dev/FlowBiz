@@ -85,7 +85,16 @@ function buildAndSeed() {
     ownerIds: [DEMO_UID],
     createdAt: now,
     createdBy: DEMO_UID,
-    subscription: { plan: 'free', status: 'active', expiry: null },
+    // FIX: seeded as an active Pro subscription with no expiry, instead
+    // of free, so anyone trying the demo can explore every Pro feature —
+    // Advanced Analytics, Inventory Intelligence, WhatsApp sharing,
+    // unlimited products/staff — without needing a real payment. This
+    // is read by AuthContext's `isPro` computation exactly the same way
+    // a real business's subscription is; it only ever affects this
+    // local, throwaway demo record and has zero bearing on real
+    // subscriptions (see cloudflare-worker/src/routes/paystackWebhook.js
+    // for where those are actually set).
+    subscription: { plan: 'pro', status: 'active', expiresAt: null },
   });
   touched.add('businesses');
 
@@ -112,14 +121,20 @@ function buildAndSeed() {
   seedCommit([...touched]);
 }
 
+// FIX: bumped v2 -> v3. This flag just means "has this browser already
+// seeded its local demo data?" — bumping the name forces everyone who
+// tried the demo before (including during earlier testing), and already
+// has an old `plan: 'free'` business record cached in their browser, to
+// get a fresh reseed with the new Pro subscription instead of silently
+// keeping their old free one forever.
 export function seedDemoDataIfNeeded() {
-  if (localStorage.getItem('flowbiz_demo_seeded_v2') === 'true') return;
+  if (localStorage.getItem('flowbiz_demo_seeded_v3') === 'true') return;
   buildAndSeed();
-  localStorage.setItem('flowbiz_demo_seeded_v2', 'true');
+  localStorage.setItem('flowbiz_demo_seeded_v3', 'true');
 }
 
 export function resetDemoData() {
   clearAllDemoData();
   buildAndSeed();
-  localStorage.setItem('flowbiz_demo_seeded_v2', 'true');
+  localStorage.setItem('flowbiz_demo_seeded_v3', 'true');
 }

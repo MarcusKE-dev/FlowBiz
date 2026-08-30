@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { auth } from '../firebase';
 import toast from 'react-hot-toast';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+import { isDemoMode } from '../demo/demoMode';
 import { Check, X, BarChart3, Boxes, FileText, MessageCircle, Users, Sparkles, ArrowLeft } from 'lucide-react';
 
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
@@ -31,13 +32,15 @@ export default function Pro() {
   const { isPro, subscription } = useAuth();
   const [loading, setLoading] = useState(false);
   const [proPrice, setProPrice] = useState(null);
+  const demo = isDemoMode();
 
   useEffect(() => {
+    if (demo) return; // demo's business record is already seeded as Pro — no real price to show
     fetch(`${FLOWBIZ_API_URL}/api/pro/price`)
       .then((r) => r.json())
       .then((data) => setProPrice(data.amountKes))
       .catch(() => {});
-  }, []);
+  }, [demo]);
 
   const handleSubscribe = async () => {
     if (loading) return;
@@ -87,28 +90,45 @@ export default function Pro() {
       <div className="card overflow-hidden border-moss-200">
         <div className="bg-gradient-to-br from-moss-700 to-moss-900 px-6 py-10 text-center sm:px-10">
 
-          <h2 className="mt-4 font-display text-4xl font-extrabold text-white">
-            {proPrice != null ? `KSh ${proPrice.toLocaleString('en-KE')}` : '…'}
-            <span className="text-base font-medium text-moss-200"> / 30 days</span>
-          </h2>
-          <p className="mt-3 max-w-md mx-auto text-sm text-moss-100">Manual renewal, no auto-billing, no surprise charges. You're always in control.</p>
-          {isPro ? (
-            <div className="mt-7 flex flex-col items-center gap-3">
-              <span className="badge bg-white text-moss-800 px-4 py-1.5 text-sm font-bold">FlowBiz Pro Active</span>
-              {expiresLabel && <p className="text-xs text-moss-200">Renews / expires on {expiresLabel}</p>}
-              <button onClick={handleSubscribe} disabled={loading} className="btn-outline !border-white/40 !text-white hover:!bg-white/10">
-                {loading ? 'Loading…' : 'Extend subscription'}
-              </button>
+          {/* FIX: the demo business is always seeded as Pro (see
+              src/demo/seedData.js) so every Pro feature can be explored
+              freely — there's genuinely nothing to buy here, so instead
+              of showing a Subscribe/Extend button that would try to
+              charge a payment method the demo login doesn't have, this
+              just confirms Pro is already active. Real accounts are
+              completely unaffected — `demo` is only ever true inside the
+              separately-built demo app. */}
+          {demo ? (
+            <div className="mt-4 flex flex-col items-center gap-3">
+              <span className="badge bg-white text-moss-800 px-4 py-1.5 text-sm font-bold">FlowBiz Pro — active in this demo</span>
+              <p className="max-w-sm text-sm text-moss-100">Every Pro feature is unlocked for this demo account. There's nothing to pay here — explore Advanced Analytics, Inventory Intelligence, and WhatsApp sharing freely.</p>
             </div>
           ) : (
-            <button onClick={handleSubscribe} disabled={loading} className="mt-7 btn-primary !bg-white !text-moss-800 hover:!bg-moss-50 px-8 py-3 text-base">
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-moss-300 border-t-moss-800" />
-                  Loading payment page…
-                </span>
-              ) : `Upgrade to Pro KSh ${proPrice != null ? proPrice.toLocaleString('en-KE') : '…'}`}
-            </button>
+            <>
+              <h2 className="mt-4 font-display text-4xl font-extrabold text-white">
+                {proPrice != null ? `KSh ${proPrice.toLocaleString('en-KE')}` : '…'}
+                <span className="text-base font-medium text-moss-200"> / 30 days</span>
+              </h2>
+              <p className="mt-3 max-w-md mx-auto text-sm text-moss-100">Manual renewal, no auto-billing, no surprise charges. You're always in control.</p>
+              {isPro ? (
+                <div className="mt-7 flex flex-col items-center gap-3">
+                  <span className="badge bg-white text-moss-800 px-4 py-1.5 text-sm font-bold">FlowBiz Pro Active</span>
+                  {expiresLabel && <p className="text-xs text-moss-200">Renews / expires on {expiresLabel}</p>}
+                  <button onClick={handleSubscribe} disabled={loading} className="btn-outline !border-white/40 !text-white hover:!bg-white/10">
+                    {loading ? 'Loading…' : 'Extend subscription'}
+                  </button>
+                </div>
+              ) : (
+                <button onClick={handleSubscribe} disabled={loading} className="mt-7 btn-primary !bg-white !text-moss-800 hover:!bg-moss-50 px-8 py-3 text-base">
+                  {loading ? (
+                    <span className="flex items-center gap-2">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-moss-300 border-t-moss-800" />
+                      Loading payment page…
+                    </span>
+                  ) : `Upgrade to Pro KSh ${proPrice != null ? proPrice.toLocaleString('en-KE') : '…'}`}
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
