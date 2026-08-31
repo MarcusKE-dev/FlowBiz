@@ -1,20 +1,8 @@
-// src/index.js — the Worker's entry point / router.
-//
-// Deliberately a plain switch on pathname + method, no router library:
-// a dependency here is a dependency every one of FlowBiz's privileged
-// operations (and now the public document route) trusts.
-//
-// FIX: removed the /api/whatsapp/send route (routes/whatsappSend.js).
-// Auditing it found it called the real Meta WhatsApp Cloud API — nothing
-// in the frontend has ever called this endpoint (WhatsApp sharing has
-// always gone through the client-side wa.me deep-link utility instead),
-// so it was dead code, and its Cloud-API approach directly contradicts
-// FlowBiz's "deep links only, no WhatsApp API" product requirement. See
-// routes/whatsappSend.js.removed for the file that was deleted, and the
-// project notes for the WHATSAPP_ACCESS_TOKEN secret this leaves unused.
-
+// cloudflare-worker/src/index.js
 import { corsHeaders, handleOptions } from './lib/cors.js';
 import { errorResponse } from './lib/response.js';
+import { checkAdminRateLimit } from './lib/adminRateLimiter.js';
+
 import { handleDeleteStaff } from './routes/deleteStaff.js';
 import { handlePaystackInitialize } from './routes/paystackInitialize.js';
 import { handlePaystackWebhook } from './routes/paystackWebhook.js';
@@ -23,6 +11,24 @@ import { handleProPrice } from './routes/proPrice.js';
 import { handleSendVerificationEmail } from './routes/sendVerificationEmail.js';
 import { handleSendPasswordReset } from './routes/sendPasswordResetEmail.js';
 import { handleDeleteOwnProfile } from './routes/deleteOwnProfile.js';
+
+// Admin Control Center Routes
+import { handleAdminVerify } from './routes/admin/adminVerify.js';
+import { handleAdminOverview } from './routes/admin/adminOverview.js';
+import {
+  handleAdminBusinesses,
+  handleAdminBusinessDetail,
+  handleAdminDeleteBusiness,
+  handleAdminToggleBusinessStatus,
+  handleAdminSendPasswordReset,
+  handleAdminSendVerification,
+} from './routes/admin/adminBusinesses.js';
+import { handleAdminBusinessData } from './routes/admin/adminBusinessData.js';
+import { handleAdminSubscriptionUpdate, handleAdminSupportToken } from './routes/admin/adminSubscription.js';
+import { handleAdminAuditLogs } from './routes/admin/adminAuditLogs.js';
+import { handleAdminListAdmins, handleAdminAddAdmin, handleAdminRemoveAdmin } from './routes/admin/adminSystemAdmins.js';
+import { handleAdminSendEmail } from './routes/admin/adminCommunications.js';
+
 function getAllowedOrigins(env) {
   return (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
@@ -31,8 +37,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Paystack calls the webhook directly (server-to-server) — it never
-    // needs, and should never get, FlowBiz's browser CORS headers.
+    // ── Paystack Webhook (Server-to-Server) ───────────────────────────
     if (url.pathname === '/api/paystack/webhook' && request.method === 'POST') {
       try {
         return await handlePaystackWebhook(request, env);
@@ -42,13 +47,7 @@ export default {
       }
     }
 
-    // Public receipt/invoice/debt-payment-receipt links (/r/<token>) are
-    // opened directly by a customer's browser — a full-page navigation,
-    // not a fetch() from the FlowBiz frontend — so it deliberately does
-    // NOT go through verifyFirebaseIdToken like every other route below.
-    // See routes/publicDocument.js for the token → document security
-    // model. Handled up front, same as the webhook, since it returns
-    // HTML rather than the JSON shape the block below assumes.
+    // ── Public Receipts / Invoices (/r/<token>) ───────────────────────
     if (url.pathname.startsWith('/r/') && request.method === 'GET') {
       const token = url.pathname.slice('/r/'.length);
       try {
@@ -65,10 +64,72 @@ export default {
     const origin = request.headers.get('Origin') || '';
     const extraHeaders = corsHeaders(origin, allowedOrigins);
 
+    // ── Edge Rate Limiting for Admin Routes ───────────────────────────
+    if (url.pathname.startsWith('/api/admin/')) {
+      const rateCheck = checkAdminRateLimit(request);
+      if (!rateCheck.allowed) {
+        return new Response(
+          JSON.stringify({ error: `Too many administrative requests. Retry after ${rateCheck.retryAfter}s.` }),
+          {
+            status: 429,
+            headers: {
+              'Content-Type': 'application/json',
+              'Retry-After': String(rateCheck.retryAfter),
+              ...extraHeaders,
+            },
+          }
+        );
+      }
+    }
+
     let response;
     try {
-// cloudflare-worker/src/index.js
-      if (url.pathname === '/api/auth/delete-staff' && request.method === 'POST') {
+      // ── Admin Control Center Endpoints ──────────────────────────────
+      if ((url.pathname === '/api/admin/auth/me' && request.method === 'GET') ||
+          (url.pathname === '/api/admin/auth/verify' && request.method === 'POST')) {
+        response = await handleAdminVerify(request, env);
+      } else if (url.pathname === '/api/admin/overview' && request.method === 'GET') {
+        response = await handleAdminOverview(request, env);
+      } else if (url.pathname === '/api/admin/businesses' && request.method === 'GET') {
+        response = await handleAdminBusinesses(request, env, url);
+      } else if (url.pathname.startsWith('/api/admin/businesses/') && url.pathname.endsWith('/data') && request.method === 'GET') {
+        const businessId = url.pathname.split('/')[4];
+        response = await handleAdminBusinessData(request, env, businessId, url);
+      } else if (url.pathname.startsWith('/api/admin/businesses/') && url.pathname.endsWith('/subscription') && request.method === 'POST') {
+        const businessId = url.pathname.split('/')[4];
+        response = await handleAdminSubscriptionUpdate(request, env, businessId);
+      } else if (url.pathname.startsWith('/api/admin/businesses/') && url.pathname.endsWith('/support-token') && request.method === 'POST') {
+        const businessId = url.pathname.split('/')[4];
+        response = await handleAdminSupportToken(request, env, businessId);
+      } else if (url.pathname.startsWith('/api/admin/businesses/') && url.pathname.endsWith('/status') && request.method === 'POST') {
+        const businessId = url.pathname.split('/')[4];
+        response = await handleAdminToggleBusinessStatus(request, env, businessId);
+      } else if (url.pathname.startsWith('/api/admin/businesses/') && url.pathname.endsWith('/send-password-reset') && request.method === 'POST') {
+        const businessId = url.pathname.split('/')[4];
+        response = await handleAdminSendPasswordReset(request, env, businessId);
+      } else if (url.pathname.startsWith('/api/admin/businesses/') && url.pathname.endsWith('/send-verification') && request.method === 'POST') {
+        const businessId = url.pathname.split('/')[4];
+        response = await handleAdminSendVerification(request, env, businessId);
+      } else if (url.pathname.startsWith('/api/admin/businesses/') && request.method === 'DELETE') {
+        const businessId = url.pathname.split('/')[4];
+        response = await handleAdminDeleteBusiness(request, env, businessId);
+      } else if (url.pathname.startsWith('/api/admin/businesses/') && request.method === 'GET' && url.pathname.split('/').length === 5) {
+        const businessId = url.pathname.split('/')[4];
+        response = await handleAdminBusinessDetail(request, env, businessId);
+      } else if (url.pathname === '/api/admin/audit-logs' && request.method === 'GET') {
+        response = await handleAdminAuditLogs(request, env, url);
+      } else if (url.pathname === '/api/admin/admins' && request.method === 'GET') {
+        response = await handleAdminListAdmins(request, env);
+      } else if (url.pathname === '/api/admin/admins' && request.method === 'POST') {
+        response = await handleAdminAddAdmin(request, env);
+      } else if (url.pathname.startsWith('/api/admin/admins/') && request.method === 'DELETE') {
+        const targetUid = url.pathname.split('/')[4];
+        response = await handleAdminRemoveAdmin(request, env, targetUid);
+      } else if (url.pathname === '/api/admin/communications/send' && request.method === 'POST') {
+        response = await handleAdminSendEmail(request, env);
+
+      // ── Customer App Privileged Routes ─────────────────────────────
+      } else if (url.pathname === '/api/auth/delete-staff' && request.method === 'POST') {
         response = await handleDeleteStaff(request, env);
       } else if (url.pathname === '/api/auth/send-verification-email' && request.method === 'POST') {
         response = await handleSendVerificationEmail(request, env);
@@ -78,7 +139,7 @@ export default {
         response = await handlePaystackInitialize(request, env);
       } else if (url.pathname === '/api/pro/price' && request.method === 'GET') {
         response = await handleProPrice();
-              } else if (url.pathname === '/api/auth/delete-own-profile' && request.method === 'POST') {
+      } else if (url.pathname === '/api/auth/delete-own-profile' && request.method === 'POST') {
         response = await handleDeleteOwnProfile(request, env);
       } else {
         response = errorResponse('Not found.', 404);

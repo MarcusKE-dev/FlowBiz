@@ -19,5 +19,7 @@ Disallow: /users
 Disallow: /settings
 Disallow: /r/
 Disallow: /demo
+Disallow: /admin
+Disallow: /admin/
 
 Sitemap: https://flowbiz.co.ke/sitemap.xml

@@ -2,18 +2,9 @@ name = "flowbiz-api"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
 
-# Secrets — set these with `wrangler secret put <NAME>`, NEVER written here:
-#   FIREBASE_SERVICE_ACCOUNT_JSON   (the full service-account JSON, as one string)
-#   PAYSTACK_SECRET_KEY
-#
-# FIX: removed WHATSAPP_ACCESS_TOKEN — it belonged to routes/whatsappSend.js
-# (the unused Meta WhatsApp Cloud API route), which has been deleted. If a
-# WHATSAPP_ACCESS_TOKEN secret still exists on this Worker from before,
-# it's safe to remove: `wrangler secret delete WHATSAPP_ACCESS_TOKEN`.
-
 [vars]
 FIREBASE_PROJECT_ID = "swiftstock-bc6a3"
-ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://flowbiz.pages.dev,https://flowbiz.co.ke"
-PAYSTACK_CALLBACK_URL = "https://flowbiz.pages.dev/pro"
+ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://flowbiz.pages.dev,https://flowbiz.co.ke,https://admin.flowbiz.co.ke"
+PAYSTACK_CALLBACK_URL = "https://flowbiz.co.ke/pro"
 APP_BASE_URL = "https://flowbiz.co.ke"
-
+ADMIN_EMAILS = "admin@flowbiz.co.ke"

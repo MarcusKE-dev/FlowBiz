@@ -1,4 +1,4 @@
-// src/router/AppRouter.jsx
+
 import { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from '../components/common/ProtectedRoute';
@@ -8,6 +8,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { prefetchRoutes } from './routePrefetch';
 import RequireOpenSession from '../components/common/RequireOpenSession';
 import LandingPage from '../pages/LandingPage';
+
+// Admin Control Center Imports
+import AdminProtectedRoute from '../components/admin/AdminProtectedRoute';
+import AdminShell from '../components/admin/AdminShell';
 
 const routeLoaders = {
   setup: () => import('../pages/Setup'),
@@ -34,6 +38,16 @@ const routeLoaders = {
   inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
   privacy: () => import('../pages/Privacy'),
   terms: () => import('../pages/Terms'),
+
+  // Admin Lazy Loaders
+  adminLogin: () => import('../pages/admin/AdminLogin'),
+  adminOverview: () => import('../pages/admin/AdminOverview'),
+  adminBusinesses: () => import('../pages/admin/AdminBusinesses'),
+  adminBusinessDetail: () => import('../pages/admin/AdminBusinessDetail'),
+  adminSupportMode: () => import('../pages/admin/AdminSupportMode'),
+  adminAuditLogs: () => import('../pages/admin/AdminAuditLogs'),
+  adminSystemAdmins: () => import('../pages/admin/AdminSystemAdmins'),
+  adminCommunications: () => import('../pages/admin/AdminCommunications'),
 };
 
 const Setup                 = lazy(routeLoaders.setup);
@@ -61,6 +75,16 @@ const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
 const Privacy               = lazy(routeLoaders.privacy);
 const Terms                 = lazy(routeLoaders.terms);
 
+// Admin Pages
+const AdminLogin            = lazy(routeLoaders.adminLogin);
+const AdminOverview         = lazy(routeLoaders.adminOverview);
+const AdminBusinesses       = lazy(routeLoaders.adminBusinesses);
+const AdminBusinessDetail   = lazy(routeLoaders.adminBusinessDetail);
+const AdminSupportMode      = lazy(routeLoaders.adminSupportMode);
+const AdminAuditLogs        = lazy(routeLoaders.adminAuditLogs);
+const AdminSystemAdmins     = lazy(routeLoaders.adminSystemAdmins);
+const AdminCommunications   = lazy(routeLoaders.adminCommunications);
+
 function Page({ children, adminOnly = false, requireOpenDay = false }) {
   return (
     <ProtectedRoute adminOnly={adminOnly}>
@@ -70,6 +94,18 @@ function Page({ children, adminOnly = false, requireOpenDay = false }) {
         </Suspense>
       </AppShell>
     </ProtectedRoute>
+  );
+}
+
+function AdminPage({ children }) {
+  return (
+    <AdminProtectedRoute>
+      <AdminShell>
+        <Suspense fallback={<LoadingSpinner label="Loading admin module…" />}>
+          {children}
+        </Suspense>
+      </AdminShell>
+    </AdminProtectedRoute>
   );
 }
 
@@ -92,7 +128,6 @@ function isStandalonePWA() {
 function RootRoute() {
   const { firebaseUser, loading, isAdmin } = useAuth();
 
-  // 1. While auth initializes, render a clean loading screen on the app's sand background (never the landing page)
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-sand">
@@ -101,17 +136,14 @@ function RootRoute() {
     );
   }
 
-  // 2. If already signed in, navigate straight to the Dashboard (or Counter for cashiers)
   if (firebaseUser) {
-    return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
+    return <Navigate to={isAdmin ? '/dashboard' : '/counter'} replace />;
   }
 
-  // 3. If opened from the phone's home screen icon (installed PWA) while signed out, go straight to Login
   if (isStandalonePWA()) {
     return <Navigate to="/login" replace />;
   }
 
-  // 4. Only standard web browser visitors on the web domain see the marketing Landing Page
   return <LandingPage />;
 }
 
@@ -131,7 +163,7 @@ export default function AppRouter() {
     <Suspense fallback={<LoadingSpinner label="Loading..." />}>
       <RoutePrefetcher />
       <Routes>
-        {/* Root Route — routes to Dashboard/Login if installed/logged in; Landing Page for website visitors */}
+        {/* Root Route */}
         <Route path="/" element={<RootRoute />} />
 
         {/* Public Authentication & Setup */}
@@ -142,31 +174,42 @@ export default function AppRouter() {
         <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
         <Route path="/join/:inviteId" element={<JoinStaff />} />
         <Route path="/auth/action" element={<AuthAction />} />
-        
+
         {/* Public Legal Pages */}
         <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
         <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
 
         {/* Protected Store Management Routes */}
-        <Route path="/dashboard"    element={<Page adminOnly><Dashboard /></Page>} />
-        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
+        <Route path="/dashboard" element={<Page adminOnly><Dashboard /></Page>} />
+        <Route path="/pro" element={<Page adminOnly><Pro /></Page>} />
         <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
         <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
 
-        <Route path="/counter"      element={<Page><Counter /></Page>} />
-        <Route path="/customers"    element={<Page><Customers /></Page>} />
+        <Route path="/counter" element={<Page><Counter /></Page>} />
+        <Route path="/customers" element={<Page><Customers /></Page>} />
         <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
-        <Route path="/expenses"     element={<Page requireOpenDay><Expenses /></Page>} />
-        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
-        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
-        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
-        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
-        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
-        <Route path="/close-day"    element={<Page adminOnly requireOpenDay><CloseDay /></Page>} />
-        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
-        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
-        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
-        <Route path="*"             element={<Navigate to="/" replace />} />
+        <Route path="/expenses" element={<Page requireOpenDay><Expenses /></Page>} />
+        <Route path="/purchases" element={<Page adminOnly><Purchases /></Page>} />
+        <Route path="/products" element={<Page adminOnly><Products /></Page>} />
+        <Route path="/suppliers" element={<Page adminOnly><Suppliers /></Page>} />
+        <Route path="/stock-take" element={<Page adminOnly><StockTake /></Page>} />
+        <Route path="/reports" element={<Page adminOnly><Reports /></Page>} />
+        <Route path="/close-day" element={<Page adminOnly requireOpenDay><CloseDay /></Page>} />
+        <Route path="/users" element={<Page adminOnly><Users /></Page>} />
+        <Route path="/settings" element={<Page adminOnly><Settings /></Page>} />
+        <Route path="/help" element={<Page><HelpGuide /></Page>} />
+
+        {/* ── FLOWBIZ ADMIN CONTROL CENTER ROUTES ─────────────────────── */}
+        <Route path="/admin/login" element={<Suspense fallback={<LoadingSpinner />}><AdminLogin /></Suspense>} />
+        <Route path="/admin" element={<AdminPage><AdminOverview /></AdminPage>} />
+        <Route path="/admin/businesses" element={<AdminPage><AdminBusinesses /></AdminPage>} />
+        <Route path="/admin/businesses/:businessId" element={<AdminPage><AdminBusinessDetail /></AdminPage>} />
+        <Route path="/admin/businesses/:businessId/support" element={<AdminPage><AdminSupportMode /></AdminPage>} />
+        <Route path="/admin/audit-logs" element={<AdminPage><AdminAuditLogs /></AdminPage>} />
+        <Route path="/admin/admins" element={<AdminPage><AdminSystemAdmins /></AdminPage>} />
+        <Route path="/admin/communications" element={<AdminPage><AdminCommunications /></AdminPage>} />
+
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
   );

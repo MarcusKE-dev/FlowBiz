@@ -67,7 +67,7 @@ dev-dist/
 public/
   icons/
     icon-128.png
-    icon-144 .png
+    icon-144.png
     icon-152.png
     icon-180.png
     icon-192.png
@@ -1229,117 +1229,6 @@ export async function handleProPrice() {
     "wrangler": "^3.90.0"
   }
 }
-````
-
-## File: dev-dist/sw.js
-````javascript
-/**
- * Copyright 2018 Google Inc. All Rights Reserved.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *     http://www.apache.org/licenses/LICENSE-2.0
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-// If the loader is already loaded, just stop.
-if (!self.define) {
-  let registry = {};
-
-  // Used for `eval` and `importScripts` where we can't get script URL by other means.
-  // In both cases, it's safe to use a global var because those functions are synchronous.
-  let nextDefineUri;
-
-  const singleRequire = (uri, parentUri) => {
-    uri = new URL(uri + ".js", parentUri).href;
-    return registry[uri] || (
-      
-        new Promise(resolve => {
-          if ("document" in self) {
-            const script = document.createElement("script");
-            script.src = uri;
-            script.onload = resolve;
-            document.head.appendChild(script);
-          } else {
-            nextDefineUri = uri;
-            importScripts(uri);
-            resolve();
-          }
-        })
-      
-      .then(() => {
-        let promise = registry[uri];
-        if (!promise) {
-          throw new Error(`Module ${uri} didn’t register its module`);
-        }
-        return promise;
-      })
-    );
-  };
-
-  self.define = (depsNames, factory) => {
-    const uri = nextDefineUri || ("document" in self ? document.currentScript.src : "") || location.href;
-    if (registry[uri]) {
-      // Module is already loading or loaded.
-      return;
-    }
-    let exports = {};
-    const require = depUri => singleRequire(depUri, uri);
-    const specialDeps = {
-      module: { uri },
-      exports,
-      require
-    };
-    registry[uri] = Promise.all(depsNames.map(
-      depName => specialDeps[depName] || require(depName)
-    )).then(deps => {
-      factory(...deps);
-      return exports;
-    });
-  };
-}
-define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
-
-  self.skipWaiting();
-  workbox.clientsClaim();
-  /**
-   * The precacheAndRoute() method efficiently caches and responds to
-   * requests for URLs in the manifest.
-   * See https://goo.gl/S9QRab
-   */
-  workbox.precacheAndRoute([{
-    "url": "index.html",
-    "revision": "0.i3p6orrmnjk"
-  }], {});
-  workbox.cleanupOutdatedCaches();
-  workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("index.html"), {
-    allowlist: [/^\/$/],
-    denylist: [/^\/demo($|\/)/, /^\/r\//, /^\/api\//]
-  }));
-  workbox.registerRoute(/^https:\/\/fonts\.googleapis\.com\/.*/i, new workbox.CacheFirst({
-    "cacheName": "google-fonts-cache",
-    plugins: [new workbox.ExpirationPlugin({
-      maxEntries: 10,
-      maxAgeSeconds: 31536000
-    }), new workbox.CacheableResponsePlugin({
-      statuses: [0, 200]
-    })]
-  }), 'GET');
-  workbox.registerRoute(/^https:\/\/fonts\.gstatic\.com\/.*/i, new workbox.CacheFirst({
-    "cacheName": "gstatic-fonts-cache",
-    plugins: [new workbox.ExpirationPlugin({
-      maxEntries: 10,
-      maxAgeSeconds: 31536000
-    }), new workbox.CacheableResponsePlugin({
-      statuses: [0, 200]
-    })]
-  }), 'GET');
-
-}));
 ````
 
 ## File: dev-dist/workbox-afac4cd2.js
@@ -8855,6 +8744,117 @@ const continueUrl = `${env.APP_BASE_URL}/auth/action?flow=verifyEmail`;
 }
 ````
 
+## File: dev-dist/sw.js
+````javascript
+/**
+ * Copyright 2018 Google Inc. All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// If the loader is already loaded, just stop.
+if (!self.define) {
+  let registry = {};
+
+  // Used for `eval` and `importScripts` where we can't get script URL by other means.
+  // In both cases, it's safe to use a global var because those functions are synchronous.
+  let nextDefineUri;
+
+  const singleRequire = (uri, parentUri) => {
+    uri = new URL(uri + ".js", parentUri).href;
+    return registry[uri] || (
+      
+        new Promise(resolve => {
+          if ("document" in self) {
+            const script = document.createElement("script");
+            script.src = uri;
+            script.onload = resolve;
+            document.head.appendChild(script);
+          } else {
+            nextDefineUri = uri;
+            importScripts(uri);
+            resolve();
+          }
+        })
+      
+      .then(() => {
+        let promise = registry[uri];
+        if (!promise) {
+          throw new Error(`Module ${uri} didn’t register its module`);
+        }
+        return promise;
+      })
+    );
+  };
+
+  self.define = (depsNames, factory) => {
+    const uri = nextDefineUri || ("document" in self ? document.currentScript.src : "") || location.href;
+    if (registry[uri]) {
+      // Module is already loading or loaded.
+      return;
+    }
+    let exports = {};
+    const require = depUri => singleRequire(depUri, uri);
+    const specialDeps = {
+      module: { uri },
+      exports,
+      require
+    };
+    registry[uri] = Promise.all(depsNames.map(
+      depName => specialDeps[depName] || require(depName)
+    )).then(deps => {
+      factory(...deps);
+      return exports;
+    });
+  };
+}
+define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
+
+  self.skipWaiting();
+  workbox.clientsClaim();
+  /**
+   * The precacheAndRoute() method efficiently caches and responds to
+   * requests for URLs in the manifest.
+   * See https://goo.gl/S9QRab
+   */
+  workbox.precacheAndRoute([{
+    "url": "/index.html",
+    "revision": "0.fd53bsc1t3k"
+  }], {});
+  workbox.cleanupOutdatedCaches();
+  workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("/index.html"), {
+    allowlist: [/^\/$/],
+    denylist: [/^\/demo($|\/)/, /^\/r\//, /^\/api\//]
+  }));
+  workbox.registerRoute(/^https:\/\/fonts\.googleapis\.com\/.*/i, new workbox.CacheFirst({
+    "cacheName": "google-fonts-cache",
+    plugins: [new workbox.ExpirationPlugin({
+      maxEntries: 10,
+      maxAgeSeconds: 31536000
+    }), new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    })]
+  }), 'GET');
+  workbox.registerRoute(/^https:\/\/fonts\.gstatic\.com\/.*/i, new workbox.CacheFirst({
+    "cacheName": "gstatic-fonts-cache",
+    plugins: [new workbox.ExpirationPlugin({
+      maxEntries: 10,
+      maxAgeSeconds: 31536000
+    }), new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    })]
+  }), 'GET');
+
+}));
+````
+
 ## File: public/favicon.svg
 ````xml
 <svg width="192" height="192" viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg">
@@ -9045,99 +9045,6 @@ export default function ConfirmDialog({ open, title, message, confirmLabel = 'Co
         </div>
       </div>
     </div>
-  );
-}
-````
-
-## File: src/components/customers/AddCustomerModal.jsx
-````javascript
-import { useState, useEffect } from 'react';
-import toast from 'react-hot-toast';
-import Modal from '../common/Modal';
-import { isValidWhatsAppPhone } from '../../utils/whatsapp';
-
-export default function AddCustomerModal({ open, onClose, onSave, existingCustomers = [], initialData }) {
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setName(initialData?.name || '');
-      setPhone(initialData?.phone || '');
-    }
-  }, [open, initialData]);
-
-  const reset = () => { setName(''); setPhone(''); };
-  const handleClose = () => { if (!busy) { reset(); onClose(); } };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    const trimmedName = name.trim();
-    const trimmedPhone = phone.trim();
-
-    if (!trimmedName) { toast.error('Enter a customer name.'); return; }
-    if (trimmedPhone && !isValidWhatsAppPhone(trimmedPhone)) {
-      toast.error("That phone number doesn't look right — check it and try again.");
-      return;
-    }
-
-    if (!initialData) {
-      const duplicate = existingCustomers.find((c) => {
-        const sameName = (c.name || '').trim().toLowerCase() === trimmedName.toLowerCase();
-        if (!sameName) return false;
-        return !trimmedPhone || !c.phone || c.phone === trimmedPhone;
-      });
-      if (duplicate) {
-        toast.error(`"${trimmedName}" already exists in your customer list.`);
-        return;
-      }
-    }
-
-    setBusy(true);
-    try {
-      await onSave({ name: trimmedName, phone: trimmedPhone });
-      reset();
-      onClose();
-    } catch {
-      // onSave already surfaces its own error toast
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal open={open} onClose={handleClose} title={initialData ? 'Edit customer' : 'Add customer'} widthClass="max-w-sm">
-      <form onSubmit={handleSubmit} className="space-y-3">
-        <div>
-          <label className="label">Customer name</label>
-          <input
-            className="input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. John Kamau"
-            disabled={busy}
-            autoFocus
-            required
-          />
-        </div>
-        <div>
-          <label className="label">Phone number <span className="text-ink-300 font-normal normal-case">(recommended)</span></label>
-          <input
-            className="input"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="07xx xxx xxx"
-            disabled={busy}
-          />
-          <p className="mt-1 text-xs text-ink-400">Needed later to send WhatsApp reminders and receipts.</p>
-        </div>
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Saving…' : (initialData ? 'Save changes' : 'Save customer')}</button>
-        </div>
-      </form>
-    </Modal>
   );
 }
 ````
@@ -11091,6 +10998,99 @@ export default function WhatsAppFloatingButton({
 }
 ````
 
+## File: src/components/customers/AddCustomerModal.jsx
+````javascript
+import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
+import Modal from '../common/Modal';
+import { isValidWhatsAppPhone } from '../../utils/whatsapp';
+
+export default function AddCustomerModal({ open, onClose, onSave, existingCustomers = [], initialData }) {
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setName(initialData?.name || '');
+      setPhone(initialData?.phone || '');
+    }
+  }, [open, initialData]);
+
+  const reset = () => { setName(''); setPhone(''); };
+  const handleClose = () => { if (!busy) { reset(); onClose(); } };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const trimmedName = name.trim();
+    const trimmedPhone = phone.trim();
+
+    if (!trimmedName) { toast.error('Enter a customer name.'); return; }
+    if (trimmedPhone && !isValidWhatsAppPhone(trimmedPhone)) {
+      toast.error("That phone number doesn't look right — check it and try again.");
+      return;
+    }
+
+    if (!initialData) {
+      const duplicate = existingCustomers.find((c) => {
+        const sameName = (c.name || '').trim().toLowerCase() === trimmedName.toLowerCase();
+        if (!sameName) return false;
+        return !trimmedPhone || !c.phone || c.phone === trimmedPhone;
+      });
+      if (duplicate) {
+        toast.error(`"${trimmedName}" already exists in your customer list.`);
+        return;
+      }
+    }
+
+    setBusy(true);
+    try {
+      await onSave({ name: trimmedName, phone: trimmedPhone });
+      reset();
+      onClose();
+    } catch {
+      // onSave already surfaces its own error toast
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={handleClose} title={initialData ? 'Edit customer' : 'Add customer'} widthClass="max-w-sm">
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <div>
+          <label className="label">Customer name</label>
+          <input
+            className="input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. John Doe"
+            disabled={busy}
+            autoFocus
+            required
+          />
+        </div>
+        <div>
+          <label className="label">Phone number <span className="text-ink-300 font-normal normal-case">(recommended)</span></label>
+          <input
+            className="input"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="07xx xxx xxx"
+            disabled={busy}
+          />
+          <p className="mt-1 text-xs text-ink-400">Needed later to send WhatsApp reminders and receipts.</p>
+        </div>
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Saving…' : (initialData ? 'Save changes' : 'Save customer')}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+````
+
 ## File: src/components/scanner/ScannerModal.jsx
 ````javascript
 // src/components/scanner/ScannerModal.jsx
@@ -11270,126 +11270,6 @@ export function enterDemoMode() {
 
 export function exitDemoMode() {
   try { localStorage.removeItem(FLAG_KEY); } catch { /* storage unavailable — ignore */ }
-}
-````
-
-## File: src/hooks/usePwaInstall.js
-````javascript
-// src/hooks/usePwaInstall.js
-import { useState, useEffect } from 'react';
-import toast from 'react-hot-toast';
-
-// Module-level global singleton so beforeinstallprompt is NEVER missed,
-// even if fired before React mounts or while navigating between routes.
-let globalDeferredPrompt = null;
-const promptListeners = new Set();
-
-function setGlobalPrompt(prompt) {
-  globalDeferredPrompt = prompt;
-  promptListeners.forEach((listener) => listener(globalDeferredPrompt));
-}
-
-if (typeof window !== 'undefined') {
-  // Capture the browser's install prompt event immediately at script execution
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    setGlobalPrompt(e);
-  });
-
-  // Clear when the app has finished installing
-  window.addEventListener('appinstalled', () => {
-    setGlobalPrompt(null);
-  });
-}
-
-export function usePwaInstall() {
-  const [deferredPrompt, setDeferredPrompt] = useState(globalDeferredPrompt);
-  const [isIOS, setIsIOS] = useState(false);
-  const [isStandalone, setIsStandalone] = useState(false);
-  const [isInstalled, setIsInstalled] = useState(false);
-
-  useEffect(() => {
-    const checkStandalone = () => {
-      const isStandaloneDisplay =
-        window.matchMedia?.('(display-mode: standalone)').matches ||
-        window.navigator.standalone === true ||
-        document.referrer.includes('android-app://');
-      setIsStandalone(Boolean(isStandaloneDisplay));
-    };
-
-    checkStandalone();
-
-    const userAgent = (navigator.userAgent || '').toLowerCase();
-    const isIosDevice = /iphone|ipad|ipod/.test(userAgent);
-    setIsIOS(isIosDevice);
-
-    // Check if the app is already installed via getInstalledRelatedApps if supported
-    if ('getInstalledRelatedApps' in navigator) {
-      navigator.getInstalledRelatedApps().then((relatedApps) => {
-        if (relatedApps && relatedApps.length > 0) {
-          setIsInstalled(true);
-        }
-      }).catch(() => {});
-    }
-
-    // Subscribe to changes in globalDeferredPrompt
-    const handlePromptChange = (prompt) => {
-      setDeferredPrompt(prompt);
-    };
-
-    promptListeners.add(handlePromptChange);
-
-    const handleAppInstalled = () => {
-      setIsInstalled(true);
-      setDeferredPrompt(null);
-    };
-
-    window.addEventListener('appinstalled', handleAppInstalled);
-
-    return () => {
-      promptListeners.delete(handlePromptChange);
-      window.removeEventListener('appinstalled', handleAppInstalled);
-    };
-  }, []);
-
-  const isInstallable = Boolean(deferredPrompt);
-
-  const promptInstall = async () => {
-    // 1. Direct 1-click install if beforeinstallprompt is ready
-    if (deferredPrompt) {
-      try {
-        await deferredPrompt.prompt();
-        const choice = await deferredPrompt.userChoice;
-        setGlobalPrompt(null);
-        return choice?.outcome === 'accepted';
-      } catch (err) {
-        console.error('[PWA] prompt error:', err);
-      }
-    }
-
-    // 2. iOS fallback
-    if (isIOS) {
-      toast('Tap the Share button in Safari, then select "Add to Home Screen".', { duration: 4000 });
-      return false;
-    }
-
-    // 3. If already installed or running in standalone mode
-    if (isStandalone || isInstalled) {
-      toast.success('FlowBiz is already installed on this device!');
-      return false;
-    }
-
-    // 4. If deferredPrompt was not captured (e.g. desktop Safari / Firefox)
-    toast('To install, tap your browser menu (⋮) and select "Install app" or "Add to Home screen".');
-    return false;
-  };
-
-  return {
-    isInstallable,
-    isIOS,
-    isStandalone: isStandalone || isInstalled,
-    promptInstall,
-  };
 }
 ````
 
@@ -13781,110 +13661,6 @@ export async function restoreProduct(productId, barcode, businessId) {
 /*       /index.html        200
 ````
 
-## File: src/components/common/PwaInstallBanner.jsx
-````javascript
-// src/components/common/PwaInstallBanner.jsx
-import { useState } from 'react';
-import { useLocation } from 'react-router-dom';
-import { Download, Share, PlusSquare, X } from 'lucide-react';
-import { usePwaInstall } from '../../hooks/usePwaInstall';
-import { isDemoMode } from '../../demo/demoMode';
-
-const DISMISSED_KEY = 'flowbiz_pwa_banner_dismissed';
-
-export default function PwaInstallBanner() {
-  const location = useLocation();
-  const { isIOS, isStandalone, promptInstall } = usePwaInstall();
-
-  // Read persisted dismissal state from localStorage
-  const [dismissed, setDismissed] = useState(() => {
-    try {
-      return localStorage.getItem(DISMISSED_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  });
-
-  const handleDismiss = () => {
-    setDismissed(true);
-    try {
-      localStorage.setItem(DISMISSED_KEY, 'true');
-    } catch {
-      // Ignore if localStorage is unavailable
-    }
-  };
-
-  const handleInstallClick = async () => {
-    const accepted = await promptInstall();
-    if (accepted) {
-      handleDismiss();
-    }
-  };
-
-  // Only allow on landing page ('/') and signup/setup pages ('/setup', '/signup')
-  const allowedPaths = ['/', '/setup', '/signup'];
-  const isAllowedPath = allowedPaths.includes(location.pathname);
-
-  // Never show in Demo build, standalone/installed mode, dismissed state, or off allowed paths
-  if (isDemoMode() || isStandalone || dismissed || !isAllowedPath) return null;
-
-  return (
-    <aside
-      aria-label="Install FlowBiz App"
-      className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md rounded-2xl border border-moss-200 bg-white p-4 shadow-2xl animate-fade-in"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <img
-            src="/icons/icon-96.png"
-            alt="FlowBiz App Icon"
-            className="h-11 w-11 rounded-xl shadow-xs shrink-0 object-cover"
-            onError={(e) => {
-              e.currentTarget.src = '/favicon.svg';
-            }}
-          />
-          <div>
-            <h4 className="font-display text-sm font-bold text-ink-900">
-              Install FlowBiz App
-            </h4>
-            <p className="text-xs text-ink-500">
-              Run your counter faster and work 100% offline.
-            </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={handleDismiss}
-          className="text-ink-400 hover:text-ink-700 p-1 min-h-[32px] min-w-[32px] flex items-center justify-center rounded-lg"
-          aria-label="Close install prompt"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
-      <div className="mt-3">
-        {isIOS ? (
-          <div className="rounded-lg bg-[#faf6ef] p-2.5 text-[11px] text-ink-700 border border-ink-100">
-            <p className="font-semibold flex items-center flex-wrap gap-1">
-              Tap <Share className="h-3.5 w-3.5 text-moss-700 inline" /> Share, then select{' '}
-              <PlusSquare className="h-3.5 w-3.5 text-moss-700 inline" /> &quot;Add to Home Screen&quot;
-            </p>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={handleInstallClick}
-            className="btn-primary w-full !py-2 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
-          >
-            <Download className="h-4 w-4" /> Install Free App
-          </button>
-        )}
-      </div>
-    </aside>
-  );
-}
-````
-
 ## File: src/components/pos/CartList.jsx
 ````javascript
 import { useState } from 'react';
@@ -14477,6 +14253,130 @@ export function useCameraScanner({ onDetected, active }) {
   }, [torchOn, torchSupported]);
 
   return { videoRef, status, torchOn, torchSupported, toggleTorch, retry };
+}
+````
+
+## File: src/hooks/usePwaInstall.js
+````javascript
+// src/hooks/usePwaInstall.js
+import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
+
+let globalDeferredPrompt = null;
+const promptListeners = new Set();
+
+function setGlobalPrompt(prompt) {
+  globalDeferredPrompt = prompt;
+  promptListeners.forEach((listener) => listener(globalDeferredPrompt));
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeinstallprompt', (e) => {
+    // Prevent default mini-infobar and store event for 1-click install
+    e.preventDefault();
+    setGlobalPrompt(e);
+  });
+
+  window.addEventListener('appinstalled', () => {
+    setGlobalPrompt(null);
+  });
+}
+
+export function usePwaInstall() {
+  const [deferredPrompt, setDeferredPrompt] = useState(globalDeferredPrompt);
+  const [isIOS, setIsIOS] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [isInstalled, setIsInstalled] = useState(false);
+  const [isInAppBrowser, setIsInAppBrowser] = useState(false);
+
+  useEffect(() => {
+    const isStandaloneDisplay =
+      window.matchMedia?.('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true ||
+      document.referrer.includes('android-app://');
+    setIsStandalone(Boolean(isStandaloneDisplay));
+
+    const ua = (navigator.userAgent || '').toLowerCase();
+    const isIosDevice = /iphone|ipad|ipod/.test(ua);
+    setIsIOS(isIosDevice);
+
+    // Detect common in-app browsers (WhatsApp, FB, IG, Messenger, Twitter)
+    const inApp = /fban|fbav|instagram|crios|gsa|wv|line|micromessenger/i.test(ua);
+    setIsInAppBrowser(inApp);
+
+    if ('getInstalledRelatedApps' in navigator) {
+      navigator.getInstalledRelatedApps().then((apps) => {
+        if (apps && apps.length > 0) setIsInstalled(true);
+      }).catch(() => {});
+    }
+
+    const handlePromptChange = (prompt) => {
+      setDeferredPrompt(prompt);
+    };
+
+    promptListeners.add(handlePromptChange);
+
+    const handleAppInstalled = () => {
+      setIsInstalled(true);
+      setDeferredPrompt(null);
+    };
+
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      promptListeners.delete(handlePromptChange);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const isInstallable = Boolean(deferredPrompt);
+
+  const promptInstall = async () => {
+    // 1. Direct 1-click native install dialog (Android Chrome / Edge / Desktop Chrome)
+    if (deferredPrompt) {
+      try {
+        await deferredPrompt.prompt();
+        const choice = await deferredPrompt.userChoice;
+        if (choice?.outcome === 'accepted') {
+          setGlobalPrompt(null);
+          return true;
+        }
+        return false;
+      } catch (err) {
+        console.error('[PWA] prompt error:', err);
+      }
+    }
+
+    // 2. iOS Safari (Apple does not support programmatic beforeinstallprompt)
+    if (isIOS) {
+      toast('Tap the Share button at the bottom of Safari, then select "Add to Home Screen".', { duration: 5000 });
+      return false;
+    }
+
+    // 3. In-App WebViews (e.g. WhatsApp, Facebook link preview)
+    if (isInAppBrowser) {
+      toast('In-app browsers block app installation. Tap menu (⋮) and select "Open in Chrome".', { duration: 5000 });
+      return false;
+    }
+
+    // 4. Already installed
+    if (isStandalone || isInstalled) {
+      toast.success('FlowBiz is already installed on this device!');
+      return false;
+    }
+
+    // 5. Incognito / Private or Uncaptured state
+    toast('App installation is blocked in Incognito/Private mode. Open FlowBiz in a standard tab to install.', { duration: 5000 });
+    return false;
+  };
+
+  return {
+    isInstallable,
+    isIOS,
+    isStandalone: isStandalone || isInstalled,
+    isInAppBrowser,
+    promptInstall,
+  };
 }
 ````
 
@@ -16081,6 +15981,109 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
 
   if (adminOnly && !isAdmin) return <Navigate to="/counter" replace />;
   return children;
+}
+````
+
+## File: src/components/common/PwaInstallBanner.jsx
+````javascript
+// src/components/common/PwaInstallBanner.jsx
+import { useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import { Download, Share, PlusSquare, X } from 'lucide-react';
+import { usePwaInstall } from '../../hooks/usePwaInstall';
+import { isDemoMode } from '../../demo/demoMode';
+
+const DISMISSED_KEY = 'flowbiz_pwa_banner_dismissed';
+
+export default function PwaInstallBanner() {
+  const location = useLocation();
+  const { isIOS, isStandalone, promptInstall } = usePwaInstall();
+
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(DISMISSED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleDismiss = () => {
+    setDismissed(true);
+    try {
+      localStorage.setItem(DISMISSED_KEY, 'true');
+    } catch {
+      // Ignore if localStorage unavailable
+    }
+  };
+
+  const handleInstallClick = async () => {
+    const accepted = await promptInstall();
+    if (accepted) {
+      handleDismiss();
+    }
+  };
+
+  // Only show on public landing and setup pages
+  const allowedPaths = ['/', '/setup', '/signup'];
+  const isAllowedPath = allowedPaths.includes(location.pathname);
+
+  // Do not render in demo mode, standalone PWA mode, dismissed state, or internal routes
+  if (isDemoMode() || isStandalone || dismissed || !isAllowedPath) return null;
+
+  return (
+    <aside
+      aria-label="Install FlowBiz App"
+      className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md rounded-2xl border border-moss-200 bg-white p-4 shadow-2xl animate-fade-in"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <img
+            src="/icons/icon-96.png"
+            alt="FlowBiz App Icon"
+            className="h-11 w-11 rounded-xl shadow-xs shrink-0 object-cover"
+            onError={(e) => {
+              e.currentTarget.src = '/favicon.svg';
+            }}
+          />
+          <div>
+            <h4 className="font-display text-sm font-bold text-ink-900">
+              Install FlowBiz App
+            </h4>
+            <p className="text-xs text-ink-500">
+              Run your counter faster and work 100% offline.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleDismiss}
+          className="text-ink-400 hover:text-ink-700 p-1 min-h-[32px] min-w-[32px] flex items-center justify-center rounded-lg"
+          aria-label="Close install prompt"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="mt-3">
+        {isIOS ? (
+          <div className="rounded-lg bg-[#faf6ef] p-2.5 text-[11px] text-ink-700 border border-ink-100">
+            <p className="font-semibold flex items-center flex-wrap gap-1">
+              Tap <Share className="h-3.5 w-3.5 text-moss-700 inline" /> Share, then select{' '}
+              <PlusSquare className="h-3.5 w-3.5 text-moss-700 inline" /> &quot;Add to Home Screen&quot;
+            </p>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={handleInstallClick}
+            className="btn-primary w-full !py-2 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
+          >
+            <Download className="h-4 w-4" /> Install Free App
+          </button>
+        )}
+      </div>
+    </aside>
+  );
 }
 ````
 
@@ -19337,109 +19340,6 @@ match /businessSettings/{businessId} {
 }
 ````
 
-## File: vite.config.js
-````javascript
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import { VitePWA } from 'vite-plugin-pwa';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-export default defineConfig(({ mode }) => ({
-  base: mode === 'demo' ? '/demo/' : '/',
-
-  build: {
-    outDir: mode === 'demo' ? 'dist/demo' : 'dist',
-  },
-
-  server: {
-    watch: {
-      usePolling: true,
-      interval: 100,
-    },
-  },
-
-  resolve: mode === 'demo' ? {
-    alias: {
-      'firebase/firestore': path.resolve(__dirname, 'src/demo/localFirestore.js'),
-      'firebase/auth': path.resolve(__dirname, 'src/demo/localAuth.js'),
-    },
-  } : {},
-
-  plugins: [
-    react(),
-
-    VitePWA({
-      registerType: 'autoUpdate',
-      includeAssets: [
-        'favicon.svg',
-        'favicon-32.png',
-        'favicon-16.png',
-        'icons/*.png',
-        'hero-photo.webp',
-        'robots.txt',
-      ],
-      manifest: {
-        id: '/',
-        name: 'FlowBiz — Business Manager',
-        short_name: 'FlowBiz',
-        description: 'POS, inventory and finance management for Kenyan SMBs',
-        theme_color: '#1a623c',
-        background_color: '#faf6ef',
-        display: 'standalone',
-        orientation: 'natural',
-        start_url: '/',
-        scope: '/',
-        lang: 'en-KE',
-        categories: ['business', 'finance', 'productivity'],
-        icons: [
-          { src: '/icons/icon-72.png',  sizes: '72x72',   type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-96.png',  sizes: '96x96',   type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-128.png', sizes: '128x128', type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-144.png', sizes: '144x144', type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-152.png', sizes: '152x152', type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
-          { src: '/icons/icon-384.png', sizes: '384x384', type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-        ],
-        screenshots: [],
-      },
-      devOptions: {
-        enabled: true,
-      },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
-        navigateFallbackDenylist: [/^\/demo($|\/)/, /^\/r\//, /^\/api\//],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-cache',
-              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          {
-            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'gstatic-fonts-cache',
-              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
-      },
-    }),
-  ],
-}));
-````
-
 ## File: src/components/layout/TopHeader.jsx
 ````javascript
 import { useAuth } from '../../contexts/AuthContext';
@@ -20053,6 +19953,111 @@ createRoot(document.getElementById('root')).render(
     </BrowserRouter>
   </StrictMode>
 );
+````
+
+## File: vite.config.js
+````javascript
+// vite.config.js
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { VitePWA } from 'vite-plugin-pwa';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export default defineConfig(({ mode }) => ({
+  base: mode === 'demo' ? '/demo/' : '/',
+
+  build: {
+    outDir: mode === 'demo' ? 'dist/demo' : 'dist',
+  },
+
+  server: {
+    watch: {
+      usePolling: true,
+      interval: 100,
+    },
+  },
+
+  resolve: mode === 'demo' ? {
+    alias: {
+      'firebase/firestore': path.resolve(__dirname, 'src/demo/localFirestore.js'),
+      'firebase/auth': path.resolve(__dirname, 'src/demo/localAuth.js'),
+    },
+  } : {},
+
+  plugins: [
+    react(),
+
+    VitePWA({
+      registerType: 'autoUpdate',
+      includeAssets: [
+        'favicon.svg',
+        'favicon-32.png',
+        'favicon-16.png',
+        'icons/*.png',
+        'hero-photo.webp',
+        'robots.txt',
+      ],
+      manifest: {
+        id: '/',
+        name: 'FlowBiz — Business Manager',
+        short_name: 'FlowBiz',
+        description: 'POS, inventory and finance management for Kenyan SMBs',
+        theme_color: '#1a623c',
+        background_color: '#faf6ef',
+        display: 'standalone',
+        orientation: 'natural',
+        start_url: '/',
+        scope: '/',
+        lang: 'en-KE',
+        categories: ['business', 'finance', 'productivity'],
+        icons: [
+          { src: '/icons/icon-72.png',  sizes: '72x72',   type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-96.png',  sizes: '96x96',   type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-128.png', sizes: '128x128', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-144.png', sizes: '144x144', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-152.png', sizes: '152x152', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          { src: '/icons/icon-384.png', sizes: '384x384', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+        ],
+        screenshots: [],
+      },
+      devOptions: {
+        enabled: true,
+      },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/demo($|\/)/, /^\/r\//, /^\/api\//],
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'google-fonts-cache',
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'gstatic-fonts-cache',
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
+      },
+    }),
+  ],
+}));
 ````
 
 ## File: src/pages/CustomerDetail.jsx
@@ -21029,221 +21034,6 @@ export default function Purchases() {
           ))}
         </div>
       )}
-    </div>
-  );
-}
-````
-
-## File: src/pages/Setup.jsx
-````javascript
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
-import { doc, collection, writeBatch, serverTimestamp, getDoc } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-import { auth, db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-
-const DEFAULT_CATEGORIES = ['Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
-
-export default function Setup() {
-  const { firebaseUser, profile, loading: authLoading } = useAuth();
-  const navigate = useNavigate();
-  const creatingRef = useRef(false);
-
-  useEffect(() => {
-    if (authLoading) return;
-    if (firebaseUser && profile?.businessId && !creatingRef.current) {
-      navigate(profile.role === 'owner' ? '/dashboard' : '/counter', { replace: true });
-    }
-  }, [firebaseUser, profile, authLoading, navigate]);
-
-  const [businessName, setBusinessName] = useState('');
-  const [displayName, setDisplayName]   = useState('');
-  const [email, setEmail]               = useState('');
-  const [password, setPassword]         = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [submitting, setSubmitting]     = useState(false);
-  const [error, setError]               = useState(null);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
-
-    if (!businessName.trim()) { setError('Enter your business name.'); return; }
-    if (!displayName.trim()) { setError('Enter your name.'); return; }
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters long.');
-      return;
-    }
-    if (!/[A-Z]/.test(password)) {
-      setError('Password must include at least one uppercase letter.');
-      return;
-    }
-    if (!/[a-z]/.test(password)) {
-      setError('Password must include at least one lowercase letter.');
-      return;
-    }
-    if (!/[0-9]/.test(password)) {
-      setError('Password must include at least one number.');
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
-
-    setSubmitting(true);
-    creatingRef.current = true;
-
-    let targetUser = null;
-
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-      targetUser = cred.user;
-    } catch (err) {
-      if (err.code === 'auth/email-already-in-use') {
-        try {
-          const signInCred = await signInWithEmailAndPassword(auth, email.trim(), password);
-          const existingProfileSnap = await getDoc(doc(db, 'users', signInCred.user.uid));
-          if (existingProfileSnap.exists() && existingProfileSnap.data()?.businessId) {
-            setError('An account with this email already exists. Please sign in instead.');
-            creatingRef.current = false;
-            setSubmitting(false);
-            return;
-          }
-          targetUser = signInCred.user;
-        } catch {
-          setError('An account with this email already exists. Please sign in or use another email.');
-          creatingRef.current = false;
-          setSubmitting(false);
-          return;
-        }
-      } else {
-        const message =
-          err.code === 'auth/invalid-email' ? 'Please enter a valid email address.' :
-          err.code === 'auth/weak-password'  ? 'Password is too weak. Please choose a stronger password.' :
-          'Could not create your account. Please try again.';
-        setError(message);
-        creatingRef.current = false;
-        setSubmitting(false);
-        return;
-      }
-    }
-
-    if (!targetUser) {
-      setError('Failed to authenticate. Please try again.');
-      creatingRef.current = false;
-      setSubmitting(false);
-      return;
-    }
-
-    const businessId = doc(collection(db, 'businesses')).id;
-
-    try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'businesses', businessId), {
-        name: businessName.trim(),
-        ownerIds: [targetUser.uid],
-        createdAt: serverTimestamp(),
-        createdBy: targetUser.uid,
-        subscription: { plan: 'free', status: 'active', expiresAt: null },
-      });
-      batch.set(doc(db, 'users', targetUser.uid), {
-        uid: targetUser.uid,
-        email: email.trim(),
-        displayName: displayName.trim(),
-        role: 'owner',
-        businessId,
-        active: true,
-        createdAt: serverTimestamp(),
-      });
-      batch.set(doc(db, 'businessSettings', businessId), {
-        businessId,
-        shopName: businessName.trim(),
-        cashierCanRecordExpenses: true,
-        categories: DEFAULT_CATEGORIES,
-      });
-      await batch.commit();
-    } catch (err) {
-      console.error('[FlowBiz] Business setup write failed:', err.code || err.name, err.message);
-      setError('Something went wrong setting up your business records. Please try again.');
-      creatingRef.current = false;
-      setSubmitting(false);
-      return;
-    }
-
-    try {
-      const idToken = await targetUser.getIdToken(true);
-      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-      });
-      if (!response.ok) throw new Error('worker-send-failed');
-      toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Please check your email to verify your account.`);
-    } catch (err) {
-      console.warn('[FlowBiz] Worker email send failed, attempting direct send:', err.message);
-      try {
-        await sendEmailVerification(targetUser);
-        toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Check your email to verify.`);
-      } catch {
-        toast.success(`Welcome to FlowBiz, ${displayName.trim()}!`);
-      }
-    }
-
-    setSubmitting(false);
-    navigate('/', { replace: true });
-  };
-
-  if (authLoading && !creatingRef.current) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-ink-950">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4 py-8">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-white">Create your business</h1>
-            <p className="text-sm text-ink-400">Set up FlowBiz in under a minute.</p>
-          </div>
-        </div>
-        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
-          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-          <div>
-            <label className="label">Business name</label>
-            <input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="e.g. Nairobi Smart Retail" disabled={submitting} />
-          </div>
-          <div>
-            <label className="label">Your name</label>
-            <input className="input" required value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="e.g. John Kamau" disabled={submitting} />
-          </div>
-          <div>
-            <label className="label">Email</label>
-            <input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="owner@yourbusiness.co.ke" autoComplete="username" disabled={submitting} />
-          </div>
-          <div>
-            <label className="label">Password</label>
-            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 chars (upper, lower, number)" autoComplete="new-password" disabled={submitting} />
-          </div>
-          <div>
-            <label className="label">Confirm password</label>
-            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="Repeat password" autoComplete="new-password" disabled={submitting} />
-          </div>
-          <button type="submit" className="btn-primary w-full" disabled={submitting}>
-            {submitting ? 'Setting up…' : 'Create business'}
-          </button>
-        </form>
-        <p className="text-center text-sm text-ink-400">
-          Already have an account? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link>
-        </p>
-      </div>
     </div>
   );
 }
@@ -23153,160 +22943,217 @@ function Row({ label, value, tone = '', mono = false }) {
 }
 ````
 
-## File: src/router/AppRouter.jsx
+## File: src/pages/Setup.jsx
 ````javascript
-import { lazy, Suspense, useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
-import ProtectedRoute from '../components/common/ProtectedRoute';
-import AppShell from '../components/layout/AppShell';
-import LoadingSpinner from '../components/common/LoadingSpinner';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
+import { doc, collection, writeBatch, serverTimestamp, getDoc } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+import { auth, db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { prefetchRoutes } from './routePrefetch';
-import RequireOpenSession from '../components/common/RequireOpenSession';
-import LandingPage from '../pages/LandingPage';
 
-const routeLoaders = {
-  setup: () => import('../pages/Setup'),
-  login: () => import('../pages/Login'),
-  forgotPassword: () => import('../pages/ForgotPassword'),
-  joinStaff: () => import('../pages/JoinStaff'),
-  authAction: () => import('../pages/AuthAction'),
-  dashboard: () => import('../pages/Dashboard'),
-  counter: () => import('../pages/Counter'),
-  customers: () => import('../pages/Customers'),
-  customerDetail: () => import('../pages/CustomerDetail'),
-  expenses: () => import('../pages/Expenses'),
-  purchases: () => import('../pages/Purchases'),
-  products: () => import('../pages/Products'),
-  suppliers: () => import('../pages/Suppliers'),
-  stockTake: () => import('../pages/StockTake'),
-  reports: () => import('../pages/Reports'),
-  closeDay: () => import('../pages/CloseDay'),
-  users: () => import('../pages/Users'),
-  settings: () => import('../pages/Settings'),
-  helpGuide: () => import('../pages/HelpGuide'),
-  pro: () => import('../pages/Pro'),
-  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
-  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
-  privacy: () => import('../pages/Privacy'),
-  terms: () => import('../pages/Terms'),
-};
+const DEFAULT_CATEGORIES = ['Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
+const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
-const Setup                 = lazy(routeLoaders.setup);
-const Login                 = lazy(routeLoaders.login);
-const ForgotPassword         = lazy(routeLoaders.forgotPassword);
-const JoinStaff             = lazy(routeLoaders.joinStaff);
-const AuthAction            = lazy(routeLoaders.authAction);
-const Dashboard             = lazy(routeLoaders.dashboard);
-const Counter               = lazy(routeLoaders.counter);
-const Customers             = lazy(routeLoaders.customers);
-const CustomerDetail        = lazy(routeLoaders.customerDetail);
-const Expenses              = lazy(routeLoaders.expenses);
-const Purchases             = lazy(routeLoaders.purchases);
-const Products              = lazy(routeLoaders.products);
-const Suppliers             = lazy(routeLoaders.suppliers);
-const StockTake             = lazy(routeLoaders.stockTake);
-const Reports               = lazy(routeLoaders.reports);
-const CloseDay              = lazy(routeLoaders.closeDay);
-const Users                 = lazy(routeLoaders.users);
-const Settings              = lazy(routeLoaders.settings);
-const HelpGuide             = lazy(routeLoaders.helpGuide);
-const Pro                   = lazy(routeLoaders.pro);
-const AdvancedAnalytics     = lazy(routeLoaders.advancedAnalytics);
-const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
-const Privacy               = lazy(routeLoaders.privacy);
-const Terms                 = lazy(routeLoaders.terms);
+export default function Setup() {
+  const { firebaseUser, profile, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
+  const creatingRef = useRef(false);
 
-function Page({ children, adminOnly = false, requireOpenDay = false }) {
-  return (
-    <ProtectedRoute adminOnly={adminOnly}>
-      <AppShell>
-        <Suspense fallback={<LoadingSpinner />}>
-          {requireOpenDay ? <RequireOpenSession>{children}</RequireOpenSession> : children}
-        </Suspense>
-      </AppShell>
-    </ProtectedRoute>
-  );
-}
-
-function PublicOnly({ children }) {
-  const { firebaseUser, loading } = useAuth();
-  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
-  if (firebaseUser) return <Navigate to="/dashboard" replace />;
-  return children;
-}
-
-function isStandalonePWA() {
-  if (typeof window === 'undefined') return false;
-  return window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
-}
-
-function RootRoute() {
-  const { firebaseUser, loading, isAdmin } = useAuth();
-
-  if (!loading && firebaseUser) {
-    return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
-  }
-  if (!loading && !firebaseUser && isStandalonePWA()) {
-    return <Navigate to="/login" replace />;
-  }
-  return <LandingPage />;
-}
-
-function RoutePrefetcher() {
-  const { firebaseUser, isAdmin } = useAuth();
   useEffect(() => {
-    if (!firebaseUser) return;
-    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
-    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
-    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
-  }, [firebaseUser, isAdmin]);
-  return null;
-}
+    if (authLoading) return;
+    if (firebaseUser && profile?.businessId && !creatingRef.current) {
+      navigate(profile.role === 'owner' ? '/dashboard' : '/counter', { replace: true });
+    }
+  }, [firebaseUser, profile, authLoading, navigate]);
 
-export default function AppRouter() {
+  const [businessName, setBusinessName] = useState('');
+  const [displayName, setDisplayName]   = useState('');
+  const [email, setEmail]               = useState('');
+  const [password, setPassword]         = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submitting, setSubmitting]     = useState(false);
+  const [error, setError]               = useState(null);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+
+    if (!businessName.trim()) { setError('Enter your business name.'); return; }
+    if (!displayName.trim()) { setError('Enter your name.'); return; }
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters long.');
+      return;
+    }
+    if (!/[A-Z]/.test(password)) {
+      setError('Password must include at least one uppercase letter.');
+      return;
+    }
+    if (!/[a-z]/.test(password)) {
+      setError('Password must include at least one lowercase letter.');
+      return;
+    }
+    if (!/[0-9]/.test(password)) {
+      setError('Password must include at least one number.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setSubmitting(true);
+    creatingRef.current = true;
+
+    let targetUser = null;
+
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      targetUser = cred.user;
+    } catch (err) {
+      if (err.code === 'auth/email-already-in-use') {
+        try {
+          const signInCred = await signInWithEmailAndPassword(auth, email.trim(), password);
+          const existingProfileSnap = await getDoc(doc(db, 'users', signInCred.user.uid));
+          if (existingProfileSnap.exists() && existingProfileSnap.data()?.businessId) {
+            setError('An account with this email already exists. Please sign in instead.');
+            creatingRef.current = false;
+            setSubmitting(false);
+            return;
+          }
+          targetUser = signInCred.user;
+        } catch {
+          setError('An account with this email already exists. Please sign in or use another email.');
+          creatingRef.current = false;
+          setSubmitting(false);
+          return;
+        }
+      } else {
+        const message =
+          err.code === 'auth/invalid-email' ? 'Please enter a valid email address.' :
+          err.code === 'auth/weak-password'  ? 'Password is too weak. Please choose a stronger password.' :
+          'Could not create your account. Please try again.';
+        setError(message);
+        creatingRef.current = false;
+        setSubmitting(false);
+        return;
+      }
+    }
+
+    if (!targetUser) {
+      setError('Failed to authenticate. Please try again.');
+      creatingRef.current = false;
+      setSubmitting(false);
+      return;
+    }
+
+    const businessId = doc(collection(db, 'businesses')).id;
+
+    try {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'businesses', businessId), {
+        name: businessName.trim(),
+        ownerIds: [targetUser.uid],
+        createdAt: serverTimestamp(),
+        createdBy: targetUser.uid,
+        subscription: { plan: 'free', status: 'active', expiresAt: null },
+      });
+      batch.set(doc(db, 'users', targetUser.uid), {
+        uid: targetUser.uid,
+        email: email.trim(),
+        displayName: displayName.trim(),
+        role: 'owner',
+        businessId,
+        active: true,
+        createdAt: serverTimestamp(),
+      });
+      batch.set(doc(db, 'businessSettings', businessId), {
+        businessId,
+        shopName: businessName.trim(),
+        cashierCanRecordExpenses: true,
+        categories: DEFAULT_CATEGORIES,
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error('[FlowBiz] Business setup write failed:', err.code || err.name, err.message);
+      setError('Something went wrong setting up your business records. Please try again.');
+      creatingRef.current = false;
+      setSubmitting(false);
+      return;
+    }
+
+    try {
+      const idToken = await targetUser.getIdToken(true);
+      const response = await fetch(`${FLOWBIZ_API_URL}/api/auth/send-verification-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      });
+      if (!response.ok) throw new Error('worker-send-failed');
+      toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Please check your email to verify your account.`);
+    } catch (err) {
+      console.warn('[FlowBiz] Worker email send failed, attempting direct send:', err.message);
+      try {
+        await sendEmailVerification(targetUser);
+        toast.success(`Welcome to FlowBiz, ${displayName.trim()}! Check your email to verify.`);
+      } catch {
+        toast.success(`Welcome to FlowBiz, ${displayName.trim()}!`);
+      }
+    }
+
+    setSubmitting(false);
+    navigate('/', { replace: true });
+  };
+
+  if (authLoading && !creatingRef.current) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-ink-950">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+      </div>
+    );
+  }
+
   return (
-    <Suspense fallback={<LoadingSpinner label="Loading..." />}>
-      <RoutePrefetcher />
-      <Routes>
-        {/* Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
-        <Route path="/" element={<RootRoute />} />
-
-        {/* Public Authentication & Setup */}
-        <Route path="/setup" element={<Setup />} />
-        <Route path="/signup" element={<Setup />} />
-        <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
-        <Route path="/signin" element={<PublicOnly><Login /></PublicOnly>} />
-        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
-        <Route path="/join/:inviteId" element={<JoinStaff />} />
-        <Route path="/auth/action" element={<AuthAction />} />
-        
-        {/* Public Legal Pages */}
-        <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
-        <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
-
-        {/* Protected Store Management Routes */}
-        <Route path="/dashboard"    element={<Page adminOnly><Dashboard /></Page>} />
-        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
-        <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
-        <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
-
-        <Route path="/counter"      element={<Page><Counter /></Page>} />
-        <Route path="/customers"    element={<Page><Customers /></Page>} />
-        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
-        <Route path="/expenses"     element={<Page requireOpenDay><Expenses /></Page>} />
-        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
-        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
-        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
-        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
-        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
-        <Route path="/close-day"    element={<Page adminOnly requireOpenDay><CloseDay /></Page>} />
-        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
-        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
-        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
-        <Route path="*"             element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4 py-8">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="flex flex-col items-center text-center gap-3">
+          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
+          <div>
+            <h1 className="font-display text-2xl font-bold text-white">Create your business</h1>
+            <p className="text-sm text-ink-400">Set up FlowBiz in under a minute.</p>
+          </div>
+        </div>
+        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
+          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
+          <div>
+            <label className="label">Business name</label>
+            <input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="e.g. Nairobi Smart Retail" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Your name</label>
+            <input className="input" required value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="e.g. John Doe" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Email</label>
+            <input type="email" className="input" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="owner@yourbusiness.co.ke" autoComplete="username" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Password</label>
+            <input type="password" className="input" required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 chars (upper, lower, number)" autoComplete="new-password" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Confirm password</label>
+            <input type="password" className="input" required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="Repeat password" autoComplete="new-password" disabled={submitting} />
+          </div>
+          <button type="submit" className="btn-primary w-full" disabled={submitting}>
+            {submitting ? 'Setting up…' : 'Create business'}
+          </button>
+        </form>
+        <p className="text-center text-sm text-ink-400">
+          Already have an account? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link>
+        </p>
+      </div>
+    </div>
   );
 }
 ````
@@ -23754,6 +23601,183 @@ export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error('useAuth must be used within AuthProvider');
   return ctx;
+}
+````
+
+## File: src/router/AppRouter.jsx
+````javascript
+// src/router/AppRouter.jsx
+import { lazy, Suspense, useEffect } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import ProtectedRoute from '../components/common/ProtectedRoute';
+import AppShell from '../components/layout/AppShell';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import { useAuth } from '../contexts/AuthContext';
+import { prefetchRoutes } from './routePrefetch';
+import RequireOpenSession from '../components/common/RequireOpenSession';
+import LandingPage from '../pages/LandingPage';
+
+const routeLoaders = {
+  setup: () => import('../pages/Setup'),
+  login: () => import('../pages/Login'),
+  forgotPassword: () => import('../pages/ForgotPassword'),
+  joinStaff: () => import('../pages/JoinStaff'),
+  authAction: () => import('../pages/AuthAction'),
+  dashboard: () => import('../pages/Dashboard'),
+  counter: () => import('../pages/Counter'),
+  customers: () => import('../pages/Customers'),
+  customerDetail: () => import('../pages/CustomerDetail'),
+  expenses: () => import('../pages/Expenses'),
+  purchases: () => import('../pages/Purchases'),
+  products: () => import('../pages/Products'),
+  suppliers: () => import('../pages/Suppliers'),
+  stockTake: () => import('../pages/StockTake'),
+  reports: () => import('../pages/Reports'),
+  closeDay: () => import('../pages/CloseDay'),
+  users: () => import('../pages/Users'),
+  settings: () => import('../pages/Settings'),
+  helpGuide: () => import('../pages/HelpGuide'),
+  pro: () => import('../pages/Pro'),
+  advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
+  inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
+  privacy: () => import('../pages/Privacy'),
+  terms: () => import('../pages/Terms'),
+};
+
+const Setup                 = lazy(routeLoaders.setup);
+const Login                 = lazy(routeLoaders.login);
+const ForgotPassword        = lazy(routeLoaders.forgotPassword);
+const JoinStaff             = lazy(routeLoaders.joinStaff);
+const AuthAction            = lazy(routeLoaders.authAction);
+const Dashboard             = lazy(routeLoaders.dashboard);
+const Counter               = lazy(routeLoaders.counter);
+const Customers             = lazy(routeLoaders.customers);
+const CustomerDetail        = lazy(routeLoaders.customerDetail);
+const Expenses              = lazy(routeLoaders.expenses);
+const Purchases             = lazy(routeLoaders.purchases);
+const Products              = lazy(routeLoaders.products);
+const Suppliers             = lazy(routeLoaders.suppliers);
+const StockTake             = lazy(routeLoaders.stockTake);
+const Reports               = lazy(routeLoaders.reports);
+const CloseDay              = lazy(routeLoaders.closeDay);
+const Users                 = lazy(routeLoaders.users);
+const Settings              = lazy(routeLoaders.settings);
+const HelpGuide             = lazy(routeLoaders.helpGuide);
+const Pro                   = lazy(routeLoaders.pro);
+const AdvancedAnalytics     = lazy(routeLoaders.advancedAnalytics);
+const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
+const Privacy               = lazy(routeLoaders.privacy);
+const Terms                 = lazy(routeLoaders.terms);
+
+function Page({ children, adminOnly = false, requireOpenDay = false }) {
+  return (
+    <ProtectedRoute adminOnly={adminOnly}>
+      <AppShell>
+        <Suspense fallback={<LoadingSpinner />}>
+          {requireOpenDay ? <RequireOpenSession>{children}</RequireOpenSession> : children}
+        </Suspense>
+      </AppShell>
+    </ProtectedRoute>
+  );
+}
+
+function PublicOnly({ children }) {
+  const { firebaseUser, loading } = useAuth();
+  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
+  if (firebaseUser) return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
+function isStandalonePWA() {
+  if (typeof window === 'undefined') return false;
+  return (
+    window.matchMedia?.('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true ||
+    document.referrer.includes('android-app://')
+  );
+}
+
+function RootRoute() {
+  const { firebaseUser, loading, isAdmin } = useAuth();
+
+  // 1. While auth initializes, render a clean loading screen on the app's sand background (never the landing page)
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-sand">
+        <LoadingSpinner label="Starting FlowBiz…" />
+      </div>
+    );
+  }
+
+  // 2. If already signed in, navigate straight to the Dashboard (or Counter for cashiers)
+  if (firebaseUser) {
+    return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
+  }
+
+  // 3. If opened from the phone's home screen icon (installed PWA) while signed out, go straight to Login
+  if (isStandalonePWA()) {
+    return <Navigate to="/login" replace />;
+  }
+
+  // 4. Only standard web browser visitors on the web domain see the marketing Landing Page
+  return <LandingPage />;
+}
+
+function RoutePrefetcher() {
+  const { firebaseUser, isAdmin } = useAuth();
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
+    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
+    prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
+  }, [firebaseUser, isAdmin]);
+  return null;
+}
+
+export default function AppRouter() {
+  return (
+    <Suspense fallback={<LoadingSpinner label="Loading..." />}>
+      <RoutePrefetcher />
+      <Routes>
+        {/* Root Route — routes to Dashboard/Login if installed/logged in; Landing Page for website visitors */}
+        <Route path="/" element={<RootRoute />} />
+
+        {/* Public Authentication & Setup */}
+        <Route path="/setup" element={<Setup />} />
+        <Route path="/signup" element={<Setup />} />
+        <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
+        <Route path="/signin" element={<PublicOnly><Login /></PublicOnly>} />
+        <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
+        <Route path="/join/:inviteId" element={<JoinStaff />} />
+        <Route path="/auth/action" element={<AuthAction />} />
+        
+        {/* Public Legal Pages */}
+        <Route path="/privacy" element={<Suspense fallback={<LoadingSpinner />}><Privacy /></Suspense>} />
+        <Route path="/terms" element={<Suspense fallback={<LoadingSpinner />}><Terms /></Suspense>} />
+
+        {/* Protected Store Management Routes */}
+        <Route path="/dashboard"    element={<Page adminOnly><Dashboard /></Page>} />
+        <Route path="/pro"          element={<Page adminOnly><Pro /></Page>} />
+        <Route path="/advanced-analytics" element={<Page adminOnly><AdvancedAnalytics /></Page>} />
+        <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
+
+        <Route path="/counter"      element={<Page><Counter /></Page>} />
+        <Route path="/customers"    element={<Page><Customers /></Page>} />
+        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
+        <Route path="/expenses"     element={<Page requireOpenDay><Expenses /></Page>} />
+        <Route path="/purchases"    element={<Page adminOnly><Purchases /></Page>} />
+        <Route path="/products"     element={<Page adminOnly><Products /></Page>} />
+        <Route path="/suppliers"    element={<Page adminOnly><Suppliers /></Page>} />
+        <Route path="/stock-take"   element={<Page adminOnly><StockTake /></Page>} />
+        <Route path="/reports"      element={<Page adminOnly><Reports /></Page>} />
+        <Route path="/close-day"    element={<Page adminOnly requireOpenDay><CloseDay /></Page>} />
+        <Route path="/users"        element={<Page adminOnly><Users /></Page>} />
+        <Route path="/settings"     element={<Page adminOnly><Settings /></Page>} />
+        <Route path="/help"         element={<Page><HelpGuide /></Page>} />
+        <Route path="*"             element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
+  );
 }
 ````
 

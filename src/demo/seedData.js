@@ -1,6 +1,7 @@
 // src/demo/seedData.js
 import { seedDoc, seedCommit, clearAllDemoData, makeTimestamp } from './localFirestore';
 import { DEMO_UID } from './localAuth';
+import { todayKey } from '../utils/dateRanges';
 
 // MULTI-TENANT CHANGE: every collection in the real app is now scoped by
 // `businessId`, and `tenantQuery()` throws if it's ever called without
@@ -34,6 +35,10 @@ const SUPPLIERS = [
   },
 ];
 
+// FIX: added one 17th product, deliberately at zero stock, so Inventory
+// Intelligence's "Critical Stockout" / "REVENUE LOSS" insight has
+// something real to show — every other product already had at least 2
+// units.
 const PRODUCTS = [
   { name: 'Wireless Mouse',            category: 'Electronics', costPrice: 650,   sellingPrice: 950,   stock: 40, lowStockThreshold: 8,  barcode: '6009880123451', supplierId: 'sup_nairobi_electronics' },
   { name: 'Mechanical Keyboard',       category: 'Electronics', costPrice: 2800,  sellingPrice: 3999,  stock: 15, lowStockThreshold: 5,  barcode: '6009880123452', supplierId: 'sup_techhub' },
@@ -51,7 +56,189 @@ const PRODUCTS = [
   { name: 'Extension Cable (4-way)',   category: 'Electronics', costPrice: 700,   sellingPrice: 1099,  stock: 20, lowStockThreshold: 5,  barcode: '6009880123464', supplierId: 'sup_nairobi_electronics' },
   { name: 'Router (Wireless N)',       category: 'Electronics', costPrice: 2600,  sellingPrice: 3599,  stock: 9,  lowStockThreshold: 4,  barcode: '6009880123465', supplierId: 'sup_techhub' },
   { name: 'Smart Watch',               category: 'Electronics', costPrice: 3500,  sellingPrice: 4999,  stock: 7,  lowStockThreshold: 3,  barcode: '6009880123466', supplierId: 'sup_techhub' },
+  { name: 'Wireless Charging Pad',     category: 'Electronics', costPrice: 950,   sellingPrice: 1499,  stock: 0,  lowStockThreshold: 5,  barcode: '6009880123467', supplierId: 'sup_techhub' },
 ];
+
+const DEMO_CUSTOMERS = [
+  { id: 'demo_cust_1', name: 'John Kamau', phone: '0722334455' },
+  { id: 'demo_cust_2', name: 'Grace Wanjiru', phone: '0711223344' },
+  { id: 'demo_cust_3', name: 'Peter Otieno', phone: '0733445566' },
+  { id: 'demo_cust_4', name: 'Mary Njeri', phone: '0700112233' },
+  { id: 'demo_cust_5', name: 'Samuel Kiprop', phone: '0745667788' },
+];
+
+const STAFF_NAMES = ['Demo Owner', 'Sarah M.', 'Brian K.'];
+const PAYMENT_WEIGHTED = ['Cash', 'Cash', 'M-Pesa', 'M-Pesa', 'M-Pesa'];
+const EXPENSE_ENTRIES = [
+  ['Rent', 15000], ['Electricity', 2500], ['Transport', 800], ['Wages', 8000],
+  ['Airtime Float', 1000], ['Shop Supplies', 1200], ['Security', 1500], ['Other', 600],
+];
+
+// Deliberately given ZERO sales anywhere in the seeded history, so
+// Inventory Intelligence's "Slow-Moving Stock" section has real,
+// consistent examples (in stock, but nothing sold in 30 days).
+const SLOW_PRODUCT_NAMES = ['Router (Wireless N)', 'Smart Watch', 'Monitor 24" LED'];
+// Deliberately given EXTRA sales weight — combined with their already-low
+// starting stock above, this gives Inventory Intelligence's "Reorder
+// Priority" section real fast-movers that are genuinely running low,
+// not just low stock with no signal either way.
+const HOT_PRODUCT_NAMES = ['USB-C Charger 20W', 'Phone Charger (Micro-USB)', 'Wireless Mouse', 'USB Flash Disk 32GB'];
+
+// Small, seeded (not Math.random) pseudo-random generator — mulberry32.
+// Using a fixed seed means resetting the demo (Settings → Demo Reset)
+// always regenerates the SAME history rather than a different random
+// story every time, which is easier to reason about and support.
+function createRng(seed) {
+  let s = seed >>> 0;
+  return function rng() {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function dateAt(daysAgoCount, hour, minute) {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgoCount);
+  d.setHours(hour, minute, 0, 0);
+  return d;
+}
+
+// Builds ~70 days of sales, credit sales + repayments, and expenses —
+// enough for the 7/30/90-day Advanced Analytics windows to all have
+// data, for period-over-period comparisons to have a real "previous
+// period" to compare against, and for every Inventory Intelligence
+// section (ABC classification, slow-moving, reorder priority,
+// overstock, stockout) to have a genuine example rather than an empty
+// state.
+function seedHistory(touched, businessId) {
+  const rng = createRng(20260830);
+  const randInt = (min, max) => Math.floor(rng() * (max - min + 1)) + min;
+  const pick = (arr) => arr[Math.floor(rng() * arr.length)];
+
+  const productWithId = (product) => {
+    const index = PRODUCTS.indexOf(product);
+    return { productId: `demo_product_${index + 1}`, product };
+  };
+
+  const salesPool = PRODUCTS.filter((p) => !SLOW_PRODUCT_NAMES.includes(p.name) && p.stock > 0);
+  const hotPool = PRODUCTS.filter((p) => HOT_PRODUCT_NAMES.includes(p.name));
+
+  const HISTORY_DAYS = 69; // ~10 weeks
+  let saleCounter = 0;
+  let voidedPlaced = false;
+
+  for (let dayOffset = HISTORY_DAYS; dayOffset >= 0; dayOffset--) {
+    const salesToday = randInt(0, 3);
+    for (let i = 0; i < salesToday; i++) {
+      const useHot = hotPool.length > 0 && rng() < 0.35;
+      const { productId, product } = productWithId(useHot ? pick(hotPool) : pick(salesPool));
+      const quantity = randInt(1, 3);
+      const totalAmount = quantity * product.sellingPrice;
+      const profit = quantity * (product.sellingPrice - product.costPrice);
+      const method = pick(PAYMENT_WEIGHTED);
+      const isVoided = !voidedPlaced && dayOffset === 12 && i === 0;
+      if (isVoided) voidedPlaced = true;
+
+      seedDoc('sales', `demo_sale_${dayOffset}_${i}`, {
+        businessId,
+        productId, productName: product.name,
+        quantity, costPricePerUnit: product.costPrice, soldPricePerUnit: product.sellingPrice,
+        totalAmount, profit,
+        paymentMethod: method, mpesaCode: method === 'M-Pesa' ? `QW${randInt(100000, 999999)}KE` : null,
+        soldBy: DEMO_UID, soldByName: pick(STAFF_NAMES),
+        soldAt: makeTimestamp(dateAt(dayOffset, randInt(8, 19), randInt(0, 59)).getTime()),
+        isCredit: false, isVoided,
+      });
+      touched.add('sales');
+      saleCounter++;
+    }
+  }
+
+  // Credit sales, each with 0-2 repayments depending on how much (if
+  // any) of the balance has been collected — this is what feeds Top
+  // Debtors, Capital & Credit Exposure, and the payment-mix chart's
+  // credit slice.
+  let creditIndex = 0;
+  for (let dayOffset = 65; dayOffset >= 3; dayOffset -= randInt(3, 6)) {
+    const customer = pick(DEMO_CUSTOMERS);
+    const { productId, product } = productWithId(pick(salesPool));
+    const quantity = randInt(1, 2);
+    const totalAmount = quantity * product.sellingPrice;
+    const creditId = `demo_credit_${creditIndex}`;
+    const outcome = rng();
+    let status, amountPaid, remainingBalance;
+    if (outcome < 0.4) {
+      status = 'paid'; amountPaid = totalAmount; remainingBalance = 0;
+    } else if (outcome < 0.75) {
+      status = 'partial';
+      amountPaid = Math.round(totalAmount * (0.3 + rng() * 0.4));
+      remainingBalance = totalAmount - amountPaid;
+    } else {
+      status = 'pending'; amountPaid = 0; remainingBalance = totalAmount;
+    }
+
+    seedDoc('creditSales', creditId, {
+      businessId,
+      customerId: customer.id, customerName: customer.name, customerPhone: customer.phone,
+      productId, productName: product.name, quantity,
+      costPricePerUnit: product.costPrice, soldPricePerUnit: product.sellingPrice, totalAmount,
+      soldBy: DEMO_UID, soldByName: pick(STAFF_NAMES),
+      soldAt: makeTimestamp(dateAt(dayOffset, randInt(9, 17), randInt(0, 59)).getTime()),
+      status, amountPaid, remainingBalance, paymentHistory: [],
+      isCredit: true,
+    });
+    touched.add('creditSales');
+
+    if (amountPaid > 0) {
+      const splitInTwo = amountPaid > 1000 && rng() < 0.5;
+      const firstAmt = splitInTwo ? Math.round(amountPaid * 0.5) : amountPaid;
+      seedDoc('repayments', `demo_repay_${creditIndex}_a`, {
+        businessId, creditSaleId: creditId, customerId: customer.id, customerName: customer.name,
+        productName: product.name, amount: firstAmt, method: pick(PAYMENT_WEIGHTED),
+        mpesaCode: null, paymentReference: `PAY-${creditIndex}A`,
+        paidAt: makeTimestamp(dateAt(Math.max(dayOffset - randInt(1, 5), 0), randInt(9, 18), randInt(0, 59)).getTime()),
+        recordedBy: DEMO_UID, recordedByName: pick(STAFF_NAMES),
+      });
+      touched.add('repayments');
+
+      if (splitInTwo) {
+        seedDoc('repayments', `demo_repay_${creditIndex}_b`, {
+          businessId, creditSaleId: creditId, customerId: customer.id, customerName: customer.name,
+          productName: product.name, amount: amountPaid - firstAmt, method: pick(PAYMENT_WEIGHTED),
+          mpesaCode: null, paymentReference: `PAY-${creditIndex}B`,
+          paidAt: makeTimestamp(dateAt(Math.max(dayOffset - randInt(6, 10), 0), randInt(9, 18), randInt(0, 59)).getTime()),
+          recordedBy: DEMO_UID, recordedByName: pick(STAFF_NAMES),
+        });
+        touched.add('repayments');
+      }
+    }
+    creditIndex++;
+  }
+
+  // Expenses — spread across the same window, cycling through every
+  // category so the Expense Breakdown donut has more than one slice.
+  let expenseIndex = 0;
+  for (let dayOffset = 68; dayOffset >= 0; dayOffset -= randInt(2, 4)) {
+    const [category, base] = pick(EXPENSE_ENTRIES);
+    const amount = Math.round(base * (0.8 + rng() * 0.4));
+    const method = pick(PAYMENT_WEIGHTED);
+    seedDoc('expenses', `demo_expense_${expenseIndex}`, {
+      businessId,
+      description: category,
+      category, amount, paymentMethod: method,
+      mpesaCode: method === 'M-Pesa' ? `QW${randInt(100000, 999999)}KE` : null,
+      recordedBy: DEMO_UID, recordedByName: pick(STAFF_NAMES),
+      recordedAt: makeTimestamp(dateAt(dayOffset, randInt(8, 18), randInt(0, 59)).getTime()),
+    });
+    touched.add('expenses');
+    expenseIndex++;
+  }
+
+  return { saleCount: saleCounter, creditCount: creditIndex, expenseCount: expenseIndex };
+}
 
 function buildAndSeed() {
   const now = makeTimestamp(Date.now());
@@ -77,6 +264,15 @@ function buildAndSeed() {
   seedDoc('productCodeCounters', DEMO_BUSINESS_ID, { businessId: DEMO_BUSINESS_ID, lastNumber: PRODUCTS.length });
   touched.add('productCodeCounters');
 
+  DEMO_CUSTOMERS.forEach((c) => {
+    seedDoc('customers', c.id, {
+      businessId: DEMO_BUSINESS_ID, name: c.name, phone: c.phone,
+      customerCode: `CUS-${c.id.slice(-6).toUpperCase()}`,
+      email: '', address: '', notes: '', createdAt: now, updatedAt: now,
+    });
+    touched.add('customers');
+  });
+
   // Business record + owner profile — mirrors exactly what Setup.jsx
   // creates for a real signed-up owner, so nothing downstream needs to
   // special-case Demo Mode.
@@ -85,15 +281,14 @@ function buildAndSeed() {
     ownerIds: [DEMO_UID],
     createdAt: now,
     createdBy: DEMO_UID,
-    // FIX: seeded as an active Pro subscription with no expiry, instead
-    // of free, so anyone trying the demo can explore every Pro feature —
+    // Seeded as an active Pro subscription with no expiry, instead of
+    // free, so anyone trying the demo can explore every Pro feature —
     // Advanced Analytics, Inventory Intelligence, WhatsApp sharing,
     // unlimited products/staff — without needing a real payment. This
     // is read by AuthContext's `isPro` computation exactly the same way
     // a real business's subscription is; it only ever affects this
     // local, throwaway demo record and has zero bearing on real
-    // subscriptions (see cloudflare-worker/src/routes/paystackWebhook.js
-    // for where those are actually set).
+    // subscriptions.
     subscription: { plan: 'pro', status: 'active', expiresAt: null },
   });
   touched.add('businesses');
@@ -114,27 +309,39 @@ function buildAndSeed() {
   });
   touched.add('businessSettings');
 
-  // Sales, purchases, expenses, credit sales, repayments, and daily
-  // sessions are intentionally left empty — those figures should come
-  // from actually using the app, per spec.
+  // Today's counter session, opened, so a demo visitor lands straight on
+  // Dashboard/Counter without first having to click through "Open
+  // today's counter" themselves.
+  seedDoc('dailySessions', `${DEMO_BUSINESS_ID}_${todayKey()}`, {
+    businessId: DEMO_BUSINESS_ID,
+    date: todayKey(),
+    openingCashFloat: 5000,
+    openingMpesaFloat: 10000,
+    openedBy: DEMO_UID,
+    openedAt: now,
+    closedAt: null,
+    closedBy: null,
+  });
+  touched.add('dailySessions');
+
+  seedHistory(touched, DEMO_BUSINESS_ID);
 
   seedCommit([...touched]);
 }
 
-// FIX: bumped v2 -> v3. This flag just means "has this browser already
-// seeded its local demo data?" — bumping the name forces everyone who
-// tried the demo before (including during earlier testing), and already
-// has an old `plan: 'free'` business record cached in their browser, to
-// get a fresh reseed with the new Pro subscription instead of silently
-// keeping their old free one forever.
+// FIX: bumped v3 -> v4 (history/customers/session are new). This flag
+// just means "has this browser already seeded its local demo data?" —
+// bumping the name forces everyone who tried the demo before this
+// change to get a fresh reseed with the full history, instead of
+// silently keeping their old, mostly-empty demo data forever.
 export function seedDemoDataIfNeeded() {
-  if (localStorage.getItem('flowbiz_demo_seeded_v3') === 'true') return;
+  if (localStorage.getItem('flowbiz_demo_seeded_v4') === 'true') return;
   buildAndSeed();
-  localStorage.setItem('flowbiz_demo_seeded_v3', 'true');
+  localStorage.setItem('flowbiz_demo_seeded_v4', 'true');
 }
 
 export function resetDemoData() {
   clearAllDemoData();
   buildAndSeed();
-  localStorage.setItem('flowbiz_demo_seeded_v3', 'true');
+  localStorage.setItem('flowbiz_demo_seeded_v4', 'true');
 }

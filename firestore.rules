@@ -2,7 +2,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ── Helpers ─────────────────────────────────────────────────────────
+    // ── Security Helpers ────────────────────────────────────────────────
     function isSignedIn() { return request.auth != null; }
 
     function hasProfile() {
@@ -43,6 +43,15 @@ service cloud.firestore {
       return invite.claimed == false && invite.businessId == businessId && invite.role == role;
     }
 
+    // ── Platform Administrative Collections (Locked to Backend Worker) ──
+    match /systemAdmins/{adminId} {
+      allow read, write: if false; // Accessible only by backend Service Account
+    }
+
+    match /adminAuditLogs/{logId} {
+      allow read, write: if false; // Accessible only by backend Service Account
+    }
+
     // ── Businesses ──────────────────────────────────────────────────────
     match /businesses/{businessId} {
       allow get: if isStaff() && myBusinessId() == businessId;
@@ -64,12 +73,12 @@ service cloud.firestore {
       allow read, write: if isOwner() && myBusinessId() == businessId;
     }
 
-match /businessSettings/{businessId} {
-  allow read: if isStaff() && myBusinessId() == businessId;
-  allow create: if isSignedIn() && request.resource.data.businessId == businessId;
-  allow update: if isOwner() && myBusinessId() == businessId;
-  allow delete: if false;
-}
+    match /businessSettings/{businessId} {
+      allow read: if isStaff() && myBusinessId() == businessId;
+      allow create: if isSignedIn() && request.resource.data.businessId == businessId;
+      allow update: if isOwner() && myBusinessId() == businessId;
+      allow delete: if false;
+    }
 
     // ── Users & invites ─────────────────────────────────────────────────
     match /users/{userId} {

@@ -1,15 +1,4 @@
-// src/lib/firestore.js
-//
-// Minimal Firestore REST API client — just enough for this backend's
-// needs (read-by-id, patch-by-id, create-by-id). Deliberately NOT a
-// general Firestore SDK: no queries, no transactions. Every route in this
-// project only ever needs to read/write documents it already knows the ID
-// of (a uid, a businessId, a Paystack reference), so this stays small.
-//
-// Auth is via the OAuth2 access token from googleAuth.js, which — like
-// the Firebase Admin SDK — bypasses Firestore Security Rules entirely.
-// That's expected and required: this is the privileged, server-side path.
-
+// cloudflare-worker/src/lib/firestore.js
 import { getGoogleAccessToken } from './googleAuth.js';
 
 function fieldsToObject(fields) {
@@ -25,13 +14,13 @@ function valueToJs(value) {
   if (value.doubleValue !== undefined) return value.doubleValue;
   if (value.booleanValue !== undefined) return value.booleanValue;
   if (value.nullValue !== undefined) return null;
-  if (value.timestampValue !== undefined) return value.timestampValue; // ISO string
+  if (value.timestampValue !== undefined) return value.timestampValue;
   if (value.mapValue !== undefined) return fieldsToObject(value.mapValue.fields);
   if (value.arrayValue !== undefined) return (value.arrayValue.values || []).map(valueToJs);
   return null;
 }
 
-function jsToValue(value) {
+export function jsToValue(value) {
   if (value === null || value === undefined) return { nullValue: null };
   if (typeof value === 'string') return { stringValue: value };
   if (typeof value === 'boolean') return { booleanValue: value };
@@ -44,7 +33,7 @@ function jsToValue(value) {
   throw new Error(`Unsupported Firestore value type: ${typeof value}`);
 }
 
-function objectToFields(obj) {
+export function objectToFields(obj) {
   const fields = {};
   for (const [key, value] of Object.entries(obj)) fields[key] = jsToValue(value);
   return fields;
@@ -89,12 +78,102 @@ export async function createDocument(env, collection, docId, data) {
   if (!res.ok) throw new Error(`Firestore create failed (${collection}/${docId}): ${await res.text()}`);
   return res.json();
 }
+
 export async function deleteDocument(env, collection, docId) {
   const token = await getGoogleAccessToken(env);
   const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}/${collection}/${docId}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (res.status === 404) return; 
+  if (res.status === 404) return;
   if (!res.ok) throw new Error(`Firestore delete failed (${collection}/${docId}): ${await res.text()}`);
+}
+
+export async function listDocuments(env, collection, { pageSize = 100, pageToken = null, orderBy = null } = {}) {
+  const token = await getGoogleAccessToken(env);
+  const params = new URLSearchParams();
+  if (pageSize) params.set('pageSize', String(pageSize));
+  if (pageToken) params.set('pageToken', pageToken);
+  if (orderBy) params.set('orderBy', orderBy);
+
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}/${collection}${qs}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return { documents: [], nextPageToken: null };
+  if (!res.ok) throw new Error(`Firestore listDocuments failed (${collection}): ${await res.text()}`);
+  const data = await res.json();
+  const rawDocs = data.documents || [];
+  const documents = rawDocs.map((d) => ({
+    id: d.name.split('/').pop(),
+    ...fieldsToObject(d.fields),
+  }));
+  return { documents, nextPageToken: data.nextPageToken || null };
+}
+
+export async function runStructuredQuery(env, structuredQuery) {
+  const token = await getGoogleAccessToken(env);
+  const res = await fetch(`${baseUrl(env.FIREBASE_PROJECT_ID)}:runQuery`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ structuredQuery }),
+  });
+  if (!res.ok) throw new Error(`Firestore runQuery failed: ${await res.text()}`);
+  const rawList = await res.json();
+  const documents = [];
+  for (const item of rawList) {
+    if (item.document) {
+      documents.push({
+        id: item.document.name.split('/').pop(),
+        ...fieldsToObject(item.document.fields),
+      });
+    }
+  }
+  return documents;
+}
+
+export async function queryCollection(env, collectionName, { filters = [], orderBy = null, orderDirection = 'DESCENDING', limit = 50, offset = null } = {}) {
+  const structuredQuery = {
+    from: [{ collectionId: collectionName }],
+  };
+
+  if (filters && filters.length > 0) {
+    if (filters.length === 1) {
+      const f = filters[0];
+      structuredQuery.where = {
+        fieldFilter: {
+          field: { fieldPath: f.field },
+          op: f.op || 'EQUAL',
+          value: jsToValue(f.value),
+        },
+      };
+    } else {
+      structuredQuery.where = {
+        compositeFilter: {
+          op: 'AND',
+          filters: filters.map((f) => ({
+            fieldFilter: {
+              field: { fieldPath: f.field },
+              op: f.op || 'EQUAL',
+              value: jsToValue(f.value),
+            },
+          })),
+        },
+      };
+    }
+  }
+
+  if (orderBy) {
+    structuredQuery.orderBy = [
+      {
+        field: { fieldPath: orderBy },
+        direction: orderDirection,
+      },
+    ];
+  }
+
+  if (limit != null) structuredQuery.limit = limit;
+  if (offset != null) structuredQuery.offset = offset;
+
+  return runStructuredQuery(env, structuredQuery);
 }

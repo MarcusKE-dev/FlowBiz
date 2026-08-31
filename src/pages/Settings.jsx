@@ -14,9 +14,28 @@ import Modal from '../components/common/Modal';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { buildExportZip } from '../utils/dataExport';
 import { readExportZip, checkExistingData, importBusinessData } from '../utils/dataImport';
+import { printReceipt } from '../utils/documentService';
 
 const RESET_CONFIRM_PHRASE = 'RESET';
 const DELETE_ACCOUNT_CONFIRM_PHRASE = 'DELETE';
+
+// Used only by the Devices card's "Test Print" button — runs through the
+// exact same buildDocument()/jsPDF pipeline a real receipt uses, just
+// with made-up sample items, so a Test Print genuinely proves your
+// printer works with FlowBiz's real receipt output (not a mockup).
+const TEST_PRINT_SAMPLE = {
+  id: 'test-print-sample',
+  customerName: '',
+  soldByName: 'Test Print',
+  soldAt: new Date(),
+  isCredit: false,
+  paymentMethod: 'Cash',
+  totalAmount: 450,
+  items: [
+    { productName: 'Sample Product A', quantity: 2, unitPrice: 150, lineTotal: 300 },
+    { productName: 'Sample Product B', quantity: 1, unitPrice: 150, lineTotal: 150 },
+  ],
+};
 
 export default function Settings() {
   const { profile, businessId, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, deleteOwnAccount } = useAuth();
@@ -30,6 +49,12 @@ export default function Settings() {
   const [logoFile, setLogoFile]   = useState(null);
   const [logoUrl, setLogoUrl]     = useState('');
   const [cashierExp, setCashierExp] = useState(true);
+
+  // Devices card — printer paper width + live scanner/printer test state
+  const [paperWidth, setPaperWidth] = useState(80);
+  const [savingDevices, setSavingDevices] = useState(false);
+  const [scanTestValue, setScanTestValue] = useState('');
+  const [lastScan, setLastScan] = useState('');
   
   const [saving, setSaving]       = useState(false);
   const [savingPermissions, setSavingPermissions] = useState(false);
@@ -189,6 +214,7 @@ export default function Settings() {
         setAddress(d.address || '');
         setLogoUrl(d.logoUrl || '');
         setCashierExp(d.cashierCanRecordExpenses !== false); 
+        setPaperWidth(d.receiptPaperWidth === 58 ? 58 : 80);
       }
       setLoading(false);
     }).catch(() => setLoading(false));
@@ -262,6 +288,44 @@ export default function Settings() {
     setSavingPermissions(false);
     if (error) { toast.error(error.message); return; }
     toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Permissions saved');
+  };
+
+  const handleSaveDeviceSettings = async () => {
+    if (!settingsRef) return;
+    setSavingDevices(true);
+    const write = setDoc(settingsRef, { receiptPaperWidth: paperWidth }, { merge: true });
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    setSavingDevices(false);
+    if (error) { toast.error(error.message); return; }
+    toast.success(queuedOffline ? "Saved, it'll sync once you're back online." : 'Printer settings saved');
+  };
+
+  const handleTestPrint = async () => {
+    try {
+      await printReceipt(TEST_PRINT_SAMPLE, {
+        shopName: shopName || 'FlowBiz Store',
+        phone, email, address, logoUrl,
+        receiptPaperWidth: paperWidth,
+      });
+      toast.success('Test receipt sent — check your printer.');
+    } catch {
+      toast.error('Could not generate the test receipt.');
+    }
+  };
+
+  const handleScanTestKeyDown = (e) => {
+    // Hardware barcode scanners work by "typing" into whatever field
+    // currently has focus, then sending an Enter keystroke — a plain
+    // text input already receives that correctly with no special code,
+    // exactly the same way it would receive someone typing by hand. This
+    // just watches for that trailing Enter to know a scan finished.
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (scanTestValue.trim()) {
+        setLastScan(scanTestValue.trim());
+        setScanTestValue('');
+      }
+    }
   };
 
   const handleReset = async () => {
@@ -383,6 +447,61 @@ export default function Settings() {
         <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
           {savingPermissions ? 'Saving…' : 'Save permissions'}
         </button>
+      </div>
+
+      <div className="card p-5 space-y-4">
+        <div>
+          <h2 className="font-display text-base font-bold text-ink-800">Printer &amp; Scanner</h2>
+          <p className="text-sm text-ink-500 mt-1">
+            FlowBiz works with regular USB/Bluetooth barcode scanners and thermal receipt printers — there's nothing to install or pair here. Use this to set your receipt size and confirm your hardware is reading/printing correctly.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-ink-100 p-3.5 space-y-2.5">
+          <p className="text-sm font-semibold text-ink-800">Barcode scanner</p>
+          <p className="text-xs text-ink-500">
+            Most USB and Bluetooth scanners work like a keyboard — plug it in (or pair it) and it just works, no setup needed. Click the box below, then scan a barcode to confirm it's reading correctly.
+          </p>
+          <input
+            className="input font-mono"
+            value={scanTestValue}
+            onChange={(e) => setScanTestValue(e.target.value)}
+            onKeyDown={handleScanTestKeyDown}
+            placeholder="Click here, then scan a barcode…"
+            autoComplete="off"
+          />
+          {lastScan && (
+            <p className="text-xs font-semibold text-moss-700">✓ Received: <span className="font-mono">{lastScan}</span> — your scanner is reading correctly.</p>
+          )}
+        </div>
+
+        <div className="rounded-lg border border-ink-100 p-3.5 space-y-3">
+          <p className="text-sm font-semibold text-ink-800">Receipt printer</p>
+          <p className="text-xs text-ink-500">
+            Printing uses your device's normal print dialog — any printer already set up on your computer or phone (including USB thermal receipt printers) works automatically. Choose your paper width, then use Test Print to confirm.
+          </p>
+          <div>
+            <label className="label">Receipt paper width</label>
+            <div className="grid grid-cols-2 gap-2">
+              {[58, 80].map((w) => (
+                <button
+                  key={w}
+                  type="button"
+                  onClick={() => setPaperWidth(w)}
+                  className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${paperWidth === w ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}
+                >
+                  {w}mm
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" className="btn-outline" onClick={handleTestPrint}>Test Print</button>
+            <button type="button" className="btn-primary" onClick={handleSaveDeviceSettings} disabled={savingDevices}>
+              {savingDevices ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="card p-5 space-y-3">
