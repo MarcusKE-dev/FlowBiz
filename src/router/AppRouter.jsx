@@ -1,4 +1,4 @@
-
+// src/router/AppRouter.jsx
 import { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from '../components/common/ProtectedRoute';
@@ -9,7 +9,7 @@ import { prefetchRoutes } from './routePrefetch';
 import RequireOpenSession from '../components/common/RequireOpenSession';
 import LandingPage from '../pages/LandingPage';
 
-// Admin Control Center Imports
+// Admin Control Center
 import AdminProtectedRoute from '../components/admin/AdminProtectedRoute';
 import AdminShell from '../components/admin/AdminShell';
 
@@ -39,7 +39,7 @@ const routeLoaders = {
   privacy: () => import('../pages/Privacy'),
   terms: () => import('../pages/Terms'),
 
-  // Admin Lazy Loaders
+  // Admin Module Loaders
   adminLogin: () => import('../pages/admin/AdminLogin'),
   adminOverview: () => import('../pages/admin/AdminOverview'),
   adminBusinesses: () => import('../pages/admin/AdminBusinesses'),
@@ -75,7 +75,6 @@ const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
 const Privacy               = lazy(routeLoaders.privacy);
 const Terms                 = lazy(routeLoaders.terms);
 
-// Admin Pages
 const AdminLogin            = lazy(routeLoaders.adminLogin);
 const AdminOverview         = lazy(routeLoaders.adminOverview);
 const AdminBusinesses       = lazy(routeLoaders.adminBusinesses);
@@ -125,8 +124,18 @@ function isStandalonePWA() {
   );
 }
 
+function isSubdomainAdmin() {
+  if (typeof window === 'undefined') return false;
+  return window.location.hostname.startsWith('admin.');
+}
+
 function RootRoute() {
   const { firebaseUser, loading, isAdmin } = useAuth();
+
+  // 1. If on admin.flowbiz.co.ke subdomain, route straight to the admin console
+  if (isSubdomainAdmin()) {
+    return <Navigate to="/admin" replace />;
+  }
 
   if (loading) {
     return (
@@ -208,6 +217,11 @@ export default function AppRouter() {
         <Route path="/admin/audit-logs" element={<AdminPage><AdminAuditLogs /></AdminPage>} />
         <Route path="/admin/admins" element={<AdminPage><AdminSystemAdmins /></AdminPage>} />
         <Route path="/admin/communications" element={<AdminPage><AdminCommunications /></AdminPage>} />
+
+        {/* Subdomain fallback route aliases */}
+        <Route path="/businesses" element={<Navigate to="/admin/businesses" replace />} />
+        <Route path="/communications" element={<Navigate to="/admin/communications" replace />} />
+        <Route path="/audit-logs" element={<Navigate to="/admin/audit-logs" replace />} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

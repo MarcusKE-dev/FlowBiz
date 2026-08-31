@@ -105,7 +105,7 @@ export default function Settings() {
         onProgress: (name, i, total) => setImportProgress(`${name} (${i + 1}/${total})`),
       });
       const totalDocs = Object.values(results).reduce((a, b) => a + b, 0);
-      toast.success(`Import complete — ${totalDocs} record(s) restored.`);
+      toast.success(`Import complete ${totalDocs} record(s) restored.`);
       setPendingImport(null);
     } catch (err) {
       toast.error(`Import failed: ${err.message}`);
@@ -307,7 +307,7 @@ export default function Settings() {
         phone, email, address, logoUrl,
         receiptPaperWidth: paperWidth,
       });
-      toast.success('Test receipt sent — check your printer.');
+      toast.success('Test receipt sent, check your printer.');
     } catch {
       toast.error('Could not generate the test receipt.');
     }
@@ -453,14 +453,14 @@ export default function Settings() {
         <div>
           <h2 className="font-display text-base font-bold text-ink-800">Printer &amp; Scanner</h2>
           <p className="text-sm text-ink-500 mt-1">
-            FlowBiz works with regular USB/Bluetooth barcode scanners and thermal receipt printers — there's nothing to install or pair here. Use this to set your receipt size and confirm your hardware is reading/printing correctly.
+            FlowBiz works with regular USB/Bluetooth barcode scanners and thermal receipt printers, there's nothing to install or pair here. Use this to set your receipt size and confirm your hardware is reading/printing correctly.
           </p>
         </div>
 
         <div className="rounded-lg border border-ink-100 p-3.5 space-y-2.5">
           <p className="text-sm font-semibold text-ink-800">Barcode scanner</p>
           <p className="text-xs text-ink-500">
-            Most USB and Bluetooth scanners work like a keyboard — plug it in (or pair it) and it just works, no setup needed. Click the box below, then scan a barcode to confirm it's reading correctly.
+            Most USB and Bluetooth scanners work like a keyboard, plug it in (or pair it) and it just works, no setup needed. Click the box below, then scan a barcode to confirm it's reading correctly.
           </p>
           <input
             className="input font-mono"
@@ -471,14 +471,14 @@ export default function Settings() {
             autoComplete="off"
           />
           {lastScan && (
-            <p className="text-xs font-semibold text-moss-700">✓ Received: <span className="font-mono">{lastScan}</span> — your scanner is reading correctly.</p>
+            <p className="text-xs font-semibold text-moss-700">✓ Received: <span className="font-mono">{lastScan}</span>your scanner is reading correctly.</p>
           )}
         </div>
 
         <div className="rounded-lg border border-ink-100 p-3.5 space-y-3">
           <p className="text-sm font-semibold text-ink-800">Receipt printer</p>
           <p className="text-xs text-ink-500">
-            Printing uses your device's normal print dialog — any printer already set up on your computer or phone (including USB thermal receipt printers) works automatically. Choose your paper width, then use Test Print to confirm.
+            Printing uses your device's normal print dialog, any printer already set up on your computer or phone (including USB thermal receipt printers) works automatically. Choose your paper width, then use Test Print to confirm.
           </p>
           <div>
             <label className="label">Receipt paper width</label>
@@ -628,7 +628,7 @@ export default function Settings() {
 
           {pendingImport?.nonEmptyCollections.length > 0 && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
-              This business already has data in: {pendingImport.nonEmptyCollections.join(', ')}. Importing will add these records alongside what's already there — any record that shares the exact same ID as one you already have will be overwritten.
+              This business already has data in: {pendingImport.nonEmptyCollections.join(', ')}. Importing will add these records alongside what's already there, any record that shares the exact same ID as one you already have will be overwritten.
             </div>
           )}
 

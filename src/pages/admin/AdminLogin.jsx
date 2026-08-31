@@ -180,7 +180,7 @@ export default function AdminLogin() {
               required
               disabled={isLockedOut || submitting}
               className="input disabled:bg-ink-50 disabled:text-ink-400"
-              placeholder="admin@flowbiz.co.ke"
+              placeholder=""
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="username"

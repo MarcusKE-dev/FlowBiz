@@ -389,7 +389,7 @@ export default function InventoryIntelligence() {
                   </div>
                 ))}
               </div>
-              <p className="mt-3 text-[11px] leading-relaxed text-ink-400">Based on sales value over the last {LOOKBACK_DAYS} days. "A" products drive roughly 80% of your sales value — protect their stock levels first.</p>
+              <p className="mt-3 text-[11px] leading-relaxed text-ink-400">Based on sales value over the last {LOOKBACK_DAYS} days. "A" products drive roughly 80% of your sales value, protect their stock levels first.</p>
             </>
           ) : (
             <NoData>Not enough recent sales to classify products yet.</NoData>
@@ -406,7 +406,7 @@ export default function InventoryIntelligence() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Reorder Priority" subtitle="Fast-moving items running low — suggested 2-week restock quantity" icon={ClipboardCheck}>
+        <Section title="Reorder Priority" subtitle="Fast-moving items running low, suggested 2-week restock quantity" icon={ClipboardCheck}>
           {reorderPriority.length > 0 ? (
             <div className="divide-y divide-ink-100">
               {reorderPriority.map((p) => (

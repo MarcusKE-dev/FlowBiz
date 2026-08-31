@@ -1,3 +1,4 @@
+// src/pages/admin/AdminBusinesses.jsx
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { fetchAdminBusinesses } from '../../utils/adminService';
@@ -14,7 +15,7 @@ import {
 import { formatDate } from '../../utils/dateRanges';
 
 export default function AdminBusinesses() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
 
   const [search, setSearch] = useState(searchParams.get('search') || '');
   const [plan, setPlan] = useState(searchParams.get('plan') || 'all');
@@ -70,7 +71,7 @@ export default function AdminBusinesses() {
               className="input !pl-9 text-xs sm:text-sm"
             />
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <select
               value={plan}
               onChange={(e) => { setPlan(e.target.value); setPage(1); }}
@@ -88,6 +89,7 @@ export default function AdminBusinesses() {
               <option value="all">All Statuses</option>
               <option value="active">Active</option>
               <option value="expired">Expired</option>
+              <option value="suspended">Suspended</option>
             </select>
             <button type="submit" className="btn-primary !py-2 text-xs font-bold">
               Filter
@@ -98,7 +100,7 @@ export default function AdminBusinesses() {
 
       {error && <ErrorBanner message={error} />}
 
-      {/* Directory Table */}
+      {/* Directory Content */}
       {loading ? (
         <LoadingSpinner label="Querying business directory…" />
       ) : data?.businesses?.length === 0 ? (
@@ -108,94 +110,141 @@ export default function AdminBusinesses() {
           <p className="text-xs text-ink-400">Try adjusting your keyword, plan filter, or status criteria.</p>
         </div>
       ) : (
-        <div className="card overflow-hidden bg-white shadow-xs">
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left">
-              <thead className="bg-ink-50 uppercase text-[10px] font-bold text-ink-400 border-b border-ink-100">
-                <tr>
-                  <th className="px-4 py-3">Business Name &amp; ID</th>
-                  <th className="px-4 py-3">Owner Contact</th>
-                  <th className="px-4 py-3">Plan</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Registered</th>
-                  <th className="px-4 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-ink-100 font-medium">
-                {data.businesses.map((b) => (
-                  <tr key={b.id} className="hover:bg-ink-50/50 transition-colors">
-                    <td className="px-4 py-3">
-                      <Link to={`/admin/businesses/${b.id}`} className="font-bold text-ink-900 hover:text-moss-700 block text-sm">
-                        {b.name}
-                      </Link>
-                      <span className="font-mono text-[10px] text-ink-400">{b.id}</span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="font-semibold text-ink-800 block">{b.owner?.name || 'Owner'}</span>
-                      <span className="text-[11px] text-ink-500">{b.owner?.email || b.settings?.email || 'No email on file'}</span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`badge ${b.plan === 'pro' ? 'bg-amber-100 text-amber-800 font-black' : 'bg-ink-100 text-ink-600'}`}>
-                        {b.plan.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`badge ${b.status === 'active' ? 'bg-moss-100 text-moss-800' : 'bg-rust-100 text-rust-700'}`}>
-                        {b.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-ink-500">
-                      {formatDate(b.createdAt)}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <Link
-                          to={`/admin/businesses/${b.id}`}
-                          className="btn-outline !min-h-0 !py-1 !px-2 text-[11px] font-semibold inline-flex items-center gap-1"
-                        >
-                          <Eye className="h-3 w-3" /> Inspect
-                        </Link>
-                        <Link
-                          to={`/admin/businesses/${b.id}/support`}
-                          className="btn-outline !min-h-0 !py-1 !px-2 text-[11px] font-semibold inline-flex items-center gap-1 text-amber-700 hover:bg-amber-50"
-                          title="View as Business (Read-Only)"
-                        >
-                          <Shield className="h-3 w-3" /> Support
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="space-y-3">
+          {/* Mobile Card View (< sm screens) */}
+          <div className="grid grid-cols-1 gap-3 sm:hidden">
+            {data.businesses.map((b) => (
+              <div key={b.id} className="card p-4 bg-white space-y-3 shadow-xs">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <Link to={`/admin/businesses/${b.id}`} className="font-bold text-ink-900 text-sm hover:text-moss-700 block">
+                      {b.name}
+                    </Link>
+                    <span className="font-mono text-[10px] text-ink-400">{b.id}</span>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <span className={`badge ${b.plan === 'pro' ? 'bg-amber-100 text-amber-800 font-bold' : 'bg-ink-100 text-ink-600'}`}>
+                      {b.plan.toUpperCase()}
+                    </span>
+                    <span className={`badge ${b.status === 'active' ? 'bg-moss-100 text-moss-800' : 'bg-rust-100 text-rust-700'}`}>
+                      {b.status}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="text-xs text-ink-600 space-y-0.5 border-t border-ink-100 pt-2">
+                  <p><strong className="text-ink-800">{b.owner?.name || 'Owner'}</strong> &middot; {b.owner?.email || b.settings?.email || 'No email'}</p>
+                  <p className="text-[11px] text-ink-400">Registered on {formatDate(b.createdAt)}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <Link
+                    to={`/admin/businesses/${b.id}`}
+                    className="btn-outline !min-h-0 !py-1.5 text-xs font-semibold flex items-center justify-center gap-1"
+                  >
+                    <Eye className="h-3.5 w-3.5" /> Inspect
+                  </Link>
+                  <Link
+                    to={`/admin/businesses/${b.id}/support`}
+                    className="btn-outline !min-h-0 !py-1.5 text-xs font-semibold flex items-center justify-center gap-1 text-amber-700 hover:bg-amber-50"
+                  >
+                    <Shield className="h-3.5 w-3.5" /> Support
+                  </Link>
+                </div>
+              </div>
+            ))}
           </div>
 
-          {/* Pagination Controls */}
-          {data.totalPages > 1 && (
-            <div className="flex items-center justify-between border-t border-ink-100 px-4 py-3 text-xs text-ink-500">
-              <span>
-                Page {data.page} of {data.totalPages} ({data.total} total)
-              </span>
-              <div className="flex gap-1">
-                <button
-                  type="button"
-                  disabled={data.page <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="btn-outline !min-h-0 !py-1 !px-2 text-xs disabled:opacity-40"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" /> Previous
-                </button>
-                <button
-                  type="button"
-                  disabled={data.page >= data.totalPages}
-                  onClick={() => setPage((p) => p + 1)}
-                  className="btn-outline !min-h-0 !py-1 !px-2 text-xs disabled:opacity-40"
-                >
-                  Next <ChevronRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
+          {/* Desktop Table View (>= sm screens) */}
+          <div className="hidden sm:block card overflow-hidden bg-white shadow-xs">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-ink-50 uppercase text-[10px] font-bold text-ink-400 border-b border-ink-100">
+                  <tr>
+                    <th className="px-4 py-3">Business Name &amp; ID</th>
+                    <th className="px-4 py-3">Owner Contact</th>
+                    <th className="px-4 py-3">Plan</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Registered</th>
+                    <th className="px-4 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-ink-100 font-medium">
+                  {data.businesses.map((b) => (
+                    <tr key={b.id} className="hover:bg-ink-50/50 transition-colors">
+                      <td className="px-4 py-3">
+                        <Link to={`/admin/businesses/${b.id}`} className="font-bold text-ink-900 hover:text-moss-700 block text-sm">
+                          {b.name}
+                        </Link>
+                        <span className="font-mono text-[10px] text-ink-400">{b.id}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="font-semibold text-ink-800 block">{b.owner?.name || 'Owner'}</span>
+                        <span className="text-[11px] text-ink-500">{b.owner?.email || b.settings?.email || 'No email on file'}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`badge ${b.plan === 'pro' ? 'bg-amber-100 text-amber-800 font-black' : 'bg-ink-100 text-ink-600'}`}>
+                          {b.plan.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`badge ${b.status === 'active' ? 'bg-moss-100 text-moss-800' : 'bg-rust-100 text-rust-700'}`}>
+                          {b.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-ink-500">
+                        {formatDate(b.createdAt)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Link
+                            to={`/admin/businesses/${b.id}`}
+                            className="btn-outline !min-h-0 !py-1 !px-2 text-[11px] font-semibold inline-flex items-center gap-1"
+                          >
+                            <Eye className="h-3 w-3" /> Inspect
+                          </Link>
+                          <Link
+                            to={`/admin/businesses/${b.id}/support`}
+                            className="btn-outline !min-h-0 !py-1 !px-2 text-[11px] font-semibold inline-flex items-center gap-1 text-amber-700 hover:bg-amber-50"
+                            title="View as Business (Read-Only)"
+                          >
+                            <Shield className="h-3 w-3" /> Support
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          )}
+
+            {/* Pagination Controls */}
+            {data.totalPages > 1 && (
+              <div className="flex items-center justify-between border-t border-ink-100 px-4 py-3 text-xs text-ink-500">
+                <span>
+                  Page {data.page} of {data.totalPages} ({data.total} total)
+                </span>
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    disabled={data.page <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    className="btn-outline !min-h-0 !py-1 !px-2 text-xs disabled:opacity-40"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" /> Previous
+                  </button>
+                  <button
+                    type="button"
+                    disabled={data.page >= data.totalPages}
+                    onClick={() => setPage((p) => p + 1)}
+                    className="btn-outline !min-h-0 !py-1 !px-2 text-xs disabled:opacity-40"
+                  >
+                    Next <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
