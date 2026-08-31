@@ -6,6 +6,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
     <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="preconnect" href="https://js.paystack.co" crossorigin />
     <link rel="preconnect" href="https://api.paystack.co" crossorigin />
     <link rel="preconnect" href="https://flowbiz-api.flowbiz.workers.dev" crossorigin />
@@ -19,7 +20,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 
     <!-- SEO & Search Engine Optimization Meta Tags -->
-    <title>FlowBiz — POS, Inventory & Business Manager for Kenyan SMBs</title>
+    <title>FlowBiz POS, Inventory & Business Manager for Kenyan SMBs</title>
     <meta name="description" content="Offline-first Point of Sale (POS), real-time stock inventory, M-Pesa till reconciliation, and customer credit (deni) ledger tailored for Kenyan retail shops, wholesalers, and supermarkets." />
     <meta name="keywords" content="POS Kenya, Point of Sale Nairobi, M-Pesa POS integration, retail management Kenya, duka inventory app, deni credit ledger, Kenyan business software, FlowBiz, stock control Kenya" />
     <meta name="author" content="FlowBiz" />
@@ -57,38 +58,38 @@
         "description": "Offline-first POS and business management software for Kenyan retail, wholesale, and service shops with M-Pesa reconciliation and debt tracking."
       }
     </script>
-      <script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "FAQPage",
-  "mainEntity": [
+    <script type="application/ld+json">
     {
-      "@type": "Question",
-      "name": "Does FlowBiz work when there is no internet connection?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "Yes. FlowBiz uses an offline-first architecture with persistent local caching. Sales, credit purchases, and expenses are saved immediately in your browser or phone storage and sync automatically when connectivity is restored."
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "How does M-Pesa reconciliation work at closing time?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "When recording sales, cashiers specify whether the payment was received via Cash or M-Pesa. At the end of the shift on the Close Day page, FlowBiz calculates the exact expected M-Pesa sum so you can reconcile it directly against your M-Pesa Till or Paybill balance."
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "Why does profit stay at zero when I record a Credit (Deni) sale?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "FlowBiz uses a cash-flow-first accounting model specifically designed for retail businesses. Revenue and gross profit are only recognized when the customer pays off their debt to prevent false profit illusions on uncollected credit."
-      }
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Does FlowBiz work when there is no internet connection?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. FlowBiz uses an offline-first architecture with persistent local caching. Sales, credit purchases, and expenses are saved immediately in your browser or phone storage and sync automatically when connectivity is restored."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How does M-Pesa reconciliation work at closing time?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "When recording sales, cashiers specify whether the payment was received via Cash or M-Pesa. At the end of the shift on the Close Day page, FlowBiz calculates the exact expected M-Pesa sum so you can reconcile it directly against your M-Pesa Till or Paybill balance."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why does profit stay at zero when I record a Credit (Deni) sale?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "FlowBiz uses a cash-flow-first accounting model specifically designed for retail businesses. Revenue and gross profit are only recognized when the customer pays off their debt to prevent false profit illusions on uncollected credit."
+          }
+        }
+      ]
     }
-  ]
-}
-</script>
+    </script>
     <!-- Google Fonts Preconnect & Stylesheets -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

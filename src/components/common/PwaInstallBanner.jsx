@@ -9,7 +9,7 @@ const DISMISSED_KEY = 'flowbiz_pwa_banner_dismissed';
 
 export default function PwaInstallBanner() {
   const location = useLocation();
-  const { isInstallable, isIOS, isStandalone, promptInstall } = usePwaInstall();
+  const { isIOS, isStandalone, promptInstall } = usePwaInstall();
 
   // Read persisted dismissal state from localStorage
   const [dismissed, setDismissed] = useState(() => {
@@ -40,11 +40,7 @@ export default function PwaInstallBanner() {
   const allowedPaths = ['/', '/setup', '/signup'];
   const isAllowedPath = allowedPaths.includes(location.pathname);
 
-  // Never show this inside the Demo build: its PWA manifest is scoped to
-  // the real app's root ('/'), not '/demo/', so "installing" it here
-  // would point at the wrong app — and nobody needs to install a demo
-  // anyway. Otherwise unchanged: skipped in installed-app mode, once
-  // dismissed, or off the allowed pages.
+  // Never show in Demo build, standalone/installed mode, dismissed state, or off allowed paths
   if (isDemoMode() || isStandalone || dismissed || !isAllowedPath) return null;
 
   return (
@@ -82,16 +78,7 @@ export default function PwaInstallBanner() {
       </div>
 
       <div className="mt-3">
-        {/* Android & Desktop Chrome / Edge 1-Click Install Button */}
-        {isInstallable ? (
-          <button
-            type="button"
-            onClick={handleInstallClick}
-            className="btn-primary w-full !py-2 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
-          >
-            <Download className="h-4 w-4" /> Install Free App
-          </button>
-        ) : isIOS ? (
+        {isIOS ? (
           <div className="rounded-lg bg-[#faf6ef] p-2.5 text-[11px] text-ink-700 border border-ink-100">
             <p className="font-semibold flex items-center flex-wrap gap-1">
               Tap <Share className="h-3.5 w-3.5 text-moss-700 inline" /> Share, then select{' '}
