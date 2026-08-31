@@ -11,7 +11,6 @@ export default function PwaInstallBanner() {
   const location = useLocation();
   const { isIOS, isStandalone, promptInstall } = usePwaInstall();
 
-  // Read persisted dismissal state from localStorage
   const [dismissed, setDismissed] = useState(() => {
     try {
       return localStorage.getItem(DISMISSED_KEY) === 'true';
@@ -25,7 +24,7 @@ export default function PwaInstallBanner() {
     try {
       localStorage.setItem(DISMISSED_KEY, 'true');
     } catch {
-      // Ignore if localStorage is unavailable
+      // Ignore if localStorage unavailable
     }
   };
 
@@ -36,11 +35,11 @@ export default function PwaInstallBanner() {
     }
   };
 
-  // Only allow on landing page ('/') and signup/setup pages ('/setup', '/signup')
+  // Only show on public landing and setup pages
   const allowedPaths = ['/', '/setup', '/signup'];
   const isAllowedPath = allowedPaths.includes(location.pathname);
 
-  // Never show in Demo build, standalone/installed mode, dismissed state, or off allowed paths
+  // Do not render in demo mode, standalone PWA mode, dismissed state, or internal routes
   if (isDemoMode() || isStandalone || dismissed || !isAllowedPath) return null;
 
   return (

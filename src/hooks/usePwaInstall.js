@@ -2,8 +2,6 @@
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 
-// Module-level global singleton so beforeinstallprompt is NEVER missed,
-// even if fired before React mounts or while navigating between routes.
 let globalDeferredPrompt = null;
 const promptListeners = new Set();
 
@@ -13,13 +11,12 @@ function setGlobalPrompt(prompt) {
 }
 
 if (typeof window !== 'undefined') {
-  // Capture the browser's install prompt event immediately at script execution
   window.addEventListener('beforeinstallprompt', (e) => {
+    // Prevent default mini-infobar and store event for 1-click install
     e.preventDefault();
     setGlobalPrompt(e);
   });
 
-  // Clear when the app has finished installing
   window.addEventListener('appinstalled', () => {
     setGlobalPrompt(null);
   });
@@ -30,32 +27,29 @@ export function usePwaInstall() {
   const [isIOS, setIsIOS] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
   const [isInstalled, setIsInstalled] = useState(false);
+  const [isInAppBrowser, setIsInAppBrowser] = useState(false);
 
   useEffect(() => {
-    const checkStandalone = () => {
-      const isStandaloneDisplay =
-        window.matchMedia?.('(display-mode: standalone)').matches ||
-        window.navigator.standalone === true ||
-        document.referrer.includes('android-app://');
-      setIsStandalone(Boolean(isStandaloneDisplay));
-    };
+    const isStandaloneDisplay =
+      window.matchMedia?.('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true ||
+      document.referrer.includes('android-app://');
+    setIsStandalone(Boolean(isStandaloneDisplay));
 
-    checkStandalone();
-
-    const userAgent = (navigator.userAgent || '').toLowerCase();
-    const isIosDevice = /iphone|ipad|ipod/.test(userAgent);
+    const ua = (navigator.userAgent || '').toLowerCase();
+    const isIosDevice = /iphone|ipad|ipod/.test(ua);
     setIsIOS(isIosDevice);
 
-    // Check if the app is already installed via getInstalledRelatedApps if supported
+    // Detect common in-app browsers (WhatsApp, FB, IG, Messenger, Twitter)
+    const inApp = /fban|fbav|instagram|crios|gsa|wv|line|micromessenger/i.test(ua);
+    setIsInAppBrowser(inApp);
+
     if ('getInstalledRelatedApps' in navigator) {
-      navigator.getInstalledRelatedApps().then((relatedApps) => {
-        if (relatedApps && relatedApps.length > 0) {
-          setIsInstalled(true);
-        }
+      navigator.getInstalledRelatedApps().then((apps) => {
+        if (apps && apps.length > 0) setIsInstalled(true);
       }).catch(() => {});
     }
 
-    // Subscribe to changes in globalDeferredPrompt
     const handlePromptChange = (prompt) => {
       setDeferredPrompt(prompt);
     };
@@ -78,32 +72,41 @@ export function usePwaInstall() {
   const isInstallable = Boolean(deferredPrompt);
 
   const promptInstall = async () => {
-    // 1. Direct 1-click install if beforeinstallprompt is ready
+    // 1. Direct 1-click native install dialog (Android Chrome / Edge / Desktop Chrome)
     if (deferredPrompt) {
       try {
         await deferredPrompt.prompt();
         const choice = await deferredPrompt.userChoice;
-        setGlobalPrompt(null);
-        return choice?.outcome === 'accepted';
+        if (choice?.outcome === 'accepted') {
+          setGlobalPrompt(null);
+          return true;
+        }
+        return false;
       } catch (err) {
         console.error('[PWA] prompt error:', err);
       }
     }
 
-    // 2. iOS fallback
+    // 2. iOS Safari (Apple does not support programmatic beforeinstallprompt)
     if (isIOS) {
-      toast('Tap the Share button in Safari, then select "Add to Home Screen".', { duration: 4000 });
+      toast('Tap the Share button at the bottom of Safari, then select "Add to Home Screen".', { duration: 5000 });
       return false;
     }
 
-    // 3. If already installed or running in standalone mode
+    // 3. In-App WebViews (e.g. WhatsApp, Facebook link preview)
+    if (isInAppBrowser) {
+      toast('In-app browsers block app installation. Tap menu (⋮) and select "Open in Chrome".', { duration: 5000 });
+      return false;
+    }
+
+    // 4. Already installed
     if (isStandalone || isInstalled) {
       toast.success('FlowBiz is already installed on this device!');
       return false;
     }
 
-    // 4. If deferredPrompt was not captured (e.g. desktop Safari / Firefox)
-    toast('To install, tap your browser menu (⋮) and select "Install app" or "Add to Home screen".');
+    // 5. Incognito / Private or Uncaptured state
+    toast('App installation is blocked in Incognito/Private mode. Open FlowBiz in a standard tab to install.', { duration: 5000 });
     return false;
   };
 
@@ -111,6 +114,7 @@ export function usePwaInstall() {
     isInstallable,
     isIOS,
     isStandalone: isStandalone || isInstalled,
+    isInAppBrowser,
     promptInstall,
   };
 }
