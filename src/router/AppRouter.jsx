@@ -1,3 +1,4 @@
+// src/router/AppRouter.jsx
 import { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from '../components/common/ProtectedRoute';
@@ -37,7 +38,7 @@ const routeLoaders = {
 
 const Setup                 = lazy(routeLoaders.setup);
 const Login                 = lazy(routeLoaders.login);
-const ForgotPassword         = lazy(routeLoaders.forgotPassword);
+const ForgotPassword        = lazy(routeLoaders.forgotPassword);
 const JoinStaff             = lazy(routeLoaders.joinStaff);
 const AuthAction            = lazy(routeLoaders.authAction);
 const Dashboard             = lazy(routeLoaders.dashboard);
@@ -81,18 +82,36 @@ function PublicOnly({ children }) {
 
 function isStandalonePWA() {
   if (typeof window === 'undefined') return false;
-  return window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  return (
+    window.matchMedia?.('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true ||
+    document.referrer.includes('android-app://')
+  );
 }
 
 function RootRoute() {
   const { firebaseUser, loading, isAdmin } = useAuth();
 
-  if (!loading && firebaseUser) {
+  // 1. While auth initializes, render a clean loading screen on the app's sand background (never the landing page)
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-sand">
+        <LoadingSpinner label="Starting FlowBiz…" />
+      </div>
+    );
+  }
+
+  // 2. If already signed in, navigate straight to the Dashboard (or Counter for cashiers)
+  if (firebaseUser) {
     return <Navigate to={isAdmin ? "/dashboard" : "/counter"} replace />;
   }
-  if (!loading && !firebaseUser && isStandalonePWA()) {
+
+  // 3. If opened from the phone's home screen icon (installed PWA) while signed out, go straight to Login
+  if (isStandalonePWA()) {
     return <Navigate to="/login" replace />;
   }
+
+  // 4. Only standard web browser visitors on the web domain see the marketing Landing Page
   return <LandingPage />;
 }
 
@@ -112,7 +131,7 @@ export default function AppRouter() {
     <Suspense fallback={<LoadingSpinner label="Loading..." />}>
       <RoutePrefetcher />
       <Routes>
-        {/* Landing Page for visitors; redirects to Dashboard/Counter when logged in */}
+        {/* Root Route — routes to Dashboard/Login if installed/logged in; Landing Page for website visitors */}
         <Route path="/" element={<RootRoute />} />
 
         {/* Public Authentication & Setup */}
