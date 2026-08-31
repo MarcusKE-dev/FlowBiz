@@ -184,7 +184,7 @@ export default function Setup() {
           </div>
           <div>
             <label className="label">Your name</label>
-            <input className="input" required value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="e.g. John Kamau" disabled={submitting} />
+            <input className="input" required value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="e.g. John Doe" disabled={submitting} />
           </div>
           <div>
             <label className="label">Email</label>

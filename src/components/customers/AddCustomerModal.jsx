@@ -62,7 +62,7 @@ export default function AddCustomerModal({ open, onClose, onSave, existingCustom
             className="input"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. John Kamau"
+            placeholder="e.g. John Doe"
             disabled={busy}
             autoFocus
             required
