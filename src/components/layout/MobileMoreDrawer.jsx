@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 import * as Lucide from 'lucide-react';
 import { NAV_ITEMS } from './navConfig';
 import { useAuth } from '../../contexts/AuthContext';
-import { useSettings } from '../../hooks/useSettings';
+import { useSettings } from '../../contexts/SettingsContext';
 import { X } from 'lucide-react';
 
 const Icon = ({ name, className = 'h-5 w-5' }) => {

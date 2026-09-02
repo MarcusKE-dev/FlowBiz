@@ -4,7 +4,7 @@ import * as Lucide from 'lucide-react';
 import { Menu } from 'lucide-react';
 import { NAV_ITEMS, MOBILE_PRIMARY } from './navConfig';
 import { useAuth } from '../../contexts/AuthContext';
-import { useSettings } from '../../hooks/useSettings';
+import { useSettings } from '../../contexts/SettingsContext';
 import MobileMoreDrawer from './MobileMoreDrawer';
 
 export default function BottomNav() {

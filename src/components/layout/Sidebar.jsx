@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import * as Lucide from 'lucide-react';
 import { NAV_ITEMS } from './navConfig';
 import { useAuth } from '../../contexts/AuthContext';
-import { useSettings } from '../../hooks/useSettings';
+import { useSettings } from '../../contexts/SettingsContext';
 
 const Icon = ({ name, className = 'h-5 w-5' }) => {
   const C = Lucide[name] || Lucide.Circle;

@@ -6,7 +6,7 @@ import { tenantQuery } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { useFinancialsForRange } from '../hooks/useFinancials';
 import { useDailySession } from '../hooks/useDailySession';
-import { useSettings } from '../hooks/useSettings';
+import { useSettings } from '../contexts/SettingsContext';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import ErrorBanner from '../components/common/ErrorBanner';
 import Modal from '../components/common/Modal';

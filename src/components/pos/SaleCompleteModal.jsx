@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import Modal from '../common/Modal';
 import { generateReceiptPDF, printReceipt, generateInvoicePDF, printInvoice, sendWhatsAppDocument } from '../../utils/documentService';
 import { getOrCreateShareLink } from '../../utils/documentSharing';
-import { useSettings } from '../../hooks/useSettings';
+import { useSettings } from '../../contexts/SettingsContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatKES } from '../../utils/currency';
 import { Printer, Download, MessageCircle } from 'lucide-react';

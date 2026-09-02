@@ -5,7 +5,7 @@ import { Banknote, Smartphone } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useSettings } from '../hooks/useSettings';
+import { useSettings } from '../contexts/SettingsContext';
 import { isExpenseExcluded } from '../utils/financials';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';

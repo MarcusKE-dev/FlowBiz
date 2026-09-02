@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import { Printer, Download, MessageCircle, CheckCircle2, Clock } from 'lucide-react';
 import Modal from '../common/Modal';
 import { useAuth } from '../../contexts/AuthContext';
-import { useSettings } from '../../hooks/useSettings';
+import { useSettings } from '../../contexts/SettingsContext';
 import { formatKES } from '../../utils/currency';
 import { openWhatsApp, buildDebtPaymentReceiptMessage, isValidWhatsAppPhone } from '../../utils/whatsapp';
 import { printDebtPaymentReceipt, generateDebtPaymentReceiptPDF } from '../../utils/documentService';

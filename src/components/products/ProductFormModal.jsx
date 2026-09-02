@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import Modal from '../common/Modal';
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSettings } from '../../contexts/SettingsContext';
 import { raceWithTimeout } from '../../utils/offlineWrite';
 
 const empty = {
@@ -17,16 +18,6 @@ const empty = {
   barcode: '',
   description: '',
 };
-
-const DEFAULT_CATEGORIES = [
-  'Beverages',
-  'Hardware',
-  'Household',
-  'Personal Care',
-  'Stationery',
-  'Airtime/Float',
-  'Other',
-];
 
 const FREE_PLAN_PRODUCT_LIMIT = 100;
 
@@ -44,8 +35,9 @@ export default function ProductFormModal({
   productCount = 0,
 }) {
   const { businessId, isPro } = useAuth();
+  const { settings } = useSettings();
+  const categories = settings.categories;
   const [form, setForm] = useState(empty);
-  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -53,27 +45,6 @@ export default function ProductFormModal({
 
   // Only true if we are editing an existing product that already has a Firestore document ID
   const isEditing = Boolean(initialProduct && initialProduct.id);
-
-  // Load permanent categories from Firestore
-  useEffect(() => {
-    if (!open || !businessId) return;
-    const unsub = onSnapshot(doc(db, 'businessSettings', businessId), (snap) => {
-      if (snap.exists() && Array.isArray(snap.data().categories)) {
-        const cleaned = snap
-          .data()
-          .categories.filter((c) => c && c.trim().toLowerCase() !== 'groceries');
-        setCategories(cleaned.length > 0 ? cleaned : DEFAULT_CATEGORIES);
-      } else {
-        setCategories(DEFAULT_CATEGORIES);
-        setDoc(
-          doc(db, 'businessSettings', businessId),
-          { categories: DEFAULT_CATEGORIES },
-          { merge: true }
-        ).catch(console.error);
-      }
-    });
-    return unsub;
-  }, [open, businessId]);
 
   // Sync form state when modal opens
   useEffect(() => {
