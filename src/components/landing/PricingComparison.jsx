@@ -14,7 +14,7 @@ export function PricingComparison() {
 Start free with the essentials. Upgrade to FlowBiz Pro when your business needs more.          </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl mx-auto">
           {/* Starter Plan */}
           <div className="bg-white rounded-2xl border border-[#cfd3da] p-6 sm:p-8 flex flex-col justify-between space-y-6 shadow-sm">
             <div className="space-y-4">
@@ -135,6 +135,57 @@ Start free with the essentials. Upgrade to FlowBiz Pro when your business needs 
               className="w-full py-3 text-center font-bold text-sm bg-[#1a623c] text-white rounded-xl hover:bg-[#144f30] transition-colors shadow-sm block"
             >
               Start Free &amp; Upgrade Later
+              <ArrowRight className="h-4 w-4 ml-1 inline" />
+            </Link>
+          </div>
+
+          {/* Lifetime Plan */}
+          <div className="bg-white rounded-2xl border border-[#e6b95c] p-6 sm:p-8 flex flex-col justify-between space-y-6 shadow-sm relative">
+            <div className="absolute -top-3 right-6 bg-[#a15c07] text-white px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide">
+              Pay once
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-xl font-bold text-[#15171d]">FlowBiz Lifetime</h3>
+                <p className="text-xs text-[#767f8f] mt-0.5">
+                  Everything in Pro, paid for once — no recurring FlowBiz software subscription.
+                </p>
+              </div>
+
+              <div className="pt-2">
+                <span className="text-3xl font-extrabold text-[#a15c07]">KES 15,550</span>
+                <span className="text-xs text-[#767f8f] font-medium"> one-time</span>
+                <p className="text-[11px] text-[#a15c07] font-semibold mt-0.5">
+                  Pay once · No auto-billing · No renewals, ever
+                </p>
+              </div>
+
+              <ul className="space-y-2.5 pt-4 border-t border-[#e8eaed] text-xs text-[#363b48] font-medium">
+                <li className="flex items-center gap-2">
+                  <Check className="h-4 w-4 text-[#a15c07] shrink-0" />
+                  <strong className="text-[#15171d]">Every FlowBiz Pro feature, permanently unlocked</strong>
+                </li>
+                <li className="flex items-center gap-2">
+                  <Check className="h-4 w-4 text-[#a15c07] shrink-0" />
+                  <span>One perpetual license tied to your business — works across your devices</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <Check className="h-4 w-4 text-[#a15c07] shrink-0" />
+                  <span>Cloud-synced &amp; offline-first, same as every FlowBiz plan</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <Check className="h-4 w-4 text-[#a15c07] shrink-0" />
+                  <span>WhatsApp receipts, invoices &amp; debt reminders</span>
+                </li>
+              </ul>
+            </div>
+
+            <Link
+              to="/setup"
+              className="w-full py-3 text-center font-bold text-sm bg-[#a15c07] text-white rounded-xl hover:bg-[#8a4d06] transition-colors shadow-sm block"
+            >
+              Get FlowBiz Lifetime
               <ArrowRight className="h-4 w-4 ml-1 inline" />
             </Link>
           </div>
