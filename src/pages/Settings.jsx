@@ -10,6 +10,7 @@ import { isDemoMode } from '../demo/demoMode';
 import { resetDemoData } from '../demo/seedData';
 import { formatDateTime } from '../utils/dateRanges';
 import ConfirmDialog from '../components/common/ConfirmDialog';
+import PageHeader from '../components/ui/PageHeader';
 import Modal from '../components/common/Modal'; 
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { buildExportZip } from '../utils/dataExport';
@@ -403,18 +404,20 @@ export default function Settings() {
 
   return (
     <div className="mx-auto max-w-2xl">
-      <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
-      <p className="mt-1 text-sm text-ink-500">Manage your business profile, hardware, team, data and account.</p>
+      <PageHeader
+        title="Settings"
+        description="Your business profile, hardware, team, data and account."
+      />
 
-      <Section title="Account & Security" first>
-        <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
+      <Section title="Account and security" first>
+        <Row label="Email verification" value={demo ? 'Not applicable in demo mode' : emailVerified ? 'Verified' : 'Not verified'} tone={!demo && !emailVerified ? 'text-danger-700' : ''} />
         <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
         <Row label="Business ID" value={businessId || '—'} mono />
       </Section>
 
       <Section
-        title="Business Information"
-        description="This info dynamically populates your customer-facing documents (receipts, invoices)."
+        title="Business information"
+        description="This appears on the receipts and invoices your customers receive."
         as="form"
         onSubmit={handleSave}
       >
@@ -471,7 +474,7 @@ export default function Settings() {
               autoComplete="off"
             />
             {lastScan && (
-              <p className="text-xs font-semibold text-moss-700">✓ Received: <span className="font-mono">{lastScan}</span>your scanner is reading correctly.</p>
+              <p className="text-secondary font-medium text-success-700">Received <span className="num font-mono">{lastScan}</span>your scanner is reading correctly.</p>
             )}
           </div>
 
@@ -527,7 +530,7 @@ export default function Settings() {
                       <div className="flex flex-wrap items-center gap-2 mb-1">
                         <p className="font-semibold text-ink-800 truncate">{group.deviceLabel || 'Unknown device'}</p>
                         {isCurrent && <span className="badge bg-ink-900 text-white border border-ink-900 shrink-0">This device</span>}
-                        {!isCurrent && isActiveNow && !isRevoked && <span className="badge bg-moss-50 text-moss-700 border border-moss-200 shrink-0">Active</span>}
+                        {!isCurrent && isActiveNow && !isRevoked && <span className="badge bg-success-50 text-success-700 border border-success-200 shrink-0">Active</span>}
                         {!isCurrent && !isActiveNow && !isRevoked && <span className="badge bg-ink-50 text-ink-600 border border-ink-200 shrink-0">Inactive</span>}
                       </div>
                       <p className="text-[11px] text-ink-500 truncate">
@@ -535,7 +538,7 @@ export default function Settings() {
                       </p>
                     </div>
                     {isRevoked ? (
-                      <span className="badge bg-rust-50 text-rust-600 border border-rust-200 shrink-0">Signed out</span>
+                      <span className="badge bg-danger-50 text-danger-600 border border-danger-200 shrink-0">Signed out</span>
                     ) : (
                       !isCurrent && <button className="btn-outline !px-3 !py-1.5 !min-h-0 text-xs shrink-0" onClick={() => handleRevokeGroup(group)}>Sign out</button>
                     )}
@@ -579,7 +582,7 @@ export default function Settings() {
         title="Subscription"
         action={<Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>}
       >
-        <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
+        <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-warning-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
       </Section>
 
       <Section title="Help &amp; Guide">
@@ -618,7 +621,7 @@ export default function Settings() {
           </div>
 
           {pendingImport?.nonEmptyCollections.length > 0 && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+            <div className="rounded-lg border border-warning-200 bg-warning-50 px-3 py-2.5 text-sm text-warning-800">
               This business already has data in: {pendingImport.nonEmptyCollections.join(', ')}. Importing will add these records alongside what's already there, any record that shares the exact same ID as one you already have will be overwritten.
             </div>
           )}
@@ -640,9 +643,9 @@ export default function Settings() {
       </Modal>
 
       <div className="border-t border-ink-100 py-6 space-y-4">
-        <h2 className="section-title text-rust-700">Danger Zone</h2>
+        <h2 className="section-title text-danger-700">Danger zone</h2>
 
-        <div className="space-y-3 rounded-lg border border-rust-200 bg-rust-50/40 p-4">
+        <div className="space-y-3 rounded-lg border border-danger-200 bg-danger-50/40 p-4">
           <p className="text-sm text-ink-600">
             {demo
               ? 'Demo Reset clears all sample data stored in this browser.'
@@ -653,7 +656,7 @@ export default function Settings() {
           </button>
         </div>
 
-        <div className="space-y-3 rounded-lg border border-rust-200 bg-rust-50/40 p-4">
+        <div className="space-y-3 rounded-lg border border-danger-200 bg-danger-50/40 p-4">
           <p className="text-sm font-semibold text-ink-800">Delete my account</p>
           <p className="text-sm text-ink-600">
             Removes your own FlowBiz sign-in permanently. What happens to the business depends on whether other owners exist. Export your data first if you're the only owner.
@@ -698,11 +701,11 @@ export default function Settings() {
           {otherOwnersCount === null ? (
             <p className="text-sm text-ink-400">Checking your business…</p>
           ) : otherOwnersCount > 0 ? (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+            <div className="rounded-lg border border-warning-200 bg-warning-50 px-3 py-2.5 text-sm text-warning-800">
               Another owner is on this account. The business and all its data stay intact, and they'll take over as the business's main contact. Only your own sign-in will be removed.
             </div>
           ) : (
-            <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2.5 text-sm text-rust-700">
+            <div className="rounded-lg border border-danger-200 bg-danger-50 px-3 py-2.5 text-sm text-danger-700">
               <strong>You're the only owner.</strong> Deleting your account permanently erases every product, sale, customer, and record this business has. This cannot be undone.
             </div>
           )}
@@ -743,7 +746,7 @@ export default function Settings() {
 function Section({ title, description, action, first = false, as = 'div', children, ...rest }) {
   const Tag = as;
   return (
-    <Tag className={`space-y-3 py-6 ${first ? 'pt-5' : 'border-t border-ink-100'}`} {...rest}>
+    <Tag className={`space-y-3 py-6 ${first ? 'pt-6' : 'border-t border-divider'}`} {...rest}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="section-title">{title}</h2>
@@ -758,9 +761,9 @@ function Section({ title, description, action, first = false, as = 'div', childr
 
 function Row({ label, value, tone = '', mono = false }) {
   return (
-    <div className="flex items-center justify-between py-1 text-sm">
-      <span className="text-ink-500">{label}</span>
-      <span className={`font-semibold ${mono ? 'font-mono text-xs' : ''} ${tone || 'text-ink-800'}`}>{value}</span>
+    <div className="flex items-baseline justify-between gap-4 py-1 text-body">
+      <span className="text-ink-600">{label}</span>
+      <span className={`num font-semibold ${mono ? 'font-mono text-secondary' : ''} ${tone || 'text-ink-900'}`}>{value}</span>
     </div>
   );
 }
