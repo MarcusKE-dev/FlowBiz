@@ -1,16 +1,10 @@
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import Modal from '../common/Modal';
+import PaymentMethodSelect from './PaymentMethodSelect';
 import { formatKES } from '../../utils/currency';
-import { Banknote, Smartphone, BookOpen } from 'lucide-react';
 import { raceWithTimeout } from '../../utils/offlineWrite';
 import { friendlyErrorMessage } from '../../utils/errorMessages';
-
-const METHODS = [
-  { id: 'Cash',   label: 'Cash',   Icon: Banknote   },
-  { id: 'M-Pesa', label: 'M-Pesa', Icon: Smartphone },
-  { id: 'Credit', label: 'Credit', Icon: BookOpen   },
-];
 
 export default function SaleModal({ open, product, customers, onClose, onConfirmSale, onConfirmCredit, onCreateCustomer }) {
   const [quantity, setQuantity]               = useState(1);
@@ -87,13 +81,7 @@ const handleConfirm = async () => {
         </div>
         <div>
           <label className="label">Payment method</label>
-          <div className="grid grid-cols-3 gap-2">
-            {METHODS.map(({id,label,Icon}) => (
-              <button key={id} type="button" onClick={()=>setMethod(id)} className={`flex flex-col items-center gap-1 rounded-lg border px-2 py-2.5 text-xs font-semibold ${method===id ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}>
-                <Icon className="h-4 w-4" strokeWidth={1.75} />{label}
-              </button>
-            ))}
-          </div>
+          <PaymentMethodSelect value={method} onChange={setMethod} idPrefix="sale" />
         </div>
         {method === 'M-Pesa' && (
           <div>

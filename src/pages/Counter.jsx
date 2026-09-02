@@ -4,8 +4,8 @@ import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { doc, addDoc, writeBatch, increment, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import {
-  Trash2, ShoppingCart, Banknote, Smartphone, BookOpen, Printer, Download,
-  MessageCircle, CheckCircle2, X, Plus, Minus, ArrowUpRight
+  Trash2, ShoppingCart, Printer, Download,
+  MessageCircle, CheckCircle2, X, Plus, Minus
 } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -24,6 +24,7 @@ import ConfirmDialog from '../components/common/ConfirmDialog';
 import Modal from '../components/common/Modal';
 import ProductGrid from '../components/pos/ProductGrid';
 import CartList from '../components/pos/CartList';
+import PaymentMethodSelect from '../components/pos/PaymentMethodSelect';
 import CartCheckoutModal from '../components/pos/CartCheckoutModal';
 import SaleCompleteModal from '../components/pos/SaleCompleteModal';
 import OpenSessionPrompt from '../components/pos/OpenSessionPrompt';
@@ -31,6 +32,11 @@ import ProductFormModal from '../components/products/ProductFormModal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
 import ScannerModal from '../components/scanner/ScannerModal';
 import ScanFab from '../components/scanner/ScanFab';
+import PageHeader from '../components/ui/PageHeader';
+import Section from '../components/ui/Section';
+import DataTable from '../components/ui/DataTable';
+import StatusPill from '../components/ui/StatusPill';
+import Money from '../components/ui/Money';
 import { formatKES, roundMoney } from '../utils/currency';
 import { formatDateTime } from '../utils/dateRanges';
 import { raceWithTimeout } from '../utils/offlineWrite';
@@ -490,13 +496,11 @@ export default function Counter() {
       : null;
 
   return (
-    <div className="mx-auto max-w-7xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Counter</h1>
-          <p className="text-sm text-ink-400">Scan a barcode, search, or click a product to add it to the sale.</p>
-        </div>
-      </div>
+    <div className="mx-auto max-w-7xl space-y-6">
+      <PageHeader
+        title="Counter"
+        description="Scan a barcode, search, or select a product to add it to the sale."
+      />
 
       {/* Desktop gets a fixed-width checkout column so it never gets
           squeezed by the product grid; mobile is untouched (single
@@ -534,43 +538,88 @@ export default function Counter() {
           )}
 
           {isAdmin && (
-            <div className="mt-6 space-y-2 border-t border-ink-100 pt-4">
-              <h2 className="font-display text-sm font-bold text-ink-800">Sales log (last 100)</h2>
+            <Section title="Sales log" hint="Last 100 sales and credit sales">
               {salesLoading || creditLoading ? (
                 <LoadingSpinner />
-              ) : mergedSales.length === 0 ? (
-                <EmptyState title="No sales recorded" />
               ) : (
-                <div className="card max-h-96 divide-y divide-ink-100 overflow-y-auto">
-                  {mergedSales.map((s) => (
-                    <div key={s.id} className={`flex items-center justify-between px-4 py-3 text-sm ${s.isVoided ? 'opacity-40 line-through' : ''}`}>
-                      <div>
-                        <p className="font-medium text-ink-700">
-                          {s.quantity} × {s.productName} — {formatKES(s.totalAmount)}
+                <DataTable
+                  caption="Sales and credit sales recorded on this counter"
+                  maxHeight="24rem"
+                  rows={mergedSales}
+                  rowKey={(s) => s.id}
+                  columns={[
+                    {
+                      key: 'productName',
+                      header: 'Sale',
+                      primary: true,
+                      render: (s) => (
+                        <span className={s.isVoided ? 'text-ink-400 line-through' : 'text-ink-900'}>
+                          <span className="num">{s.quantity}</span> × {s.productName}
                           {Array.isArray(s.items) && s.items.length > 1 && (
-                            <span className="badge ml-2 bg-ink-100 text-ink-500 align-middle">{s.items.length} products</span>
+                            <StatusPill tone="neutral" className="ml-2 align-middle">
+                              {s.items.length} products
+                            </StatusPill>
                           )}
-                        </p>
-                        <p className="text-xs text-ink-400">
-                          {s.paymentType === 'Credit' ? `Credit (${s.customerName})` : s.paymentMethod}
-                          {s.mpesaCode ? ` (${s.mpesaCode})` : ''} · {formatDateTime(s.soldAt)} · {s.soldByName || 'Staff'}
-                        </p>
-                      </div>
+                        </span>
+                      ),
+                    },
+                    {
+                      key: 'paymentMethod',
+                      header: 'Method',
+                      render: (s) => (
+                        <span className="text-ink-600">
+                          {s.paymentType === 'Credit' ? `Credit · ${s.customerName}` : s.paymentMethod}
+                          {s.mpesaCode ? ` (${s.mpesaCode})` : ''}
+                        </span>
+                      ),
+                    },
+                    { key: 'soldByName', header: 'Sold by', render: (s) => <span className="text-ink-600">{s.soldByName || 'Staff'}</span> },
+                    { key: 'soldAt', header: 'Time', render: (s) => <span className="text-ink-600">{formatDateTime(s.soldAt)}</span> },
+                    {
+                      key: 'status',
+                      header: 'Status',
+                      render: (s) =>
+                        s.isVoided
+                          ? <StatusPill tone="negative">Voided</StatusPill>
+                          : s.isCredit
+                            ? <StatusPill tone="caution">On credit</StatusPill>
+                            : <StatusPill tone="positive">Paid</StatusPill>,
+                    },
+                    {
+                      key: 'totalAmount',
+                      header: 'Amount',
+                      numeric: true,
+                      render: (s) => (
+                        <span className={`font-semibold ${s.isVoided ? 'text-ink-400 line-through' : ''}`}>
+                          <Money value={s.totalAmount} />
+                        </span>
+                      ),
+                    },
+                  ]}
+                  rowActions={(s) => (
+                    <>
                       {!s.isVoided && !s.isCredit && isAdmin && (
-                        <button onClick={() => setPendingVoid(s)} className="flex min-h-[44px] min-w-[44px] items-center justify-center p-1 text-rust-400 hover:text-rust-600" title="Void sale">
+                        <button
+                          type="button"
+                          onClick={() => setPendingVoid(s)}
+                          className="btn-ghost !px-2 text-ink-500 hover:text-danger-700"
+                          title="Void sale"
+                          aria-label={`Void sale of ${s.productName}`}
+                        >
                           <Trash2 className="h-4 w-4" strokeWidth={1.75} />
                         </button>
                       )}
                       {s.isCredit && isAdmin && (
-                        <Link to={`/customers/${s.customerId}`} className="btn-outline !min-h-0 !px-2.5 !py-1 text-xs text-ink-500 hover:text-ink-700">
+                        <Link to={`/customers/${s.customerId}`} className="btn-ghost !px-2 text-ink-600">
                           View customer
                         </Link>
                       )}
-                    </div>
-                  ))}
-                </div>
+                    </>
+                  )}
+                  empty={<EmptyState title="No sales recorded yet" description="Sales made at this counter will be listed here." />}
+                />
               )}
-            </div>
+            </Section>
           )}
         </div>
 
@@ -580,76 +629,86 @@ export default function Counter() {
             further down this file. */}
         <div className="hidden lg:sticky lg:top-4 lg:flex lg:flex-col lg:gap-4">
 
-          <div className="card space-y-4 p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Current order</p>
-                <p className="mt-0.5 text-sm font-semibold text-ink-800">
+          <div className="overflow-hidden rounded-panel border border-line bg-surface">
+            <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-label uppercase text-ink-500">Current order</p>
+                <p className="mt-0.5 text-body font-semibold text-ink-900">
                   {cart.length === 0 ? 'No items yet' : `${cart.length} item${cart.length !== 1 ? 's' : ''} in cart`}
                 </p>
               </div>
               {cart.length > 0 && (
-                <button type="button" onClick={clearCart} className="text-xs font-semibold text-rust-500 hover:underline">
+                <button type="button" onClick={clearCart} className="btn-ghost !px-2 text-ink-600 hover:text-danger-700">
                   Clear all
                 </button>
               )}
             </div>
 
-            <div className="max-h-60 divide-y divide-ink-100 overflow-y-auto">
+            {/* The cart is a ledger: one line per product, quantity and
+                unit price editable in place, line total right-aligned on
+                tabular figures. */}
+            <div className="max-h-64 divide-y divide-divider overflow-y-auto">
               {cart.length === 0 ? (
-                <div className="flex flex-col items-center gap-1.5 rounded-xl border border-dashed border-ink-200 bg-ink-50 py-8 text-center">
-                  <ShoppingCart className="h-5 w-5 text-ink-300" strokeWidth={1.5} />
-                  <p className="px-4 text-xs text-ink-400">Select products from the list to add them here.</p>
+                <div className="flex flex-col items-center gap-1.5 px-4 py-10 text-center">
+                  <ShoppingCart className="h-5 w-5 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
+                  <p className="text-secondary text-ink-500">Select a product to add it to this sale.</p>
                 </div>
               ) : (
                 cart.map((item) => {
                   const lineTotal = roundMoney((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0));
                   return (
-                    <div key={item.productId} className="space-y-1.5 py-2.5 first:pt-0">
-                      <div className="flex items-start justify-between gap-1 text-xs">
-                        <span className="truncate pr-1 font-semibold leading-snug text-ink-800">{item.productName}</span>
+                    <div key={item.productId} className="space-y-2 px-4 py-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="min-w-0 flex-1 truncate text-body font-medium text-ink-900">
+                          {item.productName}
+                        </span>
                         <button
                           type="button"
                           onClick={() => removeCartItem(item.productId)}
-                          className="shrink-0 rounded p-0.5 text-ink-400 hover:text-rust-500"
+                          className="-m-1 shrink-0 rounded-control p-1 text-ink-400 hover:text-danger-700"
                           aria-label={`Remove ${item.productName}`}
                         >
-                          <X className="h-3.5 w-3.5" strokeWidth={1.75} />
+                          <X className="h-4 w-4" strokeWidth={1.75} />
                         </button>
                       </div>
+
                       <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1 rounded-lg border border-ink-200 bg-white px-1 py-0.5">
+                        <div className="flex items-center rounded-control border border-line">
                           <button
                             type="button"
                             onClick={() => updateCartQuantity(item.productId, item.quantity - 1)}
-                            className="flex h-6 w-6 items-center justify-center rounded text-ink-500 hover:bg-ink-50"
-                            aria-label="Decrease quantity"
+                            className="flex h-7 w-7 items-center justify-center rounded-l-control text-ink-600 hover:bg-ink-50"
+                            aria-label={`Decrease quantity of ${item.productName}`}
                           >
-                            <Minus className="h-3 w-3" strokeWidth={2} />
+                            <Minus className="h-3.5 w-3.5" strokeWidth={1.75} />
                           </button>
-                          <span className="w-5 text-center text-xs font-bold text-ink-900">{item.quantity}</span>
+                          <span className="num w-7 text-center text-cell font-semibold text-ink-900">{item.quantity}</span>
                           <button
                             type="button"
                             onClick={() => updateCartQuantity(item.productId, item.quantity + 1)}
-                            className="flex h-6 w-6 items-center justify-center rounded text-ink-500 hover:bg-ink-50"
-                            aria-label="Increase quantity"
+                            className="flex h-7 w-7 items-center justify-center rounded-r-control text-ink-600 hover:bg-ink-50"
+                            aria-label={`Increase quantity of ${item.productName}`}
                           >
-                            <Plus className="h-3 w-3" strokeWidth={2} />
+                            <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
                           </button>
                         </div>
-                        <div className="flex items-center gap-1 text-[11px] text-ink-400">
-                          <span>@ KES</span>
+
+                        <div className="flex items-center gap-1">
+                          <span className="text-label uppercase text-ink-400">KES</span>
                           <input
                             type="number"
                             min="0"
                             step="0.01"
                             value={item.unitPrice}
                             onChange={(e) => updateCartPrice(item.productId, e.target.value)}
-                            className="w-16 rounded border border-ink-200 px-1.5 py-0.5 text-right text-xs font-bold text-ink-900"
+                            className="num w-20 rounded-control border border-line px-2 py-1 text-right text-cell font-medium text-ink-900 focus:border-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-600"
                             aria-label={`Unit price for ${item.productName}`}
                           />
                         </div>
-                        <span className="font-display text-sm font-bold text-moss-700">{formatKES(lineTotal)}</span>
+
+                        <span className="num shrink-0 text-cell font-semibold text-ink-900">
+                          {formatKES(lineTotal)}
+                        </span>
                       </div>
                     </div>
                   );
@@ -657,64 +716,48 @@ export default function Counter() {
               )}
             </div>
 
-            <div className="space-y-2.5 border-t border-ink-100 pt-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Payment method</p>
-              <div className="grid grid-cols-3 gap-1.5">
-                {[
-                  { id: 'Cash', label: 'Cash', Icon: Banknote },
-                  { id: 'M-Pesa', label: 'M-Pesa', Icon: Smartphone },
-                  { id: 'Credit', label: 'Deni', Icon: BookOpen },
-                ].map(({ id, label, Icon }) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setDesktopMethod(id)}
-                    className={`flex flex-col items-center gap-1 rounded-lg border py-2 text-xs font-semibold ${
-                      desktopMethod === id
-                        ? 'border-moss-600 bg-moss-50 text-moss-800'
-                        : 'border-ink-200 text-ink-500 hover:bg-ink-50'
-                    }`}
-                  >
-                    <Icon className="h-4 w-4" strokeWidth={1.75} />
-                    {label}
-                  </button>
-                ))}
+            <div className="space-y-3 border-t border-line px-4 py-3">
+              <div>
+                <p className="label">Payment method</p>
+                <PaymentMethodSelect value={desktopMethod} onChange={setDesktopMethod} idPrefix="counter" />
               </div>
 
               {desktopMethod === 'M-Pesa' && (
-                <div className="space-y-1 rounded-lg bg-ink-50 p-2.5">
-                  <label className="text-[11px] font-semibold text-ink-600">
-                    M-Pesa transaction code <span className="text-rust-500">*</span>
+                <div>
+                  <label className="label" htmlFor="counter-mpesa-code">
+                    M-Pesa transaction code <span className="text-danger-600" aria-hidden="true">*</span>
                   </label>
                   <input
+                    id="counter-mpesa-code"
                     type="text"
                     value={desktopMpesaCode}
                     onChange={(e) => setDesktopMpesaCode(e.target.value.toUpperCase())}
                     placeholder="e.g. QWE1234567"
-                    className="w-full rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-mono font-bold uppercase text-ink-900"
+                    className="input num uppercase"
                   />
                 </div>
               )}
 
               {desktopMethod === 'Credit' && (
-                <div className="space-y-2 rounded-lg bg-ink-50 p-2.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[11px] font-semibold text-ink-600">Customer (Deni)</label>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="label mb-0" htmlFor="counter-customer">Customer (deni)</label>
                     <button
                       type="button"
                       onClick={() => setDesktopNewMode((v) => !v)}
-                      className="text-[11px] font-semibold text-moss-700 hover:underline"
+                      className="text-secondary font-medium text-primary-700 hover:underline"
                     >
-                      {desktopNewMode ? 'Use existing' : '+ New customer'}
+                      {desktopNewMode ? 'Use existing' : 'New customer'}
                     </button>
                   </div>
                   {!desktopNewMode ? (
                     <select
-                      className="input !min-h-0 !py-1.5 text-xs"
+                      id="counter-customer"
+                      className="input"
                       value={desktopCustomerId}
                       onChange={(e) => setDesktopCustomerId(e.target.value)}
                     >
-                      <option value="">— Select customer —</option>
+                      <option value="">Select a customer</option>
                       {customers.map((c) => (
                         <option key={c.id} value={c.id}>
                           {c.name}{c.phone ? ` · ${c.phone}` : ''}
@@ -722,42 +765,45 @@ export default function Counter() {
                       ))}
                     </select>
                   ) : (
-                    <div className="space-y-1.5">
+                    <div className="space-y-2">
                       <input
-                        className="input !min-h-0 !py-1.5 text-xs"
+                        className="input"
                         placeholder="Customer name"
                         value={desktopNewName}
                         onChange={(e) => setDesktopNewName(e.target.value)}
+                        aria-label="New customer name"
                       />
                       <input
-                        className="input !min-h-0 !py-1.5 text-xs"
-                        placeholder="Phone (07xx...)"
+                        className="input"
+                        placeholder="Phone (07xx…)"
                         value={desktopNewPhone}
                         onChange={(e) => setDesktopNewPhone(e.target.value)}
+                        aria-label="New customer phone"
                       />
                     </div>
                   )}
                 </div>
               )}
 
-              <div className="flex items-center justify-between border-t border-ink-100 pt-2.5">
+              <div className="flex items-end justify-between gap-3 border-t border-divider pt-3">
                 <div>
-                  <p className="text-[11px] text-ink-400">Total</p>
+                  <p className="text-label uppercase text-ink-500">Total</p>
                   {cartEstimatedProfit > 0 && (
-                    <p className="text-[11px] font-semibold text-moss-700">Margin +{formatKES(cartEstimatedProfit)}</p>
+                    <p className="text-secondary text-success-700">
+                      Margin <Money value={cartEstimatedProfit} />
+                    </p>
                   )}
                 </div>
-                <p className="font-display text-xl font-bold text-ink-900">{formatKES(cartTotal)}</p>
+                <p className="text-money text-ink-900"><Money value={cartTotal} /></p>
               </div>
 
               <button
                 type="button"
                 disabled={cart.length === 0 || desktopSubmitting}
                 onClick={handleDesktopCheckout}
-                className="btn-primary flex w-full items-center justify-center gap-1.5 !py-3"
+                className="btn-primary w-full"
               >
-                <span>{desktopSubmitting ? 'Recording…' : desktopMethod === 'Credit' ? 'Record credit' : 'Complete sale'}</span>
-                <ArrowUpRight className="h-4 w-4" strokeWidth={1.75} />
+                {desktopSubmitting ? 'Recording…' : desktopMethod === 'Credit' ? 'Record credit sale' : 'Complete sale'}
               </button>
             </div>
           </div>

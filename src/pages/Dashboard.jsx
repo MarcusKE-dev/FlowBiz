@@ -21,26 +21,22 @@ import ProductFormModal from '../components/products/ProductFormModal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
 import ScannerModal from '../components/scanner/ScannerModal';
 import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
 import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
-import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff } from 'lucide-react';
+import PageHeader from '../components/ui/PageHeader';
+import Section from '../components/ui/Section';
+import MetricRail, { Metric } from '../components/ui/MetricRail';
+import DataTable from '../components/ui/DataTable';
+import StatusPill from '../components/ui/StatusPill';
+import Money from '../components/ui/Money';
+import { amountOnly } from '../components/ui/format';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
 
-function StatCard({ label, value, tone = 'text-ink-900', sub }) {
-  return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <p className={`mt-1 font-display text-xl font-bold ${tone}`}>{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-ink-400">{sub}</p>}
-    </div>
-  );
-}
-
 export default function Dashboard() {
-  const { profile, isAdmin, businessId, isPro } = useAuth();
+  const { profile, isAdmin, businessId } = useAuth();
   const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
-  const { loading: financialsLoading, summary, sales, creditSales, expenses, repayments, purchases } = useFinancialsForRange(today.start, today.end);
+  const { loading: financialsLoading, summary, sales, creditSales, repayments } = useFinancialsForRange(today.start, today.end);
 
   const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
   const customersQuery = useMemo(() => businessId ? tenantQuery('customers', businessId, orderBy('name')) : null, [businessId]);
@@ -78,7 +74,8 @@ export default function Dashboard() {
     });
   };
 
-  const formatVal = (val) => (privacyMode ? '••••••••' : formatKES(val));
+  // Digits only — the KES prefix is rendered separately and muted.
+  const railValue = (val) => (privacyMode ? '••••••' : amountOnly(val));
 
   const dashboardCashReceived = summary.totalCashReceipts;
   const dashboardMpesaReceived = summary.totalMpesaReceipts;
@@ -212,64 +209,113 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Hello, {profile?.displayName}</h1>
-          <div className="flex items-center gap-2 mt-1">
-            <p className="text-sm text-ink-400">{isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}</p>
-          </div>
-        </div>
-        <button
-          onClick={togglePrivacyMode}
-          className="flex h-10 w-10 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-400 hover:bg-ink-100 hover:text-ink-700 shadow-sm transition-colors"
-          title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
-        >
-          {privacyMode ? <EyeOff className="h-5 w-5 text-rust-600 animate-fade-in" strokeWidth={1.75} /> : <Eye className="h-5 w-5 text-moss-700 animate-fade-in" strokeWidth={1.75} />}
-        </button>
-      </div>
+    <div className="mx-auto max-w-6xl space-y-6">
+      <PageHeader
+        title={`Hello, ${profile?.displayName}`}
+        description={isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}
+        actions={
+          <button
+            type="button"
+            onClick={togglePrivacyMode}
+            className="btn-secondary"
+            aria-pressed={privacyMode}
+            title={privacyMode ? 'Show sensitive balances' : 'Hide sensitive balances'}
+          >
+            {privacyMode
+              ? <EyeOff className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+              : <Eye className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />}
+            {privacyMode ? 'Show figures' : 'Hide figures'}
+          </button>
+        }
+      />
 
       {isAdmin && (
         <>
-          {financialsLoading ? <LoadingSpinner /> : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 animate-fade-in">
-              <StatCard label="Cash Received Today" value={formatVal(dashboardCashReceived)} />
-              <StatCard label="M-Pesa Received Today" value={formatVal(dashboardMpesaReceived)} />
-              <StatCard label="Today's net profit" value={formatVal(dashboardNetProfit)} tone="text-moss-700" />
-              <StatCard label="Today's expenses" value={formatVal(dashboardExpenses)} tone="text-rust-600" />
-            </div>
-          )}
-          <div className="grid gap-3 sm:grid-cols-3">
-            <StatCard label="Inventory value (cost)" value={formatVal(totalInventoryValue)} />
-            <StatCard label="Outstanding debt (Deni)" value={formatVal(totalOutstanding)} tone="text-rust-600" sub={<Link to="/customers" className="font-semibold text-moss-700 hover:underline">View customers</Link>} />
-            <StatCard label="Low stock items" value={lowStock.length} tone={lowStock.length > 0 ? 'text-rust-600' : 'text-moss-700'} sub={<Link to="/products" className="font-semibold text-moss-700 hover:underline">View products</Link>} />
-          </div>
+          <Section title="Money today">
+            {financialsLoading ? (
+              <div className="h-[86px] animate-pulse rounded-panel border border-line bg-ink-50" aria-hidden="true" />
+            ) : (
+              <MetricRail columns={4}>
+                <Metric label="Cash received"  prefix={privacyMode ? null : 'KES'} value={railValue(dashboardCashReceived)} />
+                <Metric label="M-Pesa received" prefix={privacyMode ? null : 'KES'} value={railValue(dashboardMpesaReceived)} />
+                <Metric label="Net profit"      prefix={privacyMode ? null : 'KES'} value={railValue(dashboardNetProfit)} />
+                <Metric label="Expenses"        prefix={privacyMode ? null : 'KES'} value={railValue(dashboardExpenses)} />
+              </MetricRail>
+            )}
+          </Section>
+
+          <Section title="Position">
+            <MetricRail columns={3}>
+              <Metric
+                label="Inventory value at cost"
+                prefix={privacyMode ? null : 'KES'}
+                value={railValue(totalInventoryValue)}
+              />
+              <Metric
+                label="Outstanding debt"
+                prefix={privacyMode ? null : 'KES'}
+                value={railValue(totalOutstanding)}
+                hint={<Link to="/customers" className="font-medium text-primary-700 hover:underline">View customers</Link>}
+              />
+              <Metric
+                label="Low stock items"
+                value={lowStock.length}
+                hint={<Link to="/products" className="font-medium text-primary-700 hover:underline">View products</Link>}
+              />
+            </MetricRail>
+          </Section>
         </>
       )}
 
-      <div>
-        <h2 className="font-display text-sm font-bold text-ink-800 mb-2">Today's Recent Activity</h2>
-        {recentActivity.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-ink-400">No activity recorded today yet.</div>
-        ) : (
-          <div className="card divide-y divide-ink-100">
-            {recentActivity.map((act) => (
-              <div key={act.id} className="flex items-center justify-between p-3 text-sm">
-                <div className="min-w-0 flex-1 pr-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-ink-800 truncate">{act.title}</p>
-                    <span className="badge bg-moss-100 text-moss-800">{act.type}</span>
-                  </div>
-                  <p className="text-xs text-ink-400 mt-0.5">{act.method} · {formatDateTime(act.timestamp)}</p>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="font-semibold text-moss-700">+{formatVal(act.amount)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <Section title="Activity today">
+        <DataTable
+          caption="Sales, credit sales and debt repayments recorded today"
+          rows={recentActivity}
+          rowKey={(r) => r.id}
+          columns={[
+            {
+              key: 'title',
+              header: 'Item',
+              primary: true,
+              render: (a) => (
+                <span className="font-medium text-ink-900">{a.title}</span>
+              ),
+            },
+            {
+              key: 'type',
+              header: 'Type',
+              render: (a) => (
+                <StatusPill tone={a.isPositive ? 'positive' : 'caution'}>{a.type}</StatusPill>
+              ),
+            },
+            { key: 'method', header: 'Method', render: (a) => <span className="text-ink-600">{a.method}</span> },
+            {
+              key: 'timestamp',
+              header: 'Time',
+              render: (a) => <span className="text-ink-600">{formatDateTime(a.timestamp)}</span>,
+            },
+            {
+              key: 'amount',
+              header: 'Amount',
+              numeric: true,
+              render: (a) => (
+                /* Credit sales are stock leaving on account, not money in,
+                   so they stay ink rather than reading as a receipt. The
+                   Type pill on each row says which is which. */
+                <span className="font-semibold">
+                  <Money value={a.amount} masked={privacyMode} tone={a.isPositive ? 'positive' : undefined} />
+                </span>
+              ),
+            },
+          ]}
+          empty={
+            <EmptyState
+              title="Nothing recorded yet today"
+              description="Sales, credit sales and debt repayments will appear here as they happen."
+            />
+          }
+        />
+      </Section>
 
       <SaleModal 
         open={!!activeProduct} 
