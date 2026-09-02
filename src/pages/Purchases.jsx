@@ -14,7 +14,11 @@ import ProductFormModal from '../components/products/ProductFormModal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
 import ScannerModal from '../components/scanner/ScannerModal';
 import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
+import PageHeader from '../components/ui/PageHeader';
+import Section from '../components/ui/Section';
+import DataTable from '../components/ui/DataTable';
+import StatusPill from '../components/ui/StatusPill';
+import Money from '../components/ui/Money';
 import { formatDateTime } from '../utils/dateRanges';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
@@ -154,29 +158,32 @@ export default function Purchases() {
   const hasProducts = products && products.length > 0;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <h1 className="font-display text-xl font-bold text-ink-900">Record Purchase</h1>
-      <form onSubmit={handle} className="card space-y-3 p-4">
+    <div className="mx-auto max-w-4xl space-y-6">
+      <PageHeader
+        title="Purchases"
+        description="Record stock received from a supplier."
+      />
+      <form onSubmit={handle} className="space-y-4 rounded-panel border border-line bg-surface p-4">
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label">Supplier</label>
             <select className="input" value={form.supplierId} onChange={set('supplierId')} required>
-              <option value="" disabled>{hasSuppliers ? '— Select Supplier —' : '— None (No Suppliers) —'}</option>
+              <option value="" disabled>{hasSuppliers ? 'Select a supplier' : 'No suppliers yet'}</option>
               {hasSuppliers && suppliers.map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
-            <button type="button" className="mt-2 text-sm font-semibold text-moss-700 hover:underline" onClick={() => setSupplierModal(true)}>+ Add new supplier</button>
+            <button type="button" className="mt-2 text-secondary font-medium text-primary-700 hover:underline" onClick={() => setSupplierModal(true)}>Add a supplier</button>
           </div>
           <div>
             <label className="label">Product</label>
             <select className="input" value={form.productId} onChange={set('productId')} required>
-              <option value="" disabled>{hasProducts ? '— Select Product —' : '— None (No Products) —'}</option>
+              <option value="" disabled>{hasProducts ? 'Select a product' : 'No products yet'}</option>
               {hasProducts && products.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
-            <button type="button" className="mt-2 text-sm font-semibold text-moss-700 hover:underline" onClick={() => { setPrefillBarcode(null); setProductModal(true); }}>+ Add new product</button>
+            <button type="button" className="mt-2 text-secondary font-medium text-primary-700 hover:underline" onClick={() => { setPrefillBarcode(null); setProductModal(true); }}>Add a product</button>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -189,14 +196,15 @@ export default function Purchases() {
             <input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required />
           </div>
         </div>
-        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm text-ink-600">
-          Total cost: <span className="font-semibold text-ink-900">{formatKES(totalCost)}</span>
+        <div className="flex items-baseline justify-between rounded-control border border-line bg-ink-50 px-3 py-2 text-body text-ink-600">
+          <span>Total cost</span>
+          <span className="font-semibold text-ink-900"><Money value={totalCost} /></span>
         </div>
         <div>
           <label className="label">Payment status</label>
           <div className="grid grid-cols-2 gap-2">
-            <button type="button" onClick={() => setForm((p) => ({ ...p, paymentStatus: 'paid' }))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus === 'paid' ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}>Paid now</button>
-            <button type="button" onClick={() => setForm((p) => ({ ...p, paymentStatus: 'credit' }))} className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${form.paymentStatus === 'credit' ? 'border-rust-500 bg-rust-50 text-rust-700' : 'border-ink-200 text-ink-500'}`}>On credit</button>
+            <button type="button" onClick={() => setForm((p) => ({ ...p, paymentStatus: 'paid' }))} className={`rounded-control border text-button transition-colors ${form.paymentStatus === 'paid' ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-line text-ink-600 hover:bg-ink-50'}`}>Paid now</button>
+            <button type="button" onClick={() => setForm((p) => ({ ...p, paymentStatus: 'credit' }))} className={`rounded-control border text-button transition-colors ${form.paymentStatus === 'credit' ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-line text-ink-600 hover:bg-ink-50'}`}>On credit</button>
           </div>
         </div>
         {form.paymentStatus === 'paid' && (
@@ -216,11 +224,12 @@ export default function Purchases() {
             )}
           </div>
         )}
-        <button type="submit" className="btn-primary w-full" disabled={busy}>
-          {busy ? 'Saving…' : 'Record purchase'}
-        </button>
+        <div className="flex justify-end border-t border-divider pt-4">
+          <button type="submit" className="btn-primary" disabled={busy}>
+            {busy ? 'Saving…' : 'Record purchase'}
+          </button>
+        </div>
       </form>
-      <h2 className="font-display text-sm font-bold text-ink-800">Recent purchases</h2>
 
       <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
       <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
@@ -254,28 +263,46 @@ export default function Purchases() {
         simplifiedForPurchase
       />
       <SupplierFormModal open={supplierModal} onClose={() => setSupplierModal(false)} onSave={handleSupplierSave} />
-      {loading ? (
-        <LoadingSpinner />
-      ) : purchases.length === 0 ? (
-        <EmptyState title="No purchases yet" />
-      ) : (
-        <div className="card divide-y divide-ink-100">
-          {purchases.map((p) => (
-            <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-3 text-sm">
-              <div>
-                <p className="font-medium text-ink-700">{p.quantity} × {p.productName}</p>
-                <p className="text-xs text-ink-400">{p.supplierName || 'Supplier'} · {formatDateTime(p.purchasedAt)}</p>
-              </div>
-              <div className="text-right">
-                <p className="font-semibold text-ink-800">{formatKES(p.totalCost)}</p>
-                <span className={`badge ${p.paymentStatus === 'paid' ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>
-                  {p.paymentStatus === 'paid' ? 'Paid' : 'On credit'}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <Section title="Recent purchases">
+        {loading ? (
+          <LoadingSpinner />
+        ) : (
+          <DataTable
+            caption="Recent stock purchases"
+            rows={purchases}
+            rowKey={(p) => p.id}
+            columns={[
+              {
+                key: 'productName',
+                header: 'Purchase',
+                primary: true,
+                render: (p) => (
+                  <span className="text-ink-900">
+                    <span className="num">{p.quantity}</span> × {p.productName}
+                  </span>
+                ),
+              },
+              { key: 'supplierName', header: 'Supplier', render: (p) => <span className="text-ink-600">{p.supplierName || 'Supplier'}</span> },
+              { key: 'purchasedAt', header: 'Date', render: (p) => <span className="text-ink-600">{formatDateTime(p.purchasedAt)}</span> },
+              {
+                key: 'paymentStatus',
+                header: 'Status',
+                render: (p) =>
+                  p.paymentStatus === 'paid'
+                    ? <StatusPill tone="positive">Paid</StatusPill>
+                    : <StatusPill tone="caution">On credit</StatusPill>,
+              },
+              {
+                key: 'totalCost',
+                header: 'Total cost',
+                numeric: true,
+                render: (p) => <span className="font-semibold"><Money value={p.totalCost} /></span>,
+              },
+            ]}
+            empty={<EmptyState title="No purchases yet" description="Stock you record above will be listed here." />}
+          />
+        )}
+      </Section>
     </div>
   );
 }

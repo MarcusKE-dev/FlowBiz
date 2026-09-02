@@ -18,7 +18,12 @@ import ProductFormModal from '../components/products/ProductFormModal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
 import ScannerModal from '../components/scanner/ScannerModal';
 import ScanFab from '../components/scanner/ScanFab';
-import { formatKES } from '../utils/currency';
+import ProductThumb from '../components/products/ProductThumb';
+import PageHeader from '../components/ui/PageHeader';
+import Toolbar from '../components/ui/Toolbar';
+import DataTable from '../components/ui/DataTable';
+import StatusPill from '../components/ui/StatusPill';
+import Money from '../components/ui/Money';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
 
@@ -105,75 +110,121 @@ export default function Products() {
 
   useHardwareScanner(handleScanDetected, { enabled: !modal && !supplierModal && !scannerOpen && !scanFoundProduct });
 
-  return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Products</h1><p className="text-sm text-ink-400">{products.length} items</p></div>
-        <div className="flex gap-2">
-          <Link to="/inventory-intelligence" className="btn-outline">
-            <TrendingUp className="h-4 w-4" /> Intelligence
-          </Link>
-          <button className="btn-primary" onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}>+ Add product</button>
-        </div>
-      </div>
-      <input className="input" placeholder="Search by name, category, or code…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      <ErrorBanner message={error} />
-      {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
-        <EmptyState title="No products yet" description="Add your first product to start tracking stock." action={<button className="btn-primary" onClick={() => setModal(true)}>+ Add product</button>} />
-      ) : (
-        <>
-          <div className="space-y-2.5 sm:hidden">
-            {filtered.map((p) => (
-              <div key={p.id} className={`card p-3.5 space-y-2 ${p.stock <= (p.lowStockThreshold ?? 5) ? 'border-rust-200 bg-rust-50/20' : ''}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <span className="badge bg-ink-100 text-ink-500 text-[10px] mb-1">{p.category}</span>
-                    <h3 className="font-semibold text-ink-800 leading-tight truncate">{p.name}</h3>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-4 w-4" strokeWidth={1.75} /></button>
-                    <button className="rounded-lg p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-4 w-4" strokeWidth={1.75} /></button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between pt-1 border-t border-ink-100 text-xs">
-                  <div className="space-x-3">
-                    <span><span className="text-ink-400">Cost: </span><span className="font-semibold text-ink-600">{formatKES(p.costPrice)}</span></span>
-                    <span><span className="text-ink-400">Retail: </span><span className="font-display font-bold text-moss-700">{formatKES(p.sellingPrice)}</span></span>
-                  </div>
-                  <span className={`font-semibold ${p.stock <= (p.lowStockThreshold ?? 5) ? 'text-rust-600' : 'text-ink-700'}`}>{p.stock} in stock {p.stock <= (p.lowStockThreshold ?? 5) ? '⚠️' : ''}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+  // Presentation-only classification of an existing number — the low
+  // stock threshold and its default are unchanged.
+  const stockTone = (p) => {
+    if (p.stock <= 0) return 'negative';
+    if (p.stock <= (p.lowStockThreshold ?? 5)) return 'caution';
+    return 'neutral';
+  };
+  const stockLabel = (p) => {
+    if (p.stock <= 0) return 'Out of stock';
+    if (p.stock <= (p.lowStockThreshold ?? 5)) return 'Low';
+    return null;
+  };
 
-          <div className="hidden sm:block card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                  <tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Cat.</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Retail</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 w-16"></th></tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {filtered.map((p) => (
-                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold ?? 5) ? 'bg-rust-50/40' : ''}>
-                      <td className="px-4 py-3 font-semibold text-ink-800">{p.name}</td>
-                      <td className="px-4 py-3 text-ink-500">{p.category}</td>
-                      <td className="px-4 py-3 text-ink-500">{formatKES(p.costPrice)}</td>
-                      <td className="px-4 py-3 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
-                      <td className="px-4 py-3"><span className={p.stock <= (p.lowStockThreshold ?? 5) ? 'font-bold text-rust-600' : 'text-ink-700'}>{p.stock}</span></td>
-                      <td className="px-4 py-3 text-ink-500">{suppName(p.supplierId)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          <button className="rounded p-1.5 text-ink-400 hover:bg-ink-100" onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}><Pencil className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                          <button className="rounded p-1.5 text-rust-400 hover:bg-rust-50" onClick={() => setPendingDel(p)}><Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
+  return (
+    <div className="mx-auto max-w-6xl space-y-6">
+      <PageHeader
+        title="Products"
+        description={`${products.length} item${products.length === 1 ? '' : 's'} in the catalogue`}
+        actions={
+          <>
+            <Link to="/inventory-intelligence" className="btn-secondary">
+              <TrendingUp className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Intelligence
+            </Link>
+            <button
+              className="btn-primary"
+              onClick={() => { setEditing(null); setPrefillBarcode(null); setModal(true); }}
+            >
+              Add product
+            </button>
+          </>
+        }
+      />
+
+      <Toolbar>
+        <input
+          className="input sm:max-w-sm"
+          placeholder="Search by name, category, or code…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          aria-label="Search products"
+        />
+      </Toolbar>
+
+      <ErrorBanner message={error} />
+
+      {loading ? (
+        <LoadingSpinner />
+      ) : (
+        <DataTable
+          caption="Product catalogue"
+          rows={filtered}
+          rowKey={(p) => p.id}
+          columns={[
+            {
+              key: 'name',
+              header: 'Product',
+              primary: true,
+              render: (p) => (
+                <div className="flex items-center gap-2.5">
+                  <ProductThumb product={p} />
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium text-ink-900">{p.name}</span>
+                    {(p.internalCode || p.barcode) && (
+                      <span className="num block truncate text-secondary text-ink-500">
+                        {p.internalCode || p.barcode}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              ),
+            },
+            { key: 'category', header: 'Category', render: (p) => <span className="text-ink-600">{p.category || '—'}</span> },
+            { key: 'costPrice', header: 'Cost', numeric: true, render: (p) => <Money value={p.costPrice} tone="muted" /> },
+            { key: 'sellingPrice', header: 'Price', numeric: true, render: (p) => <span className="font-semibold"><Money value={p.sellingPrice} /></span> },
+            {
+              key: 'stock',
+              header: 'Stock',
+              align: 'right',
+              render: (p) => (
+                <span className="inline-flex items-center justify-end gap-2">
+                  <span className="num font-semibold text-ink-900">{p.stock}</span>
+                  {stockLabel(p) && <StatusPill tone={stockTone(p)}>{stockLabel(p)}</StatusPill>}
+                </span>
+              ),
+            },
+            { key: 'supplierId', header: 'Supplier', render: (p) => <span className="text-ink-600">{suppName(p.supplierId)}</span> },
+          ]}
+          rowActions={(p) => (
+            <>
+              <button
+                className="btn-ghost !px-2 text-ink-500 hover:text-ink-900"
+                onClick={() => { setEditing(p); setPrefillBarcode(null); setModal(true); }}
+                aria-label={`Edit ${p.name}`}
+              >
+                <Pencil className="h-4 w-4" strokeWidth={1.75} />
+              </button>
+              <button
+                className="btn-ghost !px-2 text-ink-500 hover:text-danger-700"
+                onClick={() => setPendingDel(p)}
+                aria-label={`Archive ${p.name}`}
+              >
+                <Trash2 className="h-4 w-4" strokeWidth={1.75} />
+              </button>
+            </>
+          )}
+          empty={
+            <EmptyState
+              title={search ? 'No products match that search' : 'No products yet'}
+              description={search ? 'Try another keyword, or scan a barcode.' : 'Add your first product to start tracking stock.'}
+              action={!search && (
+                <button className="btn-primary" onClick={() => setModal(true)}>Add product</button>
+              )}
+            />
+          }
+        />
       )}
 
       <ScanFab onClick={() => setScannerOpen(true)} label="Scan" />
@@ -183,7 +234,7 @@ export default function Products() {
         <p className="text-sm text-ink-500 mb-4">This barcode already belongs to <span className="font-semibold text-ink-800">{scanFoundProduct?.name}</span>.</p>
         <div className="flex justify-end gap-2">
           <button className="btn-secondary" onClick={() => setScanFoundProduct(null)}>Cancel</button>
-          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View Product</button>
+          <button className="btn-primary" onClick={() => { setEditing(scanFoundProduct); setPrefillBarcode(null); setScanFoundProduct(null); setModal(true); }}>View product</button>
         </div>
       </Modal>
 
