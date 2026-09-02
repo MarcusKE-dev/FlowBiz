@@ -1,9 +1,9 @@
 import { Link } from 'react-router-dom';
-import { Mail, Shield, FileText, ArrowRight } from 'lucide-react';
+import { Mail, Shield, FileText } from 'lucide-react';
 
 export function LandingFooter() {
   return (
-    <footer className="bg-[#15171d] text-[#cfd3da] border-t border-[#2b303c] pt-14 pb-10 text-xs">
+    <footer className="bg-ink-900 text-ink-300 border-t border-ink-800 pt-14 pb-10 text-xs">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
         
 
@@ -17,10 +17,10 @@ export function LandingFooter() {
              
               <span className="font-bold text-xl text-white tracking-tight">FlowBiz</span>
             </div>
-            <p className="text-xs text-[#9aa2b1] max-w-sm leading-relaxed">
+            <p className="text-xs text-ink-400 max-w-sm leading-relaxed">
               The offline-first Point of Sale, inventory intelligence, and cash-flow management platform purpose-built for Kenyan retailers and small businesses.
             </p>
-            <div className="flex items-center gap-2 text-[11px] text-[#767f8f]">
+            <div className="flex items-center gap-2 text-[11px] text-ink-500">
               <span>Nairobi, Kenya</span>
               <span>·</span>
               <a href="mailto:support@flowbiz.co.ke" className="hover:text-white transition-colors flex items-center gap-1">
@@ -34,7 +34,7 @@ export function LandingFooter() {
             <span className="text-[11px] font-bold uppercase tracking-wider text-white block">
               Application
             </span>
-            <ul className="space-y-2 text-[#9aa2b1]">
+            <ul className="space-y-2 text-ink-400">
               <li>
                 <a href="#features" className="hover:text-white transition-colors">
                   POS Features
@@ -72,13 +72,13 @@ export function LandingFooter() {
             <ul className="space-y-2">
               <li>
                 <Link to="/privacy" className="hover:text-white transition-colors flex items-center gap-1.5">
-                  <Shield className="h-3.5 w-3.5 text-[#54b67c]" />
+                  <Shield className="h-3.5 w-3.5 text-primary-400" />
                   Privacy Policy (KDPA 2019)
                 </Link>
               </li>
               <li>
                 <Link to="/terms" className="hover:text-white transition-colors flex items-center gap-1.5">
-                  <FileText className="h-3.5 w-3.5 text-[#54b67c]" />
+                  <FileText className="h-3.5 w-3.5 text-primary-400" />
                   Terms of Service
                 </Link>
               </li>
@@ -89,7 +89,7 @@ export function LandingFooter() {
         </div>
 
         {/* Bottom Line */}
-        <div className="pt-8 border-t border-[#2b303c] flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-[#767f8f]">
+        <div className="pt-8 border-t border-ink-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-ink-500">
           <p>© {new Date().getFullYear()} FlowBiz. All rights reserved.</p>
           
         </div>

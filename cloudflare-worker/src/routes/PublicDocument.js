@@ -102,7 +102,7 @@ function renderNotFound() {
     title: 'Document not available — FlowBiz',
     bodyHtml: `
       <div class="empty">
-        <div class="empty-icon">📄</div>
+        <svg class="empty-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
         <h1>This document is no longer available</h1>
         <p>The link may have expired or was removed by the business.</p>
       </div>`,
@@ -120,22 +120,26 @@ function renderShell({ title, bodyHtml, paperWidthMm = 80 }) {
 <title>${escapeHtml(title)}</title>
 <style>
   :root {
-    --ink-900:#15171d; --ink-700:#363b48; --ink-500:#5a6273; --ink-400:#767f8f; --ink-200:#cfd3da; --ink-100:#e8eaed;
-    --moss-800:#144f30; --moss-700:#1a623c; --moss-600:#1f7c4a; --moss-50:#f1faf4; --rust-600:#c4441d; --rust-50:#fdf4ef;
-    --sand:#f6f1e7;
+    /* Mirrors src/theme/tokens.js. The worker is a separate bundle and
+       cannot import from the app, so these are kept in step by hand. */
+    --ink-900:#0F1522; --ink-700:#4A5468; --ink-500:#7A8598; --ink-400:#9AA3B2;
+    --ink-200:#E2E6EC; --ink-100:#EDF0F4; --ink-50:#F4F6F9;
+    --primary:#1D70F5; --primary-700:#1659CC; --primary-50:#EEF4FE;
+    --positive:#0F9D74; --positive-50:#ECFAF4;
+    --negative:#D3402F; --negative-50:#FDF2F1;
+    --canvas:#F4F6F9; --surface:#FFFFFF; --line:#E2E6EC;
   }
   * { box-sizing: border-box; margin:0; padding:0; }
-  body { background: var(--sand); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: var(--ink-900); }
+  body { background: var(--canvas); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: var(--ink-900); }
   .page { max-width: 440px; margin: 0 auto; padding: 24px 16px 48px; }
   .brand-bar { display:flex; align-items:center; justify-content:center; gap:6px; margin-bottom: 16px; }
-  .brand-bar span { font-weight: 800; color: var(--moss-700); font-size: 14px; letter-spacing: 0.04em; text-transform:uppercase; }
+  .brand-bar span { font-weight: 600; color: var(--ink-900); font-size: 15px; letter-spacing: -0.02em; }
   
   .card {
-    background: #fff;
-    border: 1px solid var(--ink-200);
-    border-radius: 16px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
     padding: 24px 20px;
-    box-shadow: 0 4px 20px -2px rgba(21, 23, 29, 0.07);
   }
   
   .logo { display:block; margin: 0 auto 10px; height: 48px; max-width:130px; object-fit:contain; border-radius: 6px; }
@@ -146,41 +150,41 @@ function renderShell({ title, bodyHtml, paperWidthMm = 80 }) {
     display:flex;
     justify-content:space-between;
     align-items:center;
-    background: var(--ink-50, #f5f6f7);
+    background: var(--ink-50);
     padding: 8px 12px;
     border-radius: 8px;
     margin-bottom: 12px;
   }
   .doc-title { font-weight: 800; font-size: 11px; letter-spacing: 0.04em; color: var(--ink-700); }
-  .doc-number { font-family: monospace; font-weight: 700; font-size: 11px; color: var(--moss-700); }
+  .doc-number { font-family: monospace; font-weight: 600; font-size: 11px; color: var(--ink-700); }
   
   .meta-grid { display:flex; justify-content:space-between; font-size:12px; color: var(--ink-500); padding: 3px 0; }
   .meta-grid strong { color: var(--ink-900); }
   
-  .divider { border:none; border-top:1px dashed var(--ink-200); margin: 12px 0; }
+  .divider { border:none; border-top:1px solid var(--line); margin: 12px 0; }
   
   .item-table { width:100%; border-collapse:collapse; margin-bottom: 12px; }
-  .item-table th { text-align:left; font-size:10px; text-transform:uppercase; color:var(--ink-400); padding-bottom:6px; font-weight:700; }
+  .item-table th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-500); padding-bottom:6px; font-weight:600; }
   .item-table th:last-child { text-align:right; }
   .item-table td { padding: 6px 0; font-size:13px; vertical-align:top; }
-  .item-table td:last-child { text-align:right; font-weight:700; }
-  .item-sub { font-size:11px; color: var(--ink-400); margin-top:1.5px; }
+  .item-table td:last-child { text-align:right; font-weight:600; font-variant-numeric: tabular-nums; }
+  .item-sub { font-size:11px; color: var(--ink-500); margin-top:1.5px; font-variant-numeric: tabular-nums; }
   
   .total-box {
-    background: var(--moss-50);
-    border: 1px solid rgba(26, 98, 60, 0.15);
-    border-radius: 10px;
+    background: var(--positive-50);
+    border: 1px solid var(--line);
+    border-radius: 8px;
     padding: 12px 14px;
     display:flex;
     justify-content:space-between;
     align-items:center;
     margin-top: 10px;
   }
-  .total-box.credit { background: var(--rust-50); border-color: rgba(196, 68, 29, 0.15); }
-  .total-label { font-size:12px; font-weight:700; color:var(--moss-700); text-transform:uppercase; }
-  .total-box.credit .total-label { color:var(--rust-600); }
-  .total-val { font-size:17px; font-weight:800; color:var(--moss-700); }
-  .total-box.credit .total-val { color:var(--rust-600); }
+  .total-box.credit { background: var(--negative-50); }
+  .total-label { font-size:11px; font-weight:600; color:var(--positive); text-transform:uppercase; letter-spacing:0.04em; }
+  .total-box.credit .total-label { color:var(--negative); }
+  .total-val { font-size:20px; font-weight:600; color:var(--positive); font-variant-numeric: tabular-nums; }
+  .total-box.credit .total-val { color:var(--negative); }
   
   .status-tag {
     text-align:center;
@@ -190,21 +194,22 @@ function renderShell({ title, bodyHtml, paperWidthMm = 80 }) {
     font-weight:700;
     margin-top: 10px;
   }
-  .status-tag.cleared { background:var(--moss-50); color:var(--moss-700); border:1px solid rgba(26, 98, 60, 0.2); }
-  .status-tag.partial { background:var(--rust-50); color:var(--rust-600); border:1px solid rgba(196, 68, 29, 0.2); }
+  .status-tag.cleared { background:var(--positive-50); color:var(--positive); border:1px solid var(--line); }
+  .status-tag.partial { background:var(--negative-50); color:var(--negative); border:1px solid var(--line); }
   
   .actions { display:flex; gap:10px; margin-top:16px; }
   .btn {
-    flex:1; text-align:center; padding: 11px; border-radius:8px;
-    font-weight:700; font-size:13px; border:1px solid var(--ink-200);
-    background:#fff; color: var(--ink-700); cursor:pointer;
+    flex:1; text-align:center; padding: 11px; border-radius:4px;
+    font-weight:600; font-size:13px; border:1px solid var(--line);
+    background: var(--surface); color: var(--ink-700); cursor:pointer;
   }
-  .btn:hover { background: var(--ink-100); }
-  .btn.primary { background: var(--moss-700); border-color: var(--moss-700); color:#fff; }
+  .btn:hover { background: var(--ink-50); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color:#fff; }
+  .btn.primary:hover { background: var(--primary-700); }
   
   .footer-note { text-align:center; font-size:11px; color: var(--ink-400); margin-top: 18px; line-height: 1.5; }
   .empty { text-align:center; padding: 60px 16px; }
-  .empty-icon { font-size: 40px; margin-bottom: 8px; }
+  .empty-icon { color: var(--ink-400); margin-bottom: 10px; }
   .empty h1 { font-size: 17px; margin-bottom: 6px; }
   .empty p { font-size: 13px; color: var(--ink-400); max-width: 300px; margin: 0 auto; }
   
@@ -236,14 +241,14 @@ function renderDocumentBody(vm, settings) {
     contentHtml = `
       <div style="font-size:13px;">
         <div class="meta-grid"><span>Previous Total Debt:</span><strong>${formatKES(vm.previousBalance)}</strong></div>
-        <div class="meta-grid"><span>Payment Received:</span><strong style="color:var(--moss-700);">- ${formatKES(vm.amountPaid)}</strong></div>
+        <div class="meta-grid"><span>Payment Received:</span><strong style="color:var(--positive);">- ${formatKES(vm.amountPaid)}</strong></div>
       </div>
       <div class="total-box ${vm.isCleared ? '' : 'credit'}">
         <span class="total-label">Remaining Debt</span>
         <span class="total-val">${formatKES(vm.remainingBalance)}</span>
       </div>
       <div class="status-tag ${vm.isCleared ? 'cleared' : 'partial'}">
-        ${vm.isCleared ? '✓ DEBT FULLY CLEARED' : '⚠ PARTIALLY PAID'}
+        ${vm.isCleared ? 'PAID IN FULL' : 'PARTIALLY PAID'}
       </div>
     `;
   } else if (vm.items) {
@@ -354,16 +359,16 @@ function buildPdfScript() {
     doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5);
     doc.text(biz.shopName.toUpperCase(), centerX, y + 2, { align: 'center' });
     y += 5.5;
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(90, 98, 115);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(74, 84, 104);
     if (biz.phone) { doc.text('Tel: ' + biz.phone, centerX, y, { align: 'center' }); y += 3.2; }
     if (biz.email) { doc.text(biz.email, centerX, y, { align: 'center' }); y += 3.2; }
 
-    doc.setDrawColor(180, 185, 195); doc.setLineWidth(0.2);
+    doc.setDrawColor(226, 230, 236); doc.setLineWidth(0.2);
     doc.line(marginX, y, pageWidth, y); y += 3.8;
 
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(21, 23, 29);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(15, 21, 34);
     doc.text(vm.label + ' ' + (vm.receiptNumber || ''), marginX, y);
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(90, 98, 115);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(74, 84, 104);
     doc.text(vm.dateLabel, pageWidth, y, { align: 'right' });
     y += 3.5;
     if (vm.customerName) { doc.text('Customer: ' + vm.customerName, marginX, y); y += 3.2; }
@@ -374,7 +379,7 @@ function buildPdfScript() {
 
     function row(label, value, bold) {
       doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(bold ? 8 : 7.5);
-      doc.setTextColor(21, 23, 29);
+      doc.setTextColor(15, 21, 34);
       doc.text(label, marginX, y);
       doc.text(value, pageWidth, y, { align: 'right' });
       y += 4.8;
@@ -387,8 +392,8 @@ function buildPdfScript() {
       row('Remaining Balance:', formatKES(vm.remainingBalance), true);
       y += 1.5;
       doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
-      doc.setTextColor(vm.isCleared ? 26 : 196, vm.isCleared ? 98 : 68, vm.isCleared ? 60 : 29);
-      doc.text(vm.isCleared ? '✓ DEBT FULLY CLEARED' : '⚠ PARTIALLY PAID', centerX, y, { align: 'center' });
+      doc.setTextColor(vm.isCleared ? 15 : 211, vm.isCleared ? 157 : 64, vm.isCleared ? 116 : 47);
+      doc.text(vm.isCleared ? 'PAID IN FULL' : 'PARTIALLY PAID', centerX, y, { align: 'center' });
     } else if (vm.items && vm.items.length) {
       vm.items.forEach(function (it) {
         var lineTotal = (it.lineTotal != null) ? it.lineTotal : ((it.quantity || 0) * (it.unitPrice || 0));
@@ -411,7 +416,7 @@ function buildPdfScript() {
     }
 
     y += 7;
-    doc.setFontSize(7); doc.setFont('helvetica', 'italic'); doc.setTextColor(120, 125, 135);
+    doc.setFontSize(7); doc.setFont('helvetica', 'italic'); doc.setTextColor(122, 133, 152);
     doc.text('Thank you for your business!', centerX, y, { align: 'center' });
     doc.save((vm.receiptNumber || 'document').toLowerCase() + '.pdf');
   };

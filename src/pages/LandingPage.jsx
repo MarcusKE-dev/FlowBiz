@@ -10,7 +10,7 @@ import WhatsAppFloatingButton from '../components/common/WhatsAppFloatingButton'
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-[#faf6ef] text-[#15171d] flex flex-col">
+    <div className="min-h-screen bg-canvas text-ink-900 flex flex-col">
       <LandingHeader />
       <main className="flex-1">
         <HeroSection />

@@ -464,13 +464,13 @@ export default function AdminCommunications() {
           </div>
 
           {/* Full-width Responsive Email Simulation */}
-          <div className="w-full max-w-2xl mx-auto rounded-xl bg-white shadow-xl overflow-hidden border border-ink-200">
+          <div className="mx-auto w-full max-w-2xl overflow-hidden rounded-panel border border-line bg-surface">
             {/* Header */}
-            <div className="bg-[#1a623c] px-5 sm:px-6 py-4 text-white flex items-center justify-between">
+            <div className="flex items-center justify-between bg-primary-600 px-5 py-4 text-white sm:px-6">
               <div className="flex items-center gap-2.5">
-                <span className="font-extrabold text-lg sm:text-xl tracking-tight">FlowBiz</span>
+                <span className="font-display text-page-title tracking-[-0.02em] text-white">FlowBiz</span>
                 {badge && (
-                  <span className="text-[#c3eed3] text-[11px] font-semibold uppercase tracking-wider">
+                  <span className="text-label uppercase text-primary-100">
                     {badge}
                   </span>
                 )}
@@ -500,11 +500,11 @@ export default function AdminCommunications() {
             </div>
 
             {/* Footer */}
-            <div className="bg-[#fafbfc] border-t border-ink-100 p-5 sm:p-6 text-xs text-ink-500 space-y-1.5">
+            <div className="space-y-1.5 border-t border-line bg-canvas p-5 text-secondary text-ink-600 sm:p-6">
               <p className="font-bold text-ink-800">Need help or have questions?</p>
               <p className="leading-relaxed text-[11px] sm:text-xs">
                 Reply to this email or chat with our team on WhatsApp: 
-                <a href={`https://wa.me/254741104469?text=${encodeURIComponent(whatsappText)}`} className="text-[#1a623c] font-bold ml-1">
+                <a href={`https://wa.me/254741104469?text=${encodeURIComponent(whatsappText)}`} className="ml-1 font-semibold text-primary-700">
                   +254 741 104 469
                 </a>.
               </p>

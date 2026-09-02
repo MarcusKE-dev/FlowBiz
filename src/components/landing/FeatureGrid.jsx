@@ -1,17 +1,4 @@
-import { 
-  ShoppingCart, 
-  BookOpen, 
-  Lock, 
-  WifiOff, 
-  Smartphone, 
-  Printer, 
-  Boxes, 
-  Users, 
-  TrendingUp, 
-  ShieldCheck, 
-  RotateCcw,
-  Truck
-} from 'lucide-react';
+import { ShoppingCart, BookOpen, Lock, WifiOff, Smartphone, Printer, Boxes, Users, TrendingUp, ShieldCheck, RotateCcw, Truck } from 'lucide-react';
 
 export function FeatureGrid() {
   const features = [
@@ -93,7 +80,7 @@ return (
   <section id="features" className="py-16 md:py-24 bg-white">
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
       <div className="text-center max-w-3xl mx-auto space-y-3">
-        <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-[#15171d] tracking-tight">
+        <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-ink-900 tracking-tight">
           Everything you need to run your business
         </h2>
       </div>
@@ -105,20 +92,20 @@ return (
           return (
             <div
               key={index}
-              className="space-y-3 pb-4 border-b border-[#e8eaed] sm:border-b-0"
+              className="space-y-3 pb-4 border-b border-line sm:border-b-0"
             >
                 <div className="flex items-center gap-3">
-                  <div className="h-9 w-9 rounded-lg 	bg-white text-[#1a623c] flex items-center justify-center shrink-0">
+                  <div className="h-9 w-9 rounded-lg 	bg-white text-primary-600 flex items-center justify-center shrink-0">
                     <Icon className="h-5 w-5" strokeWidth={2} />
                   </div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#1a623c]">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-primary-600">
                     {feat.category}
                   </span>
                 </div>
-                <h3 className="text-base font-bold text-[#15171d]">
+                <h3 className="text-base font-bold text-ink-900">
                   {feat.title}
                 </h3>
-                <p className="text-xs text-[#5a6273] leading-relaxed">
+                <p className="text-xs text-ink-600 leading-relaxed">
                   {feat.description}
                 </p>
               </div>

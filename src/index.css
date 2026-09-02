@@ -171,11 +171,6 @@
   .bottom-nav-safe {
     padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
   }
-
-  /* DEPRECATED — cards are no longer the default container. Kept only
-     so un-swept pages still render; deleted in Phase 5 once nothing
-     references it. Do not add new .card usages. */
-  .card { @apply bg-surface rounded-panel border border-line; }
 }
 
 @layer utilities {

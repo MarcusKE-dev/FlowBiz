@@ -24,6 +24,7 @@ import DataTable from '../components/ui/DataTable';
 import EmptyState from '../components/common/EmptyState';
 import Money from '../components/ui/Money';
 import { amountOnly } from '../components/ui/format';
+import { PDF } from '../theme/tokens';
 import toast from 'react-hot-toast';
 
 const PRESETS = [
@@ -230,12 +231,12 @@ export default function Reports() {
 
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(16);
-      doc.setTextColor(21, 23, 29);
+      doc.setTextColor(...PDF.ink);
       doc.text(businessName.toUpperCase(), textX, y + 6);
 
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8.5);
-      doc.setTextColor(90, 98, 115);
+      doc.setTextColor(...PDF.ink2);
       const metaLine = [settings.phone, settings.email, settings.address].filter(Boolean).join(' · ');
       if (metaLine) {
         doc.text(metaLine, textX, y + 11);
@@ -243,38 +244,38 @@ export default function Reports() {
       doc.text(`FINANCIAL AUDIT & PERFORMANCE STATEMENT  |  ${formatDate(start)} to ${formatDate(end)}`, textX, y + 15.5);
 
       y += 22;
-      doc.setDrawColor(21, 23, 29);
+      doc.setDrawColor(...PDF.ink);
       doc.setLineWidth(0.4);
       doc.line(marginX, y, pageWidth - marginX, y);
       y += 6;
 
       // Helper for clean subsection headers
       const drawSectionHeader = (title) => {
-        doc.setFillColor(246, 241, 231); // warm subtle sand
+        doc.setFillColor(...PDF.canvas);
         doc.roundedRect(marginX, y, contentWidth, 6.5, 1, 1, 'F');
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(9);
-        doc.setTextColor(21, 23, 29);
+        doc.setTextColor(...PDF.ink);
         doc.text(title.toUpperCase(), marginX + 3, y + 4.6);
         y += 9.5;
       };
 
       // Helper for clean data rows
-      const drawDataRow = (label, value, isBold = false, isHighlight = false, valueColor = [21, 23, 29]) => {
+      const drawDataRow = (label, value, isBold = false, isHighlight = false, valueColor = PDF.ink) => {
         if (isHighlight) {
-          doc.setFillColor(241, 250, 244);
+          doc.setFillColor(...PDF.positiveTint);
           doc.roundedRect(marginX, y - 3.5, contentWidth, 6, 0.8, 0.8, 'F');
         }
         doc.setFont('helvetica', isBold ? 'bold' : 'normal');
         doc.setFontSize(8.5);
-        doc.setTextColor(54, 59, 72);
+        doc.setTextColor(...PDF.ink2);
         doc.text(label, marginX + 3, y + 0.8);
 
-        doc.setTextColor(valueColor[0], valueColor[1], valueColor[2]);
+        doc.setTextColor(...valueColor);
         doc.setFont('helvetica', isBold ? 'bold' : 'normal');
         doc.text(value, pageWidth - marginX - 3, y + 0.8, { align: 'right' });
 
-        doc.setDrawColor(232, 234, 237);
+        doc.setDrawColor(...PDF.divider);
         doc.setLineWidth(0.12);
         doc.line(marginX + 3, y + 2.5, pageWidth - marginX - 3, y + 2.5);
 
@@ -292,7 +293,7 @@ export default function Reports() {
       drawDataRow('− Customer Refunds Issued (Cash)', `- ${formatKES(summary.totalRefundsCash)}`);
       drawDataRow('− Direct Stock Purchases Paid (Cash)', `- ${formatKES(cashPurchases)}`);
       drawDataRow('− Supplier Debt Payments (Cash)', `- ${formatKES(cashSupplierPay)}`);
-      drawDataRow('= Net Expected Cash in Drawer', formatKES(expectedCashAtClose), true, true, [26, 98, 60]);
+      drawDataRow('= Net Expected Cash in Drawer', formatKES(expectedCashAtClose), true, true, PDF.positive);
       y += 3;
 
       // 3. M-Pesa Till Reconciliation Breakdown
@@ -306,23 +307,23 @@ export default function Reports() {
       drawDataRow('− Customer Refunds Issued (M-Pesa)', `- ${formatKES(summary.totalRefundsMpesa)}`);
       drawDataRow('− Direct Stock Purchases Paid (M-Pesa)', `- ${formatKES(mpesaPurchases)}`);
       drawDataRow('− Supplier Debt Payments (M-Pesa)', `- ${formatKES(mpesaSupplierPay)}`);
-      drawDataRow('= Net Expected M-Pesa Till Balance', formatKES(expectedMpesaAtClose), true, true, [26, 98, 60]);
+      drawDataRow('= Net Expected M-Pesa Till Balance', formatKES(expectedMpesaAtClose), true, true, PDF.positive);
       y += 3;
 
       // 4. Profit & Loss Statement (Cash-Flow / Operating)
       drawSectionHeader('3. Cash-Flow Profit & Loss Statement');
       drawDataRow('Recognized Cash-Flow Revenue (Sales + Debt Repaid − Refunds)', formatKES(summary.revenue));
       drawDataRow('− Cost of Goods Sold (COGS)', `- ${formatKES(summary.costOfGoodsSold)}`);
-      drawDataRow('= Gross Profit', formatKES(summary.grossProfit), true, true, [26, 98, 60]);
+      drawDataRow('= Gross Profit', formatKES(summary.grossProfit), true, true, PDF.positive);
       drawDataRow('− Total Operating Expenses', `- ${formatKES(summary.totalExpenses)}`);
-      drawDataRow('= Net Operating Profit', formatKES(summary.netProfit), true, true, summary.netProfit >= 0 ? [26, 98, 60] : [196, 68, 29]);
+      drawDataRow('= Net Operating Profit', formatKES(summary.netProfit), true, true, summary.netProfit >= 0 ? PDF.positive : PDF.negative);
       y += 3;
 
       // 5. Purchases & Supplier Restocking Summary
       drawSectionHeader('4. Stock Purchases & Supplier Credit Activity');
       drawDataRow('Total Stock Purchases (Cash & M-Pesa Paid)', formatKES(cashPurchases + mpesaPurchases));
-      drawDataRow('Stock Taken on Supplier Credit (Payables Added)', formatKES(creditPurchases), false, false, [196, 68, 29]);
-      drawDataRow('Supplier Debt Payments Cleared', formatKES(cashSupplierPay + mpesaSupplierPay), false, false, [26, 98, 60]);
+      drawDataRow('Stock Taken on Supplier Credit (Payables Added)', formatKES(creditPurchases), false, false, PDF.negative);
+      drawDataRow('Supplier Debt Payments Cleared', formatKES(cashSupplierPay + mpesaSupplierPay), false, false, PDF.positive);
       drawDataRow('Total Current Supplier Balance Outstanding', formatKES(supplierBalances.reduce((a, b) => a + b.balance, 0)), true);
       y += 3;
 
@@ -337,7 +338,7 @@ export default function Reports() {
 
       // Footer
       doc.setFontSize(7.5);
-      doc.setTextColor(140, 145, 155);
+      doc.setTextColor(...PDF.ink3);
       doc.text(`Generated on ${formatDateTime(new Date())} · Official Record from FlowBiz Workstation`, marginX, 287);
       doc.text(`Page 1 of 1`, pageWidth - marginX, 287, { align: 'right' });
 

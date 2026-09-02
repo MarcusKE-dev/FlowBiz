@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom';
-import { ArrowRight, CheckCircle2, ShieldCheck } from 'lucide-react';
-import { PosSimulationMockup } from './PosSimulationMockup';
+import { CheckCircle2, ShieldCheck } from 'lucide-react';
 
 const HERO_PHOTO_URL = '/hero-photo.webp';
 
@@ -9,7 +8,7 @@ export function HeroSection() {
     <section className="relative overflow-hidden">
       
       {/* Full-Bleed Hero Background Banner */}
-      <div className="relative min-h-[580px] lg:min-h-[680px] flex items-center bg-[#0d1f16]">
+      <div className="relative flex min-h-[580px] items-center bg-deep-900 lg:min-h-[680px]">
         
         {/* 1. Base Background Photo */}
         <div className="absolute inset-0 z-0 overflow-hidden">
@@ -27,7 +26,9 @@ export function HeroSection() {
         <div 
           className="absolute inset-0 z-1 pointer-events-none"
           style={{
-            background: 'linear-gradient(to right, rgba(13, 31, 22, 0.96) 0%, rgba(13, 31, 22, 0.88) 42%, rgba(13, 31, 22, 0.35) 70%, rgba(13, 31, 22, 0.02) 100%)',
+            // Deep blue (#121A63) laid over the photo, fading out to the right
+            // so the shop stays visible behind the headline.
+            background: 'linear-gradient(to right, rgba(18, 26, 99, 0.94) 0%, rgba(18, 26, 99, 0.86) 42%, rgba(18, 26, 99, 0.34) 70%, rgba(18, 26, 99, 0.02) 100%)',
           }}
         />
 
@@ -46,11 +47,11 @@ export function HeroSection() {
         <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24 w-full">
           <div className="max-w-3xl space-y-6 text-white">
 
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-black text-white tracking-tight leading-[1.08] drop-shadow-sm">
+            <h1 className="font-hero text-4xl font-extrabold leading-[1.08] tracking-tight text-white sm:text-5xl lg:text-6xl xl:text-7xl">
               Run your business with ease
             </h1>
 
-            <p className="text-base sm:text-lg lg:text-xl text-[#d1dcd4] font-normal leading-relaxed max-w-2xl">
+            <p className="text-base sm:text-lg lg:text-xl text-white/70 font-normal leading-relaxed max-w-2xl">
               Sell <strong className="text-white font-semibold">faster</strong>, know what you have in{' '}
               <strong className="text-white font-semibold">stock</strong>, and keep your business running
               even while <strong className="text-white font-semibold">offline</strong>, then see how it’s doing when you’re <strong className="text-white font-semibold">online.</strong>
@@ -59,10 +60,9 @@ export function HeroSection() {
             <div className="pt-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5">
               <Link
                 to="/setup"
-                className="bg-[#1a623c] text-white px-8 py-4 rounded-xl text-base font-bold shadow-lg hover:bg-[#144f30] transition-all flex items-center justify-center gap-2 border border-[#348a58]"
+                className="bg-primary-600 text-white px-8 py-4 rounded-xl text-base font-bold shadow-lg hover:bg-primary-700 transition-all flex items-center justify-center gap-2 border border-primary-600"
               >
                 <span>Get Started Free</span>
-                <ArrowRight className="h-5 w-5" />
               </Link>
               <Link
                 to="/login"
@@ -72,21 +72,21 @@ export function HeroSection() {
               </Link>
             </div>
 
-            <div className="pt-6 border-t border-white/15 grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-xs sm:text-sm font-semibold text-[#e1ece4]">
+            <div className="pt-6 border-t border-white/15 grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-xs sm:text-sm font-semibold text-primary-100">
               <span className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
+                <CheckCircle2 className="h-4 w-4 text-primary-100 shrink-0" />
                 Works 100% Offline
               </span>
               <span className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
+                <CheckCircle2 className="h-4 w-4 text-primary-100 shrink-0" />
                 M-Pesa Till Reconciled
               </span>
               <span className="flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4 text-[#a3e6ba] shrink-0" />
+                <ShieldCheck className="h-4 w-4 text-primary-100 shrink-0" />
                 Customer Reminders
               </span>
               <span className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-[#a3e6ba] shrink-0" />
+                <CheckCircle2 className="h-4 w-4 text-primary-100 shrink-0" />
                 No POS Hardware Required
               </span>
             </div>
@@ -97,9 +97,7 @@ export function HeroSection() {
       </div>
 
       {/* Demo section — replaces the old embedded "Live Point of Sale
-          Simulator" (PosSimulationMockup is still imported above and used
-          nowhere else in the app, so it's left in place untouched in case
-          it's wanted again later).
+          Simulator", whose component has now been deleted.
 
           The button below is a plain <a>, not a react-router <Link>, on
           purpose: /demo/ is a SEPARATE build (see vite.config.js + 
@@ -111,15 +109,15 @@ export function HeroSection() {
           which is what lets Cloudflare correctly hand the request to the
           separately-built demo app. */}
 
-      <div id="demo" className="py-16 md:py-24 border-t border-[#e8eaed] scroll-mt-14">
+      <div id="demo" className="py-16 md:py-24 border-t border-line scroll-mt-14">
         <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-8">
           
           {/* Heading and Paragraph with increased spacing */}
           <div className="space-y-4 sm:space-y-5">
-            <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-[#15171d] tracking-tight">
+            <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-ink-900 tracking-tight">
               See FlowBiz in action
             </h2>
-            <p className="text-sm sm:text-base text-[#5a6273] leading-relaxed">
+            <p className="text-sm sm:text-base text-ink-600 leading-relaxed">
               Explore a fully working FlowBiz account, preloaded with sample products, sales, and
               customers. Try the POS counter, check the dashboard, and see how credit sales and
               M-Pesa reconciliation work. <br className="hidden sm:inline" /> Nothing you do here ever touches a real business.
@@ -129,12 +127,11 @@ export function HeroSection() {
           <div className="pt-2 flex flex-col items-center gap-2.5">
             <a
               href="/demo/"
-              className="inline-flex items-center justify-center gap-2 bg-[#1a623c] text-white px-8 py-3.5 rounded-xl font-bold text-sm hover:bg-[#144f30] transition-all shadow-sm"
+              className="inline-flex items-center justify-center gap-2 bg-primary-600 text-white px-8 py-3.5 rounded-xl font-bold text-sm hover:bg-primary-700 transition-all shadow-sm"
             >
               <span>Try the Free Demo</span>
-              <ArrowRight className="h-4 w-4" />
             </a>
-            <span className="text-xs text-[#767f8f]">
+            <span className="text-xs text-ink-500">
               No sign-in needed &middot; Free demo trial &middot; Nothing is saved to a real account
             </span>
           </div>

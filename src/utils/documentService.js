@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import { formatKES } from './currency';
 import { formatDateTime } from './dateRanges';
 import { openWhatsApp, buildReceiptMessage } from './whatsapp';
+import { PDF } from '../theme/tokens';
 
 export async function loadImageAsDataUrl(url) {
   if (!url) return null;
@@ -38,13 +39,13 @@ async function drawDocumentHeader(doc, settings, marginX, startY, paperWidthMm =
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(paperWidthMm <= 58 ? 9.5 : 11.5);
-  doc.setTextColor(21, 23, 29);
+  doc.setTextColor(...PDF.ink);
   doc.text((settings.shopName || 'FLOWBIZ STORE').toUpperCase(), centerX, y + 2, { align: 'center' });
 
   y += 5.5;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
-  doc.setTextColor(90, 98, 115);
+  doc.setTextColor(...PDF.ink2);
 
   if (settings.phone) {
     doc.text(`Tel: ${settings.phone}`, centerX, y, { align: 'center' });
@@ -90,7 +91,7 @@ async function buildDocument(data, settings, typeLabel) {
   let y = await drawDocumentHeader(doc, settings, marginX, 5, paperWidthMm);
 
   const drawDivider = (currentY) => {
-    doc.setDrawColor(180, 185, 195);
+    doc.setDrawColor(...PDF.line);
     doc.setLineWidth(0.2);
     doc.setLineDashPattern([1, 1], 0);
     doc.line(marginX, currentY, pageWidth, currentY);
@@ -103,24 +104,24 @@ async function buildDocument(data, settings, typeLabel) {
   const docRef = data.id ? `#${data.id.slice(-6).toUpperCase()}` : '#REC';
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
-  doc.setTextColor(21, 23, 29);
+  doc.setTextColor(...PDF.ink);
   doc.text(`${typeLabel} ${docRef}`, marginX, y);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
-  doc.setTextColor(90, 98, 115);
+  doc.setTextColor(...PDF.ink2);
   doc.text(formatDateTime(data.soldAt || data.recordedAt || new Date()), pageWidth, y, { align: 'right' });
 
   y += 3.5;
   if (data.customerName) {
     doc.setFont('helvetica', 'bold');
-    doc.setTextColor(21, 23, 29);
+    doc.setTextColor(...PDF.ink);
     doc.text(`Customer: ${data.customerName}`, marginX, y);
     y += 3.5;
   }
   if (data.soldByName) {
     doc.setFont('helvetica', 'normal');
-    doc.setTextColor(90, 98, 115);
+    doc.setTextColor(...PDF.ink2);
     doc.text(`Served by: ${data.soldByName}`, marginX, y);
     y += 3.5;
   }
@@ -130,7 +131,7 @@ async function buildDocument(data, settings, typeLabel) {
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
-  doc.setTextColor(54, 59, 72);
+  doc.setTextColor(...PDF.ink2);
   doc.text('ITEM', marginX, y);
   doc.text('AMOUNT', pageWidth, y, { align: 'right' });
 
@@ -140,7 +141,7 @@ async function buildDocument(data, settings, typeLabel) {
     y += 3.5;
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
-    doc.setTextColor(21, 23, 29);
+    doc.setTextColor(...PDF.ink);
 
     const itemName = item.productName || 'Item';
     const splitName = doc.splitTextToSize(itemName, contentWidth - 22);
@@ -153,7 +154,7 @@ async function buildDocument(data, settings, typeLabel) {
     if (item.quantity) {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(6.8);
-      doc.setTextColor(110, 115, 125);
+      doc.setTextColor(...PDF.ink3);
       doc.text(`${item.quantity} x @ ${formatKES(item.unitPrice || 0)}`, marginX, y);
     }
   });
@@ -163,26 +164,26 @@ async function buildDocument(data, settings, typeLabel) {
   y += 4.5;
 
   if (data.isCredit) {
-    doc.setFillColor(253, 244, 239);
+    doc.setFillColor(...PDF.negativeTint);
     doc.roundedRect(marginX, y - 3, contentWidth, 10.5, 1, 1, 'F');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
-    doc.setTextColor(196, 68, 29);
+    doc.setTextColor(...PDF.negative);
     doc.text('AMOUNT DUE (DENI):', marginX + 2, y + 3.5);
     doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth - 2, y + 3.5, { align: 'right' });
     y += 12;
   } else {
-    doc.setFillColor(241, 250, 244);
+    doc.setFillColor(...PDF.positiveTint);
     doc.roundedRect(marginX, y - 3, contentWidth, 11.5, 1, 1, 'F');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
-    doc.setTextColor(26, 98, 60);
+    doc.setTextColor(...PDF.positive);
     doc.text('TOTAL PAID:', marginX + 2, y + 2.5);
     doc.text(formatKES(data.totalAmount || data.amount || 0), pageWidth - 2, y + 2.5, { align: 'right' });
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
-    doc.setTextColor(54, 59, 72);
+    doc.setTextColor(...PDF.ink2);
     const methodStr = `${data.paymentMethod || data.method || 'Cash'}${data.mpesaCode ? ` (${data.mpesaCode})` : ''}`;
     doc.text(`Tender: ${methodStr}`, marginX + 2, y + 6.8);
     y += 13.5;
@@ -190,7 +191,7 @@ async function buildDocument(data, settings, typeLabel) {
 
   doc.setFontSize(7);
   doc.setFont('helvetica', 'italic');
-  doc.setTextColor(120, 125, 135);
+  doc.setTextColor(...PDF.ink3);
   doc.text(data.isCredit ? 'Payment due · Thank you!' : 'Thank you for shopping with us!', centerX, y, { align: 'center' });
 
   return doc;
@@ -208,7 +209,7 @@ async function buildDebtPaymentDocument(receipt, settings) {
   let y = await drawDocumentHeader(doc, settings, marginX, 5, paperWidthMm);
 
   const drawDivider = (currentY) => {
-    doc.setDrawColor(180, 185, 195);
+    doc.setDrawColor(...PDF.line);
     doc.setLineWidth(0.2);
     doc.setLineDashPattern([1, 1], 0);
     doc.line(marginX, currentY, pageWidth, currentY);
@@ -221,12 +222,12 @@ async function buildDebtPaymentDocument(receipt, settings) {
   const recNo = receipt.receiptDocId ? `#PAY-${receipt.receiptDocId.slice(-6).toUpperCase()}` : '#PAYMENT';
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
-  doc.setTextColor(21, 23, 29);
+  doc.setTextColor(...PDF.ink);
   doc.text(`DEBT RECEIPT ${recNo}`, marginX, y);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
-  doc.setTextColor(90, 98, 115);
+  doc.setTextColor(...PDF.ink2);
   doc.text(formatDateTime(receipt.paidAt || new Date()), pageWidth, y, { align: 'right' });
 
   y += 3.5;
@@ -238,10 +239,10 @@ async function buildDebtPaymentDocument(receipt, settings) {
   drawDivider(y);
   y += 4.5;
 
-  const row = (label, val, boldVal = false, color = [21, 23, 29]) => {
+  const row = (label, val, boldVal = false, color = PDF.ink) => {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
-    doc.setTextColor(90, 98, 115);
+    doc.setTextColor(...PDF.ink2);
     doc.text(label, marginX, y);
 
     doc.setFont('helvetica', boldVal ? 'bold' : 'normal');
@@ -251,27 +252,27 @@ async function buildDebtPaymentDocument(receipt, settings) {
   };
 
   row('Previous Total Debt:', formatKES(receipt.previousBalance));
-  row('Payment Received:', `- ${formatKES(receipt.amountPaid)}`, true, [26, 98, 60]);
+  row('Payment Received:', `- ${formatKES(receipt.amountPaid)}`, true, PDF.positive);
 
   drawDivider(y - 1);
   y += 3.5;
 
-  row('Remaining Debt:', formatKES(receipt.remainingBalance), true, receipt.isCleared ? [26, 98, 60] : [196, 68, 29]);
+  row('Remaining Debt:', formatKES(receipt.remainingBalance), true, receipt.isCleared ? PDF.positive : PDF.negative);
 
   y += 1.5;
   const isCleared = !!receipt.isCleared;
-  const statusColor = isCleared ? [26, 98, 60] : [196, 68, 29];
-  doc.setFillColor(isCleared ? 241 : 253, isCleared ? 250 : 244, isCleared ? 244 : 239);
+  const statusColor = isCleared ? PDF.positive : PDF.negative;
+  doc.setFillColor(...(isCleared ? PDF.positiveTint : PDF.negativeTint));
   doc.roundedRect(marginX, y, contentWidth, 6.5, 1, 1, 'F');
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.5);
   doc.setTextColor(statusColor[0], statusColor[1], statusColor[2]);
-  doc.text(isCleared ? '✓ DEBT FULLY CLEARED' : '⚠ PARTIALLY PAID', centerX, y + 4.5, { align: 'center' });
+  doc.text(isCleared ? 'PAID IN FULL' : 'PARTIALLY PAID', centerX, y + 4.5, { align: 'center' });
 
   y += 12;
   doc.setFontSize(7);
   doc.setFont('helvetica', 'italic');
-  doc.setTextColor(120, 125, 135);
+  doc.setTextColor(...PDF.ink3);
   doc.text('Thank you for settling your balance!', centerX, y, { align: 'center' });
 
   return doc;

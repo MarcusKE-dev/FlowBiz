@@ -36,14 +36,14 @@ export function FaqSection() {
   };
 
   return (
-    <section id="faq" className="py-16 md:py-24 border-t border-[#e8eaed] bg-white">
+    <section id="faq" className="py-16 md:py-24 border-t border-line bg-white">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
         <div className="text-center space-y-3">
          
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-[#15171d] tracking-tight">
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-ink-900 tracking-tight">
             Frequently Asked Questions
           </h2>
-          <p className="text-sm text-[#5a6273]">
+          <p className="text-sm text-ink-600">
             Everything you need to know about setting up and running FlowBiz in your shop.
           </p>
         </div>
@@ -52,21 +52,21 @@ export function FaqSection() {
           {faqs.map((faq, idx) => {
             const isOpen = openIndex === idx;
             return (
-              <div key={idx} className="border-b border-[#e8eaed] pb-4 transition-all">
+              <div key={idx} className="border-b border-line pb-4 transition-all">
                 <button
                   type="button"
                   onClick={() => toggleFaq(idx)}
-                  className="w-full flex items-center justify-between gap-4 text-left font-bold text-[#15171d] text-sm sm:text-base py-2 hover:text-[#1a623c] transition-colors"
+                  className="w-full flex items-center justify-between gap-4 text-left font-bold text-ink-900 text-sm sm:text-base py-2 hover:text-primary-600 transition-colors"
                 >
                   <span>{faq.question}</span>
                   {isOpen ? (
-                    <ChevronUp className="h-4 w-4 text-[#1a623c] shrink-0" />
+                    <ChevronUp className="h-4 w-4 text-primary-600 shrink-0" />
                   ) : (
-                    <ChevronDown className="h-4 w-4 text-[#767f8f] shrink-0" />
+                    <ChevronDown className="h-4 w-4 text-ink-500 shrink-0" />
                   )}
                 </button>
                 {isOpen && (
-                  <p className="text-xs sm:text-sm text-[#5a6273] leading-relaxed pt-2 pb-1">
+                  <p className="text-xs sm:text-sm text-ink-600 leading-relaxed pt-2 pb-1">
                     {faq.answer}
                   </p>
                 )}

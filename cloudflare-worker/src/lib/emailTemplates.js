@@ -6,22 +6,22 @@
 // Colors match the app's own Tailwind palette (moss/sand, see
 // tailwind.config.js) so the email doesn't look like a different product.
 
-const BRAND_GREEN = '#1a623c';
-const BRAND_SAND = '#faf6ef';
-const INK_900 = '#15171d';
-const INK_700 = '#363b48';
-const INK_400 = '#767f8f';
-const INK_100 = '#e8eaed';
+const BRAND_BLUE = '#1D70F5';
+const CANVAS = '#F4F6F9';
+const INK_900 = '#0F1522';
+const INK_700 = '#4A5468';
+const INK_400 = '#7A8598';
+const INK_100 = '#E2E6EC';
 
 function shell(bodyHtml) {
   return `<!doctype html>
 <html>
 <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
-<body style="margin:0;padding:0;background:${BRAND_SAND};font-family:Arial,Helvetica,sans-serif;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${BRAND_SAND};padding:32px 16px;">
+<body style="margin:0;padding:0;background:${CANVAS};font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${CANVAS};padding:32px 16px;">
     <tr><td align="center">
-      <table role="presentation" width="100%" style="max-width:480px;background:#ffffff;border-radius:14px;overflow:hidden;">
-        <tr><td style="background:${BRAND_GREEN};padding:20px 28px;">
+      <table role="presentation" width="100%" style="max-width:480px;background:#ffffff;border-radius:8px;overflow:hidden;">
+        <tr><td style="background:${BRAND_BLUE};padding:20px 28px;">
           <span style="color:#ffffff;font-size:18px;font-weight:800;letter-spacing:0.02em;">FlowBiz</span>
         </td></tr>
         <tr><td style="padding:28px;">
@@ -38,7 +38,7 @@ function shell(bodyHtml) {
 }
 
 function button(url, label) {
-  return `<a href="${url}" style="display:inline-block;background:${BRAND_GREEN};color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:12px 24px;border-radius:8px;margin:20px 0;">${label}</a>`;
+  return `<a href="${url}" style="display:inline-block;background:${BRAND_BLUE};color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:12px 24px;border-radius:8px;margin:20px 0;">${label}</a>`;
 }
 
 export function verificationEmail(link) {
