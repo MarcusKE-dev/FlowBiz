@@ -14,6 +14,16 @@ import { formatKES } from '../utils/currency';
 import { formatDate, formatDateTime, getRangeForPreset, startOfDay, endOfDay, todayKey } from '../utils/dateRanges';
 import { computeSupplierBalances, computeExpectedTillBalances } from '../utils/financials';
 import { Printer, TrendingUp } from 'lucide-react';
+import PageHeader from '../components/ui/PageHeader';
+import Toolbar from '../components/ui/Toolbar';
+import Section from '../components/ui/Section';
+import SegmentedControl from '../components/ui/SegmentedControl';
+import MetricRail, { Metric } from '../components/ui/MetricRail';
+import StatementBlock, { StatementRow, StatementResult } from '../components/ui/StatementBlock';
+import DataTable from '../components/ui/DataTable';
+import EmptyState from '../components/common/EmptyState';
+import Money from '../components/ui/Money';
+import { amountOnly } from '../components/ui/format';
 import toast from 'react-hot-toast';
 
 const PRESETS = [
@@ -22,15 +32,6 @@ const PRESETS = [
   { id: 'month', label: 'This Month' },
   { id: 'custom', label: 'Custom' },
 ];
-
-function Card({ label, value, tone = 'text-ink-900' }) {
-  return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <p className={`mt-1 font-display text-lg font-bold ${tone}`}>{value}</p>
-    </div>
-  );
-}
 
 export default function Reports() {
   const { businessId } = useAuth();
@@ -80,19 +81,47 @@ export default function Reports() {
     [businessId]
   );
 
-  const { data: products } = useFirestoreCollection(productsQ);
+  // Query kept (it feeds the PDF export path); the list itself is no
+  // longer read on screen since inventory value moved to Dashboard.
+  useFirestoreCollection(productsQ);
   const { data: purchasesData } = useFirestoreCollection(purchasesQ);
-  const { data: outstandingCreditSales } = useFirestoreCollection(outstandingCreditQ);
+  useFirestoreCollection(outstandingCreditQ);
   const { data: supplierPaymentsData } = useFirestoreCollection(supplierPaymentsQ);
   const { data: suppliersData } = useFirestoreCollection(suppliersQ);
 
-  const totalInventoryValue = useMemo(() => {
-    return products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
-  }, [products]);
-
-  const lowStock = useMemo(() => {
-    return products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
-  }, [products]);
+  const bestSellers = useMemo(() => {
+    const map = {};
+    const ensure = (name) => {
+      const key = name || 'Unnamed product';
+      if (!map[key]) map[key] = { name: key, qty: 0, revenue: 0, profit: 0 };
+      return map[key];
+    };
+    (sales || []).forEach((sale) => {
+      if (sale.isVoided) return;
+      if (Array.isArray(sale.items) && sale.items.length > 0) {
+        sale.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty += Number(it.quantity) || 0;
+          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
+          row.profit += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
+        });
+      } else {
+        const row = ensure(sale.productName);
+        row.qty += Number(sale.quantity) || 0;
+        row.revenue += Number(sale.totalAmount) || 0;
+        row.profit += Number(sale.profit) || 0;
+      }
+    });
+    (creditSales || []).forEach((cs) => {
+      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+      if (Array.isArray(cs.items) && cs.items.length > 0) {
+        cs.items.forEach((it) => { ensure(it.productName).qty += Number(it.quantity) || 0; });
+      } else {
+        ensure(cs.productName).qty += Number(cs.quantity) || 0;
+      }
+    });
+    return Object.values(map).sort((a, b) => b.qty - a.qty).slice(0, 8);
+  }, [sales, creditSales]);
 
   const supplierBalances = useMemo(
     () => computeSupplierBalances(purchasesData, supplierPaymentsData, suppliersData),
@@ -327,34 +356,49 @@ export default function Reports() {
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
-      <div className="flex justify-between items-center">
-        <h1 className="font-display text-xl font-bold text-ink-900">Reports</h1>
-        <Link to="/advanced-analytics" className="btn-outline">
-          <TrendingUp className="h-4 w-4" /> Advanced Analytics
-        </Link>
-      </div>
+    <div className="mx-auto max-w-5xl space-y-6">
+      <PageHeader
+        title="Reports"
+        description="Where the money went over the period you choose."
+        actions={
+          <>
+            <Link to="/advanced-analytics" className="btn-secondary">
+              <TrendingUp className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Advanced analytics
+            </Link>
+            <button className="btn-primary" onClick={() => setPdfModalOpen(true)}>
+              <Printer className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Export report
+            </button>
+          </>
+        }
+      />
 
-      <div className="flex flex-wrap items-center gap-2">
-        {PRESETS.map((p) => (
-          <button
-            key={p.id}
-            onClick={() => setPreset(p.id)}
-            className={`rounded-full px-3.5 py-1.5 text-sm font-semibold ${
-              preset === p.id ? 'bg-ink-900 text-white' : 'bg-ink-100 text-ink-600 hover:bg-ink-200'
-            }`}
-          >
-            {p.label}
-          </button>
-        ))}
+      <Toolbar>
+        <SegmentedControl
+          ariaLabel="Reporting period"
+          options={PRESETS.map((p) => ({ value: p.id, label: p.label }))}
+          value={preset}
+          onChange={setPreset}
+        />
         {preset === 'custom' && (
           <div className="flex items-center gap-2">
-            <input type="date" className="input !w-auto" value={cStart} onChange={(e) => setCStart(e.target.value)} />
-            <span className="text-ink-400">to</span>
-            <input type="date" className="input !w-auto" value={cEnd} onChange={(e) => setCEnd(e.target.value)} />
+            <input
+              type="date"
+              className="input !w-auto"
+              value={cStart}
+              onChange={(e) => setCStart(e.target.value)}
+              aria-label="Start date"
+            />
+            <span className="text-secondary text-ink-500">to</span>
+            <input
+              type="date"
+              className="input !w-auto"
+              value={cEnd}
+              onChange={(e) => setCEnd(e.target.value)}
+              aria-label="End date"
+            />
           </div>
         )}
-      </div>
+      </Toolbar>
 
       <ErrorBanner message={error ? `${error}` : null} />
 
@@ -362,49 +406,72 @@ export default function Reports() {
         <LoadingSpinner />
       ) : (
         <>
-          <div>
-            <h2 className="mb-2 font-display text-sm font-bold text-ink-800">Financial Summary</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Card label="Cash Balance" value={formatKES(expectedCashAtClose)} />
-              <Card label="M-Pesa Balance" value={formatKES(expectedMpesaAtClose)} />
-              <Card label="Credit Sales" value={formatKES(summary.totalCreditSales)} tone="text-rust-600" />
-              <Card label="Repayments Collected" value={formatKES(summary.totalDebtRepayments)} tone="text-moss-700" />
-            </div>
-          </div>
-          <div>
-            <h2 className="mb-2 font-display text-sm font-bold text-ink-800">Profit Calculation</h2>
-            <div className="card divide-y divide-ink-100">
-              {[
-                ['Revenue', summary.revenue, false],
-                ['− Cost of goods sold', -summary.costOfGoodsSold, false],
-                ['= Gross profit', summary.grossProfit, true],
-                ['− Total expenses', -summary.totalExpenses, false],
-                ['= Net profit', summary.netProfit, true],
-              ].map(([label, value, bold], i) => (
-                <div key={label} className={`flex items-center justify-between px-4 py-3 ${bold ? 'bg-ink-50/60' : ''}`}>
-                  <span className={`text-sm ${bold ? 'font-bold text-ink-900' : 'text-ink-600'}`}>{label}</span>
-                  <span className={`font-semibold ${value < 0 ? 'text-rust-600' : i === 4 ? 'text-moss-700' : 'text-ink-800'}`}>
-                    {formatKES(value)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <Section title="Position">
+            <MetricRail columns={4}>
+              <Metric label="Cash balance"        prefix="KES" value={amountOnly(expectedCashAtClose)} />
+              <Metric label="M-Pesa balance"      prefix="KES" value={amountOnly(expectedMpesaAtClose)} />
+              <Metric label="Credit sales"        prefix="KES" value={amountOnly(summary.totalCreditSales)} />
+              <Metric label="Repayments collected" prefix="KES" value={amountOnly(summary.totalDebtRepayments)} />
+            </MetricRail>
+          </Section>
 
-          <div className="flex flex-wrap gap-2">
-            <button className="btn-primary" onClick={() => setPdfModalOpen(true)}>
-              <Printer className="h-4 w-4" strokeWidth={1.75} /> Get PDF Report
-            </button>
-          </div>
+          <Section title="How the profit is made">
+            <StatementBlock>
+              <StatementRow label="Revenue"            prefix="KES" value={amountOnly(summary.revenue)} />
+              <StatementRow label="Cost of goods sold" prefix="KES" value={amountOnly(-summary.costOfGoodsSold)} tone={summary.costOfGoodsSold ? 'negative' : 'muted'} />
+              <StatementRow label="Gross profit"       prefix="KES" value={amountOnly(summary.grossProfit)} strong />
+              <StatementRow label="Total expenses"     prefix="KES" value={amountOnly(-summary.totalExpenses)} tone={summary.totalExpenses ? 'negative' : 'muted'} />
+              <StatementResult
+                label="Net profit"
+                prefix="KES"
+                value={amountOnly(summary.netProfit)}
+                tone={summary.netProfit < 0 ? 'negative' : 'positive'}
+              />
+            </StatementBlock>
+          </Section>
+
+          <Section title="Best sellers" hint="By units sold over this period">
+            <DataTable
+              caption="Best selling products over the selected period"
+              rows={bestSellers}
+              rowKey={(r) => r.name}
+              columns={[
+                {
+                  key: 'name',
+                  header: 'Product',
+                  primary: true,
+                  render: (r) => <span className="font-medium text-ink-900">{r.name}</span>,
+                },
+                { key: 'qty', header: 'Units', numeric: true, render: (r) => <span className="font-semibold text-ink-900">{r.qty}</span> },
+                { key: 'revenue', header: 'Revenue', numeric: true, render: (r) => <Money value={r.revenue} /> },
+                {
+                  key: 'profit',
+                  header: 'Profit',
+                  numeric: true,
+                  render: (r) => (
+                    <span className="font-semibold">
+                      <Money value={r.profit} tone={r.profit < 0 ? 'negative' : 'positive'} />
+                    </span>
+                  ),
+                },
+              ]}
+              empty={
+                <EmptyState
+                  title="No sales in this period"
+                  description="Pick a wider date range, or record a sale at the counter."
+                />
+              }
+            />
+          </Section>
         </>
       )}
 
-      <Modal open={pdfModalOpen} onClose={() => setPdfModalOpen(false)} title="Export Financial Report">
+      <Modal open={pdfModalOpen} onClose={() => setPdfModalOpen(false)} title="Export financial report">
         <div className="space-y-3">
-          <p className="text-sm text-ink-500 mb-4">Export clean, print-ready accounting reports with full till reconciliation and purchases for your records.</p>
-          <button className="btn-primary w-full" onClick={() => doExport('download')}>Download PDF Report</button>
-          <button className="btn-outline w-full" onClick={() => doExport('print')}>Print Report Directly</button>
-          <button className="btn-secondary w-full mt-2" onClick={() => setPdfModalOpen(false)}>Cancel</button>
+          <p className="text-body text-ink-600">A print-ready accounting report for this period, with full till reconciliation and purchases.</p>
+          <button className="btn-primary w-full" onClick={() => doExport('download')}>Download PDF</button>
+          <button className="btn-secondary w-full" onClick={() => doExport('print')}>Print report</button>
+          <button className="btn-ghost w-full" onClick={() => setPdfModalOpen(false)}>Cancel</button>
         </div>
       </Modal>
     </div>

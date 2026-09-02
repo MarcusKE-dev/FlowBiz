@@ -8,8 +8,20 @@
 // Accessible by design rather than by adding interactivity: instead of
 // JS-driven hover tooltips, the start/end labels and the overall change
 // are always shown as real text under the chart, so the trend is never
-// locked behind a color someone might not be able to distinguish.
-export default function MiniLineChart({ data, height = 140, colorClassName = 'text-blue-600', formatValue = (v) => String(v), ariaLabel, compact = false }) {
+// locked behind a colour someone might not be able to distinguish.
+//
+// Colours come from theme/tokens.js as raw hex, not Tailwind classes, so
+// the chart, the PDF export and the screen all read the same source.
+import { CHART_SERIES, POSITIVE, NEGATIVE, INK_3 } from '../../theme/tokens';
+
+export default function MiniLineChart({
+  data,
+  height = 140,
+  color = CHART_SERIES[0],
+  formatValue = (v) => String(v),
+  ariaLabel,
+  compact = false,
+}) {
   if (!data || data.length === 0) return null;
 
   const width = 300; // viewBox units — scales to container via className="w-full"
@@ -36,22 +48,35 @@ export default function MiniLineChart({ data, height = 140, colorClassName = 'te
 
   return (
     <div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" preserveAspectRatio="none" role="img" aria-label={ariaLabel || 'Trend chart'}>
-        <path d={areaPath} className={colorClassName} fill="currentColor" opacity="0.08" />
-        <path d={linePath} className={colorClassName} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+      {/* preserveAspectRatio is deliberately left at its default. It used
+          to be "none", which stretched the viewBox to the container and
+          turned every data point into an ellipse. */}
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="w-full"
+        role="img"
+        aria-label={ariaLabel || 'Trend chart'}
+      >
+        <path d={areaPath} fill={color} opacity="0.08" />
+        <path d={linePath} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" />
         {showDots && points.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r="2" className={colorClassName} fill="currentColor" />
+          <circle key={i} cx={p.x} cy={p.y} r="2" fill={color} />
         ))}
       </svg>
-{!compact && (
+
+      {!compact && (
         <>
-          <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-400">
+          <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-500">
             <span>{data[0].label}</span>
             <span>{data[data.length - 1].label}</span>
           </div>
           {change !== null && (
-            <p className={`mt-1 text-xs font-semibold ${change >= 0 ? 'text-moss-700' : 'text-rust-600'}`}>
-              {change >= 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}% over this period — ending at {formatValue(last)}
+            <p
+              className="mt-1 text-secondary font-medium"
+              style={{ color: change >= 0 ? POSITIVE : NEGATIVE }}
+            >
+              {change >= 0 ? 'Up' : 'Down'} {Math.abs(change).toFixed(1)}% over this period, ending at{' '}
+              <span className="num" style={{ color: INK_3 }}>{formatValue(last)}</span>
             </p>
           )}
         </>

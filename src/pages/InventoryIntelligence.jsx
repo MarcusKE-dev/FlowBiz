@@ -8,38 +8,30 @@ import { formatKES } from '../utils/currency';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import MiniBarChart from '../components/charts/MiniBarChart';
 import DonutChart from '../components/charts/DonutChart';
-import {
-  Lock, ArrowLeft, AlertCircle, CheckCircle2, Info, PackageOpen,
-  Package, Tag, Truck, ClipboardCheck, AlertTriangle,
-} from 'lucide-react';
+import { PRIMARY, DEEP, CAUTION, NEGATIVE, INK_3 } from '../theme/tokens';
+import UiSection from '../components/ui/Section';
+import PageHeader from '../components/ui/PageHeader';
+import { Lock, ArrowLeft, AlertCircle, CheckCircle2, Info, PackageOpen } from 'lucide-react';
 
 const LOOKBACK_DAYS = 30;
 
 function KpiCard({ label, value, tone = 'text-ink-900', bg = 'bg-white' }) {
   return (
     <div className={`card p-4 sm:p-5 ${bg} hover:shadow-md transition-shadow`}>
-      <p className="text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
-      <p className={`mt-2 font-display text-xl sm:text-2xl font-bold tracking-tight ${tone}`}>{value}</p>
+      <p className="text-label uppercase text-ink-500">{label}</p>
+      <p className={`num mt-1.5 text-money ${tone}`}>{value}</p>
     </div>
   );
 }
 
-function Section({ title, subtitle, icon: Icon, children }) {
+// Sections sit on the canvas now: no card, no border, and no tinted
+// icon chip above the heading. The `icon` prop is accepted and ignored
+// so call sites did not all have to change in one go.
+function Section({ title, subtitle, className = '', children }) {
   return (
-    <div className="card p-5 sm:p-6 bg-white">
-      <div className="mb-5 flex items-center gap-3 border-b border-ink-100 pb-4">
-        {Icon && (
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-panel bg-moss-50 text-moss-700">
-            <Icon className="h-4 w-4" strokeWidth={1.75} />
-          </div>
-        )}
-        <div>
-          <h2 className="font-display text-sm font-bold text-ink-900">{title}</h2>
-          {subtitle && <p className="mt-0.5 text-xs text-ink-500">{subtitle}</p>}
-        </div>
-      </div>
-      <div>{children}</div>
-    </div>
+    <UiSection title={title} hint={subtitle} className={className}>
+      {children}
+    </UiSection>
   );
 }
 
@@ -277,66 +269,64 @@ export default function InventoryIntelligence() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Inventory Intelligence</h1>
-          <p className="text-sm text-ink-500 mt-1">Capital deployment and supply chain health.</p>
-        </div>
-        <Link to="/products" className="btn-outline text-xs bg-white">
-          <ArrowLeft className="h-4 w-4 mr-1.5" strokeWidth={2} /> Back to Products
-        </Link>
-      </div>
+      <PageHeader
+        title="Inventory intelligence"
+        description="Capital deployment and supply chain health."
+        actions={
+          <Link to="/products" className="btn-secondary">
+            <ArrowLeft className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Back to products
+          </Link>
+        }
+      />
 
-      <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Capital &amp; stock</p>
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <KpiCard label="Capital Deployed" value={formatKES(metrics.totalCost)} />
-          <KpiCard label="Projected Gross Profit" value={formatKES(potentialProfit)} tone="text-moss-700" />
-          <KpiCard label="Physical Units" value={metrics.unitsInStock.toLocaleString()} />
-          <KpiCard label="Active SKUs" value={activeProductsCount.toLocaleString()} />
+      <UiSection title="Capital and stock">
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-line bg-line lg:grid-cols-4">
+          <KpiCard label="Capital deployed" value={formatKES(metrics.totalCost)} />
+          <KpiCard label="Projected gross profit" value={formatKES(potentialProfit)} />
+          <KpiCard label="Units in stock" value={metrics.unitsInStock.toLocaleString()} />
+          <KpiCard label="Active products" value={activeProductsCount.toLocaleString()} />
         </div>
-      </div>
+      </UiSection>
 
-      <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Risk &amp; velocity</p>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          <KpiCard label="Low Stock Risk" value={metrics.lowStock.length} tone={metrics.lowStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.lowStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
-          <KpiCard label="Stockout Status" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-rust-600' : 'text-ink-900'} bg={metrics.outOfStock.length > 0 ? 'bg-rust-50' : 'bg-white'} />
-          <KpiCard label="Overstocked SKUs" value={metrics.overstocked.length} tone="text-amber-600" />
-          <KpiCard label="Capital Trapped" value={formatKES(totalOverstockValue)} tone="text-amber-600" />
-          <KpiCard label="Avg Days of Stock" value={avgDaysOfStock != null ? `${avgDaysOfStock.toFixed(0)} days` : '—'} />
+      <UiSection title="Risk and velocity">
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-line bg-line sm:grid-cols-3 lg:grid-cols-5">
+          <KpiCard label="Low stock" value={metrics.lowStock.length} tone={metrics.lowStock.length > 0 ? 'text-danger-700' : 'text-ink-900'} />
+          <KpiCard label="Out of stock" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-danger-700' : 'text-ink-900'} />
+          <KpiCard label="Overstocked products" value={metrics.overstocked.length} tone={metrics.overstocked.length > 0 ? 'text-warning-700' : 'text-ink-900'} />
+          <KpiCard label="Capital trapped" value={formatKES(totalOverstockValue)} tone={totalOverstockValue > 0 ? 'text-warning-700' : 'text-ink-900'} />
+          <KpiCard label="Average days of stock" value={avgDaysOfStock != null ? `${avgDaysOfStock.toFixed(0)} days` : '—'} />
         </div>
-      </div>
+      </UiSection>
 
-      <div className="card p-5 sm:p-6 bg-white">
+      <div className="rounded-panel border border-line bg-surface p-5 sm:p-6">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h2 className="font-display text-sm font-bold text-ink-900">Capital Health</h2>
-            <p className="mt-0.5 text-xs text-ink-500">Share of inventory capital that's healthy vs. tied up in overstock or slow movers</p>
+            <h2 className="section-title">Capital health</h2>
+            <p className="section-hint mt-0.5">The share of your inventory capital that is healthy, rather than tied up in overstock or slow movers.</p>
           </div>
-          <span className={`font-display text-2xl font-bold ${capitalHealth.pct >= 80 ? 'text-moss-700' : capitalHealth.pct >= 60 ? 'text-amber-600' : 'text-rust-600'}`}>{capitalHealth.pct.toFixed(0)}%</span>
+          <span className={`num text-money ${capitalHealth.pct >= 80 ? 'text-success-700' : capitalHealth.pct >= 60 ? 'text-warning-700' : 'text-danger-700'}`}>{capitalHealth.pct.toFixed(0)}%</span>
         </div>
-        <div className="h-3 w-full overflow-hidden rounded-full bg-rust-100">
-          <div className="h-full rounded-full bg-moss-600 transition-all" style={{ width: `${capitalHealth.pct}%` }} />
+        <div className="h-1.5 w-full overflow-hidden rounded-pill bg-divider">
+          <div className="h-full rounded-pill bg-primary-600 transition-all" style={{ width: `${capitalHealth.pct}%` }} />
         </div>
-        <div className="mt-2 flex justify-between text-[11px] text-ink-400">
-          <span>Healthy: {formatKES(capitalHealth.healthyValue)}</span>
-          <span>At risk: {formatKES(capitalHealth.atRiskValue)}</span>
+        <div className="mt-2 flex justify-between text-secondary text-ink-500">
+          <span className="num">Healthy {formatKES(capitalHealth.healthyValue)}</span>
+          <span className="num">At risk {formatKES(capitalHealth.atRiskValue)}</span>
         </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Global Supply Distribution" subtitle="System-wide inventory health check" icon={Package}>
+        <Section title="Stock health" subtitle="How the catalogue is distributed across stock states">
           {activeProductsCount > 0 ? (
             <div className="pt-2">
               <DonutChart
                 size={180}
                 formatValue={(v) => `${v} SKU${v === 1 ? '' : 's'}`}
                 segments={[
-                  { label: 'Optimal Inventory', value: metrics.healthyCount, colorClassName: 'text-moss-600', dotClassName: 'bg-moss-600' },
-                  { label: 'Low Stock Risk', value: metrics.lowStock.length, colorClassName: 'text-amber-500', dotClassName: 'bg-amber-500' },
-                  { label: 'Critical Stockout', value: metrics.outOfStock.length, colorClassName: 'text-rust-600', dotClassName: 'bg-rust-600' },
-                  { label: 'Capital Surplus (Overstock)', value: metrics.overstocked.length, colorClassName: 'text-ink-800', dotClassName: 'bg-ink-800' },
+                  { label: 'Healthy stock', value: metrics.healthyCount, color: PRIMARY },
+                  { label: 'Low stock', value: metrics.lowStock.length, color: CAUTION },
+                  { label: 'Out of stock', value: metrics.outOfStock.length, color: NEGATIVE },
+                  { label: 'Overstocked', value: metrics.overstocked.length, color: INK_3 },
                 ]}
               />
             </div>
@@ -345,13 +335,13 @@ export default function InventoryIntelligence() {
           )}
         </Section>
 
-        <Section title="Overstock Concentration" subtitle="Items holding maximum illiquid capital" icon={AlertTriangle}>
+        <Section title="Overstock" subtitle="The items holding the most capital you cannot easily release">
           {metrics.overstocked.length > 0 ? (
             <div className="pt-2">
               <MiniBarChart
                 orientation="horizontal"
                 formatValue={formatKES}
-                data={metrics.overstocked.slice(0, 6).map((p) => ({ label: p.name, value: p.value, colorClassName: 'bg-ink-800' }))}
+                data={metrics.overstocked.slice(0, 6).map((p) => ({ label: p.name, value: p.value, color: DEEP }))}
               />
             </div>
           ) : (
@@ -361,17 +351,17 @@ export default function InventoryIntelligence() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Value Analysis (ABC)" subtitle="Which products drive most of your sales value" icon={Tag}>
+        <Section title="Value analysis" subtitle="Which products drive most of your sales value">
           {abcClassification.tiered.length > 0 ? (
             <>
               <div className="mb-4 grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-lg bg-moss-50 p-3">
-                  <p className="font-display text-lg font-bold text-moss-700">{abcClassification.counts.A}</p>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-moss-600">A — Top value</p>
+                <div className="rounded-lg bg-success-50 p-3">
+                  <p className="font-display text-lg font-bold text-success-700">{abcClassification.counts.A}</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-success-600">A — Top value</p>
                 </div>
-                <div className="rounded-lg bg-amber-50 p-3">
-                  <p className="font-display text-lg font-bold text-amber-700">{abcClassification.counts.B}</p>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600">B — Moderate</p>
+                <div className="rounded-lg bg-warning-50 p-3">
+                  <p className="font-display text-lg font-bold text-warning-700">{abcClassification.counts.B}</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-warning-600">B — Moderate</p>
                 </div>
                 <div className="rounded-lg bg-ink-50 p-3">
                   <p className="font-display text-lg font-bold text-ink-700">{abcClassification.counts.C}</p>
@@ -382,7 +372,7 @@ export default function InventoryIntelligence() {
                 {abcClassification.tiered.slice(0, 8).map((p) => (
                   <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <span className={`badge shrink-0 ${p.tier === 'A' ? 'bg-moss-100 text-moss-700' : p.tier === 'B' ? 'bg-amber-100 text-amber-700' : 'bg-ink-100 text-ink-500'}`}>{p.tier}</span>
+                      <span className={`badge shrink-0 ${p.tier === 'A' ? 'bg-success-100 text-success-700' : p.tier === 'B' ? 'bg-warning-100 text-warning-700' : 'bg-ink-100 text-ink-500'}`}>{p.tier}</span>
                       <span className="truncate font-medium text-ink-800">{p.name}</span>
                     </div>
                     <span className="shrink-0 font-semibold text-ink-700">{formatKES(p.valueMoved)}</span>
@@ -396,9 +386,9 @@ export default function InventoryIntelligence() {
           )}
         </Section>
 
-        <Section title="Capital by Supplier" subtitle="Current inventory value tied to each supplier" icon={Truck}>
+        <Section title="Capital by supplier" subtitle="Current inventory value tied to each supplier">
           {capitalBySupplier.length > 0 ? (
-            <MiniBarChart orientation="horizontal" formatValue={formatKES} data={capitalBySupplier.map((s) => ({ label: s.name, value: s.value, colorClassName: 'bg-blue-600' }))} />
+            <MiniBarChart orientation="horizontal" formatValue={formatKES} data={capitalBySupplier.map((s) => ({ label: s.name, value: s.value, color: PRIMARY }))} />
           ) : (
             <NoData>No supplier-linked stock found.</NoData>
           )}
@@ -406,7 +396,7 @@ export default function InventoryIntelligence() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Section title="Reorder Priority" subtitle="Fast-moving items running low, suggested 2-week restock quantity" icon={ClipboardCheck}>
+        <Section title="Reorder priority" subtitle="Fast-moving items running low, with a suggested two-week restock quantity">
           {reorderPriority.length > 0 ? (
             <div className="divide-y divide-ink-100">
               {reorderPriority.map((p) => (
@@ -415,7 +405,7 @@ export default function InventoryIntelligence() {
                     <p className="truncate font-medium text-ink-800">{p.name}</p>
                     <p className="text-[11px] text-ink-400">{p.supplierName || 'No supplier assigned'} &middot; {p.daysOfStock != null ? `${p.daysOfStock.toFixed(0)} days of stock left` : 'Stock estimate unavailable'}</p>
                   </div>
-                  <span className="shrink-0 rounded-lg bg-rust-50 px-2.5 py-1 text-xs font-bold text-rust-700">+{p.suggestedQty} units</span>
+                  <span className="shrink-0 rounded-lg bg-danger-50 px-2.5 py-1 text-xs font-bold text-danger-700">+{p.suggestedQty} units</span>
                 </div>
               ))}
             </div>
@@ -424,7 +414,7 @@ export default function InventoryIntelligence() {
           )}
         </Section>
 
-        <Section title="Slow-Moving Stock" subtitle={`In stock, but no sales in the last ${LOOKBACK_DAYS} days`} icon={PackageOpen}>
+        <Section title="Slow-moving stock" subtitle={`In stock, but no sales in the last ${LOOKBACK_DAYS} days`}>
           {slowMoving.length > 0 ? (
             <div className="divide-y divide-ink-100">
               {slowMoving.map((p) => (
@@ -433,7 +423,7 @@ export default function InventoryIntelligence() {
                     <p className="truncate font-medium text-ink-800">{p.name}</p>
                     <p className="text-[11px] text-ink-400">{p.stock} units on the shelf</p>
                   </div>
-                  <span className="shrink-0 font-semibold text-amber-700">{formatKES(p.stock * p.costPrice)}</span>
+                  <span className="shrink-0 font-semibold text-warning-700">{formatKES(p.stock * p.costPrice)}</span>
                 </div>
               ))}
             </div>
@@ -443,16 +433,16 @@ export default function InventoryIntelligence() {
         </Section>
       </div>
 
-      <Section title="Automated Intelligence Briefing" subtitle="System-generated supply chain alerts" icon={Info}>
+      <Section title="Summary" subtitle="What the figures above add up to">
         <div className="space-y-4 pt-1">
           {insights.map((insight, i) => (
-            <div key={i} className={`flex items-start gap-3 text-sm p-4 rounded-lg border ${insight.tone === 'positive' ? 'bg-moss-50 border-moss-200' : insight.tone === 'negative' ? 'bg-rust-50 border-rust-200' : 'bg-ink-50 border-ink-200'}`}>
+            <div key={i} className={`flex items-start gap-3 text-sm p-4 rounded-lg border ${insight.tone === 'positive' ? 'bg-success-50 border-success-200' : insight.tone === 'negative' ? 'bg-danger-50 border-danger-200' : 'bg-ink-50 border-ink-200'}`}>
               <div className="shrink-0 mt-0.5">
-                {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} /> :
-                 insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-rust-600" strokeWidth={2} /> :
+                {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-success-600" strokeWidth={2} /> :
+                 insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-danger-600" strokeWidth={2} /> :
                  <Info className="h-5 w-5 text-ink-600" strokeWidth={2} />}
               </div>
-              <span className={`font-medium leading-relaxed ${insight.tone === 'positive' ? 'text-moss-800' : insight.tone === 'negative' ? 'text-rust-800' : 'text-ink-800'}`}>{insight.text}</span>
+              <span className={`font-medium leading-relaxed ${insight.tone === 'positive' ? 'text-success-800' : insight.tone === 'negative' ? 'text-danger-800' : 'text-ink-800'}`}>{insight.text}</span>
             </div>
           ))}
         </div>
