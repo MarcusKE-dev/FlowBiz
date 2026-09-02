@@ -303,7 +303,7 @@ export default function AdminCommunications() {
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 transition-colors ${
                   selectedCategory === cat
                     ? 'bg-moss-700 text-white'
-                    : 'bg-sand text-ink-600 hover:bg-ink-100'
+                    : 'bg-canvas text-ink-600 hover:bg-ink-100'
                 }`}
               >
                 {cat}
@@ -331,7 +331,7 @@ export default function AdminCommunications() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-1">
                     <p className="text-xs font-bold text-ink-900 truncate">{tmpl.name}</p>
-                    <span className="badge bg-sand text-[9px] font-bold text-ink-600 uppercase shrink-0">
+                    <span className="badge bg-canvas text-[9px] font-bold text-ink-600 uppercase shrink-0">
                       {tmpl.category}
                     </span>
                   </div>
@@ -448,7 +448,7 @@ export default function AdminCommunications() {
         </div>
       ) : (
         /* LIVE EMAIL PREVIEW */
-        <div className="card p-4 sm:p-6 bg-[#faf6ef] space-y-4">
+        <div className="card p-4 sm:p-6 bg-canvas space-y-4">
           <div className="flex items-center justify-between border-b border-ink-200 pb-3">
             <div>
               <span className="text-xs font-bold text-ink-700 block">Live HTML Email Preview</span>

@@ -1,4 +1,6 @@
 import { Component } from 'react';
+import { AlertTriangle } from 'lucide-react';
+
 export default class ErrorBoundary extends Component {
   state = { hasError: false, error: null };
   static getDerivedStateFromError(error) { return { hasError: true, error }; }
@@ -6,13 +8,22 @@ export default class ErrorBoundary extends Component {
   render() {
     if (!this.state.hasError) return this.props.children;
     return (
-      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
-        <div className="card max-w-sm w-full p-6 text-center space-y-4">
-          <div className="text-4xl">⚠️</div>
-          <h2 className="font-display text-lg font-bold text-ink-900">Something went wrong</h2>
-          <p className="text-sm text-ink-500">{this.state.error?.message}</p>
-          <button className="btn-primary w-full" onClick={() => { this.setState({ hasError: false, error: null }); window.location.href = '/'; }}>
-            Return to Dashboard
+      <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
+        <div className="w-full max-w-sm space-y-3 rounded-panel border border-line bg-surface p-6 text-center">
+          <AlertTriangle
+            className="mx-auto h-5 w-5 text-danger-600"
+            strokeWidth={1.75}
+            aria-hidden="true"
+          />
+          <h2 className="font-display text-page-title text-ink-900">Something went wrong</h2>
+          <p className="text-body text-ink-600">
+            {this.state.error?.message || 'FlowBiz could not finish loading this screen.'}
+          </p>
+          <button
+            className="btn-primary w-full"
+            onClick={() => { this.setState({ hasError: false, error: null }); window.location.href = '/'; }}
+          >
+            Return to dashboard
           </button>
         </div>
       </div>

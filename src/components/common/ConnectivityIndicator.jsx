@@ -1,10 +1,19 @@
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
+import StatusPill from '../ui/StatusPill';
+
 export default function ConnectivityIndicator() {
   const online = useOnlineStatus();
   return (
-    <span className={`badge ${online ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`} title={online ? 'Online' : 'Offline — changes queue until reconnected'}>
-      <span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${online ? 'bg-moss-500' : 'bg-rust-500'}`} />
+    <StatusPill
+      tone={online ? 'positive' : 'caution'}
+      className="whitespace-nowrap"
+      title={online ? 'Online' : 'Offline — changes queue until reconnected'}
+    >
+      <span
+        className={`h-1.5 w-1.5 rounded-full ${online ? 'bg-success-600' : 'bg-warning-600'}`}
+        aria-hidden="true"
+      />
       {online ? 'Online' : 'Offline'}
-    </span>
+    </StatusPill>
   );
 }

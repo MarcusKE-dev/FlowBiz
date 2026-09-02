@@ -1,10 +1,22 @@
-import { useAuth } from '../../contexts/AuthContext';
-import ConnectivityIndicator from '../common/ConnectivityIndicator';
-import { isDemoMode } from '../../demo/demoMode';
 import { Link } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
+import { useSettings } from '../../contexts/SettingsContext';
+import { useDailySession } from '../../hooks/useDailySession';
+import ConnectivityIndicator from '../common/ConnectivityIndicator';
+import StatusPill from '../ui/StatusPill';
+import { isDemoMode } from '../../demo/demoMode';
 
+// The control rail. Thinner than before, sits on the canvas rather than
+// on its own surface, and leads with the two facts that actually matter
+// at a counter: which shop this is, and whether today is open for
+// trading. The old "Welcome, <name>" string said neither.
 export default function TopHeader() {
   const { profile, logout, isAdmin, isPro } = useAuth();
+  const { settings } = useSettings();
+  // Same document id the Counter and Close Day pages already listen to,
+  // so the Firestore SDK serves both from one subscription rather than
+  // opening a second channel. Read-only: this header never writes.
+  const { session, loading, isClosed } = useDailySession();
   const demo = isDemoMode();
 
   // Demo Mode gets its own minimal header — just a "Demo" label, a way
@@ -15,42 +27,47 @@ export default function TopHeader() {
   // try to client-side-route to a page this bundle doesn't have.
   if (demo) {
     return (
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-ink-100 bg-sand/95 px-4 py-2 backdrop-blur sm:px-6 safe-top">
-        <span className="badge bg-amber-100 text-amber-800">Demo</span>
+      <header className="safe-top sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-line bg-canvas px-4 sm:px-6">
+        <StatusPill tone="caution">Demo</StatusPill>
         <div className="flex items-center gap-2">
-          <a href="/" className="btn-outline !px-3 !py-1.5 text-xs !min-h-0">Exit Demo</a>
-          <a href="/setup" className="btn-primary !px-3 !py-1.5 text-xs !min-h-0">Sign Up</a>
+          <a href="/" className="btn-secondary">Exit demo</a>
+          <a href="/setup" className="btn-primary">Sign up</a>
         </div>
       </header>
     );
   }
 
-  return (
-    <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-ink-100 bg-sand/95 px-4 py-2 backdrop-blur sm:px-6 safe-top">
+  const sessionPill = loading
+    ? null
+    : isClosed
+      ? <StatusPill tone="neutral">Day closed</StatusPill>
+      : session
+        ? <StatusPill tone="positive">Day open</StatusPill>
+        : <StatusPill tone="caution">Not opened</StatusPill>;
 
-      <div className="flex min-w-0 items-center gap-3">
-{isAdmin && (
-  <Link
-    to="/pro"
-    className={`inline-flex shrink-0 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
-      isPro
-        ? 'bg-amber-100 text-amber-800'
-        : 'bg-moss-600 text-white hover:bg-moss-700 active:bg-moss-800'
-    }`}
-  >
-    {isPro ? 'Pro Activated' : 'FlowBiz Pro'}
-  </Link>
-)}
-        <div className="hidden truncate text-sm text-ink-500 lg:block">
-          Welcome, <span className="font-semibold text-ink-800">{profile?.displayName}</span>
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <ConnectivityIndicator />
-        <span className={`badge hidden sm:inline-flex ${profile?.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>
-          {profile?.role === 'owner' ? 'Owner' : 'Cashier'}
+  return (
+    <header className="safe-top sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-line bg-canvas px-4 sm:px-6">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="truncate text-body font-semibold text-ink-900">
+          {settings.shopName}
         </span>
-        <button onClick={logout} className="btn-outline !px-3 !py-1.5 text-xs !min-h-0">Sign out</button>
+        {sessionPill}
+      </div>
+
+      <div className="flex shrink-0 items-center gap-2">
+        {isAdmin && (
+          <Link
+            to="/pro"
+            className={isPro ? 'btn-secondary hidden sm:inline-flex' : 'btn-primary hidden sm:inline-flex'}
+          >
+            {isPro ? 'Pro active' : 'FlowBiz Pro'}
+          </Link>
+        )}
+        <ConnectivityIndicator />
+        <StatusPill tone="neutral" className="hidden sm:inline-flex">
+          {profile?.role === 'owner' ? 'Owner' : 'Cashier'}
+        </StatusPill>
+        <button type="button" onClick={logout} className="btn-secondary">Sign out</button>
       </div>
     </header>
   );

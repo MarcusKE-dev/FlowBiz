@@ -23,11 +23,11 @@ export default function AppShell({ children }) {
   }, [isCounterRoute]);
 
   return (
-    <div className="flex min-h-screen bg-sand">
+    <div className="flex min-h-screen bg-canvas">
       <Sidebar collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed((v) => !v)} />
       <div className="flex min-h-screen flex-1 flex-col overflow-hidden">
         <TopHeader />
-        <main className="flex-1 overflow-y-auto px-4 pb-28 pt-4 sm:px-6 lg:pb-8">{children}</main>
+        <main className="flex-1 overflow-y-auto px-4 pb-28 pt-6 sm:px-6 lg:pb-8">{children}</main>
       </div>
       <BottomNav />
     </div>

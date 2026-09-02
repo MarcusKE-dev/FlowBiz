@@ -1,3 +1,4 @@
+import { MailCheck } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
@@ -41,7 +42,7 @@ const handleSubmit = async (e) => {
 
         {sent ? (
           <div className="card p-6 text-center space-y-3">
-            <div className="text-3xl">📧</div>
+            <MailCheck className="mx-auto h-5 w-5 text-ink-500" strokeWidth={1.75} aria-hidden="true" />
             <p className="text-sm text-ink-600">If an account exists for <span className="font-semibold">{email.trim()}</span>, a password reset link is on its way. Check your inbox (and spam folder).</p>
             <Link to="/login" className="btn-primary w-full">Back to sign in</Link>
           </div>

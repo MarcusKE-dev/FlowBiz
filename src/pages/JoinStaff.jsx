@@ -1,3 +1,4 @@
+import { Link2, CheckCircle2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, deleteUser, sendEmailVerification } from 'firebase/auth';
@@ -157,7 +158,7 @@ export default function JoinStaff() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
         <div className="w-full max-w-sm card p-6 text-center space-y-3">
-          <div className="text-3xl">🔗</div>
+          <Link2 className="mx-auto h-5 w-5 text-ink-500" strokeWidth={1.75} aria-hidden="true" />
           <h1 className="font-display text-lg font-bold text-ink-900">Invite not found</h1>
           <p className="text-sm text-ink-500">This link may be invalid or was cancelled by the business owner.</p>
           <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
@@ -170,7 +171,7 @@ export default function JoinStaff() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
         <div className="w-full max-w-sm card p-6 text-center space-y-3">
-          <div className="text-3xl">✅</div>
+          <CheckCircle2 className="mx-auto h-5 w-5 text-success-600" strokeWidth={1.75} aria-hidden="true" />
           <h1 className="font-display text-lg font-bold text-ink-900">Invite Already Claimed</h1>
           <p className="text-sm text-ink-500">This invite link has already been used. Please sign in with your email and password.</p>
           <Link to="/login" className="btn-primary w-full">Go to sign in</Link>

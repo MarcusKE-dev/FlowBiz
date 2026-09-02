@@ -1,5 +1,6 @@
 // src/App.jsx
 import { Toaster } from 'react-hot-toast';
+import { POSITIVE, NEGATIVE, INK, SURFACE, LINE } from './theme/tokens';
 import { AuthProvider } from './contexts/AuthContext';
 import { SettingsProvider } from './contexts/SettingsContext';
 import AppRouter from './router/AppRouter';
@@ -14,9 +15,17 @@ function App() {
           <Toaster
             position="top-center"
             toastOptions={{
-              style: { fontSize: '14px', borderRadius: '10px', maxWidth: '90vw' },
-              success: { iconTheme: { primary: '#1a623c', secondary: '#fff' } },
-              error:   { iconTheme: { primary: '#c4441d', secondary: '#fff' } },
+              style: {
+                fontSize: '14px',
+                lineHeight: '20px',
+                borderRadius: '8px',
+                border: `1px solid ${LINE}`,
+                background: SURFACE,
+                color: INK,
+                maxWidth: '90vw',
+              },
+              success: { iconTheme: { primary: POSITIVE, secondary: SURFACE } },
+              error:   { iconTheme: { primary: NEGATIVE, secondary: SURFACE } },
               duration: 3000,
             }}
           />

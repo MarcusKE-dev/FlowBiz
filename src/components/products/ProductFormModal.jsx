@@ -1,3 +1,4 @@
+import { AlertTriangle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import Modal from '../common/Modal';
@@ -279,7 +280,7 @@ export default function ProductFormModal({
         </div>
 
         {Number(form.sellingPrice) > 0 && Number(form.costPrice) > 0 && Number(form.sellingPrice) <= Number(form.costPrice) && (
-          <p className="text-xs text-rust-600 font-medium">⚠️ Selling price is at or below cost — you will make no profit on this item.</p>
+          <p className="flex items-start gap-1.5 text-secondary text-danger-700"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />Selling price is at or below cost — you will make no profit on this item.</p>
         )}
 
         <div className="flex justify-end gap-2 pt-1">
