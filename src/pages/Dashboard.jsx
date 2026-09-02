@@ -159,16 +159,20 @@ export default function Dashboard() {
   };
 
   const handleProductSave = async (data) => {
+    let created = null;
     try {
       if (editProduct) {
         const { queuedOffline } = await updateProduct(editProduct.id, data, editProduct.barcode, businessId);
         toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
       } else {
-        const { queuedOffline } = await createProduct(data, businessId);
+        const { id, queuedOffline } = await createProduct(data, businessId);
+        created = { id };
         toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
       }
     } catch (err) { toast.error(friendlyErrorMessage(err)); }
     finally { setEditProd(null); setProdModal(false); setPrefillBarcode(null); }
+    // Returned so ProductFormModal can attach a photo to the new product.
+    return created;
   };
 
   const handleSupplierSave = async (supplierData) => {

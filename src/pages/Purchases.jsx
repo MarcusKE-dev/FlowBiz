@@ -250,6 +250,8 @@ export default function Purchases() {
             setProductModal(false);
             setPrefillBarcode(null);
             toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added and selected');
+            // Returned so ProductFormModal can attach a photo to the new product.
+            return { id };
           } catch (err) {
             toast.error(friendlyErrorMessage(err));
             throw err;

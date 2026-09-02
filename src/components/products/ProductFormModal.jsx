@@ -1,5 +1,5 @@
-import { AlertTriangle } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { AlertTriangle, ImagePlus, Trash2, Package } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import Modal from '../common/Modal';
 import { doc, setDoc } from 'firebase/firestore';
@@ -7,6 +7,8 @@ import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSettings } from '../../contexts/SettingsContext';
 import { raceWithTimeout } from '../../utils/offlineWrite';
+import { optimizeImage, formatBytes } from '../../utils/imageOptimizer';
+import { uploadProductImage } from '../../utils/productImages';
 
 const empty = {
   name: '',
@@ -44,14 +46,40 @@ export default function ProductFormModal({
   const [busy, setBusy] = useState(false);
   const [savingCategory, setSavingCategory] = useState(false);
 
+  // Product image. `imageUrl` is whatever is already stored; `pending`
+  // holds a freshly-optimised blob that has not been uploaded yet.
+  // Uploading is entirely optional — a product with no image saves
+  // exactly as it always has.
+  const [imageUrl, setImageUrl] = useState(null);
+  const [pendingImage, setPendingImage] = useState(null);
+  const [imageWarning, setImageWarning] = useState(null);
+  const [imageError, setImageError] = useState(null);
+  const [optimising, setOptimising] = useState(false);
+  const [removeImage, setRemoveImage] = useState(false);
+
   // Only true if we are editing an existing product that already has a Firestore document ID
   const isEditing = Boolean(initialProduct && initialProduct.id);
+
+  const previewUrlRef = useRef(null);
+  const revokePreview = () => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+  };
 
   // Sync form state when modal opens
   useEffect(() => {
     setBusy(false);
     setShowAddCategory(false);
     setNewCategoryName('');
+    revokePreview();
+    setPendingImage(null);
+    setImageWarning(null);
+    setImageError(null);
+    setOptimising(false);
+    setRemoveImage(false);
+    setImageUrl(open && initialProduct?.imageUrl ? initialProduct.imageUrl : null);
     if (open) {
       if (initialProduct && initialProduct.id) {
         setForm({
@@ -84,6 +112,45 @@ export default function ProductFormModal({
   }, [newSupplierId]);
 
   const set = (f) => (e) => setForm((p) => ({ ...p, [f]: e.target.value }));
+
+  const handlePickImage = async (e) => {
+    const file = e.target.files?.[0];
+    // Let the same file be chosen again after a remove.
+    e.target.value = '';
+    if (!file) return;
+    setImageError(null);
+    setImageWarning(null);
+    setOptimising(true);
+    try {
+      const result = await optimizeImage(file);
+      // One object URL per pick, revoked as soon as it is replaced.
+      revokePreview();
+      previewUrlRef.current = URL.createObjectURL(result.blob);
+      setPendingImage({ ...result, previewUrl: previewUrlRef.current });
+      setImageWarning(result.warning);
+      setRemoveImage(false);
+    } catch (err) {
+      setImageError(err.message || 'That image could not be processed.');
+      setPendingImage(null);
+    } finally {
+      setOptimising(false);
+    }
+  };
+
+  const handleRemoveImage = () => {
+    if (pendingImage) {
+      // Only discard the unsaved pick; whatever is already stored stays.
+      revokePreview();
+      setPendingImage(null);
+      setImageWarning(null);
+      setImageError(null);
+      return;
+    }
+    setImageUrl(null);
+    setRemoveImage(true);
+  };
+
+  const shownImage = pendingImage?.previewUrl || imageUrl;
 
   const handleAddCategory = async () => {
     const trimmed = newCategoryName.trim();
@@ -151,7 +218,7 @@ export default function ProductFormModal({
         : (simplifiedForPurchase ? 0 : (Number(form.stock) || 0));
       const thresholdVal = simplifiedForPurchase ? 5 : (Number(form.lowStockThreshold) || 5);
 
-      await onSave({
+      const payload = {
         name: form.name.trim(),
         category: form.category,
         costPrice: costPriceVal,
@@ -161,7 +228,38 @@ export default function ProductFormModal({
         supplierId: form.supplierId || null,
         barcode: form.barcode.trim() || null,
         description: form.description.trim(),
-      });
+      };
+      // Clearing an existing photo is part of the same save.
+      if (removeImage && !pendingImage) payload.imageUrl = null;
+
+      const saved = await onSave(payload);
+
+      // The image is uploaded AFTER the product exists, because the
+      // storage filename is keyed to the product id. The download URL is
+      // then written back as a separate merge — deliberately not base64
+      // in the product document, which is read through a live
+      // onSnapshot and would re-ship the image to every device on every
+      // change.
+      if (pendingImage) {
+        const productId = isEditing ? initialProduct.id : saved?.id;
+        if (!productId) {
+          toast.error('The product was saved, but its photo could not be attached. Edit the product to add it.');
+        } else {
+          try {
+            const url = await uploadProductImage({
+              businessId,
+              productId,
+              blob: pendingImage.blob,
+              contentType: pendingImage.type,
+              extension: pendingImage.extension,
+            });
+            await setDoc(doc(db, 'products', productId), { imageUrl: url }, { merge: true });
+          } catch (err) {
+            console.error('Product image upload failed:', err);
+            toast.error('The product was saved, but its photo did not upload. Try again from Edit.');
+          }
+        }
+      }
     } catch {
       // Handled by onSave
     } finally {
@@ -273,6 +371,66 @@ export default function ProductFormModal({
             </div>
           </div>
         )}
+
+        <div>
+          <span className="label">Photo <span className="font-normal normal-case text-ink-400">(optional)</span></span>
+          <div className="flex items-start gap-3">
+            <span className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-control border border-line bg-ink-50 text-ink-400">
+              {shownImage
+                ? <img src={shownImage} alt="" className="h-full w-full object-cover" />
+                : <Package className="h-6 w-6" strokeWidth={1.75} aria-hidden="true" />}
+            </span>
+
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="flex flex-wrap gap-2">
+                <label className="btn-secondary cursor-pointer">
+                  <ImagePlus className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+                  {shownImage ? 'Replace photo' : 'Add photo'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    onChange={handlePickImage}
+                    disabled={busy || optimising}
+                  />
+                </label>
+                {shownImage && (
+                  <button
+                    type="button"
+                    className="btn-ghost text-ink-600 hover:text-danger-700"
+                    onClick={handleRemoveImage}
+                    disabled={busy || optimising}
+                  >
+                    <Trash2 className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Remove
+                  </button>
+                )}
+              </div>
+
+              {optimising && <p className="text-secondary text-ink-500">Compressing…</p>}
+
+              {pendingImage && !optimising && (
+                <p className="num text-secondary text-ink-500">
+                  {formatBytes(pendingImage.originalBytes)} to {formatBytes(pendingImage.bytes)}
+                  {' · '}{pendingImage.width}×{pendingImage.height}
+                  {' · '}{pendingImage.extension.toUpperCase()}
+                </p>
+              )}
+
+              {imageError && (
+                <p className="flex items-start gap-1.5 text-secondary text-danger-700">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                  {imageError}
+                </p>
+              )}
+              {imageWarning && !imageError && (
+                <p className="flex items-start gap-1.5 text-secondary text-warning-800">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                  {imageWarning}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
 
         <div>
           <label className="label">Description <span className="text-ink-300 font-normal normal-case">(optional)</span></label>

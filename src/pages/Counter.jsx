@@ -439,6 +439,8 @@ export default function Counter() {
       }
       setProdModal(false);
       setPrefillBarcode(null);
+      // Returned so ProductFormModal can attach a photo to the new product.
+      return { id };
     } catch (err) {
       toast.error(friendlyErrorMessage(err));
       throw err;

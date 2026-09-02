@@ -66,14 +66,18 @@ export default function Products() {
 
   const handleSave = async (data) => {
     try {
+      let created = null;
       if (editing) {
         const { queuedOffline } = await updateProduct(editing.id, data, editing.barcode, businessId);
         toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product updated');
       } else {
-        const { queuedOffline } = await createProduct(data, businessId);
+        const { id, queuedOffline } = await createProduct(data, businessId);
+        created = { id };
         toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added');
       }
       closeFormModal();
+      // Returned so ProductFormModal can attach a photo to the new product.
+      return created;
     } catch (err) {
       toast.error(friendlyErrorMessage(err));
       throw err;
