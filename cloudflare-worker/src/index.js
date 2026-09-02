@@ -7,7 +7,7 @@ import { handleDeleteStaff } from './routes/deleteStaff.js';
 import { handlePaystackInitialize } from './routes/paystackInitialize.js';
 import { handlePaystackWebhook } from './routes/paystackWebhook.js';
 import { handlePublicDocument } from './routes/publicDocument.js';
-import { handleProPrice } from './routes/proPrice.js';
+import { handleProPrice, handlePricing } from './routes/proPrice.js';
 import { handleSendVerificationEmail } from './routes/sendVerificationEmail.js';
 import { handleSendPasswordReset } from './routes/sendPasswordResetEmail.js';
 import { handleDeleteOwnProfile } from './routes/deleteOwnProfile.js';
@@ -139,6 +139,8 @@ export default {
         response = await handlePaystackInitialize(request, env);
       } else if (url.pathname === '/api/pro/price' && request.method === 'GET') {
         response = await handleProPrice();
+      } else if (url.pathname === '/api/pricing' && request.method === 'GET') {
+        response = await handlePricing();
       } else if (url.pathname === '/api/auth/delete-own-profile' && request.method === 'POST') {
         response = await handleDeleteOwnProfile(request, env);
       } else {

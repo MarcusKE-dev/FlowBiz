@@ -78,13 +78,22 @@ export async function handlePaystackWebhook(request, env) {
   if (!business) return errorResponse('Business not found for this payment.', 404);
 
   const now = new Date();
-  const currentExpiry = business.subscription?.expiresAt ? new Date(business.subscription.expiresAt) : null;
-  // Extend from the current expiry if still active; otherwise start fresh from now.
-  const base = currentExpiry && currentExpiry > now ? currentExpiry : now;
-  const newExpiry = addDays(base, 30);
+  let newSubscription;
+  if (paymentRecord.plan === 'lifetime') {
+    // One-time, perpetual — no expiry, no extension math. Idempotency
+    // above already guarantees this branch only ever runs once per
+    // payment reference, so a redelivered webhook can't "grant" it twice.
+    newSubscription = { plan: 'lifetime', status: 'active', expiresAt: null, purchasedAt: now };
+  } else {
+    const currentExpiry = business.subscription?.expiresAt ? new Date(business.subscription.expiresAt) : null;
+    // Extend from the current expiry if still active; otherwise start fresh from now.
+    const base = currentExpiry && currentExpiry > now ? currentExpiry : now;
+    const newExpiry = addDays(base, 30);
+    newSubscription = { plan: 'pro', status: 'active', expiresAt: newExpiry };
+  }
 
   await patchDocument(env, 'businesses', businessId, {
-    subscription: { plan: 'pro', status: 'active', expiresAt: newExpiry },
+    subscription: newSubscription,
   });
 
   await patchDocument(env, 'payments', reference, {

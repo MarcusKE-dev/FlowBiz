@@ -22,7 +22,7 @@ export async function handleAdminSubscriptionUpdate(request, env, businessId) {
   }
 
   const { plan, status, durationDays = 30, reason = 'Administrative grant' } = body;
-  if (!['pro', 'free'].includes(plan)) return errorResponse('Plan must be "pro" or "free".', 400);
+  if (!['pro', 'free', 'lifetime'].includes(plan)) return errorResponse('Plan must be "pro", "lifetime" or "free".', 400);
   if (!['active', 'expired', 'cancelled'].includes(status)) return errorResponse('Invalid status.', 400);
 
   const business = await getDocument(env, 'businesses', businessId);
@@ -36,6 +36,7 @@ export async function handleAdminSubscriptionUpdate(request, env, businessId) {
     const base = currentExpiry && currentExpiry > now ? currentExpiry : now;
     expiresAt = new Date(base.getTime() + durationDays * 24 * 60 * 60 * 1000);
   }
+  // 'lifetime' never expires — expiresAt stays null, same as 'free'.
 
   const updatedSubscription = {
     plan,
