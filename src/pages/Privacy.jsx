@@ -4,7 +4,7 @@ import { ArrowLeft, Shield } from 'lucide-react';
 
 export default function Privacy() {
   return (
-    <div className="min-h-screen bg-sand text-ink-900 selection:bg-moss-200 py-8 px-4 sm:px-6">
+    <div className="min-h-screen bg-canvas text-ink-900 selection:bg-moss-200 py-8 px-4 sm:px-6">
       <div className="mx-auto max-w-3xl">
         <Link to="/" className="inline-flex items-center gap-2 text-sm font-semibold text-ink-500 hover:text-ink-800 mb-6 transition-colors">
           <ArrowLeft className="h-4 w-4" /> Back to App

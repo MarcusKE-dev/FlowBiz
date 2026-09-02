@@ -1,34 +1,113 @@
 /** @type {import('tailwindcss').Config} */
+
+// Every colour, radius and type step below derives from src/theme/tokens.js.
+// That file is the source of truth; this one only teaches Tailwind about it.
+// If a value needs to change, change it there.
+import {
+  ink, primary, deep, success, danger, warning,
+  CANVAS, SURFACE, LINE, DIVIDER,
+} from './src/theme/tokens.js';
+
 export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
       fontFamily: {
-        display: ['"Sora"', 'system-ui', 'sans-serif'],
-        sans: ['"Inter"', 'system-ui', 'sans-serif'],
+        // Inter carries the whole app. `font-display` used to mean Sora;
+        // it now means "Inter, tracked tighter" (the tracking lives in
+        // index.css) so every existing font-display class keeps working
+        // and simply stops being a second typeface.
+        sans:    ['"Inter"', 'system-ui', 'sans-serif'],
+        display: ['"Inter"', 'system-ui', 'sans-serif'],
+        // Sora survives on exactly one element: the landing hero headline.
+        hero:    ['"Sora"', 'system-ui', 'sans-serif'],
       },
+
       colors: {
-        ink: {
-          50: '#f5f6f7', 100: '#e8eaed', 200: '#cfd3da',
-          300: '#a6adb9', 400: '#767f8f', 500: '#5a6273',
-          600: '#454b5c', 700: '#363b48', 800: '#262a34',
-          900: '#15171d', 950: '#0c0d11',
-        },
-        moss: {
-          50: '#f1faf4', 100: '#dcf3e3', 200: '#bbe6c9',
-          300: '#8ad2a6', 400: '#54b67c', 500: '#2f9a5e',
-          600: '#1f7c4a', 700: '#1a623c', 800: '#194e33', 900: '#16412c',
-        },
-        rust: {
-          50: '#fdf4ef', 100: '#fbe5d9', 200: '#f6c8ae',
-          300: '#efa278', 400: '#e87a48', 500: '#dd5a28',
-          600: '#c4441d', 700: '#a2331b', 800: '#822b1c', 900: '#6a261b',
-        },
-        sand: '#faf6ef',
+        // Named surfaces, so a page never has to guess which ink step is
+        // "the page background" or "a real boundary".
+        canvas:  CANVAS,
+        surface: SURFACE,
+        line:    LINE,
+        divider: DIVIDER,
+
+        ink,
+        primary,
+        deep,
+
+        // Data colours. `success` is the cool emerald and `danger` the
+        // cool red — both are DATA colours: numbers, status pills, chart
+        // series. Never a button, link, nav item or icon.
+        success,
+        danger,
+        warning,
+        // `info` is kept as a scale name (existing classes depend on it)
+        // and points at the deep blue so the app only ever shows one blue
+        // family.
+        info: deep,
+
+        // ── TRANSITIONAL ────────────────────────────────────────────
+        // `moss` and `rust` are the retired green/rust scales. They are
+        // aliased onto success/danger so the ~460 not-yet-swept class
+        // references render in the new palette instead of falling back to
+        // no colour at all. Every one of these is removed as Phases 3-5
+        // sweep each file; this block must be empty (and deleted) before
+        // the redesign is done. Do not add new moss-*/rust-* classes.
+        moss: success,
+        rust: danger,
       },
-      borderRadius: { xl2: '1.1rem' },
-      minHeight: { touch: '44px' },
+
+      borderRadius: {
+        control: '4px',  // buttons, inputs, tiles
+        panel:   '8px',  // panels, tables, modals
+        pill:    '999px',// status pills only
+        // Clamp the oversized defaults to the panel radius so nothing
+        // renders over-rounded while pages are still being swept.
+        xl:  '8px',
+        '2xl': '8px',
+        '3xl': '8px',
+      },
+
+      spacing: {
+        // The 4/8/12/16/24/32 scale is Tailwind's 1/2/3/4/6/8 already.
+        // These two are the control heights.
+        control: '36px',
+        touch:   '44px',
+      },
+      minHeight: { touch: '44px', control: '36px' },
       minWidth:  { touch: '44px' },
+
+      fontSize: {
+        // The type scale, as [size, {lineHeight, letterSpacing, weight}].
+        'page-title':    ['20px', { lineHeight: '24px', letterSpacing: '-0.02em', fontWeight: '600' }],
+        'section-title': ['13px', { lineHeight: '18px', fontWeight: '600' }],
+        'body':          ['14px', { lineHeight: '20px' }],
+        'secondary':     ['13px', { lineHeight: '18px' }],
+        'label':         ['11px', { lineHeight: '14px', letterSpacing: '0.04em', fontWeight: '600' }],
+        'cell':          ['13px', { lineHeight: '18px' }],
+        'button':        ['13px', { lineHeight: '16px', fontWeight: '600' }],
+        'money':         ['20px', { lineHeight: '24px', fontWeight: '600' }],
+      },
+
+      boxShadow: {
+        // Shadow is allowed on four things only: modals, dropdowns,
+        // sticky bars and the mobile bottom nav. Nothing else.
+        overlay: '0 12px 32px -8px rgba(15, 21, 34, 0.18), 0 2px 8px -2px rgba(15, 21, 34, 0.10)',
+        pop:     '0 6px 20px -6px rgba(15, 21, 34, 0.16), 0 1px 4px -1px rgba(15, 21, 34, 0.08)',
+        sticky:  '0 -1px 0 0 rgba(226, 230, 236, 1), 0 -6px 16px -8px rgba(15, 21, 34, 0.10)',
+      },
+
+      keyframes: {
+        'fade-in': {
+          from: { opacity: '0' },
+          to:   { opacity: '1' },
+        },
+      },
+      animation: {
+        // `animate-fade-in` was used in 7 places but never defined —
+        // a silent no-op. Defined here so it actually does something.
+        'fade-in': 'fade-in 150ms ease-out both',
+      },
     },
   },
   plugins: [],

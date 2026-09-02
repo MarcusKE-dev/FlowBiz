@@ -45,7 +45,7 @@ export default function AdminProtectedRoute({ children }) {
 
   if (authLoading || verifying) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-sand">
+      <div className="flex min-h-screen items-center justify-center bg-canvas">
         <LoadingSpinner label="Verifying platform administrator authorization…" />
       </div>
     );
@@ -57,7 +57,7 @@ export default function AdminProtectedRoute({ children }) {
 
   if (error || !adminProfile) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+      <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
         <div className="card max-w-md w-full p-6 text-center space-y-4 shadow-xl border-rust-200">
           <div className="h-12 w-12 mx-auto rounded-2xl bg-rust-50 text-rust-600 flex items-center justify-center">
             <ShieldAlert className="h-6 w-6" strokeWidth={2} />

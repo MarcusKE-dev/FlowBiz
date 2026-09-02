@@ -3,7 +3,7 @@ import { ArrowLeft, FileText } from 'lucide-react';
 
 export default function Terms() {
   return (
-    <div className="min-h-screen bg-sand text-ink-900 selection:bg-moss-200 py-8 px-4 sm:px-6">
+    <div className="min-h-screen bg-canvas text-ink-900 selection:bg-moss-200 py-8 px-4 sm:px-6">
       <div className="mx-auto max-w-3xl">
         <Link
           to="/"

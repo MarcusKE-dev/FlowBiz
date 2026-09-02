@@ -11,7 +11,7 @@ export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemo
   const total = roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0));
 
   return (
-    <div className="card border-moss-200 shadow-md p-3 sm:p-4 space-y-3">
+    <div className="card border-primary-100 shadow-md p-3 sm:p-4 space-y-3">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -22,7 +22,7 @@ export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemo
           <h2 className="font-display text-sm font-bold text-ink-800 shrink-0">
             Cart · {cart.length} product{cart.length !== 1 ? 's' : ''}
           </h2>
-          <span className="font-display text-sm font-bold text-moss-700 shrink-0">{formatKES(total)}</span>
+          <span className="font-display text-sm font-bold text-ink-900 shrink-0">{formatKES(total)}</span>
         </div>
         {expanded ? <ChevronUp className="h-4 w-4 text-ink-400 shrink-0" strokeWidth={2} /> : <ChevronDown className="h-4 w-4 text-ink-400 shrink-0" strokeWidth={2} />}
       </button>

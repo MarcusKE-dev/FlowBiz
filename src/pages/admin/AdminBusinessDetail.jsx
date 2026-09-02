@@ -242,27 +242,27 @@ export default function AdminBusinessDetail() {
 
         {/* Operational KPI Counters */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 pt-1">
-          <div className="rounded-xl bg-sand p-3">
+          <div className="rounded-xl bg-canvas p-3">
             <span className="text-[10px] font-bold uppercase text-ink-400 block">Catalog SKUs</span>
             <span className="font-display text-lg font-bold text-ink-900">{metrics.productsCount}</span>
           </div>
-          <div className="rounded-xl bg-sand p-3">
+          <div className="rounded-xl bg-canvas p-3">
             <span className="text-[10px] font-bold uppercase text-ink-400 block">Inventory Cost</span>
             <span className="font-display text-lg font-bold text-ink-900">{formatKES(metrics.totalInventoryCost)}</span>
           </div>
-          <div className="rounded-xl bg-sand p-3">
+          <div className="rounded-xl bg-canvas p-3">
             <span className="text-[10px] font-bold uppercase text-ink-400 block">Sales Recorded</span>
             <span className="font-display text-lg font-bold text-moss-700">{metrics.salesCount}</span>
           </div>
-          <div className="rounded-xl bg-sand p-3">
+          <div className="rounded-xl bg-canvas p-3">
             <span className="text-[10px] font-bold uppercase text-ink-400 block">Gross Revenue</span>
             <span className="font-display text-lg font-bold text-moss-700">{formatKES(metrics.totalSalesRevenue)}</span>
           </div>
-          <div className="rounded-xl bg-sand p-3">
+          <div className="rounded-xl bg-canvas p-3">
             <span className="text-[10px] font-bold uppercase text-rust-600 block">Uncollected Deni</span>
             <span className="font-display text-lg font-bold text-rust-700">{formatKES(metrics.totalOutstandingDebt)}</span>
           </div>
-          <div className="rounded-xl bg-sand p-3">
+          <div className="rounded-xl bg-canvas p-3">
             <span className="text-[10px] font-bold uppercase text-ink-400 block">Expenses Paid</span>
             <span className="font-display text-lg font-bold text-ink-800">{formatKES(metrics.totalExpensesAmount)}</span>
           </div>

@@ -54,7 +54,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
 
   if (sessionRevoked) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+      <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
         <div className="card max-w-sm w-full p-6 text-center space-y-4">
           <h2 className="font-display text-lg font-bold text-ink-900">This device was signed out</h2>
           <p className="text-sm text-ink-500">An owner revoked access for this device from Settings → Device Management.</p>
@@ -69,7 +69,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
   if (!profile) {
     if (accountRemoved) {
       return (
-        <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+        <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
           <div className="card max-w-sm w-full p-6 text-center space-y-4">
             <Store className="h-12 w-12 mx-auto text-moss-600" strokeWidth={1.5} />
             <h2 className="font-display text-lg font-bold text-ink-900">Business Setup Required</h2>
@@ -86,7 +86,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     }
 
     return (
-      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+      <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
         <div className="card max-w-md w-full p-6 text-center space-y-4">
           <AlertCircle className="h-12 w-12 mx-auto text-amber-500" strokeWidth={1.5} />
           <h2 className="font-display text-lg font-bold text-ink-900">Loading Account Profile</h2>
@@ -107,7 +107,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
 
   if (!isActive) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+      <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
         <div className="card max-w-sm p-6 text-center space-y-3">
           <Ban className="h-10 w-10 mx-auto text-rust-500" strokeWidth={1.5} />
           <h2 className="font-display text-lg font-bold text-ink-900">Account deactivated</h2>
@@ -120,7 +120,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
 
   if (!demo && !emailVerified) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-sand p-6">
+      <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
         <div className="card max-w-sm w-full p-6 text-center space-y-4">
           <h2 className="font-display text-lg font-bold text-ink-900">Verify your email</h2>
           <p className="text-sm text-ink-500">

@@ -174,7 +174,7 @@ export default function Pro() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {FEATURE_CATEGORIES.map(({ icon: Icon, title, description }) => (
             <div key={title} className="card p-5 space-y-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
+              <div className="flex h-10 w-10 items-center justify-center rounded-panel bg-moss-50 text-moss-700">
                 <Icon className="h-5 w-5" strokeWidth={1.75} />
               </div>
               <h4 className="font-display text-sm font-bold text-ink-900">{title}</h4>

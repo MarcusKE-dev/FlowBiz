@@ -399,123 +399,118 @@ export default function Settings() {
     } catch (err) { toast.error(err.message); }
   };
 
-  if (loading) return <div className="mx-auto max-w-xl"><p className="text-sm text-ink-400">Loading…</p></div>;
+  if (loading) return <div className="mx-auto max-w-2xl"><p className="text-sm text-ink-400">Loading…</p></div>;
 
   return (
-    <div className="mx-auto max-w-xl space-y-5">
+    <div className="mx-auto max-w-2xl">
       <h1 className="font-display text-xl font-bold text-ink-900">Settings</h1>
+      <p className="mt-1 text-sm text-ink-500">Manage your business profile, hardware, team, data and account.</p>
 
-      <div className="card p-5 space-y-2">
-        <h2 className="font-display text-base font-bold text-ink-800">Account &amp; Security</h2>
+      <Section title="Account & Security" first>
         <Row label="Email verification" value={demo ? 'Not applicable (Demo Mode)' : emailVerified ? 'Verified ✓' : 'Not verified'} tone={!demo && !emailVerified ? 'text-rust-600' : ''} />
         <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
         <Row label="Business ID" value={businessId || '—'} mono />
-      </div>
+      </Section>
 
-      <form onSubmit={handleSave} className="card space-y-4 p-5">
-        <h2 className="font-display text-base font-bold text-ink-800">Business Information</h2>
-        <p className="text-sm text-ink-500 mb-2">This info dynamically populates your customer-facing documents (receipts, invoices).</p>
-        
-        <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
-        
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
-          <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
-        </div>
+      <Section
+        title="Business Information"
+        description="This info dynamically populates your customer-facing documents (receipts, invoices)."
+        as="form"
+        onSubmit={handleSave}
+      >
+        <div className="space-y-4">
+          <div><label className="label">Business name</label><input className="input" value={shopName} onChange={e=>setShopName(e.target.value)} placeholder="Your Business Name" /></div>
 
-        <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
-        
-        <div>
-          <label className="label">Business Logo</label>
-          <div className="flex items-center gap-4">
-            {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
-            <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files ? e.target.files[0] : null)} />
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="label">Business Phone</label><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Official Contact Number" /></div>
+            <div><label className="label">Business Email</label><input type="email" className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="contact@example.com" /></div>
           </div>
+
+          <div><label className="label">Business Address</label><input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Physical location" /></div>
+
+          <div>
+            <label className="label">Business Logo</label>
+            <div className="flex items-center gap-4">
+              {logoUrl && <img src={logoUrl} alt="Logo" className="h-12 w-12 object-cover rounded-lg border border-ink-200" />}
+              <input type="file" accept="image/*" className="text-sm" onChange={(e) => setLogoFile(e.target.files ? e.target.files[0] : null)} />
+            </div>
+          </div>
+
+          <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
         </div>
+      </Section>
 
-        <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
-      </form>
-
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Permissions</h2>
+      <Section title="Permissions">
         <div className="flex items-center justify-between rounded-lg border border-ink-100 px-3 py-3">
           <div><p className="text-sm font-semibold text-ink-800">Let cashiers record expenses</p><p className="text-xs text-ink-400">Turn off if only owners should log expenses.</p></div>
-          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-moss-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
+          <button type="button" onClick={()=>setCashierExp(v=>!v)} className={`h-6 w-11 shrink-0 rounded-full transition-colors ${cashierExp?'bg-primary-600':'bg-ink-200'}`} role="switch" aria-checked={cashierExp}>
             <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition-transform ${cashierExp?'translate-x-5':''}`} />
           </button>
         </div>
-        <button type="button" className="btn-primary w-full" onClick={handleSavePermissions} disabled={savingPermissions}>
+        <button type="button" className="btn-primary w-full mt-3" onClick={handleSavePermissions} disabled={savingPermissions}>
           {savingPermissions ? 'Saving…' : 'Save permissions'}
         </button>
-      </div>
+      </Section>
 
-      <div className="card p-5 space-y-4">
-        <div>
-          <h2 className="font-display text-base font-bold text-ink-800">Printer &amp; Scanner</h2>
-          <p className="text-sm text-ink-500 mt-1">
-            FlowBiz works with regular USB/Bluetooth barcode scanners and thermal receipt printers, there's nothing to install or pair here. Use this to set your receipt size and confirm your hardware is reading/printing correctly.
-          </p>
-        </div>
+      <Section
+        title="Printer & Scanner"
+        description="FlowBiz works with regular USB/Bluetooth barcode scanners and thermal receipt printers, there's nothing to install or pair here. Use this to set your receipt size and confirm your hardware is reading/printing correctly."
+      >
+        <div className="space-y-4">
+          <div className="rounded-lg border border-ink-100 p-3.5 space-y-2.5">
+            <p className="text-sm font-semibold text-ink-800">Barcode scanner</p>
+            <p className="text-xs text-ink-500">
+              Most USB and Bluetooth scanners work like a keyboard, plug it in (or pair it) and it just works, no setup needed. Click the box below, then scan a barcode to confirm it's reading correctly.
+            </p>
+            <input
+              className="input font-mono"
+              value={scanTestValue}
+              onChange={(e) => setScanTestValue(e.target.value)}
+              onKeyDown={handleScanTestKeyDown}
+              placeholder="Click here, then scan a barcode…"
+              autoComplete="off"
+            />
+            {lastScan && (
+              <p className="text-xs font-semibold text-moss-700">✓ Received: <span className="font-mono">{lastScan}</span>your scanner is reading correctly.</p>
+            )}
+          </div>
 
-        <div className="rounded-lg border border-ink-100 p-3.5 space-y-2.5">
-          <p className="text-sm font-semibold text-ink-800">Barcode scanner</p>
-          <p className="text-xs text-ink-500">
-            Most USB and Bluetooth scanners work like a keyboard, plug it in (or pair it) and it just works, no setup needed. Click the box below, then scan a barcode to confirm it's reading correctly.
-          </p>
-          <input
-            className="input font-mono"
-            value={scanTestValue}
-            onChange={(e) => setScanTestValue(e.target.value)}
-            onKeyDown={handleScanTestKeyDown}
-            placeholder="Click here, then scan a barcode…"
-            autoComplete="off"
-          />
-          {lastScan && (
-            <p className="text-xs font-semibold text-moss-700">✓ Received: <span className="font-mono">{lastScan}</span>your scanner is reading correctly.</p>
-          )}
-        </div>
-
-        <div className="rounded-lg border border-ink-100 p-3.5 space-y-3">
-          <p className="text-sm font-semibold text-ink-800">Receipt printer</p>
-          <p className="text-xs text-ink-500">
-            Printing uses your device's normal print dialog, any printer already set up on your computer or phone (including USB thermal receipt printers) works automatically. Choose your paper width, then use Test Print to confirm.
-          </p>
-          <div>
-            <label className="label">Receipt paper width</label>
+          <div className="rounded-lg border border-ink-100 p-3.5 space-y-3">
+            <p className="text-sm font-semibold text-ink-800">Receipt printer</p>
+            <p className="text-xs text-ink-500">
+              Printing uses your device's normal print dialog, any printer already set up on your computer or phone (including USB thermal receipt printers) works automatically. Choose your paper width, then use Test Print to confirm.
+            </p>
+            <div>
+              <label className="label">Receipt paper width</label>
+              <div className="grid grid-cols-2 gap-2">
+                {[58, 80].map((w) => (
+                  <button
+                    key={w}
+                    type="button"
+                    onClick={() => setPaperWidth(w)}
+                    className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${paperWidth === w ? 'border-primary-600 bg-primary-50 text-primary-700' : 'border-ink-200 text-ink-500'}`}
+                  >
+                    {w}mm
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-2">
-              {[58, 80].map((w) => (
-                <button
-                  key={w}
-                  type="button"
-                  onClick={() => setPaperWidth(w)}
-                  className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${paperWidth === w ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}
-                >
-                  {w}mm
-                </button>
-              ))}
+              <button type="button" className="btn-outline" onClick={handleTestPrint}>Test Print</button>
+              <button type="button" className="btn-primary" onClick={handleSaveDeviceSettings} disabled={savingDevices}>
+                {savingDevices ? 'Saving…' : 'Save'}
+              </button>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <button type="button" className="btn-outline" onClick={handleTestPrint}>Test Print</button>
-            <button type="button" className="btn-primary" onClick={handleSaveDeviceSettings} disabled={savingDevices}>
-              {savingDevices ? 'Saving…' : 'Save'}
-            </button>
-          </div>
         </div>
-      </div>
+      </Section>
 
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Team Management</h2>
-        <p className="text-sm text-ink-500">Invite owners or cashiers, and manage pending invites and access.</p>
+      <Section title="Team Management" description="Invite owners or cashiers, and manage pending invites and access.">
         <Link to="/users" className="btn-outline w-full flex items-center justify-center gap-2">Manage users &amp; invites</Link>
-      </div>
+      </Section>
 
       {!demo && (
-        <div className="card p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-display text-base font-bold text-ink-800">Logged-in Devices</h2>
-          </div>
-          <p className="text-sm text-ink-500 mb-2">Devices currently or recently associated with your business.</p>
+        <Section title="Logged-in Devices" description="Devices currently or recently associated with your business.">
           {sessionsLoading ? (
             <p className="text-sm text-ink-400">Loading…</p>
           ) : deviceGroups.length === 0 ? (
@@ -549,19 +544,18 @@ export default function Settings() {
               })}
             </div>
           )}
-        </div>
+        </Section>
       )}
 
-      <div className="card p-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-base font-bold text-ink-800">Data</h2>
-          <div className="flex gap-2">
-            <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
-              {archivedOpen ? 'Hide' : 'View archive'}
-            </button>
-          </div>
-        </div>
-        <p className="text-sm text-ink-500">Deleted products are archived here first, never destroyed immediately.</p>
+      <Section
+        title="Data"
+        description="Deleted products are archived here first, never destroyed immediately."
+        action={
+          <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => { setArchivedOpen(o => !o); if (!archivedOpen) loadArchived(); }}>
+            {archivedOpen ? 'Hide' : 'View archive'}
+          </button>
+        }
+      >
         {archivedOpen && (
           archivedLoading ? <p className="text-sm text-ink-400">Loading…</p> : archived.length === 0 ? (
             <p className="text-sm text-ink-400">Nothing archived.</p>
@@ -579,26 +573,23 @@ export default function Settings() {
             </div>
           )
         )}
-      </div>
+      </Section>
 
-      <div className="card p-5 space-y-2">
-        <h2 className="font-display text-base font-bold text-ink-800">Subscription</h2>
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
-          <Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>
-        </div>
-      </div>
+      <Section
+        title="Subscription"
+        action={<Link to="/pro" className="btn-outline text-xs !px-2 !py-1 !min-h-0">Manage</Link>}
+      >
+        <p className="text-sm text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-amber-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
+      </Section>
 
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Help &amp; Guide</h2>
+      <Section title="Help &amp; Guide">
         <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>View Help &amp; Guide</span></Link>
-      </div>
+      </Section>
 
-      <div className="card p-5 space-y-3">
-        <h2 className="font-display text-base font-bold text-ink-800">Backup & Restore</h2>
-        <p className="text-sm text-ink-500">
-          Download everything this business has stored as a .zip (CSVs plus a FlowBiz backup file), or restore a previous FlowBiz export back into this business.
-        </p>
+      <Section
+        title="Backup & Restore"
+        description="Download everything this business has stored as a .zip (CSVs plus a FlowBiz backup file), or restore a previous FlowBiz export back into this business."
+      >
         <div className="grid grid-cols-2 gap-2">
           <button type="button" className="btn-outline" onClick={handleExport} disabled={exporting || importing || checkingImport}>
             {exporting ? (exportProgress || 'Preparing…') : 'Export (.zip)'}
@@ -608,7 +599,7 @@ export default function Settings() {
           </button>
         </div>
         <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleImportFileSelected} />
-      </div>
+      </Section>
 
       <Modal open={!!pendingImport} onClose={() => { if (!importing) setPendingImport(null); }} title="Import this backup?">
         <div className="space-y-4">
@@ -648,30 +639,29 @@ export default function Settings() {
         </div>
       </Modal>
 
-      <div className="card space-y-3 border-rust-200 p-5">
-        <div>
-          <h2 className="font-display text-base font-bold text-rust-700">Danger Zone</h2>
-          <p className="mt-1 text-sm text-ink-500">
+      <div className="border-t border-ink-100 py-6 space-y-4">
+        <h2 className="section-title text-rust-700">Danger Zone</h2>
+
+        <div className="space-y-3 rounded-lg border border-rust-200 bg-rust-50/40 p-4">
+          <p className="text-sm text-ink-600">
             {demo
               ? 'Demo Reset clears all sample data stored in this browser.'
               : "Business Reset permanently deletes ALL of this business's data and removes cashier staff accounts. The owner account and Pro subscription remain active."}
           </p>
+          <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
+            {demo ? 'Demo Reset' : 'Business Reset'}
+          </button>
         </div>
-        <button type="button" className="btn-danger w-full" onClick={() => { setResetConfirmText(''); setResetDialogOpen(true); }}>
-          {demo ? 'Demo Reset' : 'Business Reset'}
-        </button>
-      </div>
 
-      <div className="card space-y-3 border-rust-200 p-5">
-        <div>
-          <h2 className="font-display text-base font-bold text-rust-700">Delete My Account</h2>
-          <p className="mt-1 text-sm text-ink-500">
+        <div className="space-y-3 rounded-lg border border-rust-200 bg-rust-50/40 p-4">
+          <p className="text-sm font-semibold text-ink-800">Delete my account</p>
+          <p className="text-sm text-ink-600">
             Removes your own FlowBiz sign-in permanently. What happens to the business depends on whether other owners exist. Export your data first if you're the only owner.
           </p>
+          <button type="button" className="btn-danger w-full" onClick={openDeleteAccount}>
+            Delete my account
+          </button>
         </div>
-        <button type="button" className="btn-danger w-full" onClick={openDeleteAccount}>
-          Delete my account
-        </button>
       </div>
 
       <div className="pt-6 pb-2 text-center space-y-3">
@@ -741,6 +731,28 @@ export default function Settings() {
         </div>
       </Modal>
     </div>
+  );
+}
+
+// Flat, no-card section used throughout this page: a title/description
+// row (with an optional right-aligned action, e.g. "View archive"),
+// separated from the next section by a hairline divider instead of a
+// bordered/shadowed box. `as="form"` plus the rest of the props being
+// spread lets the Business Information section stay a real <form> so
+// its existing onSubmit handler keeps working unchanged.
+function Section({ title, description, action, first = false, as = 'div', children, ...rest }) {
+  const Tag = as;
+  return (
+    <Tag className={`space-y-3 py-6 ${first ? 'pt-5' : 'border-t border-ink-100'}`} {...rest}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="section-title">{title}</h2>
+          {description && <p className="section-hint mt-0.5">{description}</p>}
+        </div>
+        {action}
+      </div>
+      {children}
+    </Tag>
   );
 }
 

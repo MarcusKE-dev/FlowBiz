@@ -35,7 +35,7 @@ export default function AdminShell({ children }) {
   const isSupportMode = location.pathname.includes('/support');
 
   return (
-    <div className="flex min-h-screen bg-sand text-ink-900">
+    <div className="flex min-h-screen bg-canvas text-ink-900">
       {/* Desktop Sidebar (lg:flex) */}
       <aside className="hidden w-64 shrink-0 flex-col border-r border-ink-100 bg-white lg:flex">
         {/* Brand Header */}

@@ -29,7 +29,7 @@ function Section({ title, subtitle, icon: Icon, children }) {
     <div className="card p-5 sm:p-6 bg-white">
       <div className="mb-5 flex items-center gap-3 border-b border-ink-100 pb-4">
         {Icon && (
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-panel bg-moss-50 text-moss-700">
             <Icon className="h-4 w-4" strokeWidth={1.75} />
           </div>
         )}

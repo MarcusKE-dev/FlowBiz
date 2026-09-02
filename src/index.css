@@ -2,8 +2,41 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Design tokens ──────────────────────────────────────────────────
+   Mirrors src/theme/tokens.js for anything that needs a raw CSS value
+   (third-party widgets, inline styles, the print stylesheet). Tailwind
+   classes should be preferred everywhere they can express the same
+   thing — these exist so nothing has to type a hex literal.            */
+:root {
+  --canvas:  #F4F6F9;
+  --surface: #FFFFFF;
+  --line:    #E2E6EC;
+  --divider: #EDF0F4;
+
+  --ink:   #0F1522;
+  --ink-2: #4A5468;
+  --ink-3: #7A8598;
+
+  --primary:        #1D70F5;
+  --primary-hover:  #1659CC;
+  --primary-active: #1247A6;
+  --primary-tint:   #EEF4FE;
+  --deep:           #1B2CC1;
+
+  --positive: #0F9D74;
+  --negative: #D3402F;
+  --caution:  #C77A0B;
+
+  --radius-control: 4px;
+  --radius-panel:   8px;
+
+  --control-h:       36px;
+  --control-h-touch: 44px;
+
+  color-scheme: light;
+}
+
 @layer base {
-  /* Prevent double-tap zoom on interactive elements — smooth POS experience */
   * {
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
@@ -12,13 +45,13 @@
 
   html {
     @apply font-sans text-ink-900;
-    /* Prevent iOS bounce / overscroll that breaks fixed bottom nav */
+    /* Prevent iOS bounce / overscroll that breaks the fixed bottom nav */
     overscroll-behavior: none;
     -webkit-text-size-adjust: 100%;
   }
 
   body {
-    @apply bg-sand m-0 p-0;
+    @apply bg-canvas m-0 p-0;
     overscroll-behavior: none;
     /* Safe area insets for notched phones */
     padding-bottom: env(safe-area-inset-bottom);
@@ -28,44 +61,120 @@
 
   h1, h2, h3, h4 { @apply font-display; }
 
-  /* Smooth scrolling for all scrollable areas */
+  ::selection { background: var(--primary-tint); color: var(--ink); }
+
   * { scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
 
-  /* Remove iOS input shadows while preserving default native checkboxes and radios */
+  /* Remove iOS input chrome while preserving native checkboxes and radios */
   input:not([type="checkbox"]):not([type="radio"]), select, textarea, button {
     -webkit-appearance: none;
     appearance: none;
   }
 
-  /* Minimum touch target for all interactive elements */
-  button, a, [role="button"] {
-    min-height: 44px;
-    min-width: 44px;
+  /* Minimum touch target.
+     Deliberately NOT applied to bare `a`: it used to be, which turned
+     every inline text link into a 44x44 block and broke sentence flow.
+     Links that need a touch target opt in via .btn or [role="button"]. */
+  button, [role="button"], .btn, input, select, textarea {
+    min-height: var(--control-h);
   }
+  button, [role="button"], .btn {
+    min-width: var(--control-h);
+  }
+  /* Touch devices get the full 44px. */
+  @media (pointer: coarse) {
+    button, [role="button"], .btn, input, select, textarea {
+      min-height: var(--control-h-touch);
+    }
+    button, [role="button"], .btn {
+      min-width: var(--control-h-touch);
+    }
+  }
+
+  /* One focus treatment, everywhere. 2px primary ring, 2px offset. */
+  :focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-control);
+  }
+  /* Tailwind's preflight leaves a UA outline on :focus for some controls;
+     we only ever want the :focus-visible one above. */
+  :focus:not(:focus-visible) { outline: none; }
 }
 
 @layer components {
+  /* ── Buttons ──────────────────────────────────────────────────────
+     Blue is a verb: .btn-primary is the only filled blue in the app.
+     Nothing else — not a status, not a nav item, not an icon — is
+     allowed to wear it.                                              */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold
-           transition-colors disabled:opacity-40 disabled:cursor-not-allowed
-           min-h-[44px] active:scale-95;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-control px-3
+           text-button font-semibold transition-colors
+           disabled:opacity-40 disabled:cursor-not-allowed;
   }
-  .btn-primary   { @apply btn bg-moss-600  text-white   hover:bg-moss-700  active:bg-moss-800; }
-  .btn-secondary { @apply btn bg-ink-100   text-ink-800 hover:bg-ink-200   active:bg-ink-300; }
-  .btn-danger    { @apply btn bg-rust-600  text-white   hover:bg-rust-700  active:bg-rust-800; }
-  .btn-outline   { @apply btn border border-ink-200 text-ink-700 hover:bg-ink-50 active:bg-ink-100; }
+  .btn-primary   { @apply btn bg-primary-600 text-white hover:bg-primary-700 active:bg-primary-800; }
+  .btn-secondary { @apply btn border border-line bg-surface text-ink-800 hover:bg-ink-50 active:bg-ink-100; }
+  .btn-ghost     { @apply btn text-ink-700 hover:bg-ink-100 active:bg-ink-200; }
+  .btn-danger    { @apply btn bg-danger-600 text-white hover:bg-danger-700 active:bg-danger-800; }
+  /* Retained alias — .btn-outline and .btn-secondary are the same thing
+     now. Call sites collapse to .btn-secondary as pages are swept. */
+  .btn-outline   { @apply btn-secondary; }
 
+  /* ── Form controls ────────────────────────────────────────────── */
   .input {
-    @apply w-full rounded-lg border border-ink-200 bg-white px-3 py-2.5 text-sm text-ink-900
-           placeholder:text-ink-300 focus:outline-none focus:ring-2 focus:ring-moss-500
-           focus:border-moss-500 min-h-[44px];
+    @apply w-full rounded-control border border-line bg-surface px-3 py-2
+           text-body text-ink-900 placeholder:text-ink-400
+           focus:outline-none focus:border-primary-600
+           focus:ring-2 focus:ring-primary-600 focus:ring-offset-0
+           disabled:bg-ink-50 disabled:text-ink-400;
   }
-  .label  { @apply block text-xs font-semibold uppercase tracking-wide text-ink-500 mb-1.5; }
-  .card   { @apply bg-white rounded-xl2 border border-ink-100 shadow-sm; }
-  .badge  { @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+  .label {
+    @apply block text-label uppercase text-ink-500 mb-1;
+  }
+
+  /* ── Status ───────────────────────────────────────────────────────
+     999px is reserved for status pills and nothing else. Every pill
+     carries a word, never colour alone.                              */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-pill px-2 py-0.5
+           text-[11px] font-semibold leading-[16px];
+  }
+
+  /* ── Ledger primitives ────────────────────────────────────────── */
+
+  /* Tabular figures. Goes on every currency and quantity in the app so
+     digits line up column to column and never jitter as they update. */
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+
+  /* A section heading on the canvas — no surface, no icon chip, no
+     uppercase eyebrow above it. */
+  .section-title {
+    @apply text-section-title text-ink-900;
+  }
+  .section-hint {
+    @apply text-secondary text-ink-500;
+  }
+
+  /* The only rule this design draws: 1px, --line, full bleed. */
+  .hairline {
+    @apply border-0 border-t border-line;
+  }
 
   /* Bottom nav safe area support on iOS notched devices */
   .bottom-nav-safe {
     padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
   }
+
+  /* DEPRECATED — cards are no longer the default container. Kept only
+     so un-swept pages still render; deleted in Phase 5 once nothing
+     references it. Do not add new .card usages. */
+  .card { @apply bg-surface rounded-panel border border-line; }
+}
+
+@layer utilities {
+  /* font-display now means Inter tracked tighter, not a second family. */
+  .font-display { letter-spacing: -0.02em; }
 }

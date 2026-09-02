@@ -139,7 +139,7 @@ function RootRoute() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-sand">
+      <div className="flex min-h-screen items-center justify-center bg-canvas">
         <LoadingSpinner label="Starting FlowBiz…" />
       </div>
     );
