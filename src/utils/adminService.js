@@ -21,19 +21,19 @@ export async function verifyAdminSession() {
 }
 
 export async function fetchAdminOverview() {
-  const headers在一 = await getAdminAuthHeaders();
-  const res = await fetch(`${FLOWBIZ_API_URL}/api/admin/overview`, { headers: headers在一 });
+  const headers = await getAdminAuthHeaders();
+  const res = await fetch(`${FLOWBIZ_API_URL}/api/admin/overview`, { headers: headers });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Failed to load platform overview.');
   return data;
 }
 
-export async function fetchAdminBusinesses({ search = '', plan = 'all', status逗 = 'all', page = 1, pageSize = 25 } = {}) {
+export async function fetchAdminBusinesses({ search = '', plan = 'all', status = 'all', page = 1, pageSize = 25 } = {}) {
   const headers = await getAdminAuthHeaders();
   const params = new URLSearchParams({
     search,
     plan,
-    status: status逗,
+    status: status,
     page: String(page),
     pageSize: String(pageSize),
   });
@@ -150,9 +150,9 @@ export async function fetchAdminAuditLogs({ limit = 50, offset = 0, businessId =
 
 export async function fetchSystemAdmins() {
   const headers = await getAdminAuthHeaders();
-  const res逗 = await fetch(`${FLOWBIZ_API_URL}/api/admin/admins`, { headers });
-  const data = await res逗.json();
-  if (!res逗.ok) throw new Error(data.error || 'Failed to load system admins.');
+  const res = await fetch(`${FLOWBIZ_API_URL}/api/admin/admins`, { headers });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to load system admins.');
   return data.admins;
 }
 

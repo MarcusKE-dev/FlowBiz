@@ -14,6 +14,12 @@ import {
 } from 'lucide-react';
 import { formatDate } from '../../utils/dateRanges';
 
+const PLAN_BADGE_CLASS = {
+  lifetime: 'bg-purple-100 text-purple-800 font-black',
+  pro: 'bg-amber-100 text-amber-800 font-black',
+  free: 'bg-ink-100 text-ink-600',
+};
+
 export default function AdminBusinesses() {
   const [searchParams] = useSearchParams();
 
@@ -78,6 +84,7 @@ export default function AdminBusinesses() {
               className="input !w-auto text-xs font-semibold"
             >
               <option value="all">All Plans</option>
+              <option value="lifetime">Lifetime Plan</option>
               <option value="pro">Pro Plan</option>
               <option value="free">Free Starter</option>
             </select>
@@ -123,7 +130,7 @@ export default function AdminBusinesses() {
                     <span className="font-mono text-[10px] text-ink-400">{b.id}</span>
                   </div>
                   <div className="flex gap-1 shrink-0">
-                    <span className={`badge ${b.plan === 'pro' ? 'bg-amber-100 text-amber-800 font-bold' : 'bg-ink-100 text-ink-600'}`}>
+                    <span className={`badge ${PLAN_BADGE_CLASS[b.plan] || PLAN_BADGE_CLASS.free}`}>
                       {b.plan.toUpperCase()}
                     </span>
                     <span className={`badge ${b.status === 'active' ? 'bg-moss-100 text-moss-800' : 'bg-rust-100 text-rust-700'}`}>
@@ -183,7 +190,7 @@ export default function AdminBusinesses() {
                         <span className="text-[11px] text-ink-500">{b.owner?.email || b.settings?.email || 'No email on file'}</span>
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`badge ${b.plan === 'pro' ? 'bg-amber-100 text-amber-800 font-black' : 'bg-ink-100 text-ink-600'}`}>
+                        <span className={`badge ${PLAN_BADGE_CLASS[b.plan] || PLAN_BADGE_CLASS.free}`}>
                           {b.plan.toUpperCase()}
                         </span>
                       </td>

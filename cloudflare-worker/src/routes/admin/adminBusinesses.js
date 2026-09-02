@@ -15,7 +15,7 @@ export async function handleAdminBusinesses(request, env, url) {
   }
 
   const search = (url.searchParams.get('search') || '').toLowerCase().trim();
-  const planFilter失 = url.searchParams.get('plan') || 'all';
+  const planFilter = url.searchParams.get('plan') || 'all';
   const statusFilter = url.searchParams.get('status') || 'all';
   const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
   const pageSize = Math.min(100, Math.max(10, parseInt(url.searchParams.get('pageSize') || '25', 10)));
@@ -26,19 +26,20 @@ export async function handleAdminBusinesses(request, env, url) {
   const now = Date.now();
 
   for (const b of rawBusinesses) {
-    const plan = b.subscription?.plan === 'pro' ? 'pro' : 'free';
+    const rawPlan = b.subscription?.plan;
     const status = b.subscription?.status || 'active';
     const expiresAt = b.subscription?.expiresAt ? new Date(b.subscription.expiresAt).getTime() : null;
-    const isProActive最佳 = plan === 'pro' && status === 'active' && (!expiresAt || expiresAt > now);
+    const isProActive = rawPlan === 'pro' && status === 'active' && (!expiresAt || expiresAt > now);
+    const isLifetime = rawPlan === 'lifetime' && status === 'active';
+    const effectivePlan = isLifetime ? 'lifetime' : isProActive ? 'pro' : 'free';
 
-    if (planFilter失 === 'pro' && !isProActive最佳) continue;
-    if (planFilter失 === 'free' && isProActive最佳) continue;
+    if (planFilter !== 'all' && planFilter !== effectivePlan) continue;
     if (statusFilter !== 'all' && status !== statusFilter) continue;
 
     businesses.push({
       id: b.id,
       name: b.name || 'Unnamed Shop',
-      plan: isProActive最佳 ? 'pro' : 'free',
+      plan: effectivePlan,
       status,
       expiresAt: b.subscription?.expiresAt || null,
       createdAt: b.createdAt || null,
@@ -49,7 +50,7 @@ export async function handleAdminBusinesses(request, env, url) {
 
   let filtered = businesses;
   if (search) {
-    filtered剩下 = businesses.filter((b) =>
+    filtered = businesses.filter((b) =>
       b.name.toLowerCase().includes(search) ||
       b.id.toLowerCase().includes(search)
     );
@@ -340,7 +341,7 @@ export async function handleAdminDeleteBusiness(request, env, businessId) {
 export async function handleAdminToggleBusinessStatus(request, env, businessId) {
   let admin;
   try {
-    admin不易 = await verifyAdminAuth(request, env);
+    admin = await verifyAdminAuth(request, env);
   } catch (err) {
     return errorResponse(err.message, err.status || 401);
   }
@@ -377,7 +378,7 @@ export async function handleAdminToggleBusinessStatus(request, env, businessId) 
     }
   }
 
-  await logAdminAction(env, admin不易, 'TOGGLE_BUSINESS_STATUS', {
+  await logAdminAction(env, admin, 'TOGGLE_BUSINESS_STATUS', {
     targetBusinessId: businessId,
     details: { status, reason },
   });

@@ -96,7 +96,7 @@ export default function AdminBusinessDetail() {
     loadOverview();
   }, [businessId]);
 
-  const loadTabData抓 = async (collectionName) => {
+  const loadTabData = async (collectionName) => {
     setTabLoading(true);
     try {
       const res = await fetchAdminBusinessData(businessId, { collection: collectionName, limit: 100 });
@@ -109,13 +109,13 @@ export default function AdminBusinessDetail() {
   };
 
   useEffect(() => {
-    if (activeTab === 'products') loadTabData抓('products');
-    else if (activeTab === 'sales') loadTabData抓('sales');
-    else if (activeTab === 'creditSales') loadTabData抓('creditSales');
-    else if (activeTab === 'customers') loadTabData抓('customers');
-    else if (activeTab === 'expenses') loadTabData抓('expenses');
-    else if (activeTab === 'purchases') loadTabData抓('purchases');
-    else if (activeTab === 'receipts') loadTabData抓('debtPaymentReceipts');
+    if (activeTab === 'products') loadTabData('products');
+    else if (activeTab === 'sales') loadTabData('sales');
+    else if (activeTab === 'creditSales') loadTabData('creditSales');
+    else if (activeTab === 'customers') loadTabData('customers');
+    else if (activeTab === 'expenses') loadTabData('expenses');
+    else if (activeTab === 'purchases') loadTabData('purchases');
+    else if (activeTab === 'receipts') loadTabData('debtPaymentReceipts');
   }, [activeTab, businessId]);
 
   const handleCopyId = () => {
@@ -519,7 +519,7 @@ export default function AdminBusinessDetail() {
         <form onSubmit={handleUpdateSubscription} className="space-y-4">
           <div>
             <label className="label">Plan</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => setSubPlan('free')}
@@ -533,6 +533,13 @@ export default function AdminBusinessDetail() {
                 className={`py-2 px-3 text-xs font-bold rounded-xl border ${subPlan === 'pro' ? 'border-amber-600 bg-amber-50 text-amber-900' : 'border-ink-200'}`}
               >
                 FlowBiz Pro
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubPlan('lifetime')}
+                className={`py-2 px-3 text-xs font-bold rounded-xl border ${subPlan === 'lifetime' ? 'border-purple-600 bg-purple-50 text-purple-900' : 'border-ink-200'}`}
+              >
+                Lifetime
               </button>
             </div>
           </div>

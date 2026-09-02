@@ -13,6 +13,7 @@ export async function handleAdminOverview(request, env) {
   const { documents: allBusinesses } = await listDocuments(env, 'businesses', { pageSize: 300 });
 
   let proCount = 0;
+  let lifetimeCount = 0;
   let freeCount = 0;
   let activeCount = 0;
 
@@ -23,12 +24,15 @@ export async function handleAdminOverview(request, env) {
   const recentBusinesses = [];
 
   for (const b of allBusinesses) {
-    const plan = b.subscription?.plan === 'pro' ? 'pro' : 'free';
+    const rawPlan = b.subscription?.plan;
     const status = b.subscription?.status || 'active';
     const expiresAt = b.subscription?.expiresAt ? new Date(b.subscription.expiresAt).getTime() : null;
-    const isProActive = plan === 'pro' && status === 'active' && (!expiresAt || expiresAt > now);
+    const isProActive = rawPlan === 'pro' && status === 'active' && (!expiresAt || expiresAt > now);
+    const isLifetime = rawPlan === 'lifetime' && status === 'active';
+    const effectivePlan = isLifetime ? 'lifetime' : isProActive ? 'pro' : 'free';
 
-    if (isProActive) proCount++;
+    if (isLifetime) lifetimeCount++;
+    else if (isProActive) proCount++;
     else freeCount++;
 
     if (status === 'active') activeCount++;
@@ -39,7 +43,7 @@ export async function handleAdminOverview(request, env) {
     recentBusinesses.push({
       id: b.id,
       name: b.name || 'Unnamed Shop',
-      plan: isProActive ? 'pro' : 'free',
+      plan: effectivePlan,
       status,
       createdAt: b.createdAt || null,
       createdBy: b.createdBy || null,
@@ -59,14 +63,38 @@ export async function handleAdminOverview(request, env) {
     console.warn('[AdminOverview] Could not fetch audit logs:', err.message);
   }
 
+  // Application-measured revenue rollup from our own `payments` records —
+  // NOT provider-billed data (Paystack's own dashboard is authoritative for
+  // that). Only successful, confirmed payments count.
+  let lifetimeRevenueKes = 0;
+  let proRevenueKes = 0;
+  try {
+    const successfulPayments = await queryCollection(env, 'payments', {
+      filters: [{ field: 'status', value: 'success' }],
+      limit: 500,
+    });
+    for (const p of successfulPayments) {
+      if (p.plan === 'lifetime') lifetimeRevenueKes += Number(p.amountKes) || 0;
+      else if (p.plan === 'pro') proRevenueKes += Number(p.amountKes) || 0;
+    }
+  } catch (err) {
+    console.warn('[AdminOverview] Could not compute revenue rollup:', err.message);
+  }
+
   return json({
     totalBusinesses: allBusinesses.length,
     activeBusinesses: activeCount,
     proBusinesses: proCount,
+    lifetimeBusinesses: lifetimeCount,
     freeBusinesses: freeCount,
     newBusinessesThisMonth,
     recentBusinesses: recentBusinesses.slice(0, 5),
     recentAuditLogs,
     adminRole: admin.role,
+    revenue: {
+      lifetimeRevenueKes,
+      proRevenueKes,
+      note: 'Application-measured from confirmed FlowBiz payment records, not Paystack-reconciled billing totals.',
+    },
   });
 }

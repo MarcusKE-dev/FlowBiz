@@ -12,6 +12,7 @@ import {
   TrendingUp,
   ScrollText,
   Search,
+  Crown,
 } from 'lucide-react';
 import { formatDateTime } from '../../utils/dateRanges';
 
@@ -68,7 +69,7 @@ export default function AdminOverview() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <div className="card p-5 bg-white space-y-1">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase text-ink-400">Total Registered</span>
@@ -88,6 +89,17 @@ export default function AdminOverview() {
           <p className="font-display text-2xl font-extrabold text-amber-800">{data.proBusinesses}</p>
           <span className="text-[11px] text-ink-400">
             {proPct}% of total platform accounts
+          </span>
+        </div>
+
+        <div className="card p-5 bg-white space-y-1 border-purple-200">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase text-purple-700">Lifetime Licenses</span>
+            <Crown className="h-4 w-4 text-purple-600" />
+          </div>
+          <p className="font-display text-2xl font-extrabold text-purple-800">{data.lifetimeBusinesses ?? 0}</p>
+          <span className="text-[11px] text-ink-400">
+            KSh {(data.revenue?.lifetimeRevenueKes ?? 0).toLocaleString('en-KE')} confirmed revenue
           </span>
         </div>
 
@@ -131,7 +143,7 @@ export default function AdminOverview() {
                   <span className="text-[11px] text-ink-400 font-mono">{b.id}</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className={`badge ${b.plan === 'pro' ? 'bg-amber-100 text-amber-800 font-bold' : 'bg-ink-100 text-ink-600'}`}>
+                  <span className={`badge ${b.plan === 'lifetime' ? 'bg-purple-100 text-purple-800 font-bold' : b.plan === 'pro' ? 'bg-amber-100 text-amber-800 font-bold' : 'bg-ink-100 text-ink-600'}`}>
                     {b.plan.toUpperCase()}
                   </span>
                   <Link to={`/admin/businesses/${b.id}`} className="btn-outline !min-h-0 !py-1 !px-2 text-[11px]">
