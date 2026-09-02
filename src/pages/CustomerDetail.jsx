@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { where, orderBy, doc, writeBatch, increment, getDoc, serverTimestamp, collection } from 'firebase/firestore';
 import toast from 'react-hot-toast';
-import { Receipt, Banknote, Smartphone, Undo2 } from 'lucide-react';
+import { Receipt, Banknote, Smartphone, Undo2, ChevronLeft } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { tenantQuery } from '../lib/tenant';
@@ -11,6 +11,13 @@ import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
 import ErrorBanner from '../components/common/ErrorBanner';
 import ConfirmDialog from '../components/common/ConfirmDialog';
+import PageHeader from '../components/ui/PageHeader';
+import Section from '../components/ui/Section';
+import MetricRail, { Metric } from '../components/ui/MetricRail';
+import DataTable from '../components/ui/DataTable';
+import StatusPill from '../components/ui/StatusPill';
+import Money from '../components/ui/Money';
+import { amountOnly } from '../components/ui/format';
 import RepaymentModal from '../components/debtors/RepaymentModal';
 import RefundModal from '../components/debtors/RefundModal';
 import DebtPaymentReceiptModal from '../components/debtors/DebtPaymentReceiptModal';
@@ -218,73 +225,145 @@ export default function CustomerDetail() {
   if (!customer && creditSales.length === 0) return <EmptyState title="Customer not found" />;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <Link to="/customers" className="text-sm font-semibold text-ink-400 hover:text-ink-700">← Back to Customers</Link>
-      <div className="card flex flex-wrap items-center justify-between gap-3 p-5">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">{displayName}</h1>
-          <p className="text-sm text-ink-400">{displayPhone || 'No phone'}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-xs text-ink-400">Outstanding Debt</p>
-          <p className={`font-display text-xl font-bold ${totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>{formatKES(totalOwed)}</p>
-        </div>
-      </div>
-      <button className="btn-primary w-full sm:w-auto" disabled={totalOwed <= 0} onClick={() => setRepayOpen(true)}>
-        <Receipt className="h-4 w-4" strokeWidth={1.75}/> Record repayment
-      </button>
+    <div className="mx-auto max-w-4xl space-y-6">
+      <Link
+        to="/customers"
+        className="inline-flex items-center gap-1 text-secondary font-medium text-ink-600 hover:text-primary-700"
+      >
+        <ChevronLeft className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+        Back to customers
+      </Link>
+
+      <PageHeader
+        title={displayName}
+        description={displayPhone || 'No phone number on file'}
+        actions={
+          <button className="btn-primary" disabled={totalOwed <= 0} onClick={() => setRepayOpen(true)}>
+            <Receipt className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+            Record repayment
+          </button>
+        }
+      />
+
+      <MetricRail columns={3}>
+        <Metric
+          label="Outstanding"
+          prefix="KES"
+          value={amountOnly(totalOwed)}
+        />
+        <Metric label="Credit purchases" value={sorted.length} />
+        <Metric label="Repayments" value={repayments.length} />
+      </MetricRail>
 
       {sorted.length > 0 && (
-        <div className="card p-4">
-          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Credit purchases</h2>
-          <div className="divide-y divide-ink-100">
-            {sorted.map(cs => {
+        <Section title="Credit purchases">
+          <DataTable
+            caption="Credit purchases made by this customer"
+            rows={sorted}
+            rowKey={(cs) => cs.id}
+            columns={[
+              {
+                key: 'productName',
+                header: 'Purchase',
+                primary: true,
+                render: (cs) => {
+                  const reversed = cs.status === 'cancelled' || cs.status === 'refunded';
+                  return (
+                    <span className={reversed ? 'text-ink-400 line-through' : 'text-ink-900'}>
+                      <span className="num">{cs.quantity}</span> × {cs.productName}
+                    </span>
+                  );
+                },
+              },
+              { key: 'soldAt', header: 'Date', render: (cs) => <span className="text-ink-600">{formatDateTime(cs.soldAt)}</span> },
+              {
+                key: 'status',
+                header: 'Status',
+                render: (cs) => (
+                  <StatusPill
+                    tone={
+                      cs.status === 'paid' ? 'positive'
+                      : cs.status === 'partial' ? 'caution'
+                      : cs.status === 'cancelled' || cs.status === 'refunded' ? 'neutral'
+                      : 'caution'
+                    }
+                  >
+                    {cs.status === 'paid' ? 'Paid'
+                      : cs.status === 'partial' ? 'Part paid'
+                      : cs.status === 'cancelled' ? 'Cancelled'
+                      : cs.status === 'refunded' ? 'Refunded'
+                      : 'Unpaid'}
+                  </StatusPill>
+                ),
+              },
+              {
+                key: 'totalAmount',
+                header: 'Amount',
+                numeric: true,
+                render: (cs) => {
+                  const reversed = cs.status === 'cancelled' || cs.status === 'refunded';
+                  return (
+                    <span className={`font-semibold ${reversed ? 'text-ink-400 line-through' : ''}`}>
+                      <Money value={cs.totalAmount} />
+                    </span>
+                  );
+                },
+              },
+            ]}
+            rowActions={(cs) => {
               const reversed = cs.status === 'cancelled' || cs.status === 'refunded';
+              if (!isAdmin || reversed) return null;
+              const refunding = Number(cs.amountPaid) > 0.005;
               return (
-                <div key={cs.id} className={`flex items-center justify-between gap-2 py-2.5 text-sm ${reversed ? 'opacity-50' : ''}`}>
-                  <div>
-                    <p className="font-medium text-ink-700">{cs.quantity} × {cs.productName}</p>
-                    <p className="text-xs text-ink-400">{formatDateTime(cs.soldAt)}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="text-right">
-                      <p className={`font-semibold ${reversed ? 'line-through text-ink-400' : 'text-ink-800'}`}>{formatKES(cs.totalAmount)}</p>
-                      <span className={`badge ${cs.status === 'paid' ? 'bg-moss-100 text-moss-700' : cs.status === 'partial' ? 'bg-rust-100 text-rust-700' : 'bg-ink-100 text-ink-500'}`}>{cs.status}</span>
-                    </div>
-                    {isAdmin && !reversed && (
-                      <button
-                        className="rounded-lg p-2 text-ink-400 hover:bg-ink-100"
-                        title={Number(cs.amountPaid) > 0.005 ? 'Refund this sale' : 'Cancel this sale'}
-                        onClick={() => (Number(cs.amountPaid) > 0.005 ? setRefundTarget(cs) : setCancelTarget(cs))}
-                      >
-                        <Undo2 className="h-4 w-4" strokeWidth={1.75}/>
-                      </button>
-                    )}
-                  </div>
-                </div>
+                <button
+                  className="btn-ghost !px-2 text-ink-500 hover:text-danger-700"
+                  title={refunding ? 'Refund this sale' : 'Cancel this sale'}
+                  aria-label={`${refunding ? 'Refund' : 'Cancel'} the sale of ${cs.productName}`}
+                  onClick={() => (refunding ? setRefundTarget(cs) : setCancelTarget(cs))}
+                >
+                  <Undo2 className="h-4 w-4" strokeWidth={1.75} />
+                </button>
               );
-            })}
-          </div>
-        </div>
+            }}
+          />
+        </Section>
       )}
-      
+
       {repayments.length > 0 && (
-        <div className="card p-4">
-          <h2 className="mb-3 font-display text-sm font-bold text-ink-800">Repayment history</h2>
-          <div className="divide-y divide-ink-100">
-            {repayments.map(r => (
-              <div key={r.id} className="flex items-center justify-between py-2.5 text-sm">
-                <div>
-                  <p className="font-medium text-ink-700">{r.method === 'Cash' ? <><Banknote className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>Cash</> : <><Smartphone className="inline h-4 w-4 mr-1" strokeWidth={1.75}/>M-Pesa {r.mpesaCode ? `(${r.mpesaCode})` : ''}</>}</p>
-                  <p className="text-xs text-ink-400">
-                    {formatDateTime(r.paidAt)}{r.paymentReference ? ` · ${r.paymentReference}` : ''}
-                  </p>
-                </div>
-                <span className="font-semibold text-moss-700">{formatKES(r.amount)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        <Section title="Repayment history">
+          <DataTable
+            caption="Repayments received from this customer"
+            rows={repayments}
+            rowKey={(r) => r.id}
+            columns={[
+              {
+                key: 'method',
+                header: 'Method',
+                primary: true,
+                render: (r) => (
+                  <span className="inline-flex items-center gap-1.5 text-ink-900">
+                    {r.method === 'Cash'
+                      ? <Banknote className="h-4 w-4 text-ink-500" strokeWidth={1.75} aria-hidden="true" />
+                      : <Smartphone className="h-4 w-4 text-ink-500" strokeWidth={1.75} aria-hidden="true" />}
+                    {r.method === 'Cash' ? 'Cash' : `M-Pesa${r.mpesaCode ? ` (${r.mpesaCode})` : ''}`}
+                  </span>
+                ),
+              },
+              { key: 'paidAt', header: 'Date', render: (r) => <span className="text-ink-600">{formatDateTime(r.paidAt)}</span> },
+              {
+                key: 'paymentReference',
+                header: 'Reference',
+                render: (r) => <span className="num text-ink-600">{r.paymentReference || '—'}</span>,
+              },
+              {
+                key: 'amount',
+                header: 'Amount',
+                numeric: true,
+                render: (r) => <span className="font-semibold"><Money value={r.amount} tone="positive" /></span>,
+              },
+            ]}
+          />
+        </Section>
       )}
 
       <RepaymentModal open={repayOpen} customer={{ name: displayName }} totalOwed={totalOwed} onClose={() => setRepayOpen(false)} onSubmit={handleRepayment} />

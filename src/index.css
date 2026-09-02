@@ -150,9 +150,13 @@
   }
 
   /* A section heading on the canvas — no surface, no icon chip, no
-     uppercase eyebrow above it. */
+     uppercase eyebrow above it. At 13px it takes no negative tracking:
+     -0.02em there closes the word space up ("M-Pesa till" reading as
+     "M-Pesatill"). The tighter tracking belongs to the 20px page title,
+     which carries it from its own type-scale token. */
   .section-title {
     @apply text-section-title text-ink-900;
+    letter-spacing: normal;
   }
   .section-hint {
     @apply text-secondary text-ink-500;
@@ -175,6 +179,9 @@
 }
 
 @layer utilities {
-  /* font-display now means Inter tracked tighter, not a second family. */
-  .font-display { letter-spacing: -0.02em; }
+  /* font-display now means Inter tracked tighter, not a second family.
+     Kept gentle because the class is applied at every size from 13px up;
+     the full -0.02em the spec asks for on page titles is carried by the
+     `text-page-title` step itself. */
+  .font-display { letter-spacing: -0.01em; }
 }

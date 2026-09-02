@@ -5,7 +5,10 @@
 // ladder, a till reconciliation or a drawer count should read — as a
 // statement, not as a grid of cards.
 
-export function StatementRow({ label, value, prefix, tone = 'default', indent = false, hint }) {
+// `strong` marks a subtotal: the line the ones above it add up to. It
+// gets weight and a heavier rule above, so a statement reads as groups
+// rather than as one undifferentiated list.
+export function StatementRow({ label, value, prefix, tone = 'default', indent = false, hint, strong = false }) {
   const valueClass =
     tone === 'positive' ? 'text-success-700'
     : tone === 'negative' ? 'text-danger-700'
@@ -13,9 +16,13 @@ export function StatementRow({ label, value, prefix, tone = 'default', indent = 
     : 'text-ink-900';
 
   return (
-    <div className="flex items-baseline justify-between gap-4 px-4 py-2.5">
+    <div
+      className={`flex items-baseline justify-between gap-4 px-4 py-2.5 ${
+        strong ? 'border-t border-line bg-ink-50/60' : ''
+      }`}
+    >
       <div className={`min-w-0 ${indent ? 'pl-4' : ''}`}>
-        <span className="text-body text-ink-700">{label}</span>
+        <span className={`text-body ${strong ? 'font-semibold text-ink-900' : 'text-ink-700'}`}>{label}</span>
         {hint && <span className="ml-2 text-secondary text-ink-400">{hint}</span>}
       </div>
       <div className="flex shrink-0 items-baseline gap-1">
