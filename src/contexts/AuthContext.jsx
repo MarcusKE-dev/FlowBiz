@@ -409,19 +409,27 @@ export function AuthProvider({ children }) {
   };
 
   const isOwner = profile?.role === 'owner';
-  
-  const expiresMs = subscription?.expiresAt?.toMillis 
-    ? subscription.expiresAt.toMillis() 
+
+  const expiresMs = subscription?.expiresAt?.toMillis
+    ? subscription.expiresAt.toMillis()
     : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
 
-  const isPro = subscription?.plan === 'pro' && 
+  const isProSubscriber = subscription?.plan === 'pro' &&
                 subscription?.status === 'active' &&
                 (!subscription.expiresAt || expiresMs > Date.now());
+
+  const isLifetime = subscription?.plan === 'lifetime' && subscription?.status === 'active';
+
+  // A perpetual license unlocks every Pro capability, so `isPro` stays the
+  // single flag the rest of the app already gates features on — it just
+  // now also covers lifetime businesses. Use `isLifetime` where the UI
+  // specifically needs to tell the two apart (billing copy, admin views).
+  const isPro = isProSubscriber || isLifetime;
 
   return (
     <AuthContext.Provider
       value={{
-        firebaseUser, profile, subscription, isPro, loading, authError, accountRemoved, sessionRevoked,
+        firebaseUser, profile, subscription, isPro, isLifetime, loading, authError, accountRemoved, sessionRevoked,
         businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
         isActive: profile?.active !== false, emailVerified,
         login, logout, resendVerificationEmail, refreshEmailVerification, createStaffInvite, cancelStaffInvite, removeStaffAccount,
