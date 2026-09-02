@@ -24,7 +24,7 @@ export default function RefundModal({ open, creditSale, onClose, onSubmit }) {
           <label className="label">Refund via</label>
           <div className="grid grid-cols-2 gap-2">
             {['Cash','M-Pesa'].map(m=>(
-              <button key={m} type="button" onClick={()=>setMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${method===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
+              <button key={m} type="button" onClick={()=>setMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${method===m?'border-primary-600 bg-primary-50 text-primary-800':'border-ink-200 text-ink-500'}`}>
                 {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
               </button>
             ))}

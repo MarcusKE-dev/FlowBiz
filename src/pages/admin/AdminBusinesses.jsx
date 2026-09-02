@@ -16,7 +16,7 @@ import { formatDate } from '../../utils/dateRanges';
 
 const PLAN_BADGE_CLASS = {
   lifetime: 'bg-purple-100 text-purple-800 font-black',
-  pro: 'bg-amber-100 text-amber-800 font-black',
+  pro: 'bg-warning-100 text-warning-800 font-black',
   free: 'bg-ink-100 text-ink-600',
 };
 
@@ -65,7 +65,7 @@ export default function AdminBusinesses() {
       </div>
 
       {/* Filter & Search Bar */}
-      <div className="card p-4 bg-white space-y-3">
+      <div className="rounded-panel border border-line bg-surface p-4 bg-white space-y-3">
         <form onSubmit={handleSearchSubmit} className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-ink-400" />
@@ -111,7 +111,7 @@ export default function AdminBusinesses() {
       {loading ? (
         <LoadingSpinner label="Querying business directory…" />
       ) : data?.businesses?.length === 0 ? (
-        <div className="card p-12 text-center bg-white space-y-2">
+        <div className="rounded-panel border border-line bg-surface p-12 text-center bg-white space-y-2">
           <Building2 className="h-8 w-8 mx-auto text-ink-300" />
           <h3 className="font-bold text-ink-800">No businesses match</h3>
           <p className="text-xs text-ink-400">Try adjusting your keyword, plan filter, or status criteria.</p>
@@ -121,10 +121,10 @@ export default function AdminBusinesses() {
           {/* Mobile Card View (< sm screens) */}
           <div className="grid grid-cols-1 gap-3 sm:hidden">
             {data.businesses.map((b) => (
-              <div key={b.id} className="card p-4 bg-white space-y-3 shadow-xs">
+              <div key={b.id} className="rounded-panel border border-line bg-surface p-4 bg-white space-y-3 shadow-xs">
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <Link to={`/admin/businesses/${b.id}`} className="font-bold text-ink-900 text-sm hover:text-moss-700 block">
+                    <Link to={`/admin/businesses/${b.id}`} className="font-bold text-ink-900 text-sm hover:text-success-700 block">
                       {b.name}
                     </Link>
                     <span className="font-mono text-[10px] text-ink-400">{b.id}</span>
@@ -133,7 +133,7 @@ export default function AdminBusinesses() {
                     <span className={`badge ${PLAN_BADGE_CLASS[b.plan] || PLAN_BADGE_CLASS.free}`}>
                       {b.plan.toUpperCase()}
                     </span>
-                    <span className={`badge ${b.status === 'active' ? 'bg-moss-100 text-moss-800' : 'bg-rust-100 text-rust-700'}`}>
+                    <span className={`badge ${b.status === 'active' ? 'bg-success-100 text-success-800' : 'bg-danger-100 text-danger-700'}`}>
                       {b.status}
                     </span>
                   </div>
@@ -153,7 +153,7 @@ export default function AdminBusinesses() {
                   </Link>
                   <Link
                     to={`/admin/businesses/${b.id}/support`}
-                    className="btn-outline !min-h-0 !py-1.5 text-xs font-semibold flex items-center justify-center gap-1 text-amber-700 hover:bg-amber-50"
+                    className="btn-outline !min-h-0 !py-1.5 text-xs font-semibold flex items-center justify-center gap-1 text-warning-700 hover:bg-warning-50"
                   >
                     <Shield className="h-3.5 w-3.5" /> Support
                   </Link>
@@ -163,7 +163,7 @@ export default function AdminBusinesses() {
           </div>
 
           {/* Desktop Table View (>= sm screens) */}
-          <div className="hidden sm:block card overflow-hidden bg-white shadow-xs">
+          <div className="hidden overflow-hidden rounded-panel border border-line bg-surface sm:block">
             <div className="overflow-x-auto">
               <table className="w-full text-xs text-left">
                 <thead className="bg-ink-50 uppercase text-[10px] font-bold text-ink-400 border-b border-ink-100">
@@ -180,7 +180,7 @@ export default function AdminBusinesses() {
                   {data.businesses.map((b) => (
                     <tr key={b.id} className="hover:bg-ink-50/50 transition-colors">
                       <td className="px-4 py-3">
-                        <Link to={`/admin/businesses/${b.id}`} className="font-bold text-ink-900 hover:text-moss-700 block text-sm">
+                        <Link to={`/admin/businesses/${b.id}`} className="font-bold text-ink-900 hover:text-success-700 block text-sm">
                           {b.name}
                         </Link>
                         <span className="font-mono text-[10px] text-ink-400">{b.id}</span>
@@ -195,7 +195,7 @@ export default function AdminBusinesses() {
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`badge ${b.status === 'active' ? 'bg-moss-100 text-moss-800' : 'bg-rust-100 text-rust-700'}`}>
+                        <span className={`badge ${b.status === 'active' ? 'bg-success-100 text-success-800' : 'bg-danger-100 text-danger-700'}`}>
                           {b.status}
                         </span>
                       </td>
@@ -212,7 +212,7 @@ export default function AdminBusinesses() {
                           </Link>
                           <Link
                             to={`/admin/businesses/${b.id}/support`}
-                            className="btn-outline !min-h-0 !py-1 !px-2 text-[11px] font-semibold inline-flex items-center gap-1 text-amber-700 hover:bg-amber-50"
+                            className="btn-outline !min-h-0 !py-1 !px-2 text-[11px] font-semibold inline-flex items-center gap-1 text-warning-700 hover:bg-warning-50"
                             title="View as Business (Read-Only)"
                           >
                             <Shield className="h-3 w-3" /> Support

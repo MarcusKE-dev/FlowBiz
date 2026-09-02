@@ -85,7 +85,7 @@ export default function AdminSystemAdmins() {
       {loading ? (
         <LoadingSpinner label="Loading administrators…" />
       ) : (
-        <div className="card overflow-hidden bg-white shadow-xs">
+        <div className="rounded-panel border border-line bg-surface overflow-hidden bg-white shadow-xs">
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-left">
               <thead className="bg-ink-50 uppercase text-[10px] font-bold text-ink-400 border-b border-ink-100">
@@ -107,12 +107,12 @@ export default function AdminSystemAdmins() {
                     </td>
                     <td className="px-4 py-3 text-ink-600">{adm.email}</td>
                     <td className="px-4 py-3">
-                      <span className={`badge ${adm.role === 'SUPER_ADMIN' ? 'bg-ink-900 text-white font-bold' : 'bg-moss-100 text-moss-800'}`}>
+                      <span className={`badge ${adm.role === 'SUPER_ADMIN' ? 'bg-deep-600 text-white font-bold' : 'bg-success-100 text-success-800'}`}>
                         {adm.role}
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`badge ${adm.active !== false ? 'bg-moss-50 text-moss-700' : 'bg-rust-50 text-rust-600'}`}>
+                      <span className={`badge ${adm.active !== false ? 'bg-success-50 text-success-700' : 'bg-danger-50 text-danger-600'}`}>
                         {adm.active !== false ? 'Active' : 'Deactivated'}
                       </span>
                     </td>
@@ -125,7 +125,7 @@ export default function AdminSystemAdmins() {
                           <button
                             type="button"
                             onClick={() => handleDeactivate(adm.id, adm.name)}
-                            className="text-rust-600 hover:text-rust-800 p-1"
+                            className="text-danger-600 hover:text-danger-800 p-1"
                             title="Deactivate Admin"
                           >
                             <Trash2 className="h-4 w-4" />
@@ -190,7 +190,7 @@ export default function AdminSystemAdmins() {
             <button type="button" className="btn-secondary flex-1" onClick={() => setAddModal(false)} disabled={saving}>
               Cancel
             </button>
-            <button type="submit" className="btn-primary flex-1 !bg-ink-900" disabled={saving}>
+            <button type="submit" className="btn-primary flex-1" disabled={saving}>
               {saving ? 'Adding…' : 'Add Administrator'}
             </button>
           </div>

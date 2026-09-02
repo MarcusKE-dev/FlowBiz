@@ -84,9 +84,9 @@ export default function CartCheckoutModal({ open, cart, total, customers, onClos
 
         {method === 'M-Pesa' && (
           <div>
-            <label className="label">M-Pesa transaction code <span className="text-rust-500">*</span></label>
+            <label className="label">M-Pesa transaction code <span className="text-danger-500">*</span></label>
             <input className="input uppercase" placeholder="e.g. QWE1234567" value={mpesaCode} onChange={e => setMpesaCode(e.target.value.toUpperCase())} />
-            {needsMpesaCode && <p className="mt-1 text-xs text-rust-600">Transaction code required for M-Pesa sales.</p>}
+            {needsMpesaCode && <p className="mt-1 text-xs text-danger-600">Transaction code required for M-Pesa sales.</p>}
           </div>
         )}
 

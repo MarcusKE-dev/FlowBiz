@@ -77,11 +77,11 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
     <Modal open={open} onClose={onClose} title={sale.isCredit ? 'Credit Sale Recorded' : 'Sale Complete'}>
       <div className="space-y-4">
         {/* Fixed rounded-panel to rounded-2xl */}
-        <div className={`flex flex-col items-center justify-center py-4 rounded-2xl border ${sale.isCredit ? 'bg-rust-50 border-rust-200' : 'bg-moss-50 border-moss-200'}`}>
-          <div className={`h-10 w-10 rounded-full flex items-center justify-center mb-2 ${sale.isCredit ? 'bg-rust-100 text-rust-700' : 'bg-moss-100 text-moss-700'}`}>
-            {sale.isCredit ? <Clock className="h-5 w-5 text-rust-600" strokeWidth={2} /> : <CheckCircle2 className="h-5 w-5 text-moss-600" strokeWidth={2} />}
+        <div className={`flex flex-col items-center justify-center py-4 rounded-2xl border ${sale.isCredit ? 'bg-danger-50 border-danger-200' : 'bg-success-50 border-success-200'}`}>
+          <div className={`h-10 w-10 rounded-full flex items-center justify-center mb-2 ${sale.isCredit ? 'bg-danger-100 text-danger-700' : 'bg-success-100 text-success-700'}`}>
+            {sale.isCredit ? <Clock className="h-5 w-5 text-danger-600" strokeWidth={2} /> : <CheckCircle2 className="h-5 w-5 text-success-600" strokeWidth={2} />}
           </div>
-          <h2 className={`font-display font-bold ${sale.isCredit ? 'text-rust-700' : 'text-moss-800'}`}>
+          <h2 className={`font-display font-bold ${sale.isCredit ? 'text-danger-700' : 'text-success-800'}`}>
             {sale.isCredit ? 'Credit sale recorded' : 'Sale recorded successfully'}
           </h2>
 
@@ -100,7 +100,7 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
 
           {sale.isCredit && sale.customerName && <p className="text-xs text-ink-500 mt-1">{sale.customerName}</p>}
           <p className="text-lg font-bold text-ink-900 mt-1">{formatKES(sale.totalAmount)}</p>
-          <p className={`text-xs mt-1 font-semibold ${sale.isCredit ? 'text-rust-600' : 'text-ink-500'}`}>
+          <p className={`text-xs mt-1 font-semibold ${sale.isCredit ? 'text-danger-600' : 'text-ink-500'}`}>
             {sale.isCredit ? 'Payment Status: Unpaid' : sale.paymentMethod}
           </p>
         </div>

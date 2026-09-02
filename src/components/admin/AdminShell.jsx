@@ -37,16 +37,16 @@ export default function AdminShell({ children }) {
   return (
     <div className="flex min-h-screen bg-canvas text-ink-900">
       {/* Desktop Sidebar (lg:flex) */}
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-ink-100 bg-white lg:flex">
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-line bg-surface lg:flex">
         {/* Brand Header */}
         <div className="border-b border-ink-100 px-5 py-4 flex items-center justify-between">
           <Link to="/admin" className="flex items-center gap-2.5">
-            <div className="h-8 w-8 rounded-xl bg-ink-900 text-white flex items-center justify-center font-black text-sm shadow-xs">
+            <div className="flex h-8 w-8 items-center justify-center rounded-control bg-deep-600 text-body font-semibold text-white">
               FB
             </div>
             <div>
               <span className="font-display font-bold text-sm text-ink-900 block leading-tight">FlowBiz Admin</span>
-              <span className="text-[10px] font-semibold text-moss-700 tracking-wider uppercase block">Control Center</span>
+              <span className="block text-label uppercase text-deep-600">Control centre</span>
             </div>
           </Link>
         </div>
@@ -64,7 +64,7 @@ export default function AdminShell({ children }) {
                 className={({ isActive }) =>
                   `flex items-center gap-3 rounded-xl px-3 py-2.5 text-xs font-semibold transition-colors ${
                     isActive
-                      ? 'bg-ink-900 text-white shadow-xs'
+                      ? 'bg-deep-50 text-deep-700'
                       : 'text-ink-500 hover:bg-ink-50 hover:text-ink-800'
                   }`
                 }
@@ -90,7 +90,7 @@ export default function AdminShell({ children }) {
           <button
             type="button"
             onClick={logout}
-            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium text-rust-600 hover:bg-rust-50"
+            className="flex w-full items-center gap-2 rounded-control px-3 py-2 text-button text-danger-700 hover:bg-danger-50"
           >
             <LogOut className="h-3.5 w-3.5" /> Sign Out Admin
           </button>
@@ -112,7 +112,7 @@ export default function AdminShell({ children }) {
         )}
 
         {/* Top Header Bar */}
-        <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-ink-100 bg-white/95 px-4 backdrop-blur sm:px-6">
+        <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-line bg-canvas px-4 sm:px-6">
           <div className="flex items-center gap-2.5">
             {/* Mobile Hamburger Toggle */}
             <button
@@ -124,7 +124,7 @@ export default function AdminShell({ children }) {
               <Menu className="h-5 w-5" />
             </button>
 
-            <span className="badge bg-ink-900 text-white text-[10px] font-bold uppercase tracking-wider">
+            <span className="badge bg-deep-600 text-white">
               {admin.role}
             </span>
             <span className="text-xs text-ink-500 truncate max-w-[150px] sm:max-w-none">
@@ -152,12 +152,12 @@ export default function AdminShell({ children }) {
       {/* Mobile Slide-Over Drawer */}
       {mobileDrawerOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">
-          <div className="fixed inset-0 bg-ink-950/60 backdrop-blur-xs" onClick={() => setMobileDrawerOpen(false)} />
+          <div className="fixed inset-0 bg-ink-950/50" onClick={() => setMobileDrawerOpen(false)} />
           <div className="fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-white p-5 shadow-2xl flex flex-col justify-between animate-fade-in">
             <div className="space-y-4">
               <div className="flex items-center justify-between border-b border-ink-100 pb-3">
                 <div className="flex items-center gap-2">
-                  <div className="h-7 w-7 rounded-lg bg-ink-900 text-white flex items-center justify-center font-bold text-xs">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-control bg-deep-600 text-secondary font-semibold text-white">
                     FB
                   </div>
                   <span className="font-bold text-sm text-ink-900">Control Center</span>
@@ -185,7 +185,7 @@ export default function AdminShell({ children }) {
                       className={({ isActive }) =>
                         `flex items-center gap-3 rounded-xl px-3 py-2.5 text-xs font-semibold ${
                           isActive
-                            ? 'bg-ink-900 text-white'
+                            ? 'bg-deep-50 text-deep-700'
                             : 'text-ink-600 hover:bg-ink-50'
                         }`
                       }
@@ -211,7 +211,7 @@ export default function AdminShell({ children }) {
               <button
                 type="button"
                 onClick={() => { setMobileDrawerOpen(false); logout(); }}
-                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 font-semibold text-rust-600 hover:bg-rust-50"
+                className="flex w-full items-center gap-2 rounded-control px-3 py-2 text-button text-danger-700 hover:bg-danger-50"
               >
                 <LogOut className="h-4 w-4" /> Sign Out
               </button>
@@ -221,7 +221,7 @@ export default function AdminShell({ children }) {
       )}
 
       {/* Mobile Bottom Navigation Bar (1-Tap Page Switching) */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-ink-200 bg-white/95 backdrop-blur-md lg:hidden">
+      <nav className="bottom-nav-safe fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-surface shadow-sticky lg:hidden">
         <NavLink
           to="/admin"
           end

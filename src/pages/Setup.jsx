@@ -4,6 +4,8 @@ import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVe
 import { doc, collection, writeBatch, serverTimestamp, getDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { auth, db } from '../firebase';
+import AuthShell from '../components/common/AuthShell';
+import ErrorBanner from '../components/common/ErrorBanner';
 import { useAuth } from '../contexts/AuthContext';
 
 const DEFAULT_CATEGORIES = ['Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
@@ -160,24 +162,20 @@ export default function Setup() {
 
   if (authLoading && !creatingRef.current) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-ink-950">
+      <div className="flex min-h-screen items-center justify-center bg-deep-900">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4 py-8">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-white">Create your business</h1>
-            <p className="text-sm text-ink-400">Set up FlowBiz in under a minute.</p>
-          </div>
-        </div>
-        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
-          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
+    <AuthShell
+      title="Create your business"
+      description="Setting up takes about a minute."
+      footer={<>Already have an account? <Link to="/login" className="font-medium text-white underline underline-offset-2">Sign in</Link></>}
+    >
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <ErrorBanner message={error} />
           <div>
             <label className="label">Business name</label>
             <input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="e.g. Nairobi Smart Retail" disabled={submitting} />
@@ -202,10 +200,6 @@ export default function Setup() {
             {submitting ? 'Setting up…' : 'Create business'}
           </button>
         </form>
-        <p className="text-center text-sm text-ink-400">
-          Already have an account? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link>
-        </p>
-      </div>
-    </div>
+    </AuthShell>
   );
 }

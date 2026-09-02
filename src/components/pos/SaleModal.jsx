@@ -68,7 +68,7 @@ const handleConfirm = async () => {
           <div>
             <label className="label">Quantity</label>
             <input type="number" min="1" max={product.stock} className="input" value={quantity} onChange={e=>setQuantity(e.target.value)} />
-            {exceedsStock && <p className="mt-1 text-xs font-medium text-rust-600">Only {product.stock} left.</p>}
+            {exceedsStock && <p className="mt-1 text-xs font-medium text-danger-600">Only {product.stock} left.</p>}
           </div>
           <div>
             <label className="label">Price / unit (KES)</label>
@@ -85,9 +85,9 @@ const handleConfirm = async () => {
         </div>
         {method === 'M-Pesa' && (
           <div>
-            <label className="label">M-Pesa transaction code <span className="text-rust-500">*</span></label>
+            <label className="label">M-Pesa transaction code <span className="text-danger-500">*</span></label>
             <input className="input uppercase" placeholder="e.g. QWE1234567" value={mpesaCode} onChange={e=>setMpesaCode(e.target.value.toUpperCase())} />
-            {needsMpesaCode && <p className="mt-1 text-xs text-rust-600">Transaction code required for M-Pesa sales.</p>}
+            {needsMpesaCode && <p className="mt-1 text-xs text-danger-600">Transaction code required for M-Pesa sales.</p>}
           </div>
         )}
         {method === 'Credit' && (
@@ -99,7 +99,7 @@ const handleConfirm = async () => {
                   <option value="">— Select customer —</option>
                   {customers.map(c=><option key={c.id} value={c.id}>{c.name}{c.phone?` · ${c.phone}`:''}</option>)}
                 </select>
-                <button type="button" className="text-xs font-semibold text-moss-700 hover:underline" onClick={()=>setNewMode(true)}>+ New customer</button>
+                <button type="button" className="text-secondary font-medium text-primary-700 hover:underline" onClick={()=>setNewMode(true)}>+ New customer</button>
               </>
             ) : (
               <>

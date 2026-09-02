@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import AuthShell from '../components/common/AuthShell';
+import ErrorBanner from '../components/common/ErrorBanner';
 export default function Login() {
   const { login, firebaseUser } = useAuth();
   const navigate = useNavigate();
@@ -73,28 +75,26 @@ finally {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div><p className="text-sm text-ink-400">Business Manager</p></div>
-        </div>
-        <form onSubmit={handle} className="card space-y-4 p-6">
-          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
+    <AuthShell
+      title="Sign in"
+      description="Welcome back to your counter."
+      footer={<>New to FlowBiz? <Link to="/setup" className="font-medium text-white underline underline-offset-2">Create a business</Link></>}
+    >
+        <form onSubmit={handle} className="space-y-4">
+          <ErrorBanner message={error} />
           <div><label className="label">Email</label><input type="email" required className="input" placeholder="owner@yourbusiness.co.ke" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" /></div>
           <div>
             <div className="flex items-center justify-between">
               <label className="label !mb-0">Password</label>
-              <Link to="/forgot-password" className="text-xs font-semibold text-moss-400 hover:underline mb-1.5">Forgot password?</Link>
+              <Link to="/forgot-password" className="mb-1 text-secondary font-medium text-primary-700 hover:underline">Forgot password?</Link>
             </div>
             <input type="password" required className="input" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" />
           </div>
 
 <button type="submit" className="btn-primary w-full" disabled={submitting || lockoutSeconds > 0}>
   {lockoutSeconds > 0 ? `Try again in ${lockoutSeconds}s` : submitting ? 'Signing in…' : 'Sign in'}
-</button>        </form>
-        <p className="text-center text-sm text-ink-400">New to FlowBiz? <Link to="/setup" className="font-semibold text-moss-400 hover:underline">Create a business</Link></p>
-      </div>
-    </div>
+</button>
+        </form>
+    </AuthShell>
   );
 }

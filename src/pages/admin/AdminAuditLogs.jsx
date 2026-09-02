@@ -44,7 +44,7 @@ export default function AdminAuditLogs() {
       </div>
 
       {/* Filter Bar */}
-      <div className="card p-4 bg-white flex flex-wrap items-center gap-3">
+      <div className="rounded-panel border border-line bg-surface p-4 bg-white flex flex-wrap items-center gap-3">
         <select
           value={actionFilter}
           onChange={(e) => setActionFilter(e.target.value)}
@@ -79,13 +79,13 @@ export default function AdminAuditLogs() {
       {loading ? (
         <LoadingSpinner label="Fetching audit records…" />
       ) : logs.length === 0 ? (
-        <div className="card p-12 text-center bg-white space-y-2">
+        <div className="rounded-panel border border-line bg-surface p-12 text-center bg-white space-y-2">
           <ScrollText className="h-8 w-8 mx-auto text-ink-300" />
           <h3 className="font-bold text-ink-800">No audit logs match</h3>
           <p className="text-xs text-ink-400">All administrative operations will automatically appear here.</p>
         </div>
       ) : (
-        <div className="card overflow-hidden bg-white shadow-xs">
+        <div className="rounded-panel border border-line bg-surface overflow-hidden bg-white shadow-xs">
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-left">
               <thead className="bg-ink-50 uppercase text-[10px] font-bold text-ink-400 border-b border-ink-100">
@@ -105,7 +105,7 @@ export default function AdminAuditLogs() {
                       {formatDateTime(log.timestamp)}
                     </td>
                     <td className="px-4 py-2.5">
-                      <span className="badge bg-ink-900 text-white font-bold text-[10px]">
+                      <span className="badge bg-deep-600 text-white font-bold text-[10px]">
                         {log.action}
                       </span>
                     </td>
@@ -115,7 +115,7 @@ export default function AdminAuditLogs() {
                     </td>
                     <td className="px-4 py-2.5">
                       {log.targetBusinessId ? (
-                        <Link to={`/admin/businesses/${log.targetBusinessId}`} className="font-mono text-moss-700 font-bold hover:underline">
+                        <Link to={`/admin/businesses/${log.targetBusinessId}`} className="font-mono text-success-700 font-bold hover:underline">
                           {log.targetBusinessId}
                         </Link>
                       ) : (

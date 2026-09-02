@@ -20,7 +20,7 @@ export default function OpenSessionPrompt({ onOpen }) {
   };
   return (
     <div className="mx-auto max-w-sm pt-8">
-      <div className="card p-6 space-y-4">
+      <div className="rounded-panel border border-line bg-surface p-6 space-y-4">
         <div className="text-center"><Store className="h-10 w-10 text-primary-600 mx-auto mb-2" strokeWidth={1.5} />
           <h2 className="font-display text-lg font-bold text-ink-900">Open today's counter</h2>
           <p className="text-sm text-ink-400 mt-1">Enter starting balances for accurate end-of-day reconciliation.</p>

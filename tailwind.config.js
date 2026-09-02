@@ -45,16 +45,6 @@ export default {
         // and points at the deep blue so the app only ever shows one blue
         // family.
         info: deep,
-
-        // ── TRANSITIONAL ────────────────────────────────────────────
-        // `moss` and `rust` are the retired green/rust scales. They are
-        // aliased onto success/danger so the ~460 not-yet-swept class
-        // references render in the new palette instead of falling back to
-        // no colour at all. Every one of these is removed as Phases 3-5
-        // sweep each file; this block must be empty (and deleted) before
-        // the redesign is done. Do not add new moss-*/rust-* classes.
-        moss: success,
-        rust: danger,
       },
 
       borderRadius: {

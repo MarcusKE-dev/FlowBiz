@@ -73,11 +73,11 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
   return (
     <Modal open={open} onClose={onClose} title="Debt Payment Receipt">
       <div className="space-y-4">
-        <div className={`flex flex-col items-center justify-center py-4 rounded-2xl border ${receipt.isCleared ? 'bg-moss-50 border-moss-200' : 'bg-amber-50 border-amber-200'}`}>
-          <div className={`h-10 w-10 rounded-full flex items-center justify-center mb-2 ${receipt.isCleared ? 'bg-moss-100 text-moss-700' : 'bg-amber-100 text-amber-700'}`}>
+        <div className={`flex flex-col items-center justify-center py-4 rounded-2xl border ${receipt.isCleared ? 'bg-success-50 border-success-200' : 'bg-amber-50 border-amber-200'}`}>
+          <div className={`h-10 w-10 rounded-full flex items-center justify-center mb-2 ${receipt.isCleared ? 'bg-success-100 text-success-700' : 'bg-amber-100 text-amber-700'}`}>
             {receipt.isCleared ? <CheckCircle2 className="h-5 w-5" strokeWidth={2} /> : <Clock className="h-5 w-5" strokeWidth={2} />}
           </div>
-          <h2 className={`font-display font-bold ${receipt.isCleared ? 'text-moss-800' : 'text-amber-800'}`}>
+          <h2 className={`font-display font-bold ${receipt.isCleared ? 'text-success-800' : 'text-amber-800'}`}>
             {receipt.isCleared ? 'Debt cleared' : 'Partially paid'}
           </h2>
           <p className="text-sm font-semibold mt-2 text-ink-800">{receipt.customerName}</p>
@@ -87,7 +87,7 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
           </p>
         </div>
 
-        <div className="card divide-y divide-ink-100">
+        <div className="rounded-panel border border-line bg-surface divide-y divide-ink-100">
           <Row label="Previous balance" value={formatKES(receipt.previousBalance)} />
           <Row label="Payment received" value={formatKES(receipt.amountPaid)} />
           <Row label="Remaining balance" value={formatKES(receipt.remainingBalance)} bold />

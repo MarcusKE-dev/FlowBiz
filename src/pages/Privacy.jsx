@@ -4,16 +4,16 @@ import { ArrowLeft, Shield } from 'lucide-react';
 
 export default function Privacy() {
   return (
-    <div className="min-h-screen bg-canvas text-ink-900 selection:bg-moss-200 py-8 px-4 sm:px-6">
+    <div className="min-h-screen bg-canvas text-ink-900 selection:bg-success-200 py-8 px-4 sm:px-6">
       <div className="mx-auto max-w-3xl">
         <Link to="/" className="inline-flex items-center gap-2 text-sm font-semibold text-ink-500 hover:text-ink-800 mb-6 transition-colors">
           <ArrowLeft className="h-4 w-4" /> Back to App
         </Link>
 
-        <div className="card p-6 sm:p-10 space-y-8 bg-white border border-ink-100 shadow-sm">
+        <div className="rounded-panel border border-line bg-surface p-6 sm:p-10 space-y-8 bg-white border border-ink-100 shadow-sm">
           <div className="border-b border-ink-100 pb-6">
             <div className="flex items-center gap-3 mb-4">
-              <div className="h-10 w-10 bg-moss-50 text-moss-700 rounded-xl flex items-center justify-center">
+              <div className="h-10 w-10 bg-success-50 text-success-700 rounded-xl flex items-center justify-center">
                 <Shield className="h-6 w-6" strokeWidth={2} />
               </div>
               <h1 className="font-display text-2xl font-bold text-ink-900">

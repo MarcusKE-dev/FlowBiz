@@ -55,7 +55,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
   if (sessionRevoked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
-        <div className="card max-w-sm w-full p-6 text-center space-y-4">
+        <div className="rounded-panel border border-line bg-surface max-w-sm w-full p-6 text-center space-y-4">
           <h2 className="font-display text-lg font-bold text-ink-900">This device was signed out</h2>
           <p className="text-sm text-ink-500">An owner revoked access for this device from Settings → Device Management.</p>
           <button className="btn-primary w-full" onClick={() => (window.location.href = '/login')}>Go to sign in</button>
@@ -70,8 +70,8 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     if (accountRemoved) {
       return (
         <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
-          <div className="card max-w-sm w-full p-6 text-center space-y-4">
-            <Store className="h-12 w-12 mx-auto text-moss-600" strokeWidth={1.5} />
+          <div className="rounded-panel border border-line bg-surface max-w-sm w-full p-6 text-center space-y-4">
+            <Store className="h-12 w-12 mx-auto text-success-600" strokeWidth={1.5} />
             <h2 className="font-display text-lg font-bold text-ink-900">Business Setup Required</h2>
             <p className="text-sm text-ink-500">
               You are signed in as <span className="font-semibold text-ink-700">{firebaseUser.email}</span>, but your business workspace is not configured yet.
@@ -87,7 +87,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
 
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
-        <div className="card max-w-md w-full p-6 text-center space-y-4">
+        <div className="rounded-panel border border-line bg-surface max-w-md w-full p-6 text-center space-y-4">
           <AlertCircle className="h-12 w-12 mx-auto text-amber-500" strokeWidth={1.5} />
           <h2 className="font-display text-lg font-bold text-ink-900">Loading Account Profile</h2>
           <p className="text-sm text-ink-500">
@@ -108,8 +108,8 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
   if (!isActive) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
-        <div className="card max-w-sm p-6 text-center space-y-3">
-          <Ban className="h-10 w-10 mx-auto text-rust-500" strokeWidth={1.5} />
+        <div className="rounded-panel border border-line bg-surface max-w-sm p-6 text-center space-y-3">
+          <Ban className="h-10 w-10 mx-auto text-danger-500" strokeWidth={1.5} />
           <h2 className="font-display text-lg font-bold text-ink-900">Account deactivated</h2>
           <p className="text-sm text-ink-500">Contact your business owner to regain access.</p>
           <button className="btn-outline w-full" onClick={logout}>Sign Out</button>
@@ -121,7 +121,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
   if (!demo && !emailVerified) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
-        <div className="card max-w-sm w-full p-6 text-center space-y-4">
+        <div className="rounded-panel border border-line bg-surface max-w-sm w-full p-6 text-center space-y-4">
           <h2 className="font-display text-lg font-bold text-ink-900">Verify your email</h2>
           <p className="text-sm text-ink-500">
             We sent a verification link to <span className="font-semibold text-ink-800">{firebaseUser.email}</span>. Please check your inbox (and spam/junk folder) and click the link to activate your account.

@@ -812,9 +812,9 @@ export default function Counter() {
               completes on this screen, same pattern as the mobile
               SaleCompleteModal, just inline instead of a popup. */}
           {desktopLastSale && (
-            <div className="card space-y-3 p-4">
+            <div className="rounded-panel border border-line bg-surface space-y-3 p-4">
               <div className="flex items-center justify-between border-b border-ink-100 pb-2.5">
-                <div className="flex items-center gap-1.5 text-moss-700">
+                <div className="flex items-center gap-1.5 text-success-700">
                   <CheckCircle2 className="h-4 w-4" strokeWidth={2} />
                   <span className="text-xs font-semibold">Sale completed</span>
                 </div>

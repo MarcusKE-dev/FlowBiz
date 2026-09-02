@@ -197,7 +197,7 @@ export default function AdminBusinessDetail() {
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       {/* Top Header Card */}
-      <div className="card p-5 sm:p-6 bg-white space-y-4 shadow-sm">
+      <div className="rounded-panel border border-line bg-surface p-5 sm:p-6 bg-white space-y-4 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-ink-100 pb-4">
           <div>
             <div className="flex items-center gap-2">
@@ -206,7 +206,7 @@ export default function AdminBusinessDetail() {
               </Link>
               <span className="text-ink-300">/</span>
               <span className="text-xs font-mono font-bold text-ink-500">{businessId}</span>
-              {isSuspended && <span className="badge bg-rust-100 text-rust-800 font-bold ml-1">SUSPENDED</span>}
+              {isSuspended && <span className="badge bg-danger-100 text-danger-800 font-bold ml-1">SUSPENDED</span>}
             </div>
             <h1 className="font-display text-2xl font-bold text-ink-900 mt-1">
               {business.name || settings.shopName || 'Unnamed Business'}
@@ -227,7 +227,7 @@ export default function AdminBusinessDetail() {
             <button
               type="button"
               onClick={() => setSubModal(true)}
-              className="btn-outline !min-h-0 !py-1.5 !px-3 text-xs font-semibold flex items-center gap-1.5 text-amber-700 border-amber-300 hover:bg-amber-50"
+              className="btn-outline !min-h-0 !py-1.5 !px-3 text-xs font-semibold flex items-center gap-1.5 text-warning-700 border-warning-300 hover:bg-warning-50"
             >
               <Sparkles className="h-3.5 w-3.5" /> Plan: {business.subscription?.plan?.toUpperCase()}
             </button>
@@ -252,15 +252,15 @@ export default function AdminBusinessDetail() {
           </div>
           <div className="rounded-xl bg-canvas p-3">
             <span className="text-[10px] font-bold uppercase text-ink-400 block">Sales Recorded</span>
-            <span className="font-display text-lg font-bold text-moss-700">{metrics.salesCount}</span>
+            <span className="font-display text-lg font-bold text-success-700">{metrics.salesCount}</span>
           </div>
           <div className="rounded-xl bg-canvas p-3">
             <span className="text-[10px] font-bold uppercase text-ink-400 block">Gross Revenue</span>
-            <span className="font-display text-lg font-bold text-moss-700">{formatKES(metrics.totalSalesRevenue)}</span>
+            <span className="font-display text-lg font-bold text-success-700">{formatKES(metrics.totalSalesRevenue)}</span>
           </div>
           <div className="rounded-xl bg-canvas p-3">
-            <span className="text-[10px] font-bold uppercase text-rust-600 block">Uncollected Deni</span>
-            <span className="font-display text-lg font-bold text-rust-700">{formatKES(metrics.totalOutstandingDebt)}</span>
+            <span className="text-[10px] font-bold uppercase text-danger-600 block">Uncollected Deni</span>
+            <span className="font-display text-lg font-bold text-danger-700">{formatKES(metrics.totalOutstandingDebt)}</span>
           </div>
           <div className="rounded-xl bg-canvas p-3">
             <span className="text-[10px] font-bold uppercase text-ink-400 block">Expenses Paid</span>
@@ -281,7 +281,7 @@ export default function AdminBusinessDetail() {
               onClick={() => setActiveTab(tab.id)}
               className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold shrink-0 transition-colors ${
                 isActive
-                  ? 'bg-ink-900 text-white shadow-xs'
+                  ? 'bg-deep-600 text-white shadow-xs'
                   : 'bg-white border border-ink-200 text-ink-600 hover:bg-ink-50'
               }`}
             >
@@ -296,7 +296,7 @@ export default function AdminBusinessDetail() {
       {activeTab === 'overview' && (
         <div className="space-y-6">
           <div className="grid gap-6 lg:grid-cols-2">
-            <div className="card p-5 bg-white space-y-3">
+            <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-3">
               <h3 className="font-display text-sm font-bold text-ink-900 border-b border-ink-100 pb-2">
                 Shop Configuration
               </h3>
@@ -328,7 +328,7 @@ export default function AdminBusinessDetail() {
               </div>
             </div>
 
-            <div className="card p-5 bg-white space-y-3">
+            <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-3">
               <h3 className="font-display text-sm font-bold text-ink-900 border-b border-ink-100 pb-2">
                 Staff &amp; Users ({staff.length})
               </h3>
@@ -340,10 +340,10 @@ export default function AdminBusinessDetail() {
                       <span className="text-[11px] text-ink-400">{u.email || u.id}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className={`badge ${u.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-800'}`}>
+                      <span className={`badge ${u.role === 'owner' ? 'bg-deep-600 text-white' : 'bg-success-100 text-success-800'}`}>
                         {u.role}
                       </span>
-                      <span className={`badge ${u.active !== false ? 'bg-moss-50 text-moss-700' : 'bg-rust-50 text-rust-600'}`}>
+                      <span className={`badge ${u.active !== false ? 'bg-success-50 text-success-700' : 'bg-danger-50 text-danger-600'}`}>
                         {u.active !== false ? 'Active' : 'Deactivated'}
                       </span>
                     </div>
@@ -354,7 +354,7 @@ export default function AdminBusinessDetail() {
           </div>
 
           {/* Quick Support Actions Panel */}
-          <div className="card p-5 bg-white space-y-3 border-ink-200">
+          <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-3 border-ink-200">
             <h3 className="font-display text-sm font-bold text-ink-900">Merchant Account Assistance</h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
               <button
@@ -375,7 +375,7 @@ export default function AdminBusinessDetail() {
                 <button
                   type="button"
                   onClick={() => handleToggleStatus('active')}
-                  className="btn-outline !py-2 text-xs font-semibold flex items-center justify-center gap-1.5 text-moss-700 border-moss-300"
+                  className="btn-outline !py-2 text-xs font-semibold flex items-center justify-center gap-1.5 text-success-700 border-success-300"
                 >
                   <PlayCircle className="h-4 w-4" /> Reactivate Workspace
                 </button>
@@ -383,7 +383,7 @@ export default function AdminBusinessDetail() {
                 <button
                   type="button"
                   onClick={() => handleToggleStatus('suspended')}
-                  className="btn-outline !py-2 text-xs font-semibold flex items-center justify-center gap-1.5 text-rust-600 border-rust-200"
+                  className="btn-outline !py-2 text-xs font-semibold flex items-center justify-center gap-1.5 text-danger-600 border-danger-200"
                 >
                   <PauseCircle className="h-4 w-4" /> Suspend Workspace
                 </button>
@@ -393,9 +393,9 @@ export default function AdminBusinessDetail() {
 
           {/* Danger Zone: Delete Business Completely */}
           {isSuperAdmin && (
-            <div className="card p-5 bg-white space-y-3 border-rust-200">
+            <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-3 border-danger-200">
               <div>
-                <h3 className="font-display text-sm font-bold text-rust-700">Danger Zone: Permanent Business Deletion</h3>
+                <h3 className="font-display text-sm font-bold text-danger-700">Danger Zone: Permanent Business Deletion</h3>
                 <p className="text-xs text-ink-500 mt-0.5 leading-relaxed">
                   Permanently erase this business, its inventory, sales logs, debt records, customers, and associated Firebase Auth accounts from Firestore.
                 </p>
@@ -414,7 +414,7 @@ export default function AdminBusinessDetail() {
 
       {/* TAB CONTENT: Products */}
       {activeTab === 'products' && (
-        <div className="card p-5 bg-white space-y-4">
+        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-4">
           <h3 className="font-display text-sm font-bold text-ink-900">
             Product Catalog ({tabData.products?.length || 0})
           </h3>
@@ -438,13 +438,13 @@ export default function AdminBusinessDetail() {
                 </thead>
                 <tbody className="divide-y divide-ink-100 font-medium">
                   {tabData.products.map((p) => (
-                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold || 5) ? 'bg-rust-50/30' : ''}>
+                    <tr key={p.id} className={p.stock <= (p.lowStockThreshold || 5) ? 'bg-danger-50/30' : ''}>
                       <td className="px-3 py-2 font-bold text-ink-900">{p.name}</td>
                       <td className="px-3 py-2 text-ink-500">{p.category}</td>
                       <td className="px-3 py-2 text-ink-600">{formatKES(p.costPrice)}</td>
-                      <td className="px-3 py-2 font-semibold text-moss-700">{formatKES(p.sellingPrice)}</td>
+                      <td className="px-3 py-2 font-semibold text-success-700">{formatKES(p.sellingPrice)}</td>
                       <td className="px-3 py-2">
-                        <span className={p.stock <= 0 ? 'text-rust-700 font-bold' : 'text-ink-800'}>
+                        <span className={p.stock <= 0 ? 'text-danger-700 font-bold' : 'text-ink-800'}>
                           {p.stock} units
                         </span>
                       </td>
@@ -461,7 +461,7 @@ export default function AdminBusinessDetail() {
 
       {/* TAB CONTENT: Sales */}
       {activeTab === 'sales' && (
-        <div className="card p-5 bg-white space-y-4">
+        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-4">
           <h3 className="font-display text-sm font-bold text-ink-900">
             Recorded Sales ({tabData.sales?.length || 0})
           </h3>
@@ -493,7 +493,7 @@ export default function AdminBusinessDetail() {
                       </td>
                       <td className="px-3 py-2 font-bold text-ink-900">{formatKES(s.totalAmount)}</td>
                       <td className="px-3 py-2 text-ink-500">{formatKES(s.costOfGoodsSold || 0)}</td>
-                      <td className="px-3 py-2 font-semibold text-moss-700">{formatKES(s.profit || 0)}</td>
+                      <td className="px-3 py-2 font-semibold text-success-700">{formatKES(s.profit || 0)}</td>
                       <td className="px-3 py-2">
                         <span className="badge bg-ink-100 text-ink-700">
                           {s.paymentMethod} {s.mpesaCode ? `(${s.mpesaCode})` : ''}
@@ -501,7 +501,7 @@ export default function AdminBusinessDetail() {
                       </td>
                       <td className="px-3 py-2 text-ink-600">{s.soldByName || 'Staff'}</td>
                       <td className="px-3 py-2">
-                        <span className={`badge ${s.isVoided ? 'bg-rust-100 text-rust-800' : 'bg-moss-100 text-moss-800'}`}>
+                        <span className={`badge ${s.isVoided ? 'bg-danger-100 text-danger-800' : 'bg-success-100 text-success-800'}`}>
                           {s.isVoided ? 'Voided' : 'Completed'}
                         </span>
                       </td>
@@ -523,14 +523,14 @@ export default function AdminBusinessDetail() {
               <button
                 type="button"
                 onClick={() => setSubPlan('free')}
-                className={`py-2 px-3 text-xs font-bold rounded-xl border ${subPlan === 'free' ? 'border-ink-900 bg-ink-900 text-white' : 'border-ink-200'}`}
+                className={`py-2 px-3 text-xs font-bold rounded-xl border ${subPlan === 'free' ? 'border-ink-900 bg-deep-600 text-white' : 'border-ink-200'}`}
               >
                 Free Starter
               </button>
               <button
                 type="button"
                 onClick={() => setSubPlan('pro')}
-                className={`py-2 px-3 text-xs font-bold rounded-xl border ${subPlan === 'pro' ? 'border-amber-600 bg-amber-50 text-amber-900' : 'border-ink-200'}`}
+                className={`py-2 px-3 text-xs font-bold rounded-xl border ${subPlan === 'pro' ? 'border-warning-600 bg-warning-50 text-warning-900' : 'border-ink-200'}`}
               >
                 FlowBiz Pro
               </button>
@@ -583,7 +583,7 @@ export default function AdminBusinessDetail() {
             <button type="button" className="btn-secondary flex-1" onClick={() => setSubModal(false)} disabled={subUpdating}>
               Cancel
             </button>
-            <button type="submit" className="btn-primary flex-1 !bg-ink-900" disabled={subUpdating}>
+            <button type="submit" className="btn-primary flex-1" disabled={subUpdating}>
               {subUpdating ? 'Updating…' : 'Save Subscription'}
             </button>
           </div>
@@ -593,8 +593,8 @@ export default function AdminBusinessDetail() {
       {/* Complete Business Purge Modal */}
       <Modal open={deleteModal} onClose={() => { if (!deleting) setDeleteModal(false); }} title="Permanently Delete Business">
         <form onSubmit={handleDeleteBusiness} className="space-y-4">
-          <div className="rounded-xl border border-rust-200 bg-rust-50 p-4 text-xs font-medium text-rust-700 leading-relaxed space-y-1.5">
-            <p className="font-bold text-rust-900">WARNING: Permanent, Irreversible Action</p>
+          <div className="rounded-xl border border-danger-200 bg-danger-50 p-4 text-xs font-medium text-danger-700 leading-relaxed space-y-1.5">
+            <p className="font-bold text-danger-900">WARNING: Permanent, Irreversible Action</p>
             <p>
               This action will permanently purge <strong>all products, sales, debt records, customers, supplier history, and settings</strong> belonging to <strong>{business.name || businessId}</strong>.
             </p>
@@ -603,7 +603,7 @@ export default function AdminBusinessDetail() {
 
           <div>
             <label className="label">
-              Type <span className="font-mono font-bold text-rust-700">{expectedDeletePhrase}</span> to confirm
+              Type <span className="font-mono font-bold text-danger-700">{expectedDeletePhrase}</span> to confirm
             </label>
             <input
               type="text"

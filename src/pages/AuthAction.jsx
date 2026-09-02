@@ -9,6 +9,7 @@ import {
 import toast from 'react-hot-toast';
 import { auth } from '../firebase';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
+import AuthShell from '../components/common/AuthShell';
 import { useAuth } from '../contexts/AuthContext';
 
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
@@ -55,7 +56,7 @@ export default function AuthAction() {
   if (checkingMode) {
     return (
       <Shell>
-        <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
+        <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-line border-t-primary-600" />
         <p className="text-sm text-ink-500">Checking your link…</p>
       </Shell>
     );
@@ -67,8 +68,8 @@ export default function AuthAction() {
     if (flow === 'resetPassword' || flow === 'verifyEmail') {
       return (
         <Shell>
-          <CheckCircle2 className="h-12 w-12 mx-auto text-moss-600" strokeWidth={1.5} />
-          <h1 className="font-display text-lg font-bold text-ink-900">
+          <CheckCircle2 className="mx-auto h-6 w-6 text-success-600" strokeWidth={1.75} />
+          <h1 className="font-display text-page-title text-ink-900">
             {flow === 'resetPassword' ? 'Password updated' : 'Email verified'}
           </h1>
           <p className="text-sm text-ink-500">
@@ -84,8 +85,8 @@ export default function AuthAction() {
     }
     return (
       <Shell>
-        <AlertCircle className="h-12 w-12 mx-auto text-rust-500" strokeWidth={1.5} />
-        <h1 className="font-display text-lg font-bold text-ink-900">Invalid link</h1>
+        <AlertCircle className="mx-auto h-6 w-6 text-danger-600" strokeWidth={1.75} />
+        <h1 className="font-display text-page-title text-ink-900">Invalid link</h1>
         <p className="text-sm text-ink-500">This authentication link is missing required parameters. Please request a new link.</p>
         <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
       </Shell>
@@ -102,22 +103,21 @@ export default function AuthAction() {
 
   return (
     <Shell>
-      <AlertCircle className="h-12 w-12 mx-auto text-rust-500" strokeWidth={1.5} />
-      <h1 className="font-display text-lg font-bold text-ink-900">Invalid authentication link</h1>
+      <AlertCircle className="mx-auto h-6 w-6 text-danger-600" strokeWidth={1.75} />
+      <h1 className="font-display text-page-title text-ink-900">Invalid authentication link</h1>
       <p className="text-sm text-ink-500">We couldn't determine what this link is intended to do. Please request a new link.</p>
       <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
     </Shell>
   );
 }
 
+// One frame for every state this page can be in. The raster app icon is
+// gone with it — those files are still the old green.
 function Shell({ children }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4 py-8">
-      <div className="w-full max-w-sm card p-6 text-center space-y-4">
-        <img src="/icons/icon-192.png" alt="FlowBiz" className="mx-auto h-14 w-14 rounded-2xl shadow-lg" />
-        {children}
-      </div>
-    </div>
+    <AuthShell>
+      <div className="space-y-4 text-center">{children}</div>
+    </AuthShell>
   );
 }
 
@@ -236,7 +236,7 @@ function VerifyEmailPanel({ mode, oobCode }) {
     <Shell>
       {status === 'confirm' && (
         <>
-          <h1 className="font-display text-lg font-bold text-ink-900">Verify your email</h1>
+          <h1 className="font-display text-page-title text-ink-900">Verify your email</h1>
           <p className="text-sm text-ink-500">Tap below to confirm your email address and open your dashboard.</p>
           <button className="btn-primary w-full" onClick={handleVerify} disabled={authLoading}>
             {authLoading ? 'Preparing…' : 'Verify email'}
@@ -246,16 +246,16 @@ function VerifyEmailPanel({ mode, oobCode }) {
 
       {status === 'working' && (
         <>
-          <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
-          <h1 className="font-display text-lg font-bold text-ink-900">Verifying your email…</h1>
+          <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-line border-t-primary-600" />
+          <h1 className="font-display text-page-title text-ink-900">Verifying your email…</h1>
           <p className="text-sm text-ink-500">Taking you to your dashboard.</p>
         </>
       )}
 
       {status === 'manual' && (
         <>
-          <CheckCircle2 className="h-12 w-12 mx-auto text-moss-600" strokeWidth={1.5} />
-          <h1 className="font-display text-lg font-bold text-ink-900">Email verified!</h1>
+          <CheckCircle2 className="mx-auto h-6 w-6 text-success-600" strokeWidth={1.75} />
+          <h1 className="font-display text-page-title text-ink-900">Email verified</h1>
           <p className="text-sm text-ink-500">Your account is fully activated. You can now sign in to your dashboard.</p>
           <Link
             to="/login"
@@ -268,8 +268,8 @@ function VerifyEmailPanel({ mode, oobCode }) {
 
       {status === 'error' && (
         <>
-          <AlertCircle className="h-12 w-12 mx-auto text-rust-500" strokeWidth={1.5} />
-          <h1 className="font-display text-lg font-bold text-ink-900">Verification Link Notice</h1>
+          <AlertCircle className="mx-auto h-6 w-6 text-danger-600" strokeWidth={1.75} />
+          <h1 className="font-display text-page-title text-ink-900">That link did not work</h1>
           <p className="text-sm text-ink-500">{message}</p>
           <div className="flex flex-col gap-2 pt-2">
             <Link to={firebaseUser ? '/dashboard' : '/login'} className="btn-primary w-full">
@@ -369,7 +369,7 @@ function ResetPasswordPanel({ oobCode }) {
     <Shell>
       {status === 'ready' && (
         <>
-          <h1 className="font-display text-lg font-bold text-ink-900">Reset your password</h1>
+          <h1 className="font-display text-page-title text-ink-900">Reset your password</h1>
           <p className="text-sm text-ink-500">Click below to enter your new password.</p>
           <button className="btn-primary w-full" onClick={handleContinue}>Continue</button>
         </>
@@ -377,7 +377,7 @@ function ResetPasswordPanel({ oobCode }) {
 
       {status === 'checking' && (
         <>
-          <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-ink-200 border-t-moss-600" />
+          <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-line border-t-primary-600" />
           <p className="text-sm text-ink-500">Verifying link…</p>
         </>
       )}
@@ -385,12 +385,12 @@ function ResetPasswordPanel({ oobCode }) {
       {status === 'form' && (
         <form onSubmit={handleSubmit} className="space-y-4 text-left">
           <div className="text-center">
-            <h1 className="font-display text-lg font-bold text-ink-900">Choose a new password</h1>
+            <h1 className="font-display text-page-title text-ink-900">Choose a new password</h1>
             {email && <p className="mt-1 text-sm text-ink-500">for <span className="font-semibold">{email}</span></p>}
           </div>
 
           {message && (
-            <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">
+            <div className="rounded-panel border border-danger-200 bg-danger-50 px-3 py-2 text-body text-danger-700">
               {message}
             </div>
           )}
@@ -430,8 +430,8 @@ function ResetPasswordPanel({ oobCode }) {
 
       {status === 'success' && (
         <>
-          <CheckCircle2 className="h-12 w-12 text-moss-600 mx-auto" strokeWidth={1.5} />
-          <h1 className="font-display text-lg font-bold text-ink-900">Password updated</h1>
+          <CheckCircle2 className="mx-auto h-6 w-6 text-success-600" strokeWidth={1.75} />
+          <h1 className="font-display text-page-title text-ink-900">Password updated</h1>
           <p className="text-sm text-ink-500">You can now sign in with your new password.</p>
           <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
         </>
@@ -439,8 +439,8 @@ function ResetPasswordPanel({ oobCode }) {
 
       {status === 'error' && (
         <>
-          <AlertCircle className="h-12 w-12 text-rust-500 mx-auto" strokeWidth={1.5} />
-          <h1 className="font-display text-lg font-bold text-ink-900">Password Reset Issue</h1>
+          <AlertCircle className="mx-auto h-6 w-6 text-danger-600" strokeWidth={1.75} />
+          <h1 className="font-display text-page-title text-ink-900">That reset link did not work</h1>
           <p className="text-sm text-ink-500">{message}</p>
           <Link to="/forgot-password" className="btn-primary w-full">Request new reset link</Link>
         </>

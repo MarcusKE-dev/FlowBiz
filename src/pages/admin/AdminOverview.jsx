@@ -70,29 +70,29 @@ export default function AdminOverview() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <div className="card p-5 bg-white space-y-1">
+        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-1">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase text-ink-400">Total Registered</span>
             <Building2 className="h-4 w-4 text-ink-400" />
           </div>
           <p className="font-display text-2xl font-extrabold text-ink-900">{data.totalBusinesses}</p>
-          <span className="text-[11px] text-moss-700 font-semibold flex items-center gap-1">
+          <span className="text-[11px] text-success-700 font-semibold flex items-center gap-1">
             <TrendingUp className="h-3 w-3" /> +{data.newBusinessesThisMonth} new in 30 days
           </span>
         </div>
 
-        <div className="card p-5 bg-white space-y-1 border-amber-200">
+        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-1 border-warning-200">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase text-amber-700">Pro Subscriptions</span>
-            <Sparkles className="h-4 w-4 text-amber-600" />
+            <span className="text-xs font-semibold uppercase text-warning-700">Pro Subscriptions</span>
+            <Sparkles className="h-4 w-4 text-warning-600" />
           </div>
-          <p className="font-display text-2xl font-extrabold text-amber-800">{data.proBusinesses}</p>
+          <p className="font-display text-2xl font-extrabold text-warning-800">{data.proBusinesses}</p>
           <span className="text-[11px] text-ink-400">
             {proPct}% of total platform accounts
           </span>
         </div>
 
-        <div className="card p-5 bg-white space-y-1 border-purple-200">
+        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-1 border-purple-200">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase text-purple-700">Lifetime Licenses</span>
             <Crown className="h-4 w-4 text-purple-600" />
@@ -103,7 +103,7 @@ export default function AdminOverview() {
           </span>
         </div>
 
-        <div className="card p-5 bg-white space-y-1">
+        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-1">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase text-ink-400">Free Tier Stores</span>
             <Store className="h-4 w-4 text-ink-400" />
@@ -112,12 +112,12 @@ export default function AdminOverview() {
           <span className="text-[11px] text-ink-400">Standard Starter capacity</span>
         </div>
 
-        <div className="card p-5 bg-white space-y-1">
+        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-1">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase text-ink-400">Active Workspaces</span>
-            <Users className="h-4 w-4 text-moss-600" />
+            <Users className="h-4 w-4 text-success-600" />
           </div>
-          <p className="font-display text-2xl font-extrabold text-moss-700">{data.activeBusinesses}</p>
+          <p className="font-display text-2xl font-extrabold text-success-700">{data.activeBusinesses}</p>
           <span className="text-[11px] text-ink-400">Unrestricted operational accounts</span>
         </div>
       </div>
@@ -125,10 +125,10 @@ export default function AdminOverview() {
       {/* Grid: Recent Registrations & Live Audit Trail */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Recent Registrations */}
-        <div className="card p-5 bg-white space-y-4">
+        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-4">
           <div className="flex items-center justify-between border-b border-ink-100 pb-3">
             <h2 className="font-display text-sm font-bold text-ink-900">Recent Registrations</h2>
-            <Link to="/admin/businesses" className="text-xs font-semibold text-moss-700 hover:underline flex items-center gap-1">
+            <Link to="/admin/businesses" className="text-xs font-semibold text-success-700 hover:underline flex items-center gap-1">
               View All ({data.totalBusinesses}) <ArrowRight className="h-3 w-3" />
             </Link>
           </div>
@@ -137,13 +137,13 @@ export default function AdminOverview() {
             {data.recentBusinesses.map((b) => (
               <div key={b.id} className="flex items-center justify-between py-2.5 text-xs">
                 <div>
-                  <Link to={`/admin/businesses/${b.id}`} className="font-semibold text-ink-900 hover:text-moss-700 block">
+                  <Link to={`/admin/businesses/${b.id}`} className="font-semibold text-ink-900 hover:text-success-700 block">
                     {b.name}
                   </Link>
                   <span className="text-[11px] text-ink-400 font-mono">{b.id}</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className={`badge ${b.plan === 'lifetime' ? 'bg-purple-100 text-purple-800 font-bold' : b.plan === 'pro' ? 'bg-amber-100 text-amber-800 font-bold' : 'bg-ink-100 text-ink-600'}`}>
+                  <span className={`badge ${b.plan === 'lifetime' ? 'bg-purple-100 text-purple-800 font-bold' : b.plan === 'pro' ? 'bg-warning-100 text-warning-800 font-bold' : 'bg-ink-100 text-ink-600'}`}>
                     {b.plan.toUpperCase()}
                   </span>
                   <Link to={`/admin/businesses/${b.id}`} className="btn-outline !min-h-0 !py-1 !px-2 text-[11px]">
@@ -156,13 +156,13 @@ export default function AdminOverview() {
         </div>
 
         {/* Live Admin Audit Log Feed */}
-        <div className="card p-5 bg-white space-y-4">
+        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-4">
           <div className="flex items-center justify-between border-b border-ink-100 pb-3">
             <div className="flex items-center gap-2">
               <ScrollText className="h-4 w-4 text-ink-500" />
               <h2 className="font-display text-sm font-bold text-ink-900">Live Audit Trail</h2>
             </div>
-            <Link to="/admin/audit-logs" className="text-xs font-semibold text-moss-700 hover:underline flex items-center gap-1">
+            <Link to="/admin/audit-logs" className="text-xs font-semibold text-success-700 hover:underline flex items-center gap-1">
               All Logs <ArrowRight className="h-3 w-3" />
             </Link>
           </div>

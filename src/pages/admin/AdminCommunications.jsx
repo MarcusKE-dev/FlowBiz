@@ -270,7 +270,7 @@ export default function AdminCommunications() {
             type="button"
             onClick={() => setViewMode('compose')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
-              viewMode === 'compose' ? 'bg-ink-900 text-white' : 'text-ink-600 hover:text-ink-900'
+              viewMode === 'compose' ? 'bg-deep-600 text-white' : 'text-ink-600 hover:text-ink-900'
             }`}
           >
             <Edit3 className="h-3.5 w-3.5" /> Compose Form
@@ -279,7 +279,7 @@ export default function AdminCommunications() {
             type="button"
             onClick={() => setViewMode('preview')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
-              viewMode === 'preview' ? 'bg-ink-900 text-white' : 'text-ink-600 hover:text-ink-900'
+              viewMode === 'preview' ? 'bg-deep-600 text-white' : 'text-ink-600 hover:text-ink-900'
             }`}
           >
             <Eye className="h-3.5 w-3.5" /> Live Email Preview
@@ -288,7 +288,7 @@ export default function AdminCommunications() {
       </div>
 
       {/* Preset Template Selector */}
-      <div className="card p-5 bg-white space-y-3 shadow-xs">
+      <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-3 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-ink-100 pb-2.5">
           <label className="text-xs font-bold uppercase tracking-wider text-ink-500 block">
             Select Message Template
@@ -302,7 +302,7 @@ export default function AdminCommunications() {
                 onClick={() => setSelectedCategory(cat)}
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 transition-colors ${
                   selectedCategory === cat
-                    ? 'bg-moss-700 text-white'
+                    ? 'bg-success-700 text-white'
                     : 'bg-canvas text-ink-600 hover:bg-ink-100'
                 }`}
               >
@@ -323,11 +323,11 @@ export default function AdminCommunications() {
                 onClick={() => applyTemplate(tmpl)}
                 className={`p-3 rounded-xl border text-left flex items-start gap-2.5 transition-all ${
                   isSelected
-                    ? 'border-moss-600 bg-moss-50/60 ring-1 ring-moss-600'
+                    ? 'border-success-600 bg-success-50/60 ring-1 ring-success-600'
                     : 'border-ink-200 hover:bg-ink-50'
                 }`}
               >
-                <Icon className={`h-4 w-4 shrink-0 mt-0.5 ${isSelected ? 'text-moss-700' : 'text-ink-400'}`} />
+                <Icon className={`h-4 w-4 shrink-0 mt-0.5 ${isSelected ? 'text-success-700' : 'text-ink-400'}`} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-1">
                     <p className="text-xs font-bold text-ink-900 truncate">{tmpl.name}</p>
@@ -345,10 +345,10 @@ export default function AdminCommunications() {
 
       {/* Main Composer or Live Preview */}
       {viewMode === 'compose' ? (
-        <div className="card p-6 bg-white space-y-5 shadow-sm">
+        <div className="rounded-panel border border-line bg-surface p-6 bg-white space-y-5 shadow-sm">
           {sentSuccess && (
-            <div className="rounded-xl bg-moss-50 border border-moss-200 p-4 text-xs font-semibold text-moss-800 flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-moss-600 shrink-0" />
+            <div className="rounded-xl bg-success-50 border border-success-200 p-4 text-xs font-semibold text-success-800 flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-success-600 shrink-0" />
               <span>Follow-up email dispatched successfully via Resend with official WhatsApp support links.</span>
             </div>
           )}
@@ -439,7 +439,7 @@ export default function AdminCommunications() {
               <button
                 type="submit"
                 disabled={sending}
-                className="btn-primary !bg-ink-900 flex items-center gap-2"
+                className="btn-primary"
               >
                 <Send className="h-4 w-4" /> {sending ? 'Sending…' : 'Send Customer Email'}
               </button>
@@ -448,7 +448,7 @@ export default function AdminCommunications() {
         </div>
       ) : (
         /* LIVE EMAIL PREVIEW */
-        <div className="card p-4 sm:p-6 bg-canvas space-y-4">
+        <div className="rounded-panel border border-line bg-surface p-4 sm:p-6 bg-canvas space-y-4">
           <div className="flex items-center justify-between border-b border-ink-200 pb-3">
             <div>
               <span className="text-xs font-bold text-ink-700 block">Live HTML Email Preview</span>

@@ -223,7 +223,7 @@ export default function ProductFormModal({
                 </div>
               </div>
             ) : (
-              <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={() => setShowAddCategory(true)} disabled={busy}>+ Add Category</button>
+              <button type="button" className="mt-1.5 text-secondary font-medium text-primary-700 hover:underline block" onClick={() => setShowAddCategory(true)} disabled={busy}>+ Add Category</button>
             )}
           </div>
 
@@ -236,7 +236,7 @@ export default function ProductFormModal({
               ))}
             </select>
             {onAddSupplier && (
-              <button type="button" className="mt-1.5 text-xs font-semibold text-moss-700 hover:underline block" onClick={onAddSupplier} disabled={busy}>+ Add new supplier</button>
+              <button type="button" className="mt-1.5 text-secondary font-medium text-primary-700 hover:underline block" onClick={onAddSupplier} disabled={busy}>+ Add new supplier</button>
             )}
           </div>
         </div>

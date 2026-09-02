@@ -11,7 +11,7 @@ export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemo
   const total = roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0));
 
   return (
-    <div className="card border-primary-100 shadow-md p-3 sm:p-4 space-y-3">
+    <div className="space-y-3 rounded-panel border border-line bg-surface p-3 shadow-pop sm:p-4">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -40,7 +40,7 @@ export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemo
                     <button
                       type="button"
                       onClick={() => onRemove(item.productId)}
-                      className="shrink-0 rounded-lg p-1.5 text-ink-300 hover:bg-rust-50 hover:text-rust-500 min-h-[36px] min-w-[36px] flex items-center justify-center"
+                      className="shrink-0 rounded-lg p-1.5 text-ink-300 hover:bg-danger-50 hover:text-danger-500 min-h-[36px] min-w-[36px] flex items-center justify-center"
                       aria-label={`Remove ${item.productName}`}
                     >
                       <X className="h-4 w-4" strokeWidth={1.75} />
@@ -93,7 +93,7 @@ export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemo
             })}
           </div>
           <div className="pt-2 text-right">
-            <button type="button" onClick={onClear} className="text-xs font-semibold text-rust-500 hover:underline">
+            <button type="button" onClick={onClear} className="text-xs font-semibold text-danger-500 hover:underline">
               Clear cart
             </button>
           </div>

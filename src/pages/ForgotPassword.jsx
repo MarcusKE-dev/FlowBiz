@@ -1,4 +1,6 @@
 import { MailCheck } from 'lucide-react';
+import AuthShell from '../components/common/AuthShell';
+import ErrorBanner from '../components/common/ErrorBanner';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
@@ -30,37 +32,32 @@ const handleSubmit = async (e) => {
 };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-white">Reset your password</h1>
-            <p className="text-sm text-ink-400">Enter your account email and we'll send you a reset link.</p>
-          </div>
+    <AuthShell
+      title={sent ? 'Check your email' : 'Reset your password'}
+      description={sent ? null : "Enter your account email and we'll send you a reset link."}
+      footer={<>Remembered it? <Link to="/login" className="font-medium text-white underline underline-offset-2">Sign in</Link></>}
+    >
+      {sent ? (
+        <div className="space-y-3 text-center">
+          <MailCheck className="mx-auto h-5 w-5 text-ink-500" strokeWidth={1.75} aria-hidden="true" />
+          <p className="text-body text-ink-600">
+            If an account exists for <span className="font-semibold text-ink-900">{email.trim()}</span>,
+            a reset link is on its way. Check your inbox, and your spam folder.
+          </p>
+          <Link to="/login" className="btn-primary w-full">Back to sign in</Link>
         </div>
-
-        {sent ? (
-          <div className="card p-6 text-center space-y-3">
-            <MailCheck className="mx-auto h-5 w-5 text-ink-500" strokeWidth={1.75} aria-hidden="true" />
-            <p className="text-sm text-ink-600">If an account exists for <span className="font-semibold">{email.trim()}</span>, a password reset link is on its way. Check your inbox (and spam folder).</p>
-            <Link to="/login" className="btn-primary w-full">Back to sign in</Link>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <ErrorBanner message={error} />
+          <div>
+            <label className="label" htmlFor="reset-email">Email</label>
+            <input id="reset-email" type="email" required className="input" placeholder="owner@yourbusiness.co.ke" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" autoFocus />
           </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="card space-y-4 p-6">
-            {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
-            <div>
-              <label className="label">Email</label>
-              <input type="email" required className="input" placeholder="owner@yourbusiness.co.ke" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" autoFocus />
-            </div>
-            <button type="submit" className="btn-primary w-full" disabled={submitting}>{submitting ? 'Sending…' : 'Send reset link'}</button>
-          </form>
-        )}
-
-        <p className="text-center text-sm text-ink-400">
-          Remembered it? <Link to="/login" className="font-semibold text-moss-400 hover:underline">Sign in</Link>
-        </p>
-      </div>
-    </div>
+          <button type="submit" className="btn-primary w-full" disabled={submitting}>
+            {submitting ? 'Sending…' : 'Send reset link'}
+          </button>
+        </form>
+      )}
+    </AuthShell>
   );
 }
