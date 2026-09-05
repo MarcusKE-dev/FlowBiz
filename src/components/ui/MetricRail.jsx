@@ -5,29 +5,35 @@
 // boundary. Four across on desktop, two across on mobile.
 //
 // Numbers are the hero here: big, tabular, ink-900, with the currency
-// prefix rendered smaller and muted so the digits carry the weight.
+// prefix rendered smaller and muted so the digits carry the weight. The
+// value is `text-money` at every breakpoint (and larger again from xl),
+// so the cell claws back its horizontal padding on a 2-up phone grid —
+// otherwise a six-figure value truncates by a few pixels.
 //
 // The internal hairlines are drawn by the container's background showing
 // through a 1px grid gap, rather than by per-cell borders — that way a
 // wrapped row never doubles up a border or leaves a stub at the end.
 
 export function Metric({ label, value, prefix, delta, deltaTone = 'neutral', hint }) {
+  // The delta rides beside the number as semantic text. It used to be a
+  // filled pill, which put a second coloured container next to the one
+  // thing on this tile that is meant to carry the weight.
   const deltaClass =
-    deltaTone === 'positive' ? 'bg-success-50 text-success-800'
-    : deltaTone === 'negative' ? 'bg-danger-50 text-danger-700'
-    : 'bg-ink-100 text-ink-700';
+    deltaTone === 'positive' ? 'text-primary-700'
+    : deltaTone === 'negative' ? 'text-danger-700'
+    : 'text-ink-500';
 
   return (
-    <div className="min-w-0 bg-surface px-4 py-3">
+    <div className="min-w-0 bg-surface px-3 py-3 sm:px-4">
       <div className="text-label uppercase text-ink-500">{label}</div>
       <div className="mt-1.5 flex items-baseline gap-1.5">
         <div className="flex min-w-0 items-baseline gap-1">
           {prefix && (
-            <span className="shrink-0 text-[13px] font-medium text-ink-400">{prefix}</span>
+            <span className="shrink-0 text-secondary font-medium text-ink-400">{prefix}</span>
           )}
-          <span className="num truncate text-[17px] font-semibold leading-[22px] text-ink-900 sm:text-money">{value}</span>
+          <span className="num truncate text-money text-ink-900 xl:text-[1.5rem] xl:leading-[1.875rem]">{value}</span>
         </div>
-        {delta && <span className={`badge shrink-0 ${deltaClass}`}>{delta}</span>}
+        {delta && <span className={`num shrink-0 text-label leading-4 ${deltaClass}`}>{delta}</span>}
       </div>
       {hint && <div className="mt-1 truncate text-secondary text-ink-500">{hint}</div>}
     </div>

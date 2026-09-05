@@ -12,7 +12,7 @@ export function FeatureGrid() {
       icon: BookOpen,
       category: 'Credit Control',
       title: 'Cash-Flow Credit (Deni) Ledger',
-      description: 'Profit is recognized only as debt is repaid. Eliminates false profit illusions before customer payments reach your hands.',
+      description: 'Profit is recognised only as debt is repaid. Eliminates false profit illusions before customer payments reach your hands.',
     },
     {
       icon: Lock,
@@ -95,17 +95,17 @@ return (
               className="space-y-3 pb-4 border-b border-line sm:border-b-0"
             >
                 <div className="flex items-center gap-3">
-                  <div className="h-9 w-9 rounded-lg 	bg-white text-primary-600 flex items-center justify-center shrink-0">
+                  <div className="h-9 w-9 rounded-panel 	bg-white text-primary-600 flex items-center justify-center shrink-0">
                     <Icon className="h-5 w-5" strokeWidth={2} />
                   </div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-primary-600">
+                  <span className="text-label font-bold uppercase tracking-wider text-primary-600">
                     {feat.category}
                   </span>
                 </div>
                 <h3 className="text-base font-bold text-ink-900">
                   {feat.title}
                 </h3>
-                <p className="text-xs text-ink-600 leading-relaxed">
+                <p className="text-secondary text-ink-600 leading-relaxed">
                   {feat.description}
                 </p>
               </div>

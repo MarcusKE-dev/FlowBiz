@@ -3,7 +3,7 @@ import { Mail, Shield, FileText } from 'lucide-react';
 
 export function LandingFooter() {
   return (
-    <footer className="bg-ink-900 text-ink-300 border-t border-ink-800 pt-14 pb-10 text-xs">
+    <footer className="bg-ink-900 text-ink-300 border-t border-ink-800 pt-14 pb-10 text-secondary">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
         
 
@@ -17,10 +17,10 @@ export function LandingFooter() {
              
               <span className="font-bold text-xl text-white tracking-tight">FlowBiz</span>
             </div>
-            <p className="text-xs text-ink-400 max-w-sm leading-relaxed">
+            <p className="text-secondary text-ink-400 max-w-sm leading-relaxed">
               The offline-first Point of Sale, inventory intelligence, and cash-flow management platform purpose-built for Kenyan retailers and small businesses.
             </p>
-            <div className="flex items-center gap-2 text-[11px] text-ink-500">
+            <div className="flex items-center gap-2 text-label text-ink-500">
               <span>Nairobi, Kenya</span>
               <span>·</span>
               <a href="mailto:support@flowbiz.co.ke" className="hover:text-white transition-colors flex items-center gap-1">
@@ -31,7 +31,7 @@ export function LandingFooter() {
 
           {/* Application Navigation */}
           <div className="space-y-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-white block">
+            <span className="text-label font-bold uppercase tracking-wider text-white block">
               Application
             </span>
             <ul className="space-y-2 text-ink-400">
@@ -66,7 +66,7 @@ export function LandingFooter() {
           {/* Legal & Trust: Tight Spacing, No Sign In */}
        {/* Column 3: Legal & Compliance */}
           <div className="space-y-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-white block">
+            <span className="text-label font-bold uppercase tracking-wider text-white block">
               Trust & Legal
             </span>
             <ul className="space-y-2">
@@ -89,7 +89,7 @@ export function LandingFooter() {
         </div>
 
         {/* Bottom Line */}
-        <div className="pt-8 border-t border-ink-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-ink-500">
+        <div className="pt-8 border-t border-ink-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-label text-ink-500">
           <p>© {new Date().getFullYear()} FlowBiz. All rights reserved.</p>
           
         </div>

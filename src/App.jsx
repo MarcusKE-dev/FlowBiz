@@ -1,6 +1,6 @@
 // src/App.jsx
 import { Toaster } from 'react-hot-toast';
-import { POSITIVE, NEGATIVE, INK, SURFACE, LINE } from './theme/tokens';
+import { PRIMARY, NEGATIVE, INK, SURFACE, LINE } from './theme/tokens';
 import { AuthProvider } from './contexts/AuthContext';
 import { SettingsProvider } from './contexts/SettingsContext';
 import AppRouter from './router/AppRouter';
@@ -24,7 +24,7 @@ function App() {
                 color: INK,
                 maxWidth: '90vw',
               },
-              success: { iconTheme: { primary: POSITIVE, secondary: SURFACE } },
+              success: { iconTheme: { primary: PRIMARY, secondary: SURFACE } },
               error:   { iconTheme: { primary: NEGATIVE, secondary: SURFACE } },
               duration: 3000,
             }}

@@ -14,7 +14,7 @@ export default function AuthShell({ title, description, children, footer, width 
     <div className="flex min-h-screen flex-col items-center justify-center bg-deep-900 px-4 py-10">
       <div className={`w-full ${width} space-y-6`}>
         <div className="text-center">
-          <p className="font-display text-[22px] font-semibold leading-7 tracking-[-0.02em] text-white">
+          <p className="font-display text-page-title font-semibold text-white">
             FlowBiz
           </p>
           <p className="mt-1 text-secondary text-white/60">Business manager</p>

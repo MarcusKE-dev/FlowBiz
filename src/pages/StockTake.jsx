@@ -1,10 +1,44 @@
+// src/pages/StockTake.jsx
+//
+// A physical count, reconciled against what FlowBiz thinks is on the
+// shelf.
+//
+// WHAT IS COUNTED, AND WHY IT IS NOT ALWAYS THE PRODUCT.
+//
+// FlowBiz holds three stock ledgers, and they are required to agree:
+// `products.stock` is the total, `products.variantStock` breaks it down
+// by version, and `productBatches.remainingQuantity` breaks it down by
+// lot. A count that moved the total without moving the ledger behind it
+// would leave a boutique's sizes or a pharmacy's batches quietly wrong —
+// and the batch ledger is the one FEFO dispenses from, so a pharmacy
+// would then sell out of a box that had already been emptied.
+//
+// So the sheet expands each product into the rows that actually exist on
+// the shelf:
+//
+//   BATCH-TRACKED  → one countable row per batch. This is the option a
+//     pharmacy needs and the one good-practice guidance describes: a
+//     physical count is per lot, because the lot is what is physically
+//     boxed, dated and reconciled. Spreading a single figure across
+//     batches in FEFO order (the alternative) would INVENT per-batch
+//     quantities nobody counted, and refusing the count outright would
+//     leave the one profile that most needs reconciliation without it.
+//
+//   VERSIONED      → one countable row per version, and the product total
+//     is the sum of the version adjustments.
+//
+//   EVERYTHING ELSE → one row, exactly as this page has always worked.
+//     A General Retail shop sees precisely the sheet it saw before.
+//
+// The arithmetic lives in utils/inventory.js `resolveCountDeltas`, so the
+// invariant — variant sum equals stock, batch sum equals stock — is a
+// tested property rather than a promise made in a component.
+
 import { useMemo, useRef, useState } from 'react';
 import {
   doc,
   collection,
   writeBatch,
-  increment,
-  serverTimestamp,
   orderBy,
   where,
   limit,
@@ -17,6 +51,13 @@ import { tenantQuery } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { useHardwareScanner } from '../hooks/useHardwareScanner';
 import { findProductByCode } from '../utils/scannerService';
+import { productUnit } from '../utils/lineItems';
+import { isStockItem, resolveCountDeltas } from '../utils/inventory';
+import { applyStockDeltas } from '../utils/stockWrites';
+import { variantsOf } from '../utils/variants';
+import { sortFefo, remainingOf } from '../utils/batches';
+import { useIndustry } from '../hooks/useIndustry';
+import { DEFAULT_UNIT, getUnit, unitStep, roundQuantity, formatQuantityWithUnit } from '../industry/units';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import ScannerModal from '../components/scanner/ScannerModal';
@@ -28,6 +69,8 @@ import { friendlyErrorMessage } from '../utils/errorMessages';
 
 export default function StockTake() {
   const { profile, businessId } = useAuth();
+  const industry = useIndustry();
+  const batchesOn = industry.can('batches');
 
   // Products query
   const productsQ = useMemo(
@@ -44,7 +87,11 @@ export default function StockTake() {
     [businessId]
   );
 
-  const { data: products, loading } = useFirestoreCollection(productsQ);
+  const { data: allProducts, loading } = useFirestoreCollection(productsQ);
+  // A stock take counts things. Services and dishes assembled to order
+  // have nothing to count, so they are not rows to be left blank — they
+  // are simply not on the sheet.
+  const products = useMemo(() => allProducts.filter(isStockItem), [allProducts]);
 
   // Recent stock adjustments query
   // IMPORTANT: Hooks must be called at the top level of the component,
@@ -65,6 +112,14 @@ export default function StockTake() {
   const { data: recentAdjustments } =
     useFirestoreCollection(adjustmentsQ);
 
+  // Opened ONLY when batch tracking is on, so a shop that does not use
+  // batches subscribes to nothing and pays for no reads it will not use.
+  const batchesQ = useMemo(
+    () => (businessId && batchesOn ? tenantQuery('productBatches', businessId) : null),
+    [businessId, batchesOn]
+  );
+  const { data: batches } = useFirestoreCollection(batchesQ);
+
   const [counts, setCounts] = useState({});
   const [reasons, setReasons] = useState({});
   const [confirm, setConfirm] = useState(false);
@@ -74,17 +129,75 @@ export default function StockTake() {
 
   const rowRefs = useRef({});
 
-  const getPhysical = (p) =>
-    counts[p.id] !== undefined && counts[p.id] !== ''
-      ? counts[p.id]
-      : p.stock;
+  // The countable rows. One per product for an ordinary shop — which is
+  // exactly the sheet this page has always shown — and one per version or
+  // per batch where those exist, because that is what is physically on
+  // the shelf to be counted.
+  const sheet = useMemo(() => {
+    const rows = [];
+    for (const p of products) {
+      const unit = productUnit(p);
+      const productBatches = batchesOn ? batches.filter((b) => b.productId === p.id) : [];
+      const productVariants = variantsOf(p);
 
-  const diffFor = (p) =>
-    counts[p.id] !== undefined && counts[p.id] !== ''
-      ? Number(counts[p.id]) - p.stock
-      : 0;
+      // Versions and batches on the same product would need a count of
+      // every combination, which no profile ships and which a paper count
+      // sheet cannot express. Rather than write a figure that would leave
+      // one of the two ledgers wrong, the row says so and is not counted.
+      if (productBatches.length > 0 && productVariants.length > 0) {
+        rows.push({
+          key: p.id, product: p, unit, system: roundQuantity(Number(p.stock) || 0, unit),
+          label: p.name, uncountable: 'This item has both versions and batches. Count it from the Expiry page, batch by batch.',
+        });
+        continue;
+      }
 
-  const changed = products.filter((p) => diffFor(p) !== 0);
+      if (productBatches.length > 0) {
+        for (const b of sortFefo(productBatches)) {
+          rows.push({
+            key: `${p.id}::batch::${b.id}`,
+            product: p, unit, batchId: b.id,
+            system: remainingOf(b, unit),
+            label: p.name,
+            sublabel: [b.batchNumber ? `Batch ${b.batchNumber}` : 'Unnumbered batch',
+                       b.expiryDate ? `exp ${b.expiryDate}` : 'no expiry date'].join(' · '),
+          });
+        }
+        continue;
+      }
+
+      if (productVariants.length > 0) {
+        for (const v of productVariants) {
+          rows.push({
+            key: `${p.id}::variant::${v.id}`,
+            product: p, unit, variantId: v.id,
+            system: v.stock, label: p.name, sublabel: v.label,
+          });
+        }
+        continue;
+      }
+
+      rows.push({ key: p.id, product: p, unit, system: roundQuantity(Number(p.stock) || 0, unit), label: p.name });
+    }
+    return rows;
+  }, [products, batches, batchesOn]);
+
+  const getPhysical = (row) =>
+    counts[row.key] !== undefined && counts[row.key] !== ''
+      ? counts[row.key]
+      : row.system;
+
+  // Counted minus system, rounded to the row's own unit. Without the
+  // rounding a shop counting 9.7 m against a system figure that has
+  // drifted to 9.699999999999999 sees a phantom difference of 1e-15 and
+  // an adjustment row it never asked for.
+  const diffFor = (row) => {
+    if (row.uncountable) return 0;
+    if (counts[row.key] === undefined || counts[row.key] === '') return 0;
+    return roundQuantity(roundQuantity(Number(counts[row.key]) || 0, row.unit) - row.system, row.unit);
+  };
+
+  const changed = sheet.filter((row) => diffFor(row) !== 0);
 
   const handleScanDetected = (code) => {
     setScannerOpen(false);
@@ -96,14 +209,23 @@ export default function StockTake() {
       return;
     }
 
-    rowRefs.current[found.id]?.scrollIntoView({
+    // A scan lands on the product's FIRST countable row — its earliest
+    // batch, or its first version — because that is where a counter with
+    // a scanner in one hand starts.
+    const first = sheet.find((row) => row.product.id === found.id);
+    if (!first) {
+      toast.error('Product not found.');
+      return;
+    }
+
+    rowRefs.current[first.key]?.scrollIntoView({
       behavior: 'smooth',
       block: 'center',
     });
 
     const inputEl =
-      document.getElementById(`stocktake-count-${found.id}`) ||
-      document.getElementById(`stocktake-count-mobile-${found.id}`);
+      document.getElementById(`stocktake-count-${first.key}`) ||
+      document.getElementById(`stocktake-count-mobile-${first.key}`);
 
     inputEl?.focus();
     inputEl?.select?.();
@@ -119,26 +241,46 @@ export default function StockTake() {
     try {
       const batch = writeBatch(db);
 
-      for (const p of changed) {
-        const physicalQty = Number(getPhysical(p)) || 0;
-        const difference = physicalQty - p.stock;
-        const ref = doc(db, 'products', p.id);
+      // Every movement — product total, version and batch remainder — is
+      // resolved by the one inventory foundation and written by the one
+      // adapter, in the SAME atomic commit as the adjustment records. That
+      // is what keeps the three ledgers in step: a count that adjusts a
+      // batch by −4 adjusts the product total by −4 too, and there is no
+      // window, online or offline, where only one of them landed.
+      const deltas = resolveCountDeltas(
+        changed.map((row) => ({
+          productId: row.product.id,
+          variantId: row.variantId,
+          batchId: row.batchId,
+          counted: getPhysical(row),
+          systemQuantity: row.system,
+        })),
+        products,
+        { batches }
+      );
+      applyStockDeltas(batch, deltas);
 
-        batch.update(ref, {
-          stock: increment(difference),
-          updatedAt: serverTimestamp(),
-        });
-
+      for (const row of changed) {
+        const physicalQty = roundQuantity(Number(getPhysical(row)) || 0, row.unit);
+        const difference = diffFor(row);
         const adjRef = doc(collection(db, 'stockAdjustments'));
 
+        // The adjustment record keeps the shape every existing reader
+        // expects — productId, productName, systemQty, physicalQty,
+        // difference, reason — and names the version or batch only when
+        // there is one, so documents written before this stay valid and
+        // read identically.
         batch.set(adjRef, {
           businessId,
-          productId: p.id,
-          productName: p.name,
-          systemQty: p.stock,
+          productId: row.product.id,
+          productName: row.product.name,
+          systemQty: row.system,
           physicalQty,
+          ...(row.unit !== DEFAULT_UNIT ? { unit: row.unit } : {}),
+          ...(row.variantId ? { variantId: row.variantId, variantLabel: row.sublabel } : {}),
+          ...(row.batchId ? { batchId: row.batchId, batchLabel: row.sublabel } : {}),
           difference,
-          reason: reasons[p.id] || '',
+          reason: reasons[row.key] || '',
           adjustedBy: profile.uid,
           adjustedByName: profile.displayName,
           adjustedAt: new Date(),
@@ -157,7 +299,7 @@ export default function StockTake() {
       toast.success(
         queuedOffline
           ? 'Stock take queued offline.'
-          : `Stock take saved — ${changed.length} product(s) adjusted`
+          : `Stock take saved. ${changed.length} line${changed.length === 1 ? '' : 's'} adjusted.`
       );
 
       setCounts({});
@@ -196,17 +338,17 @@ export default function StockTake() {
           using DataTable: it is a data-entry grid, and every row owns a
           focusable input that the scanner jumps to. */}
       <div className="divide-y divide-line overflow-hidden rounded-panel border border-line bg-surface sm:hidden">
-        {products.map((p) => {
-          const diff = diffFor(p);
+        {sheet.map((row) => {
+          const diff = diffFor(row);
 
           return (
             <div
-              key={p.id}
+              key={row.key}
               ref={(el) => {
-                rowRefs.current[p.id] = el;
+                rowRefs.current[row.key] = el;
               }}
               className={`space-y-3 p-4 transition-colors ${
-                selectedProductId === p.id
+                selectedProductId === row.key
                   ? 'bg-primary-50'
                   : diff !== 0
                     ? 'bg-warning-50/50'
@@ -214,32 +356,45 @@ export default function StockTake() {
               }`}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="min-w-0 truncate text-body font-medium text-ink-900">
-                  {p.name}
+                <span className="min-w-0 text-body font-medium text-ink-900">
+                  <span className="block truncate">{row.label}</span>
+                  {row.sublabel && (
+                    <span className="block truncate text-secondary font-normal text-ink-500">{row.sublabel}</span>
+                  )}
                 </span>
 
-                <span className="badge shrink-0 bg-ink-100 text-ink-700">
-                  System <span className="num ml-1">{p.stock}</span>
+                <span className="shrink-0 text-label leading-4 text-ink-500">
+                  System <span className="num ml-1 text-ink-700">{formatQuantityWithUnit(row.system, row.unit)}</span>
                 </span>
               </div>
 
+              {row.uncountable ? (
+                <p className="text-secondary text-ink-500">{row.uncountable}</p>
+              ) : (
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="label">Physical count</label>
+                  <label className="label">
+                    Physical count
+                    {row.unit !== DEFAULT_UNIT && (
+                      <span className="ml-1 font-normal normal-case text-ink-400">({getUnit(row.unit).short})</span>
+                    )}
+                  </label>
 
                   <input
-                    id={`stocktake-count-mobile-${p.id}`}
+                    id={`stocktake-count-mobile-${row.key}`}
                     type="number"
                     min="0"
+                    step={unitStep(row.unit)}
+                    inputMode={row.unit === DEFAULT_UNIT ? 'numeric' : 'decimal'}
                     className="input"
-                    value={counts[p.id] ?? ''}
-                    placeholder={String(p.stock)}
-                    onFocus={() => setSelectedProductId(p.id)}
+                    value={counts[row.key] ?? ''}
+                    placeholder={String(row.system)}
+                    onFocus={() => setSelectedProductId(row.key)}
                     onBlur={() => setSelectedProductId(null)}
                     onChange={(e) =>
                       setCounts((c) => ({
                         ...c,
-                        [p.id]: e.target.value,
+                        [row.key]: e.target.value,
                       }))
                     }
                   />
@@ -253,7 +408,7 @@ export default function StockTake() {
                       diff < 0
                         ? 'text-danger-700'
                         : diff > 0
-                          ? 'text-success-700'
+                          ? 'text-primary-700'
                           : 'text-ink-400'
                     }`}
                   >
@@ -265,6 +420,7 @@ export default function StockTake() {
                   </div>
                 </div>
               </div>
+              )}
 
               {diff !== 0 && (
                 <div>
@@ -275,11 +431,11 @@ export default function StockTake() {
                   <input
                     className="input"
                     placeholder="e.g. damage, theft, expired"
-                    value={reasons[p.id] || ''}
+                    value={reasons[row.key] || ''}
                     onChange={(e) =>
                       setReasons((r) => ({
                         ...r,
-                        [p.id]: e.target.value,
+                        [row.key]: e.target.value,
                       }))
                     }
                   />
@@ -305,17 +461,17 @@ export default function StockTake() {
             </thead>
 
             <tbody className="divide-y divide-divider">
-              {products.map((p) => {
-                const diff = diffFor(p);
+              {sheet.map((row) => {
+                const diff = diffFor(row);
 
                 return (
                   <tr
-                    key={p.id}
+                    key={row.key}
                     ref={(el) => {
-                      rowRefs.current[p.id] = el;
+                      rowRefs.current[row.key] = el;
                     }}
                     className={`transition-colors ${
-                      selectedProductId === p.id
+                      selectedProductId === row.key
                         ? 'bg-primary-50'
                         : diff !== 0
                           ? 'bg-warning-50/50'
@@ -323,30 +479,39 @@ export default function StockTake() {
                     }`}
                   >
                     <td className="px-3 py-2 font-medium text-ink-900">
-                      {p.name}
+                      {row.label}
+                      {row.sublabel && (
+                        <span className="block text-secondary font-normal text-ink-500">{row.sublabel}</span>
+                      )}
                     </td>
 
                     <td className="num px-3 py-2 text-right text-ink-600">
-                      {p.stock}
+                      {formatQuantityWithUnit(row.system, row.unit)}
                     </td>
 
                     <td className="px-3 py-2">
-                      <input
-                        id={`stocktake-count-${p.id}`}
-                        type="number"
-                        min="0"
-                        className="input num !w-24 text-right"
-                        value={counts[p.id] ?? ''}
-                        placeholder={String(p.stock)}
-                        onFocus={() => setSelectedProductId(p.id)}
-                        onBlur={() => setSelectedProductId(null)}
-                        onChange={(e) =>
-                          setCounts((c) => ({
-                            ...c,
-                            [p.id]: e.target.value,
-                          }))
-                        }
-                      />
+                      {row.uncountable ? (
+                        <span className="text-secondary text-ink-500">{row.uncountable}</span>
+                      ) : (
+                        <input
+                          id={`stocktake-count-${row.key}`}
+                          type="number"
+                          min="0"
+                          step={unitStep(row.unit)}
+                          inputMode={row.unit === DEFAULT_UNIT ? 'numeric' : 'decimal'}
+                          className="input num !w-24 text-right"
+                          value={counts[row.key] ?? ''}
+                          placeholder={String(row.system)}
+                          onFocus={() => setSelectedProductId(row.key)}
+                          onBlur={() => setSelectedProductId(null)}
+                          onChange={(e) =>
+                            setCounts((c) => ({
+                              ...c,
+                              [row.key]: e.target.value,
+                            }))
+                          }
+                        />
+                      )}
                     </td>
 
                     <td
@@ -354,7 +519,7 @@ export default function StockTake() {
                         diff < 0
                           ? 'text-danger-700'
                           : diff > 0
-                            ? 'text-success-700'
+                            ? 'text-primary-700'
                             : 'text-ink-400'
                       }`}
                     >
@@ -362,19 +527,19 @@ export default function StockTake() {
                         ? diff > 0
                           ? `+${diff}`
                           : diff
-                        : '—'}
+                        : '-'}
                     </td>
 
                     <td className="px-3 py-2">
                       <input
                         className="input"
                         placeholder="e.g. breakage, theft"
-                        value={reasons[p.id] || ''}
+                        value={reasons[row.key] || ''}
                         disabled={diff === 0}
                         onChange={(e) =>
                           setReasons((r) => ({
                             ...r,
-                            [p.id]: e.target.value,
+                            [row.key]: e.target.value,
                           }))
                         }
                       />
@@ -396,16 +561,20 @@ export default function StockTake() {
                 <div className="flex items-center justify-between">
                   <span className="min-w-0 truncate font-medium text-ink-900">
                     {a.productName}
+                    {(a.variantLabel || a.batchLabel) && (
+                      <span className="font-normal text-ink-500"> · {a.variantLabel || a.batchLabel}</span>
+                    )}
                   </span>
 
                   <span
                     className={`num shrink-0 font-semibold ${
                       a.difference < 0
                         ? 'text-danger-700'
-                        : 'text-success-700'
+                        : 'text-primary-700'
                     }`}
                   >
-                    {a.systemQty} to {a.physicalQty} ({a.difference > 0 ? '+' : ''}{a.difference})
+                    {formatQuantityWithUnit(a.systemQty, a.unit)} to {formatQuantityWithUnit(a.physicalQty, a.unit)}{' '}
+                    ({a.difference > 0 ? '+' : ''}{formatQuantityWithUnit(a.difference, a.unit)})
                   </span>
                 </div>
 
@@ -433,7 +602,7 @@ export default function StockTake() {
       <ConfirmDialog
         open={confirm}
         title="Save stock take?"
-        message={`${changed.length} product(s) will be updated to match your physical count.`}
+        message={`${changed.length} line${changed.length === 1 ? '' : 's'} will be updated to match your physical count.`}
         confirmLabel={saving ? 'Saving…' : 'Save'}
         confirmDisabled={saving}
         onConfirm={handleSave}

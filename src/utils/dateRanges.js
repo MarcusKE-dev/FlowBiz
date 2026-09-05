@@ -42,12 +42,12 @@ export function toJsDate(value) {
 }
 export function formatDateTime(value) {
   const d = toJsDate(value);
-  if (!d) return '—';
+  if (!d) return '-';
   return d.toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 export function formatDate(value) {
   const d = toJsDate(value);
-  if (!d) return '—';
+  if (!d) return '-';
   return d.toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', year: 'numeric' });
 }
 export function todayKey(date = new Date()) {

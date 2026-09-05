@@ -5,10 +5,12 @@ import { generateReceiptPDF, printReceipt, generateInvoicePDF, printInvoice, sen
 import { getOrCreateShareLink } from '../../utils/documentSharing';
 import { useSettings } from '../../contexts/SettingsContext';
 import { useAuth } from '../../contexts/AuthContext';
-import { formatKES } from '../../utils/currency';
 import { Printer, Download, MessageCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { CheckCircle2, Clock } from 'lucide-react';
+import StatusPill from '../ui/StatusPill';
+import Money from '../ui/Money';
+import { formatQuantityWithUnit } from '../../industry/units';
+import { saleQuantityLabel, lineItemDetail } from '../../utils/lineItems';
 
 export default function SaleCompleteModal({ open, sale, onClose }) {
   const { settings } = useSettings();
@@ -76,32 +78,36 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
   return (
     <Modal open={open} onClose={onClose} title={sale.isCredit ? 'Credit Sale Recorded' : 'Sale Complete'}>
       <div className="space-y-4">
-        {/* Fixed rounded-panel to rounded-2xl */}
-        <div className={`flex flex-col items-center justify-center py-4 rounded-2xl border ${sale.isCredit ? 'bg-danger-50 border-danger-200' : 'bg-success-50 border-success-200'}`}>
-          <div className={`h-10 w-10 rounded-full flex items-center justify-center mb-2 ${sale.isCredit ? 'bg-danger-100 text-danger-700' : 'bg-success-100 text-success-700'}`}>
-            {sale.isCredit ? <Clock className="h-5 w-5 text-danger-600" strokeWidth={2} /> : <CheckCircle2 className="h-5 w-5 text-success-600" strokeWidth={2} />}
-          </div>
-          <h2 className={`font-display font-bold ${sale.isCredit ? 'text-danger-700' : 'text-success-800'}`}>
-            {sale.isCredit ? 'Credit sale recorded' : 'Sale recorded successfully'}
-          </h2>
+        <div className="flex flex-col items-center justify-center gap-2 rounded-panel border border-line bg-surface py-5 text-center">
+          <StatusPill tone={sale.isCredit ? 'negative' : 'positive'}>
+            {sale.isCredit ? 'Credit sale recorded' : 'Sale recorded'}
+          </StatusPill>
 
           {cartItems ? (
-            <div className="w-full px-5 mt-2 space-y-1">
+            <div className="mt-1 w-full space-y-1 px-5">
               {cartItems.map((item, idx) => (
-                <div key={item.productId || idx} className="flex items-center justify-between text-xs text-ink-700">
-                  <span>{item.quantity} × {item.productName}</span>
-                  <span className="font-semibold">{formatKES(item.lineTotal ?? (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0))}</span>
+                <div key={item.productId || idx} className="flex items-start justify-between gap-3 text-secondary text-ink-700">
+                  <span className="min-w-0">
+                    {formatQuantityWithUnit(item.quantity, item.unit)} × {item.productName}
+                    {/* The version, the choices and any note — absent on
+                        every line that has none, so a plain shop's
+                        confirmation reads exactly as it always did. */}
+                    {lineItemDetail(item) && (
+                      <span className="block text-ink-500">{lineItemDetail(item)}</span>
+                    )}
+                  </span>
+                  <Money value={item.lineTotal ?? (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0)} className="font-semibold" />
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-sm font-semibold mt-2 text-ink-800">{sale.quantity} × {sale.productName}</p>
+            <p className="text-body font-semibold text-ink-800">{saleQuantityLabel(sale)} × {sale.productName}</p>
           )}
 
-          {sale.isCredit && sale.customerName && <p className="text-xs text-ink-500 mt-1">{sale.customerName}</p>}
-          <p className="text-lg font-bold text-ink-900 mt-1">{formatKES(sale.totalAmount)}</p>
-          <p className={`text-xs mt-1 font-semibold ${sale.isCredit ? 'text-danger-600' : 'text-ink-500'}`}>
-            {sale.isCredit ? 'Payment Status: Unpaid' : sale.paymentMethod}
+          {sale.isCredit && sale.customerName && <p className="text-secondary text-ink-500">{sale.customerName}</p>}
+          <p className="num text-money text-ink-900"><Money value={sale.totalAmount} /></p>
+          <p className={`text-secondary font-semibold ${sale.isCredit ? 'text-danger-700' : 'text-ink-500'}`}>
+            {sale.isCredit ? 'Payment status: unpaid' : sale.paymentMethod}
           </p>
         </div>
 
@@ -114,9 +120,9 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
           </button>
         </div>
 
-        <div className="rounded-lg border border-ink-100 p-3 space-y-2">
+        <div className="rounded-panel border border-line p-3 space-y-2">
           <label className="label">
-            WhatsApp {docLabel} {!isPro && <span className="text-amber-600">— PRO</span>}
+            WhatsApp {docLabel} {!isPro && <span className="text-warning-700">(Pro)</span>}
           </label>
           <div className="flex gap-2">
             <input
@@ -138,7 +144,7 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
           </div>
         </div>
 
-        <div className="pt-2 border-t border-ink-100">
+        <div className="border-t border-line pt-2">
           <button className="btn-secondary w-full" onClick={onClose}>Cancel</button>
         </div>
       </div>

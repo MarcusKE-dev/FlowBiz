@@ -58,7 +58,7 @@ export default function Pro() {
       if (data?.access_code && window.PaystackPop) {
         const popup = new window.PaystackPop();
         popup.resumeTransaction(data.access_code, {
-          onSuccess: () => toast.success(plan === 'lifetime' ? 'Payment received — activating your lifetime license…' : 'Payment received — activating your subscription…'),
+          onSuccess: () => toast.success(plan === 'lifetime' ? 'Payment received. Activating your lifetime license…' : 'Payment received. Activating your subscription…'),
           onCancel: () => toast('Payment cancelled.'),
         });
       } else if (data?.authorization_url) {
@@ -81,7 +81,7 @@ export default function Pro() {
     <div className="mx-auto max-w-5xl space-y-8 pb-12">
       <PageHeader
         title="FlowBiz Pro"
-        description="Sharper insight into margins, stock and staff — plus WhatsApp receipts."
+        description="Sharper insight into margins, stock and staff, plus WhatsApp receipts."
         actions={
           <Link to="/" className="btn-secondary">
             <ArrowLeft className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Dashboard
@@ -102,8 +102,8 @@ export default function Pro() {
           <div className="flex flex-col items-center gap-3">
             <StatusPill tone="positive">Pro is active in this demo</StatusPill>
             <p className="max-w-sm text-body text-ink-600">
-              Every Pro feature is unlocked for this demo account. There is nothing to pay here —
-              explore advanced analytics, inventory intelligence and WhatsApp sharing freely.
+              Every Pro feature is unlocked for this demo account, with nothing to pay. Explore
+              advanced analytics, inventory intelligence and WhatsApp sharing freely.
             </p>
           </div>
         </div>
@@ -122,13 +122,13 @@ export default function Pro() {
           <div className="flex flex-col rounded-panel border border-line bg-surface p-6">
             <p className="text-label uppercase text-ink-500">Monthly</p>
             <p className="mt-2 flex items-baseline gap-1.5">
-              <span className="num text-[28px] font-semibold leading-8 text-ink-900">
+              <span className="num text-money font-semibold text-ink-900 sm:text-[1.75rem] sm:leading-[2.25rem]">
                 {pricing.pro != null ? `KES ${pricing.pro.toLocaleString('en-KE')}` : '…'}
               </span>
               <span className="text-secondary text-ink-500">per 30 days</span>
             </p>
             <p className="mt-3 text-body text-ink-600">
-              Manual renewal. No auto-billing and no surprise charges — you are always in control.
+              Manual renewal. No auto-billing, no surprise charges.
             </p>
 
             {isPro ? (
@@ -158,12 +158,12 @@ export default function Pro() {
 
           {/* Lifetime — the deep blue is the only thing marking it out. */}
           <div className="relative flex flex-col rounded-panel border border-deep-600 bg-surface p-6">
-            <span className="absolute -top-2.5 right-6 rounded-pill bg-deep-600 px-2.5 py-0.5 text-[11px] font-semibold text-white">
+            <span className="absolute -top-2.5 right-6 rounded-pill bg-deep-600 px-2.5 py-0.5 text-label font-semibold text-white">
               Pay once
             </span>
             <p className="text-label uppercase text-ink-500">Lifetime</p>
             <p className="mt-2 flex items-baseline gap-1.5">
-              <span className="num text-[28px] font-semibold leading-8 text-ink-900">
+              <span className="num text-money font-semibold text-ink-900 sm:text-[1.75rem] sm:leading-[2.25rem]">
                 {pricing.lifetime != null ? `KES ${pricing.lifetime.toLocaleString('en-KE')}` : '…'}
               </span>
               <span className="text-secondary text-ink-500">one time</span>
@@ -191,8 +191,8 @@ export default function Pro() {
               <div className="text-ink-500">
                 <Icon className="h-5 w-5" strokeWidth={1.75} />
               </div>
-              <h4 className="font-display text-sm font-bold text-ink-900">{title}</h4>
-              <p className="text-xs leading-relaxed text-ink-500">{description}</p>
+              <h4 className="font-display text-body font-bold text-ink-900">{title}</h4>
+              <p className="text-secondary leading-relaxed text-ink-500">{description}</p>
             </div>
           ))}
         </div>
@@ -211,10 +211,10 @@ export default function Pro() {
                   <tr key={row.label}>
                     <td className="px-3 py-2 font-medium text-ink-900">{row.label}</td>
                     <td className="px-3 py-2 text-center text-ink-600">
-                      {typeof row.free === 'boolean' ? (row.free ? <Check className="mx-auto h-4 w-4 text-success-700" strokeWidth={1.75} aria-label="Included" /> : <X className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-label="Not included" />) : row.free}
+                      {typeof row.free === 'boolean' ? (row.free ? <Check className="mx-auto h-4 w-4 text-ink-900" strokeWidth={1.75} aria-label="Included" /> : <X className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-label="Not included" />) : row.free}
                     </td>
                     <td className="px-3 py-2 text-center font-semibold text-ink-900">
-                      {typeof row.pro === 'boolean' ? (row.pro ? <Check className="mx-auto h-4 w-4 text-success-700" strokeWidth={1.75} aria-label="Included" /> : <X className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-label="Not included" />) : row.pro}
+                      {typeof row.pro === 'boolean' ? (row.pro ? <Check className="mx-auto h-4 w-4 text-ink-900" strokeWidth={1.75} aria-label="Included" /> : <X className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-label="Not included" />) : row.pro}
                     </td>
                   </tr>
                 ))}
@@ -224,8 +224,8 @@ export default function Pro() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 text-xs text-ink-400">
-        Built for Kenyan shops — pay in KES via M-Pesa or card, powered by Paystack.
+      <div className="flex items-center gap-2 text-secondary text-ink-400">
+        Built for Kenyan shops. Pay in KES via M-Pesa or card, powered by Paystack.
       </div>
     </div>
   );

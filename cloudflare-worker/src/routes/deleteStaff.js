@@ -44,7 +44,7 @@ export async function handleDeleteStaff(request, env) {
   // member by guessing or leaking a uid.
   const targetProfile = await getDocument(env, 'users', targetUid);
   if (!targetProfile) {
-    return errorResponse('Target staff profile not found in Firestore — nothing to reconcile.', 404);
+    return errorResponse('That staff profile no longer exists, so there is nothing to remove.', 404);
   }
   if (targetProfile.businessId !== callerProfile.businessId) {
     return errorResponse('That account does not belong to your business.', 403);

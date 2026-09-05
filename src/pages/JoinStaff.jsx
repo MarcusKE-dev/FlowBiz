@@ -81,7 +81,7 @@ export default function JoinStaff() {
     }
     const { businessId, role, displayName } = freshSnap.data();
 
-    let targetUser = null;
+    let targetUser;
     let isNewAuthUser = false;
 
     try {
@@ -130,7 +130,7 @@ export default function JoinStaff() {
     } catch (dbErr) {
       console.error('[JoinStaff] Firestore write failed:', dbErr);
       if (isNewAuthUser) {
-        try { await deleteUser(targetUser); } catch {}
+        try { await deleteUser(targetUser); } catch { /* best effort: the orphaned sign-in is less bad than blocking the error message below */ }
       }
       setError('Something went wrong completing your signup. Please contact your business owner.');
       setSubmitting(false);
@@ -146,7 +146,7 @@ export default function JoinStaff() {
       if (!response.ok) throw new Error('send-verification-failed');
       toast.success(`Welcome, ${displayName}! Please check your email to verify your account.`);
     } catch {
-      try { await sendEmailVerification(targetUser); } catch {}
+      try { await sendEmailVerification(targetUser); } catch { /* the account is usable either way; verification can be resent from Settings */ }
       toast.success(`Welcome, ${displayName}! Your account is ready.`);
     }
 
@@ -181,7 +181,7 @@ export default function JoinStaff() {
     return (
       <AuthShell>
         <div className="space-y-3 text-center">
-          <CheckCircle2 className="mx-auto h-5 w-5 text-success-600" strokeWidth={1.75} aria-hidden="true" />
+          <CheckCircle2 className="mx-auto h-5 w-5 text-primary-600" strokeWidth={1.75} aria-hidden="true" />
           <h1 className="font-display text-page-title text-ink-900">This invite is already used</h1>
           <p className="text-body text-ink-600">
             Sign in with the email and password you set up.

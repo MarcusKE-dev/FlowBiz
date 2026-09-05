@@ -1,9 +1,10 @@
 import { NavLink } from 'react-router-dom';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import * as Lucide from 'lucide-react';
-import { NAV_ITEMS, NAV_GROUPS } from './navConfig';
+import { NAV_GROUPS, visibleNavItems } from './navConfig';
 import { useAuth } from '../../contexts/AuthContext';
-import { useSettings } from '../../contexts/SettingsContext';
+import { useIndustry } from '../../hooks/useIndustry';
+import { usePermissions } from '../../hooks/usePermissions';
 
 const Icon = ({ name, className = 'h-5 w-5' }) => {
   const C = Lucide[name] || Lucide.Circle;
@@ -19,13 +20,22 @@ const Icon = ({ name, className = 'h-5 w-5' }) => {
 // that renders <Sidebar /> with no props keeps behaving exactly as
 // before (always expanded, no toggle button rendered). Role filtering is
 // unchanged from navConfig.
-export default function Sidebar({ collapsed = false, onToggleCollapse }) {
+//
+// `overlay` is the hover-expanded state: the rail keeps its 68px slot in
+// AppShell's flex layout and this panel floats above the content on top
+// of it. Reflowing the whole app on mouse-over is disorienting; floating
+// over it is the pattern people already know. `pinned` is the manual
+// toggle, which grows the slot itself so nothing is covered.
+//
+// `onNavigate` fires on every nav item's click so AppShell can collapse a
+// hover-expanded rail the moment a page is chosen. Optional: a caller that
+// omits it gets the old behaviour.
+export default function Sidebar({ collapsed = false, onToggleCollapse, overlay = false, pinned = false, onNavigate }) {
   const { isAdmin } = useAuth();
-  const { settings } = useSettings();
+  const industry = useIndustry();
+  const permissions = usePermissions();
 
-  const items = NAV_ITEMS
-    .filter((item) => !item.adminOnly || isAdmin)
-    .filter((item) => item.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses);
+  const items = visibleNavItems({ isAdmin, industry, permissions });
 
   const ungrouped = items.filter((i) => !i.group);
   const groups = NAV_GROUPS
@@ -47,6 +57,7 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
       to={item.to}
       end={item.to === '/'}
       title={collapsed ? item.label : undefined}
+      onClick={onNavigate}
       className={link}
     >
       <Icon name={item.icon} />
@@ -56,8 +67,10 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
 
   return (
     <aside
-      className={`hidden shrink-0 flex-col border-r border-line bg-surface transition-[width] duration-200 lg:flex ${
-        collapsed ? 'w-[68px]' : 'w-60'
+      className={`hidden shrink-0 flex-col border-r border-line bg-surface lg:flex ${
+        overlay
+          ? 'absolute inset-y-0 left-0 z-40 w-60 shadow-overlay'
+          : `h-full w-full ${collapsed ? '' : 'w-60'}`
       }`}
     >
       {/* Brand. A wordmark, not the icon asset — the raster icons are
@@ -71,7 +84,11 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
         <span className="sr-only">FlowBiz</span>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-2.5 py-3" aria-label="Main">
+      {/* Scrollable only when it genuinely has to be. `auto` shows nothing
+          at all while the items fit — which they do at any ordinary
+          desktop height — and `scroll-quiet` keeps the gutter out of the
+          design on the short viewports where they do not. */}
+      <nav className="scroll-quiet flex-1 overflow-y-auto px-2.5 py-3" aria-label="Main">
         {ungrouped.length > 0 && (
           <div className="space-y-0.5 pb-3">{ungrouped.map(renderItem)}</div>
         )}
@@ -101,15 +118,16 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
             className={`flex w-full items-center gap-2 rounded-control py-2 text-button text-ink-500 transition-colors hover:bg-ink-50 hover:text-ink-900 ${
               collapsed ? 'justify-center px-0' : 'px-3'
             }`}
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={pinned ? 'Unpin sidebar' : 'Keep sidebar open'}
+            aria-label={pinned ? 'Unpin sidebar' : 'Keep sidebar open'}
+            aria-pressed={pinned}
           >
-            {collapsed ? (
-              <ChevronRight className="h-4 w-4" strokeWidth={1.75} />
-            ) : (
+            {pinned ? (
               <ChevronLeft className="h-4 w-4" strokeWidth={1.75} />
+            ) : (
+              <ChevronRight className="h-4 w-4" strokeWidth={1.75} />
             )}
-            {!collapsed && 'Collapse'}
+            {!collapsed && (pinned ? 'Unpin' : 'Keep open')}
           </button>
         </div>
       )}

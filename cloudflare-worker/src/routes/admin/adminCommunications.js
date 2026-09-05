@@ -1,6 +1,8 @@
 // cloudflare-worker/src/routes/admin/adminCommunications.js
 import { json, errorResponse } from '../../lib/response.js';
-import { verifyAdminAuth, logAdminAction } from '../../lib/adminAuth.js';
+import { verifyAdminAuth, requirePermission, logAdminAction, requestContext } from '../../lib/adminAuth.js';
+import { assertBusinessId } from '../../lib/validate.js';
+import { recordOpsEvent, EVENT_TYPES, maskEmail } from '../../lib/opsEvents.js';
 import { sendEmail } from '../../lib/resend.js';
 
 function supportEmailShell(bodyHtml, {
@@ -101,8 +103,10 @@ export async function handleAdminSendEmail(request, env) {
     return errorResponse(err.message, err.status || 401);
   }
 
-  if (admin.role !== 'SUPER_ADMIN' && admin.role !== 'ADMIN') {
-    return errorResponse('Only Super Admins or Admins can send platform communications.', 403);
+  try {
+    requirePermission(admin, 'comms.send');
+  } catch (err) {
+    return errorResponse(err.message, err.status || 403);
   }
 
   let body;
@@ -129,6 +133,17 @@ export async function handleAdminSendEmail(request, env) {
   if (!to || !subject || !htmlContent) {
     return errorResponse('Recipient (to), subject, and htmlContent are required.', 400);
   }
+  if (typeof to !== 'string' || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to.trim())) {
+    return errorResponse('A single valid recipient email address is required.', 400);
+  }
+  let scopedBusinessId = null;
+  if (businessId) {
+    try {
+      scopedBusinessId = assertBusinessId(businessId);
+    } catch (err) {
+      return errorResponse(err.message, 400);
+    }
+  }
 
   const wrappedHtml = supportEmailShell(htmlContent, {
     title: title || subject,
@@ -147,12 +162,26 @@ export async function handleAdminSendEmail(request, env) {
       text: plainText || htmlContent.replace(/<[^>]+>/g, ''),
     });
   } catch (err) {
+    await recordOpsEvent(env, {
+      type: EVENT_TYPES.EMAIL_SEND_FAILED,
+      severity: 'error',
+      source: 'admin',
+      message: 'An administrative communication could not be delivered.',
+      businessId: scopedBusinessId,
+      context: { recipient: maskEmail(to) || 'unknown', reason: err.message },
+    });
     return errorResponse(`Failed to send communication: ${err.message}`, 502);
   }
 
+  const ctx = requestContext(request);
+  // The audit entry records that a message went out and to whom, in
+  // masked form. The audit trail is not a copy of every email FlowBiz
+  // has ever sent to a merchant.
   await logAdminAction(env, admin, 'SEND_COMMUNICATION', {
-    targetBusinessId: businessId,
-    details: { to, subject, title: title || subject },
+    targetBusinessId: scopedBusinessId,
+    details: { recipient: maskEmail(to), subject: String(subject).slice(0, 200) },
+    ip: ctx.ip,
+    userAgent: ctx.userAgent,
   });
 
   return json({ success: true });

@@ -1,22 +1,23 @@
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSettings } from '../../contexts/SettingsContext';
-import { useDailySession } from '../../hooks/useDailySession';
 import ConnectivityIndicator from '../common/ConnectivityIndicator';
 import StatusPill from '../ui/StatusPill';
 import { isDemoMode } from '../../demo/demoMode';
 
 // The control rail. Thinner than before, sits on the canvas rather than
-// on its own surface, and leads with the two facts that actually matter
-// at a counter: which shop this is, and whether today is open for
-// trading. The old "Welcome, <name>" string said neither.
+// on its own surface, and leads with the two facts that stay true all
+// day: which shop this is, and who is signed in.
+//
+// The day-state pill ("Day open" / "Day closed" / "Not opened") used to
+// live here. It is gone, and so is this component's useDailySession
+// subscription: Counter and Close Day both show that state where it is
+// actually actionable, and repeating it on every page bought nothing.
+// "Owner" / "Cashier" is deliberate wording — it matches the `role`
+// field in the data model and the language in Team and the Help guide.
 export default function TopHeader() {
   const { profile, logout, isAdmin, isPro } = useAuth();
   const { settings } = useSettings();
-  // Same document id the Counter and Close Day pages already listen to,
-  // so the Firestore SDK serves both from one subscription rather than
-  // opening a second channel. Read-only: this header never writes.
-  const { session, loading, isClosed } = useDailySession();
   const demo = isDemoMode();
 
   // Demo Mode gets its own minimal header — just a "Demo" label, a way
@@ -28,7 +29,7 @@ export default function TopHeader() {
   if (demo) {
     return (
       <header className="safe-top sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-line bg-canvas px-4 sm:px-6">
-        <StatusPill tone="caution">Demo</StatusPill>
+        <StatusPill tone="caution" solid>Demo</StatusPill>
         <div className="flex items-center gap-2">
           <a href="/" className="btn-secondary">Exit demo</a>
           <a href="/setup" className="btn-primary">Sign up</a>
@@ -37,21 +38,15 @@ export default function TopHeader() {
     );
   }
 
-  const sessionPill = loading
-    ? null
-    : isClosed
-      ? <StatusPill tone="neutral">Day closed</StatusPill>
-      : session
-        ? <StatusPill tone="positive">Day open</StatusPill>
-        : <StatusPill tone="caution">Not opened</StatusPill>;
-
   return (
     <header className="safe-top sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-line bg-canvas px-4 sm:px-6">
       <div className="flex min-w-0 items-center gap-2.5">
         <span className="truncate text-body font-semibold text-ink-900">
           {settings.shopName}
         </span>
-        {sessionPill}
+        <StatusPill tone="neutral" className="hidden shrink-0 sm:inline-flex">
+          {profile?.role === 'owner' ? 'Owner' : 'Cashier'}
+        </StatusPill>
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
@@ -64,9 +59,6 @@ export default function TopHeader() {
           </Link>
         )}
         <ConnectivityIndicator />
-        <StatusPill tone="neutral" className="hidden sm:inline-flex">
-          {profile?.role === 'owner' ? 'Owner' : 'Cashier'}
-        </StatusPill>
         <button type="button" onClick={logout} className="btn-secondary">Sign out</button>
       </div>
     </header>

@@ -19,7 +19,7 @@ function readLockout() {
   try { return JSON.parse(localStorage.getItem(LOCKOUT_KEY) || 'null'); } catch { return null; }
 }
 function writeLockout(state) {
-  try { localStorage.setItem(LOCKOUT_KEY, JSON.stringify(state)); } catch {}
+  try { localStorage.setItem(LOCKOUT_KEY, JSON.stringify(state)); } catch { /* private mode or a full quota: the lockout is a courtesy, not a control */ }
 }
   useEffect(() => {
     if (firebaseUser) navigate(location.state?.from?.pathname || '/', { replace: true });
@@ -45,7 +45,7 @@ useEffect(() => {
     e.preventDefault(); setError(null); setSubmitting(true);
 try {
   await login(email.trim(), password);
-  toast.success('Welcome back!');
+  toast.success('Welcome back.');
 }
 catch (err) {
   if (

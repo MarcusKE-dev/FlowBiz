@@ -1,3 +1,204 @@
+# FlowBiz — Category resolution, cashier permissions, workspace lifecycle, security log
+
+## What this pass changed
+
+Four things, in order of how much damage each was doing.
+
+### 1. Industry categories were unreachable for every existing business
+
+**The resolver was right; the data was a fossil.** Before the industry
+layer existed, two clients wrote the same seven-word category list into
+every business's settings document — `SettingsContext` self-healed one in
+on first read, and `Setup` wrote one into every new business regardless of
+trade. The category rule was "a stored list wins, always", so a
+supermarket, a pharmacy and a bar all resolved to
+`Beverages, Hardware, Household, Personal Care, Stationery, Airtime/Float,
+Other`, and no profile's own list was ever reached.
+
+`src/industry/categories.js` replaces the single stored list with the two
+halves it always was:
+
+    profile defaults − hidden + custom, arranged by order
+
+Only the business's half is stored (`customCategories`, `hiddenCategories`,
+`categoryOrder`); the trade's half is code. The legacy array is migrated at
+READ time against `LEGACY_DEFAULT_CATEGORIES`, so the words an owner typed
+and the defaults an owner removed both survive and the fossil does not.
+General Retail's profile list IS the legacy list, so every pre-industry
+business's screen is byte-identical to what it was.
+
+`categories` is still written as a compatibility mirror for a client on
+the previous bundle; nothing reads it back once the model fields exist.
+
+### 2. Cashier permissions were one boolean
+
+`cashierCanRecordExpenses`, plus a hard-coded `adminOnly` flag on each
+navigation item. `src/industry/permissions.js` replaces it with a
+catalogue of 22 permissions in six groups, gated by industry CAPABILITY —
+so a restaurant is asked about its tickets and its menu, an electronics
+shop is asked about neither, and a services business with no stock room is
+not asked about receiving stock.
+
+Precedence: base default → the trade's recommendation → the owner's
+override → applicability → dependencies. The owner edits them on the Team
+page, beside the people they apply to.
+
+**Every default is duplicated in `firestore.rules` and a test asserts the
+two never drift.** Sixteen emulator tests (`npm run test:rules`) assert
+that a revoked permission actually refuses the write and a granted one
+actually opens it. `refunds` was tightened: the button was owner-only but
+the rule was not.
+
+### 3. Suspension was a one-way door
+
+Suspending a workspace deactivated every staff account; reactivating set
+the business back to active and stopped there. Nothing ever switched the
+accounts back on, so a reactivated merchant stayed on "Account
+deactivated" forever.
+
+Suspension now stamps `deactivatedByWorkspace` on the accounts it
+switches off — and only on those, never on one the owner had already
+disabled — and reactivation switches back exactly and only what carries
+the stamp. `deactivationReason` lets the merchant's own screen say
+"suspended", which a user may read from their own profile document.
+
+### 4. There was no authentication telemetry at all
+
+A new Super Admin **Security** section, fed by `POST /api/auth/login-event`
+— the only writer; `loginEvents` is closed to every browser.
+
+It says how much each event proves. A SUCCESS is verified: the client
+sends its fresh ID token, the Worker checks the signature, and the uid and
+email come from the verified claims. A FAILURE produces no token, so it is
+recorded as a client REPORT with server-observed IP and device, rate
+limited per address, and labelled as reported in the console. An attempted
+address is stored masked plus a SHA-256 handle; the real account name is
+attached only when it matches one of our own users.
+
+Actions enforce something: disable/enable an account and revoke refresh
+tokens go through Identity Toolkit; device sessions are revoked in
+Firestore. Workspace suspension is not duplicated here — the security page
+links to the one audited place it already happens.
+
+
+---
+
+# FlowBiz — Industry customization: defect repair, two new trades, and returns
+
+*(The multi-product cart report follows below, unchanged.)*
+
+## What this pass changed
+
+The industry layer already existed: a capability catalogue, thirteen
+profiles, a pure resolver on `businessSettings`, and one inventory
+foundation in `utils/inventory.js`. This pass repaired nine defects in it,
+added two trades, moved customization onto its own page, and added the one
+retail capability that was missing entirely.
+
+### Defects repaired
+
+There was **one** inventory foundation in name only. Four call sites wrote
+stock with a raw `increment()`, and three of them silently skipped
+variants, batches and recipes:
+
+- **Purchases** had no variant selector at all, so a boutique could define
+  sizes and never stock any — it wrote `stock` and never `variantStock`.
+- **Stock take** moved `products.stock` without moving
+  `productBatches.remainingQuantity`, breaking the invariant FEFO depends
+  on. It now counts **per batch** for a batch-tracked product (a physical
+  count is per lot) and **per version** for a versioned one.
+- **Dashboard quick sale** bypassed services, recipes, versions and FEFO.
+  It now resolves through the same engine, and sends a product needing a
+  version, a batch or a modifier choice to the counter, which has the
+  pickers.
+- **Cancel/refund of a credit sale** restored stock with a raw per-line
+  increment. Now `resolveStockDeltas(..., { reverse: true })`, as voiding
+  already did.
+
+Also: services were given a buying price that fed straight into cost of
+goods sold; modifiers and kitchen notes were dropped from a direct sale
+(kept only on a saved ticket) and could not appear on any receipt;
+`expiryAlerts` gated nothing at all; a restaurant's 25-item menu showed as
+one flat list because the category threshold was hardcoded at 40; and a
+bakery's loaf kept whatever cost was typed once, so every profit figure
+drifted as ingredient prices moved.
+
+### New: `packSizes`
+
+Buy in packs, sell singles — a conversion inside the one inventory
+foundation, not a second engine. Justified by three profiles at once:
+a pharmacy box of 30 tablets, a bar's 750ml bottle poured as 25 or 30
+tots, a liquor crate of 25 bottles. Stock is held in one base unit per
+product; only quantities *entered* in packs are converted.
+
+### New: `ageRestriction`
+
+A per-product flag and one confirmation at checkout when the cart contains
+one. Kenya's Alcoholic Drinks Control Act, 2010 prohibits sale to persons
+under eighteen. **No ID scanning, no licensing-hours enforcement, no
+compliance reporting, and no claim of regulatory compliance anywhere** —
+the check is made by a person, and the prompt reminds them.
+
+### New profiles: Bar, and Wines & Spirits
+
+Both are defaults over existing capabilities. A bar runs on tabs (the same
+open-order document, called a tab), pours cocktails through recipes, and
+converts bottles to tots. A liquor shop sells sealed stock: barcodes,
+crate-to-bottle conversion, no orders and no versions — a 250ml and a
+750ml are two products with two barcodes, not two sizes of one.
+
+Three units added, each justified: `bottle`, `crate` (a Kenyan beer crate
+is 25), `tot`.
+
+### New: returns
+
+FlowBiz had a same-day void (restores stock, records no money) and a
+credit-sale refund. A customer returning something they had *paid* for had
+no correct path — a void left the till short with nothing to explain it.
+A return now restores stock through the one inventory foundation and
+writes an **ordinary** `refunds` document, so close day, till
+reconciliation and every report account for it with no change of their
+own. Full or partial line return, one reason, and it cannot happen twice.
+
+This is retail, not an industry: it applies to every profile.
+
+### New: `/customize`
+
+Industry customization moved out of Settings, which was already carrying
+the shop name, logo, permissions, receipts and data export. The new
+owner-only page holds business type, capabilities, units, dashboard order,
+three renameable words, tables, categories and reset. It opens **zero
+Firestore listeners** — everything comes from the one shared
+`businessSettings` listener — and every write is `setDoc(merge)` through
+`raceWithTimeout`, so it works offline.
+
+### Architecture
+
+- `utils/inventory.js` gained `reverse`, `resolveReceiptDeltas`,
+  `resolveCountDeltas`, `stockWriteOps` and the pack-size conversion, and
+  stayed pure and Firestore-free.
+- `utils/stockWrites.js` is the new four-line Firestore adapter — the only
+  place a delta becomes an `increment()`.
+- `utils/returns.js` is pure return arithmetic.
+- The financial engine gained exactly one branch: a refund that states its
+  own `costOfGoodsSold` uses it. Every refund written before this, and
+  every credit refund after it, falls through to the behaviour it always
+  had.
+
+### Guarantees held
+
+General Retail gained nothing — not a field, a step or a screen. The three
+copies of the profile and capability lists (client, Worker,
+`firestore.rules`) are proved identical by the drift test. Turning a
+capability off hides records and never deletes them, and the UI says so.
+The resolver is pure and total: garbage resolves to General Retail rather
+than throwing.
+
+Full architecture, per-capability reference and the stock-entry contract:
+**`docs/INDUSTRY.md`**.
+
+---
+
 # FlowBiz — Multi-Product Cart Implementation Report
 
 ## 1. Audit summary (before changes)

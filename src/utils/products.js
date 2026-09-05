@@ -1,6 +1,7 @@
 import { collection, doc, writeBatch, updateDoc, deleteField, serverTimestamp, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { raceWithTimeout } from './offlineWrite';
+import { PRODUCT_IMAGES, productImageDocId, forgetProductImage } from './productImages';
 
 function barcodeIndexRef(businessId, barcode) {
   return doc(db, 'barcodeIndex', `${businessId}__${barcode}`);
@@ -19,8 +20,20 @@ export async function permanentlyDeleteProduct(productId, barcode, businessId) {
       batch.delete(idxRef);
     }
   }
+
+  // The photo lives in its own document, so a permanent delete has to
+  // take it too or it is orphaned forever. Existence is checked first
+  // for the same reason the barcode index above is: the delete rule
+  // reads `resource.data.businessId`, which does not exist for a
+  // document that was never there, and that denial would reject the
+  // whole batch — including the product delete the user asked for.
+  const imageRef = doc(db, PRODUCT_IMAGES, productImageDocId(businessId, productId));
+  const imageSnap = await getDoc(imageRef);
+  if (imageSnap.exists()) batch.delete(imageRef);
+
   batch.delete(productRef);
   await batch.commit();
+  forgetProductImage(businessId, productId);
 }
 
 export async function createProduct(data, businessId) {

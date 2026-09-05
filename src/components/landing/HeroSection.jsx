@@ -60,19 +60,19 @@ export function HeroSection() {
             <div className="pt-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5">
               <Link
                 to="/setup"
-                className="bg-primary-600 text-white px-8 py-4 rounded-xl text-base font-bold shadow-lg hover:bg-primary-700 transition-all flex items-center justify-center gap-2 border border-primary-600"
+                className="bg-primary-600 text-white px-8 py-4 rounded-panel text-base font-bold hover:bg-primary-700 transition-all flex items-center justify-center gap-2 border border-primary-600"
               >
-                <span>Get Started Free</span>
+                <span>Get started free</span>
               </Link>
               <Link
                 to="/login"
-                className="bg-white/10 backdrop-blur-md border border-white/30 text-white px-7 py-4 rounded-xl text-base font-bold hover:bg-white/20 transition-all flex items-center justify-center"
+                className="border border-white text-white px-7 py-4 rounded-panel text-base font-bold transition-colors hover:bg-white hover:text-ink-900 flex items-center justify-center"
               >
-                Sign In to Counter
+                Sign in
               </Link>
             </div>
 
-            <div className="pt-6 border-t border-white/15 grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-xs sm:text-sm font-semibold text-primary-100">
+            <div className="pt-6 border-t border-white/15 grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-secondary sm:text-body font-semibold text-primary-100">
               <span className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-primary-100 shrink-0" />
                 Works 100% Offline
@@ -117,21 +117,21 @@ export function HeroSection() {
             <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-ink-900 tracking-tight">
               See FlowBiz in action
             </h2>
-            <p className="text-sm sm:text-base text-ink-600 leading-relaxed">
-              Explore a fully working FlowBiz account, preloaded with sample products, sales, and
-              customers. Try the POS counter, check the dashboard, and see how credit sales and
-              M-Pesa reconciliation work. <br className="hidden sm:inline" /> Nothing you do here ever touches a real business.
+            <p className="text-body sm:text-base text-ink-600 leading-relaxed">
+              A working account, preloaded with sample products, sales and customers. Try the
+              counter, the dashboard, credit sales and M-Pesa reconciliation.
+              <br className="hidden sm:inline" /> Nothing you do here touches a real business.
             </p>
           </div>
 
           <div className="pt-2 flex flex-col items-center gap-2.5">
             <a
               href="/demo/"
-              className="inline-flex items-center justify-center gap-2 bg-primary-600 text-white px-8 py-3.5 rounded-xl font-bold text-sm hover:bg-primary-700 transition-all shadow-sm"
+              className="inline-flex items-center justify-center gap-2 bg-primary-600 text-white px-8 py-3.5 rounded-panel font-bold text-body hover:bg-primary-700 transition-all"
             >
               <span>Try the Free Demo</span>
             </a>
-            <span className="text-xs text-ink-500">
+            <span className="text-secondary text-ink-500">
               No sign-in needed &middot; Free demo trial &middot; Nothing is saved to a real account
             </span>
           </div>

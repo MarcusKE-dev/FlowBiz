@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import Modal from '../common/Modal';
-import { formatKES } from '../../utils/currency';
 import { Banknote, Smartphone } from 'lucide-react';
+import StatementBlock, { StatementRow } from '../ui/StatementBlock';
+import Money from '../ui/Money';
 
 export default function RefundModal({ open, creditSale, onClose, onSubmit }) {
   const [method, setMethod] = useState('Cash');
@@ -14,17 +15,19 @@ export default function RefundModal({ open, creditSale, onClose, onSubmit }) {
     finally { setBusy(false); }
   };
   return (
-    <Modal open={open} onClose={onClose} title={`Refund — ${creditSale.productName}`}>
+    <Modal open={open} onClose={onClose} title={`Refund: ${creditSale.productName}`}>
       <form onSubmit={handle} className="space-y-3">
-        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">
-          Already collected from customer: <span className="font-semibold text-ink-800">{formatKES(amountPaid)}</span>
-          <p className="mt-1 text-xs text-ink-400">This amount will be handed back and recorded as money leaving the till. Stock will be restored.</p>
-        </div>
+        <StatementBlock>
+          <StatementRow label="Already collected from customer" value={<Money value={amountPaid} />} />
+        </StatementBlock>
+        <p className="text-secondary text-ink-500">
+          This amount will be handed back and recorded as money leaving the till. Stock will be restored.
+        </p>
         <div>
           <label className="label">Refund via</label>
           <div className="grid grid-cols-2 gap-2">
             {['Cash','M-Pesa'].map(m=>(
-              <button key={m} type="button" onClick={()=>setMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${method===m?'border-primary-600 bg-primary-50 text-primary-800':'border-ink-200 text-ink-500'}`}>
+              <button key={m} type="button" onClick={()=>setMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-control border px-3 py-2.5 text-button transition-colors ${method===m?'border-primary-600 bg-primary-50 text-primary-800':'border-line text-ink-600 hover:bg-ink-50 hover:text-ink-900'}`}>
                 {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
               </button>
             ))}

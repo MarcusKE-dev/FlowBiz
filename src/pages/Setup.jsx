@@ -7,8 +7,8 @@ import { auth, db } from '../firebase';
 import AuthShell from '../components/common/AuthShell';
 import ErrorBanner from '../components/common/ErrorBanner';
 import { useAuth } from '../contexts/AuthContext';
-
-const DEFAULT_CATEGORIES = ['Beverages', 'Hardware', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'];
+import { profilesByFamily, getProfile, DEFAULT_PROFILE_ID } from '../industry/profiles';
+ 
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
 export default function Setup() {
@@ -24,6 +24,15 @@ export default function Setup() {
   }, [firebaseUser, profile, authLoading, navigate]);
 
   const [businessName, setBusinessName] = useState('');
+  // What kind of business this is. It is chosen ONCE, here, because it is
+  // the foundation the rest of the configuration is derived from — the
+  // pages FlowBiz offers, the units the product form knows, the words on
+  // screen and the categories the business starts with. Everything that
+  // grows out of it stays adjustable afterwards on the Customize page;
+  // the trade itself does not, because a shop that has recorded a year of
+  // electronics sales is not a pharmacy. General retail is the safe
+  // default for anyone who skips past it.
+  const [industryProfile, setIndustryProfile] = useState(DEFAULT_PROFILE_ID);
   const [displayName, setDisplayName]   = useState('');
   const [email, setEmail]               = useState('');
   const [password, setPassword]         = useState('');
@@ -61,7 +70,7 @@ export default function Setup() {
     setSubmitting(true);
     creatingRef.current = true;
 
-    let targetUser = null;
+    let targetUser;
 
     try {
       const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
@@ -127,7 +136,13 @@ export default function Setup() {
         businessId,
         shopName: businessName.trim(),
         cashierCanRecordExpenses: true,
-        categories: DEFAULT_CATEGORIES,
+        industryProfile,
+        capabilityOverrides: {},
+        // No category list is written. The trade's starting categories
+        // are a DEFAULT the industry layer resolves from `industryProfile`
+        // — copying them into the document here would freeze this
+        // business on today's list and make an untouched business look
+        // like one that had chosen every word in it.
       });
       await batch.commit();
     } catch (err) {
@@ -179,6 +194,28 @@ export default function Setup() {
           <div>
             <label className="label">Business name</label>
             <input className="input" required value={businessName} onChange={e=>setBusinessName(e.target.value)} placeholder="e.g. Nairobi Smart Retail" disabled={submitting} />
+          </div>
+          <div>
+            <label className="label">Business type</label>
+            <select
+              className="input"
+              value={industryProfile}
+              onChange={(e) => setIndustryProfile(e.target.value)}
+              disabled={submitting}
+            >
+              {profilesByFamily().map((family) => (
+                <optgroup key={family.id} label={family.label}>
+                  {family.profiles.map((p) => (
+                    <option key={p.id} value={p.id}>{p.label}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            <p className="mt-1 text-secondary text-white/60">
+              {getProfile(industryProfile).tagline} This sets up your categories, units and pages.
+              choose the closest match. It is not a setting you change afterwards; if it turns out
+              wrong, FlowBiz support can correct it without touching anything you have recorded.
+            </p>
           </div>
           <div>
             <label className="label">Your name</label>

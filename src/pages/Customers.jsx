@@ -65,10 +65,10 @@ export default function Customers() {
     try {
       if (editingCustomer) {
         const { queuedOffline } = await updateCustomer(editingCustomer.customerId, { name, phone }, businessId);
-        toast.success(queuedOffline ? "Updated offline — it'll sync later." : 'Customer updated successfully.');
+        toast.success(queuedOffline ? 'Saved offline. It will sync when you reconnect.' : 'Customer updated successfully.');
       } else {
         const { queuedOffline } = await createCustomer({ name, phone }, businessId);
-        toast.success(queuedOffline ? "Saved offline — it'll sync later." : 'Customer saved successfully.');
+        toast.success(queuedOffline ? 'Saved offline. It will sync when you reconnect.' : 'Customer saved successfully.');
       }
       setModalOpen(false);
       setEditingCustomer(null);
@@ -131,6 +131,7 @@ export default function Customers() {
           caption="Customers and outstanding balances"
           rows={customerList}
           rowKey={(d) => d.customerId}
+          mobileLayout="row"
           columns={[
             {
               key: 'name',
@@ -152,11 +153,12 @@ export default function Customers() {
             {
               key: 'lastPurchase',
               header: 'Last purchase',
-              render: (d) => <span className="text-ink-600">{d.lastPurchase ? formatDate(d.lastPurchase) : '—'}</span>,
+              render: (d) => <span className="text-ink-600">{d.lastPurchase ? formatDate(d.lastPurchase) : '-'}</span>,
             },
             {
               key: 'status',
               header: 'Status',
+              mobileTrailing: true,
               render: (d) =>
                 d.totalOwed > 0
                   ? <StatusPill tone="caution">Owing</StatusPill>
@@ -168,6 +170,7 @@ export default function Customers() {
               key: 'totalOwed',
               header: 'Outstanding',
               numeric: true,
+              mobileTrailing: true,
               render: (d) => (
                 <span className="font-semibold">
                   <Money value={d.totalOwed} tone={d.totalOwed > 0 ? 'negative' : 'muted'} />

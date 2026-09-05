@@ -32,7 +32,7 @@ function ensureLoaded(name) {
     try {
       const raw = localStorage.getItem(STORAGE_PREFIX + name);
       if (raw) obj = JSON.parse(raw, reviver);
-    } catch { }
+    } catch { /* corrupt or unreadable demo data falls back to the empty object */ }
     cache.set(name, new Map(Object.entries(obj)));
   }
   return cache.get(name);
@@ -180,6 +180,13 @@ export async function deleteDoc(ref) {
 export async function getDoc(ref) {
   return makeDocSnapshot(ref.id, getRaw(ref.name, ref.id));
 }
+// The demo store is entirely local, so "from cache" and "from server"
+// are the same read. Exported because utils/productImages.js imports it
+// from 'firebase/firestore', and this module is aliased over that in
+// demo builds — a missing export here is a build failure, not a runtime
+// fallback.
+export async function getDocFromCache(ref) { return getDoc(ref); }
+
 export async function getDocs(target) {
   return makeQuerySnapshot(runQuery(target));
 }

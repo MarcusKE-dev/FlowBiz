@@ -5,12 +5,12 @@ export default function ConnectivityIndicator() {
   const online = useOnlineStatus();
   return (
     <StatusPill
-      tone={online ? 'positive' : 'caution'}
+      tone={online ? 'info' : 'negative'}
       className="whitespace-nowrap"
-      title={online ? 'Online' : 'Offline — changes queue until reconnected'}
+      title={online ? 'Online' : 'Offline. Changes are saved and sync when you reconnect.'}
     >
       <span
-        className={`h-1.5 w-1.5 rounded-full ${online ? 'bg-success-600' : 'bg-warning-600'}`}
+        className={`h-1.5 w-1.5 rounded-full ${online ? 'bg-primary-600' : 'bg-danger-600'}`}
         aria-hidden="true"
       />
       {online ? 'Online' : 'Offline'}

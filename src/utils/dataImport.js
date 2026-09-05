@@ -6,7 +6,19 @@ export const IMPORT_COLLECTIONS = [
   'customers', 'suppliers', 'products', 'sales', 'creditSales', 'purchases',
   'expenses', 'dailySessions', 'repayments', 'supplierPayments',
   'stockAdjustments', 'refunds', 'debtPaymentReceipts', 'sharedDocuments', 'staffInvites',
+  // Restored after `products`, which they point at. See the note on
+  // EXPORT_COLLECTIONS: these three must stay in step with the export and
+  // the reset lists.
+  'orders', 'productions', 'productBatches',
+  // Restored last, so every product exists before its photo lands.
+  'productImages',
 ];
+
+// Product photos are base64, ~62KB each. A 350-document batch of them
+// would be ~21MB and blow Firestore's ~10MB write-request limit, so
+// they go in much smaller chunks. Everything else keeps the old size.
+const DEFAULT_CHUNK = 350;
+const CHUNK_SIZES = { productImages: 40 };
 
 function isoToDate(value) {
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
@@ -40,16 +52,16 @@ export async function readExportZip(file) {
   const JSZip = (await import('jszip')).default;
   const zip = await JSZip.loadAsync(file);
   const manifestFile = zip.file('flowbiz-export.json');
-  if (!manifestFile) throw new Error("That doesn't look like a FlowBiz export — flowbiz-export.json was not found in the zip archive.");
+  if (!manifestFile) throw new Error("That doesn't look like a FlowBiz export. flowbiz-export.json was not found in the zip.");
   const text = await manifestFile.async('string');
   let manifest;
   try {
     manifest = JSON.parse(text);
   } catch {
-    throw new Error('flowbiz-export.json is not valid — the file may be corrupted.');
+    throw new Error('flowbiz-export.json is not valid. The file may be corrupted.');
   }
   if (!manifest.collections || typeof manifest.collections !== 'object') {
-    throw new Error("That doesn't look like a valid FlowBiz export — missing collection data.");
+    throw new Error("That doesn't look like a valid FlowBiz export. Collection data is missing.");
   }
   return manifest;
 }
@@ -74,8 +86,17 @@ export async function checkExistingData(businessId, manifest) {
   return nonEmpty;
 }
 
-function resolveTargetId(name, originalId, businessId, manifestBusinessId) {
+function resolveTargetId(name, originalId, businessId, manifestBusinessId, revived) {
   if (name === 'businessSettings') return businessId;
+  // A photo's id is `{businessId}__{productId}` and its productId has
+  // already been remapped by the caller, so it is rebuilt rather than
+  // string-patched — the generic prefix swap below would produce an id
+  // no product points at, leaving a silent orphan.
+  if (name === 'productImages') {
+    const productId = revived?.productId
+      || resolveTargetId('products', originalId.split('__').slice(1).join('__'), businessId, manifestBusinessId);
+    return `${businessId}__${productId}`;
+  }
   if (name === 'dailySessions') {
     const dateMatch = originalId.match(/(\d{4}-\d{2}-\d{2})$/);
     if (dateMatch) return `${businessId}_${dateMatch[1]}`;
@@ -104,8 +125,9 @@ export async function importBusinessData(businessId, manifest, { onProgress } = 
     if (docs.length === 0) { results[name] = 0; continue; }
 
     let written = 0;
-    for (let start = 0; start < docs.length; start += 350) {
-      const chunk = docs.slice(start, start + 350);
+    const chunkSize = CHUNK_SIZES[name] || DEFAULT_CHUNK;
+    for (let start = 0; start < docs.length; start += chunkSize) {
+      const chunk = docs.slice(start, start + chunkSize);
       const batch = writeBatch(db);
       chunk.forEach((d) => {
         const { id, ...rest } = d;
@@ -127,7 +149,7 @@ export async function importBusinessData(businessId, manifest, { onProgress } = 
           }
         }
 
-        const targetId = resolveTargetId(name, id, businessId, manifestBusinessId);
+        const targetId = resolveTargetId(name, id, businessId, manifestBusinessId, revived);
         batch.set(doc(db, name, targetId), revived);
 
         if (name === 'products' && revived.barcode && String(revived.barcode).trim()) {

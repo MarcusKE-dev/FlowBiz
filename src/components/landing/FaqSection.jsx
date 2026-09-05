@@ -15,7 +15,7 @@ export function FaqSection() {
     },
     {
       question: 'Why does profit stay at zero when I record a Credit (Deni) sale?',
-      answer: 'FlowBiz uses a cash-flow-first accounting model specifically designed for retail businesses. While physical stock is deducted immediately to prevent double-selling, revenue and gross profit are only recognized when the customer pays off their debt. This prevents false profit illusions on uncollected credit.',
+      answer: 'FlowBiz uses a cash-flow-first accounting model specifically designed for retail businesses. While physical stock is deducted immediately to prevent double-selling, revenue and gross profit are only recognised when the customer pays off their debt. This prevents false profit illusions on uncollected credit.',
     },
     {
       question: 'Do I need to purchase specialized POS hardware or barcode scanners?',
@@ -43,7 +43,7 @@ export function FaqSection() {
           <h2 className="text-2xl sm:text-3xl font-extrabold text-ink-900 tracking-tight">
             Frequently Asked Questions
           </h2>
-          <p className="text-sm text-ink-600">
+          <p className="text-body text-ink-600">
             Everything you need to know about setting up and running FlowBiz in your shop.
           </p>
         </div>
@@ -56,7 +56,7 @@ export function FaqSection() {
                 <button
                   type="button"
                   onClick={() => toggleFaq(idx)}
-                  className="w-full flex items-center justify-between gap-4 text-left font-bold text-ink-900 text-sm sm:text-base py-2 hover:text-primary-600 transition-colors"
+                  className="w-full flex items-center justify-between gap-4 text-left font-bold text-ink-900 text-body sm:text-base py-2 hover:text-primary-600 transition-colors"
                 >
                   <span>{faq.question}</span>
                   {isOpen ? (
@@ -66,7 +66,7 @@ export function FaqSection() {
                   )}
                 </button>
                 {isOpen && (
-                  <p className="text-xs sm:text-sm text-ink-600 leading-relaxed pt-2 pb-1">
+                  <p className="text-secondary sm:text-body text-ink-600 leading-relaxed pt-2 pb-1">
                     {faq.answer}
                   </p>
                 )}

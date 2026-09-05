@@ -35,3 +35,27 @@ export function findProductByCode(products, rawCode) {
 export function parseScanPayload(rawText) {
   return { kind: 'product-code', code: normalizeCode(rawText) };
 }
+
+// ── Continuous scanning preference ──────────────────────────────────
+//
+// Deliberately a per-device localStorage flag, not a Firestore field:
+// the phone at the counter and the owner's laptop want different things,
+// and a shop with two phones should be able to set them differently. It
+// is a display preference, so nothing here touches the data model.
+const CONTINUOUS_SCAN_KEY = 'flowbiz_continuous_scan';
+
+export function isContinuousScanEnabled() {
+  try {
+    // Default on — the continuous flow is the better one, and the
+    // setting exists to opt out of it.
+    return localStorage.getItem(CONTINUOUS_SCAN_KEY) !== 'false';
+  } catch {
+    return true; // storage unavailable (private mode) — keep the default
+  }
+}
+
+export function setContinuousScanEnabled(enabled) {
+  try {
+    localStorage.setItem(CONTINUOUS_SCAN_KEY, enabled ? 'true' : 'false');
+  } catch { /* storage unavailable — the session keeps its in-memory value */ }
+}

@@ -3,9 +3,11 @@ import { addDoc, orderBy, limit } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { Banknote, Smartphone } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { usePermissions } from '../hooks/usePermissions';
 import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { useSettings } from '../contexts/SettingsContext';
+import { useIndustry } from '../hooks/useIndustry';
 import { isExpenseExcluded } from '../utils/financials';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
@@ -14,15 +16,18 @@ import PageHeader from '../components/ui/PageHeader';
 import Section from '../components/ui/Section';
 import DataTable from '../components/ui/DataTable';
 import Money from '../components/ui/Money';
-import { EXPENSE_CATEGORIES } from '../constants/categories';
 import { formatDateTime, todayKey } from '../utils/dateRanges';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
-const emptyForm = { description:'', category:EXPENSE_CATEGORIES[0], amount:'', paymentMethod:'Cash', mpesaCode:'' };
+const emptyForm = { description:'', category:'', amount:'', paymentMethod:'Cash', mpesaCode:'' };
 
 export default function Expenses() {
-  const { profile, isAdmin, businessId } = useAuth();
-  const { settings, loading:sLoad } = useSettings();
+  const { profile, businessId } = useAuth();
+  const permissions = usePermissions();
+  const { loading:sLoad } = useSettings();
+  // The business's own list, resolved off the settings document the app
+  // already listens to. An owner edits it under Customize.
+  const { expenseCategories } = useIndustry();
   const expQ = useMemo(() => businessId ? tenantQuery('expenses', businessId, orderBy('recordedAt','desc'), limit(200)) : null, [businessId]);
   const { data: rawExpenses, loading } = useFirestoreCollection(expQ);
   // FIX: supplier-debt-payment entries are auto-written to `expenses` so
@@ -35,8 +40,19 @@ export default function Expenses() {
   const [busy, setBusy]   = useState(false);
   const set = f => e => setForm(p=>({...p,[f]:e.target.value}));
 
+  // The chosen category, resolved against the live list. A blank form and
+  // a form whose category an owner has since removed both fall back to
+  // the first offered word, so the select is never left showing nothing.
+  const category = expenseCategories.includes(form.category) ? form.category : (expenseCategories[0] || '');
+
   if (sLoad) return <LoadingSpinner />;
-  if (!isAdmin && !settings.cashierCanRecordExpenses) return <EmptyState title="Expense recording is owner-only" description="Ask your owner to enable cashier expenses in Settings." />;
+  // The permission catalogue's answer, not a bare settings flag — see
+  // src/industry/permissions.js. The route guard already turns a cashier
+  // without it away; this is the second answer for anyone who reaches the
+  // component another way, and firestore.rules is the third.
+  if (!permissions.can('expenses.record')) {
+    return <EmptyState title="Expense recording is owner-only" description="Ask your owner to allow cashiers to record expenses, under Team." />;
+  }
 
 const handle = async e => {
     e.preventDefault();
@@ -44,7 +60,7 @@ const handle = async e => {
     if (form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa transaction code.'); return; }
     setBusy(true);
     const write = addDoc(tenantCollection('expenses'), withBusiness({
-      description:form.description.trim(), category:form.category, amount:Number(form.amount),
+      description:form.description.trim(), category, amount:Number(form.amount),
       paymentMethod:form.paymentMethod, mpesaCode:form.paymentMethod==='M-Pesa'?form.mpesaCode.trim():null,
       recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:new Date(),
     }, businessId));
@@ -52,7 +68,7 @@ const handle = async e => {
     const { queuedOffline, error } = await raceWithTimeout(write, 4000);
     setBusy(false);
     if (error) { toast.error(friendlyErrorMessage(error)); return; }
-    toast.success(queuedOffline ? "Expense saved — it'll sync once you're back online." : 'Expense recorded');
+    toast.success(queuedOffline ? 'Expense saved offline. It will sync when you reconnect.' : 'Expense recorded');
     if (queuedOffline) write.catch((err) => toast.error(`An expense from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
     setForm(emptyForm);
   };
@@ -84,8 +100,8 @@ const handle = async e => {
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label className="label" htmlFor="expense-category">Category</label>
-            <select id="expense-category" className="input" value={form.category} onChange={set('category')}>
-              {EXPENSE_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+            <select id="expense-category" className="input" value={category} onChange={set('category')}>
+              {expenseCategories.map((c) => <option key={c}>{c}</option>)}
             </select>
           </div>
           <div>
@@ -161,6 +177,7 @@ const handle = async e => {
             caption="Expenses recorded recently"
             rows={expenses}
             rowKey={(e) => e.id}
+            mobileLayout="row"
             columns={[
               {
                 key: 'description',
@@ -168,7 +185,7 @@ const handle = async e => {
                 primary: true,
                 render: (e) => <span className="font-medium text-ink-900">{e.description}</span>,
               },
-              { key: 'category', header: 'Category', render: (e) => <span className="text-ink-600">{e.category}</span> },
+              { key: 'category', header: 'Category', mobileTrailing: true, render: (e) => <span className="text-ink-600">{e.category}</span> },
               { key: 'paymentMethod', header: 'Method', render: (e) => <span className="text-ink-600">{e.paymentMethod}</span> },
               { key: 'recordedAt', header: 'Date', render: (e) => <span className="text-ink-600">{formatDateTime(e.recordedAt)}</span> },
               { key: 'recordedByName', header: 'Recorded by', render: (e) => <span className="text-ink-600">{e.recordedByName}</span> },
@@ -176,6 +193,7 @@ const handle = async e => {
                 key: 'amount',
                 header: 'Amount',
                 numeric: true,
+                mobileTrailing: true,
                 render: (e) => <span className="font-semibold"><Money value={e.amount} /></span>,
               },
             ]}

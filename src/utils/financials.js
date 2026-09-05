@@ -42,6 +42,23 @@ function recognizeRepayment(repayment, creditSaleById) {
 
 function recognizeRefund(refund, creditSaleById) {
   const amount = Number(refund?.amount) || 0;
+
+  // SMALLEST SAFE EXTENSION to the financial engine, and the reason for
+  // it. A credit refund can derive the cost it is reversing from the
+  // credit sale it points at, in proportion to how much was paid. A
+  // RETURN of a completed cash or M-Pesa sale has no such document to
+  // look at — and it may be a PARTIAL return, so proportioning the whole
+  // sale would be wrong anyway.
+  //
+  // So a return states the cost of exactly the goods that came back, and
+  // this reads it when it is there. Every refund written before this — and
+  // every credit refund written after it — carries no such field and
+  // falls through to precisely the behaviour it has always had.
+  const stated = Number(refund?.costOfGoodsSold);
+  if (Number.isFinite(stated) && stated >= 0) {
+    return { revenue: amount, cogs: stated };
+  }
+
   const creditSale = creditSaleById.get(refund?.creditSaleId);
   if (!creditSale) {
     return { revenue: amount, cogs: 0 };

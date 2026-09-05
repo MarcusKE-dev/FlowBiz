@@ -1,9 +1,5 @@
 import { useMemo, useState } from 'react';
-import { where, orderBy } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { useFinancialsForRange } from '../hooks/useFinancials';
 import { useDailySession } from '../hooks/useDailySession';
 import { useSettings } from '../contexts/SettingsContext';
@@ -12,7 +8,7 @@ import ErrorBanner from '../components/common/ErrorBanner';
 import Modal from '../components/common/Modal';
 import { formatKES } from '../utils/currency';
 import { formatDate, formatDateTime, getRangeForPreset, startOfDay, endOfDay, todayKey } from '../utils/dateRanges';
-import { computeSupplierBalances, computeExpectedTillBalances } from '../utils/financials';
+import { computeExpectedTillBalances } from '../utils/financials';
 import { Printer, TrendingUp } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
 import Toolbar from '../components/ui/Toolbar';
@@ -26,16 +22,16 @@ import Money from '../components/ui/Money';
 import { amountOnly } from '../components/ui/format';
 import { PDF } from '../theme/tokens';
 import toast from 'react-hot-toast';
+import { roundQuantity } from '../industry/units';
 
 const PRESETS = [
   { id: 'today', label: 'Today' },
-  { id: 'week', label: 'This Week' },
-  { id: 'month', label: 'This Month' },
+  { id: 'week', label: 'This week' },
+  { id: 'month', label: 'This month' },
   { id: 'custom', label: 'Custom' },
 ];
 
 export default function Reports() {
-  const { businessId } = useAuth();
   const [preset, setPreset] = useState('today');
   const [cStart, setCStart] = useState('');
   const [cEnd, setCEnd] = useState('');
@@ -61,34 +57,16 @@ export default function Reports() {
   const { session } = useDailySession();
   const { settings } = useSettings();
 
-  const productsQ = useMemo(
-    () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
-    [businessId]
-  );
-  const purchasesQ = useMemo(
-    () => (businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null),
-    [businessId]
-  );
-  const outstandingCreditQ = useMemo(
-    () => (businessId ? tenantQuery('creditSales', businessId, where('status', 'in', ['pending', 'partial'])) : null),
-    [businessId]
-  );
-  const supplierPaymentsQ = useMemo(
-    () => (businessId ? tenantQuery('supplierPayments', businessId) : null),
-    [businessId]
-  );
-  const suppliersQ = useMemo(
-    () => (businessId ? tenantQuery('suppliers', businessId) : null),
-    [businessId]
-  );
-
-  // Query kept (it feeds the PDF export path); the list itself is no
-  // longer read on screen since inventory value moved to Dashboard.
-  useFirestoreCollection(productsQ);
-  const { data: purchasesData } = useFirestoreCollection(purchasesQ);
-  useFirestoreCollection(outstandingCreditQ);
-  const { data: supplierPaymentsData } = useFirestoreCollection(supplierPaymentsQ);
-  const { data: suppliersData } = useFirestoreCollection(suppliersQ);
+  // FIVE WHOLE-BUSINESS LISTENERS USED TO OPEN HERE and feed nothing.
+  // The products and outstanding-credit ones had their results discarded
+  // outright (a comment claimed they fed the PDF; nothing read them), and
+  // the purchases / supplierPayments / suppliers three existed only for
+  // the "current supplier balance" line, which was wrong to compute from
+  // this page's data and has been replaced by the period figure the PDF
+  // already had in hand. Every number on this page and in its export now
+  // comes from useFinancialsForRange, which is date-bounded — so opening
+  // Reports no longer streams a shop's entire catalogue, purchase history
+  // and open credit book to the device for nothing.
 
   const bestSellers = useMemo(() => {
     const map = {};
@@ -123,11 +101,6 @@ export default function Reports() {
     });
     return Object.values(map).sort((a, b) => b.qty - a.qty).slice(0, 8);
   }, [sales, creditSales]);
-
-  const supplierBalances = useMemo(
-    () => computeSupplierBalances(purchasesData, supplierPaymentsData, suppliersData),
-    [purchasesData, supplierPaymentsData, suppliersData]
-  );
 
   // Cash and M-Pesa purchase/supplier payment breakdowns (same as Close Day)
   const cashPurchases = useMemo(
@@ -263,7 +236,7 @@ export default function Reports() {
       // Helper for clean data rows
       const drawDataRow = (label, value, isBold = false, isHighlight = false, valueColor = PDF.ink) => {
         if (isHighlight) {
-          doc.setFillColor(...PDF.positiveTint);
+          doc.setFillColor(...PDF.primaryTint);
           doc.roundedRect(marginX, y - 3.5, contentWidth, 6, 0.8, 0.8, 'F');
         }
         doc.setFont('helvetica', isBold ? 'bold' : 'normal');
@@ -289,11 +262,11 @@ export default function Reports() {
       }
       drawDataRow('+ Cash Sales Received', formatKES(summary.totalCashSales));
       drawDataRow('+ Debt Repayments Collected (Cash)', formatKES(summary.totalDebtRepaymentsCash));
-      drawDataRow('− Shop Expenses Paid (Cash)', `- ${formatKES(summary.totalExpensesCash)}`);
-      drawDataRow('− Customer Refunds Issued (Cash)', `- ${formatKES(summary.totalRefundsCash)}`);
-      drawDataRow('− Direct Stock Purchases Paid (Cash)', `- ${formatKES(cashPurchases)}`);
-      drawDataRow('− Supplier Debt Payments (Cash)', `- ${formatKES(cashSupplierPay)}`);
-      drawDataRow('= Net Expected Cash in Drawer', formatKES(expectedCashAtClose), true, true, PDF.positive);
+      drawDataRow('- Shop Expenses Paid (Cash)', `- ${formatKES(summary.totalExpensesCash)}`);
+      drawDataRow('- Customer Refunds Issued (Cash)', `- ${formatKES(summary.totalRefundsCash)}`);
+      drawDataRow('- Direct Stock Purchases Paid (Cash)', `- ${formatKES(cashPurchases)}`);
+      drawDataRow('- Supplier Debt Payments (Cash)', `- ${formatKES(cashSupplierPay)}`);
+      drawDataRow('= Net Expected Cash in Drawer', formatKES(expectedCashAtClose), true, true, PDF.primary);
       y += 3;
 
       // 3. M-Pesa Till Reconciliation Breakdown
@@ -303,35 +276,47 @@ export default function Reports() {
       }
       drawDataRow('+ M-Pesa Sales Received', formatKES(summary.totalMpesaSales));
       drawDataRow('+ Debt Repayments Collected (M-Pesa)', formatKES(summary.totalDebtRepaymentsMpesa));
-      drawDataRow('− Shop Expenses Paid (M-Pesa)', `- ${formatKES(summary.totalExpensesMpesa)}`);
-      drawDataRow('− Customer Refunds Issued (M-Pesa)', `- ${formatKES(summary.totalRefundsMpesa)}`);
-      drawDataRow('− Direct Stock Purchases Paid (M-Pesa)', `- ${formatKES(mpesaPurchases)}`);
-      drawDataRow('− Supplier Debt Payments (M-Pesa)', `- ${formatKES(mpesaSupplierPay)}`);
-      drawDataRow('= Net Expected M-Pesa Till Balance', formatKES(expectedMpesaAtClose), true, true, PDF.positive);
+      drawDataRow('- Shop Expenses Paid (M-Pesa)', `- ${formatKES(summary.totalExpensesMpesa)}`);
+      drawDataRow('- Customer Refunds Issued (M-Pesa)', `- ${formatKES(summary.totalRefundsMpesa)}`);
+      drawDataRow('- Direct Stock Purchases Paid (M-Pesa)', `- ${formatKES(mpesaPurchases)}`);
+      drawDataRow('- Supplier Debt Payments (M-Pesa)', `- ${formatKES(mpesaSupplierPay)}`);
+      drawDataRow('= Net Expected M-Pesa Till Balance', formatKES(expectedMpesaAtClose), true, true, PDF.primary);
       y += 3;
 
       // 4. Profit & Loss Statement (Cash-Flow / Operating)
       drawSectionHeader('3. Cash-Flow Profit & Loss Statement');
-      drawDataRow('Recognized Cash-Flow Revenue (Sales + Debt Repaid − Refunds)', formatKES(summary.revenue));
-      drawDataRow('− Cost of Goods Sold (COGS)', `- ${formatKES(summary.costOfGoodsSold)}`);
-      drawDataRow('= Gross Profit', formatKES(summary.grossProfit), true, true, PDF.positive);
-      drawDataRow('− Total Operating Expenses', `- ${formatKES(summary.totalExpenses)}`);
-      drawDataRow('= Net Operating Profit', formatKES(summary.netProfit), true, true, summary.netProfit >= 0 ? PDF.positive : PDF.negative);
+      drawDataRow('Recognized Cash-Flow Revenue (Sales + Debt Repaid - Refunds)', formatKES(summary.revenue));
+      drawDataRow('- Cost of Goods Sold (COGS)', `- ${formatKES(summary.costOfGoodsSold)}`);
+      drawDataRow('= Gross Profit', formatKES(summary.grossProfit), true, true, PDF.primary);
+      drawDataRow('- Total Operating Expenses', `- ${formatKES(summary.totalExpenses)}`);
+      drawDataRow('= Net Operating Profit', formatKES(summary.netProfit), true, true, summary.netProfit >= 0 ? PDF.primary : PDF.negative);
       y += 3;
 
       // 5. Purchases & Supplier Restocking Summary
       drawSectionHeader('4. Stock Purchases & Supplier Credit Activity');
       drawDataRow('Total Stock Purchases (Cash & M-Pesa Paid)', formatKES(cashPurchases + mpesaPurchases));
       drawDataRow('Stock Taken on Supplier Credit (Payables Added)', formatKES(creditPurchases), false, false, PDF.negative);
-      drawDataRow('Supplier Debt Payments Cleared', formatKES(cashSupplierPay + mpesaSupplierPay), false, false, PDF.positive);
-      drawDataRow('Total Current Supplier Balance Outstanding', formatKES(supplierBalances.reduce((a, b) => a + b.balance, 0)), true);
+      drawDataRow('Supplier Debt Payments Cleared', formatKES(cashSupplierPay + mpesaSupplierPay));
+      // This is the PERIOD's net movement, and it is labelled as such.
+      // It used to say "Total Current Supplier Balance Outstanding" while
+      // being computed from the date-ranged purchase and payment lists
+      // this page already listens to — so a report run for "Today"
+      // announced that a shop owed its suppliers almost nothing, and a
+      // payment made in the period against a purchase from before it was
+      // dropped entirely. What a business owes right now is a balance,
+      // not a period figure; the Suppliers page computes it from the
+      // whole ledger and remains the place to read it.
+      drawDataRow('Net Change in Supplier Credit This Period', formatKES(creditPurchases - (cashSupplierPay + mpesaSupplierPay)), true);
       y += 3;
 
       // 6. Top Sellers & Low Stock (compact)
       if (bestSelling.length > 0) {
         drawSectionHeader('5. Top-Performing Product Sales');
         bestSelling.forEach((p, idx) => {
-          drawDataRow(`${idx + 1}. ${p.name} (${p.qty} units)`, formatKES(p.revenue));
+          // Rounded at the point of display: summing decimal quantities
+          // across a month accumulates the usual binary noise, and a
+          // report that says "50.30900000000001 units" is a bug report.
+          drawDataRow(`${idx + 1}. ${p.name} (${roundQuantity(p.qty, 'metre')} units)`, formatKES(p.revenue));
         });
         y += 3;
       }
@@ -351,7 +336,7 @@ export default function Reports() {
       toast.success('Report ready.');
       setPdfModalOpen(false);
     } catch (err) {
-      toast.error('Failed to generate PDF. Check console.');
+      toast.error('The report could not be generated. Try a shorter date range, or reload the page.');
       console.error(err);
     }
   };
@@ -362,14 +347,9 @@ export default function Reports() {
         title="Reports"
         description="Where the money went over the period you choose."
         actions={
-          <>
-            <Link to="/advanced-analytics" className="btn-secondary">
-              <TrendingUp className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Advanced analytics
-            </Link>
-            <button className="btn-primary" onClick={() => setPdfModalOpen(true)}>
-              <Printer className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Export report
-            </button>
-          </>
+          <Link to="/advanced-analytics" className="btn-secondary">
+            <TrendingUp className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Advanced analytics
+          </Link>
         }
       />
 
@@ -436,6 +416,7 @@ export default function Reports() {
               caption="Best selling products over the selected period"
               rows={bestSellers}
               rowKey={(r) => r.name}
+              mobileLayout="row"
               columns={[
                 {
                   key: 'name',
@@ -443,8 +424,8 @@ export default function Reports() {
                   primary: true,
                   render: (r) => <span className="font-medium text-ink-900">{r.name}</span>,
                 },
-                { key: 'qty', header: 'Units', numeric: true, render: (r) => <span className="font-semibold text-ink-900">{r.qty}</span> },
-                { key: 'revenue', header: 'Revenue', numeric: true, render: (r) => <Money value={r.revenue} /> },
+                { key: 'qty', header: 'Units', numeric: true, mobileTrailing: true, render: (r) => <span className="font-semibold text-ink-900">{roundQuantity(r.qty, 'metre')}</span> },
+                { key: 'revenue', header: 'Revenue', numeric: true, mobileTrailing: true, render: (r) => <Money value={r.revenue} /> },
                 {
                   key: 'profit',
                   header: 'Profit',
@@ -464,6 +445,22 @@ export default function Reports() {
               }
             />
           </Section>
+
+          {/* The export is an action on this period's data, not on the
+              page, so it sits at the end of the data rather than in the
+              header — you decide to export after reading the report. */}
+          <div className="flex flex-col gap-3 rounded-panel border border-line bg-surface p-4
+                          sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-body text-ink-600">
+              A print-ready accounting statement for this period, including full till reconciliation.
+            </p>
+            <button
+              className="btn-primary shrink-0 sm:w-auto"
+              onClick={() => setPdfModalOpen(true)}
+            >
+              <Printer className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Export report
+            </button>
+          </div>
         </>
       )}
 

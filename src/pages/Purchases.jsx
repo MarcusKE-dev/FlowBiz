@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { doc, writeBatch, increment, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
+import { doc, writeBatch, serverTimestamp, orderBy, where, limit, addDoc, collection } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -7,7 +7,14 @@ import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { useHardwareScanner } from '../hooks/useHardwareScanner';
 import { findProductByCode } from '../utils/scannerService';
+import { productUnit, normalizeQuantity } from '../utils/lineItems';
+import { DEFAULT_UNIT, getUnit, unitStep, formatQuantityWithUnit } from '../industry/units';
+import { useIndustry } from '../hooks/useIndustry';
+import { buildBatchDocument, isValidExpiryDate, todayISO } from '../utils/batches';
 import { createProduct } from '../utils/products';
+import { variantsOf } from '../utils/variants';
+import { resolveReceiptDeltas, hasPackSize, packSizeOf, packUnitOf, toBaseQuantity } from '../utils/inventory';
+import { applyStockDeltas } from '../utils/stockWrites';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
 import ProductFormModal from '../components/products/ProductFormModal';
@@ -20,13 +27,25 @@ import DataTable from '../components/ui/DataTable';
 import StatusPill from '../components/ui/StatusPill';
 import Money from '../components/ui/Money';
 import { formatDateTime } from '../utils/dateRanges';
+import { roundMoney } from '../utils/currency';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
 
-const empty = { supplierId: '', productId: '', quantity: '', costPricePerUnit: '', paymentStatus: 'paid', paymentMethod: 'Cash', mpesaCode: '' };
+const empty = {
+  supplierId: '', productId: '', variantId: '', quantity: '', costPricePerUnit: '',
+  // Is `quantity` counted in packs or in singles? Only ever asked when
+  // the selected product actually has a pack size.
+  receiveAsPack: false,
+  paymentStatus: 'paid', paymentMethod: 'Cash', mpesaCode: '',
+  // Pharmacy only. Absent from every other profile's form and from every
+  // purchase document those profiles write.
+  batchNumber: '', expiryDate: '',
+};
 
 export default function Purchases() {
   const { profile, businessId } = useAuth();
+  const industry = useIndustry();
+  const batchesOn = industry.can('batches');
   const productsQ = useMemo(() => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null), [businessId]);
   const suppliersQ = useMemo(() => (businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null), [businessId]);
   const purchasesQ = useMemo(() => (businessId ? tenantQuery('purchases', businessId, orderBy('purchasedAt', 'desc'), limit(50)) : null), [businessId]);
@@ -43,14 +62,59 @@ export default function Purchases() {
   const [prefillBarcode, setPrefillBarcode] = useState(null);
   const [scannerOpen, setScannerOpen] = useState(false);
   const set = (f) => (e) => setForm((p) => ({ ...p, [f]: e.target.value }));
+  // Changing the product clears the chosen version — a "Black / M" picked
+  // on a shirt must never survive into a delivery of shoes. Done in the
+  // handler rather than an effect so there is no render where the form
+  // holds a version that belongs to a different product.
+  const setProductId = (e) => setForm((p) => ({ ...p, productId: e.target.value, variantId: '', receiveAsPack: false }));
 
   useEffect(() => {
     if (newSupplierId) setForm((p) => ({ ...p, supplierId: newSupplierId }));
   }, [newSupplierId]);
 
+
   const selProd = products.find((p) => p.id === form.productId);
   const selSupp = suppliers.find((s) => s.id === form.supplierId);
-  const totalCost = (Number(form.quantity) || 0) * (Number(form.costPricePerUnit) || 0);
+  // A boutique can define sizes and colours, but until now had no way to
+  // RECEIVE any: this form wrote `stock` and never `variantStock`, so the
+  // per-version figures the counter sells against stayed at zero forever.
+  // Receiving a versioned product therefore requires choosing the version,
+  // and the write moves the version and the product total together.
+  const productVariants = useMemo(() => (selProd ? variantsOf(selProd) : []), [selProd]);
+  const needsVariant = productVariants.length > 0;
+  const selVariant = productVariants.find((v) => v.id === form.variantId) || null;
+
+  // Pack and single. A crate of 24 is received as one crate and booked in
+  // as 24 bottles; the conversion is done by the ONE inventory foundation
+  // at the moment the delta is resolved, so nothing downstream — stock,
+  // valuation, the counter, reports — ever sees a crate.
+  const packSizesOn = industry.can('packSizes');
+  const offersPacks = packSizesOn && hasPackSize(selProd);
+  const receivingPacks = offersPacks && form.receiveAsPack;
+  const packSize = packSizeOf(selProd);
+  const packUnitShort = offersPacks ? getUnit(packUnitOf(selProd)).short : null;
+  // The product's OWN unit — the one stock is held in and every downstream
+  // figure is counted in. Declared before `entryUnit`, which is derived
+  // from it: `const` bindings are in the temporal dead zone until the line
+  // that declares them runs, so reading this from above would throw on
+  // every single render of the page rather than only in some edge case.
+  //
+  // Receiving 12.5 m of cable is the same arithmetic as selling it, so it
+  // goes through the same unit rounding — see industry/units.js.
+  const purchaseUnit = productUnit(selProd);
+  const purchaseUnitShort = getUnit(purchaseUnit).short;
+  const isMeasuredPurchase = purchaseUnit !== DEFAULT_UNIT;
+  // The unit the QUANTITY box is counted in, which is the pack when one
+  // is being received and the product's own unit otherwise.
+  const entryUnit = receivingPacks ? packUnitOf(selProd) : purchaseUnit;
+  const baseQuantity = toBaseQuantity(
+    selProd, normalizeQuantity(form.quantity, entryUnit),
+    { pack: receivingPacks, packSizes: packSizesOn }
+  );
+  // The cost typed is the cost per THING RECEIVED — per crate when a crate
+  // is being received — because that is what the delivery note says. The
+  // per-single cost stored on the product is derived from it below.
+  const totalCost = roundMoney(normalizeQuantity(form.quantity, entryUnit) * (Number(form.costPricePerUnit) || 0));
 
   const handleScanDetected = (code) => {
     setScannerOpen(false);
@@ -76,33 +140,92 @@ export default function Purchases() {
       toast.error('Please select a product.');
       return;
     }
+    if (needsVariant && !form.variantId) {
+      toast.error('Choose which version this delivery is.');
+      return;
+    }
     if (!form.quantity || !form.costPricePerUnit) {
-      toast.error('Enter quantity and cost price.');
+      toast.error('Enter both a quantity and a cost price.');
       return;
     }
     if (form.paymentStatus === 'paid' && form.paymentMethod === 'M-Pesa' && !form.mpesaCode.trim()) {
       toast.error('Enter M-Pesa transaction code.');
       return;
     }
+    if (batchesOn && form.expiryDate && !isValidExpiryDate(form.expiryDate)) {
+      toast.error('Enter the expiry date as it is printed on the box.');
+      return;
+    }
 
     setBusy(true);
     try {
-      const qty = Number(form.quantity);
-      const cost = Number(form.costPricePerUnit);
-      const total = qty * cost;
+      const entered = normalizeQuantity(form.quantity, entryUnit);
+      if (entered <= 0) throw new Error('Enter a quantity greater than zero.');
+      // What actually goes on the shelf, in the unit the shop sells in.
+      // The pack conversion is done by the ONE inventory foundation, not
+      // here — this is the same call, with the same rounding, that the
+      // stock delta below is resolved through, so the two can never
+      // disagree about how many bottles a crate is.
+      const qty = toBaseQuantity(selProd, entered, { pack: receivingPacks, packSizes: packSizesOn });
+      if (qty <= 0) throw new Error('That is less than one whole item.');
+      const enteredCost = Number(form.costPricePerUnit);
+      const total = roundMoney(entered * enteredCost);
+      // The product's cost price is always PER SINGLE, whatever the
+      // delivery was counted in — otherwise a crate price of 2,400 would
+      // become the cost of one bottle and every margin in the business
+      // would read as a loss.
+      const cost = receivingPacks ? roundMoney(enteredCost / packSize) : enteredCost;
       const batch = writeBatch(db);
 
-      // Links the selected supplier to the product
-      const productRef = doc(db, 'products', form.productId);
-      const productUpdates = {
-        stock: increment(qty),
-        costPrice: cost,
-        updatedAt: serverTimestamp(),
-      };
-      if (form.supplierId) {
-        productUpdates.supplierId = form.supplierId;
+      // Receiving goes through the ONE inventory foundation, exactly as a
+      // sale does — so a versioned product moves `variantStock.<id>` and
+      // `stock` in the SAME dotted-path write, and the two can never drift
+      // apart. Both are Firestore increments, which is what keeps a
+      // delivery booked in on two tills at once correct, and what lets the
+      // whole batch queue as one mutation offline.
+      //
+      // Price and supplier are a plain overwrite rather than a movement,
+      // so they ride along in the SAME product update rather than as a
+      // second write to the same document.
+      const productFields = { [form.productId]: { costPrice: cost } };
+      if (form.supplierId) productFields[form.productId].supplierId = form.supplierId;
+
+      applyStockDeltas(
+        batch,
+        resolveReceiptDeltas(
+          [{
+            productId: form.productId,
+            quantity: entered,
+            pack: receivingPacks,
+            variantId: form.variantId || undefined,
+          }],
+          [selProd],
+          { packSizes: packSizesOn }
+        ),
+        { productFields }
+      );
+
+      // With batch tracking on, receiving stock ALSO creates the batch
+      // record — in the same write batch, so a pharmacy can never end up
+      // with product stock that no batch accounts for. That invariant is
+      // what makes FEFO trustworthy: the batch ledger always sums to the
+      // product total.
+      if (batchesOn) {
+        const batchRef = doc(collection(db, 'productBatches'));
+        batch.set(batchRef, withBusiness(buildBatchDocument({
+          productId: form.productId,
+          productName: selVariant ? `${selProd?.name || ''} (${selVariant.label})` : (selProd?.name || ''),
+          batchNumber: form.batchNumber,
+          expiryDate: form.expiryDate,
+          quantity: qty,
+          costPrice: cost,
+          supplierId: form.supplierId || null,
+          supplierName: selSupp?.name || null,
+          unit: purchaseUnit,
+          receivedBy: profile.uid,
+          receivedByName: profile.displayName,
+        }), businessId));
       }
-      batch.update(productRef, productUpdates);
 
       const purchRef = doc(collection(db, 'purchases'));
       batch.set(
@@ -114,6 +237,16 @@ export default function Purchases() {
             productId: form.productId,
             productName: selProd?.name || '',
             quantity: qty,
+            ...(isMeasuredPurchase ? { unit: purchaseUnit } : {}),
+            ...(selVariant ? { variantId: selVariant.id, variantLabel: selVariant.label } : {}),
+            ...(receivingPacks ? {
+              packsReceived: entered,
+              packUnit: packUnitOf(selProd),
+              packSize,
+              costPricePerPack: enteredCost,
+            } : {}),
+            ...(batchesOn && form.batchNumber.trim() ? { batchNumber: form.batchNumber.trim() } : {}),
+            ...(batchesOn && isValidExpiryDate(form.expiryDate) ? { expiryDate: form.expiryDate } : {}),
             costPricePerUnit: cost,
             totalCost: total,
             purchasedBy: profile.uid,
@@ -131,7 +264,7 @@ export default function Purchases() {
       const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
       if (error) throw error;
 
-      toast.success(queuedOffline ? "Purchase queued offline — it'll sync soon." : 'Purchase recorded and stock updated');
+      toast.success(queuedOffline ? 'Purchase saved offline. It will sync when you reconnect.' : 'Purchase recorded and stock updated');
       if (queuedOffline) commit.catch((err) => toast.error(`A purchase from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
 
       setForm(empty);
@@ -151,7 +284,7 @@ export default function Purchases() {
       await refetchSuppliers();
     }
     setSupplierModal(false);
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Supplier added');
+    toast.success(queuedOffline ? 'Saved offline. It will sync when you reconnect.' : 'Supplier added');
   };
 
   const hasSuppliers = suppliers && suppliers.length > 0;
@@ -177,7 +310,7 @@ export default function Purchases() {
           </div>
           <div>
             <label className="label">Product</label>
-            <select className="input" value={form.productId} onChange={set('productId')} required>
+            <select className="input" value={form.productId} onChange={setProductId} required>
               <option value="" disabled>{hasProducts ? 'Select a product' : 'No products yet'}</option>
               {hasProducts && products.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
@@ -186,16 +319,103 @@ export default function Purchases() {
             <button type="button" className="mt-2 text-secondary font-medium text-primary-700 hover:underline" onClick={() => { setPrefillBarcode(null); setProductModal(true); }}>Add a product</button>
           </div>
         </div>
+        {needsVariant && (
+          <div>
+            <label className="label">Which version?</label>
+            <select className="input" value={form.variantId} onChange={set('variantId')} required>
+              <option value="" disabled>Select a version</option>
+              {productVariants.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.label} · {formatQuantityWithUnit(v.stock, selProd?.unit, { showPiece: true })} in stock
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-secondary text-ink-400">
+              This delivery is booked in against the version you choose, and the product total goes up by the same amount.
+            </p>
+          </div>
+        )}
+        {offersPacks && (
+          <div>
+            <span className="label">Received as</span>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setForm((p) => ({ ...p, receiveAsPack: false }))}
+                className={`rounded-control border text-button transition-colors ${!form.receiveAsPack ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-line text-ink-600 hover:bg-ink-50'}`}
+              >
+                Single {getUnit(purchaseUnit).label.toLowerCase()}s
+              </button>
+              <button
+                type="button"
+                onClick={() => setForm((p) => ({ ...p, receiveAsPack: true }))}
+                className={`rounded-control border text-button transition-colors ${form.receiveAsPack ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-line text-ink-600 hover:bg-ink-50'}`}
+              >
+                {getUnit(packUnitOf(selProd)).label}s of {packSize}
+              </button>
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label">Qty received</label>
-            <input type="number" min="1" className="input" value={form.quantity} onChange={set('quantity')} required />
+            <label className="label">
+              Qty received
+              {(isMeasuredPurchase || receivingPacks) && (
+                <span className="ml-1 font-normal normal-case text-ink-400">
+                  ({receivingPacks ? packUnitShort : purchaseUnitShort})
+                </span>
+              )}
+            </label>
+            <input
+              type="number"
+              min={unitStep(entryUnit)}
+              step={unitStep(entryUnit)}
+              inputMode={unitStep(entryUnit) === 1 ? 'numeric' : 'decimal'}
+              className="input"
+              value={form.quantity}
+              onChange={set('quantity')}
+              required
+            />
+            {receivingPacks && baseQuantity > 0 && (
+              <p className="mt-1 text-secondary text-ink-400">
+                Adds <span className="num font-medium text-ink-600">{formatQuantityWithUnit(baseQuantity, purchaseUnit, { showPiece: true })}</span> to stock.
+              </p>
+            )}
           </div>
           <div>
-            <label className="label">Cost / unit (KES)</label>
+            <label className="label">
+              Cost / {receivingPacks ? packUnitShort : (isMeasuredPurchase ? purchaseUnitShort : 'unit')} (KES)
+            </label>
             <input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required />
           </div>
         </div>
+        {batchesOn && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Batch number <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
+              <input
+                className="input font-mono"
+                value={form.batchNumber}
+                onChange={set('batchNumber')}
+                placeholder="As printed on the box"
+              />
+            </div>
+            <div>
+              <label className="label">Expiry date</label>
+              <input
+                type="date"
+                className="input"
+                value={form.expiryDate}
+                min={todayISO()}
+                onChange={set('expiryDate')}
+              />
+              <p className="mt-1 text-secondary text-ink-400">
+                Stock is sold earliest-expiry-first. Leave blank only if the pack carries no expiry.
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="flex items-baseline justify-between rounded-control border border-line bg-ink-50 px-3 py-2 text-body text-ink-600">
           <span>Total cost</span>
           <span className="font-semibold text-ink-900"><Money value={totalCost} /></span>
@@ -235,6 +455,7 @@ export default function Purchases() {
       <ScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScanDetected} />
 
       <ProductFormModal
+        allProducts={products}
         open={productModal}
         onClose={() => { setProductModal(false); setPrefillBarcode(null); }}
         prefillSupplierId={form.supplierId || null}
@@ -249,7 +470,7 @@ export default function Purchases() {
             }));
             setProductModal(false);
             setPrefillBarcode(null);
-            toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : 'Product added and selected');
+            toast.success(queuedOffline ? 'Saved offline. It will sync when you reconnect.' : 'Product added and selected');
             // Returned so ProductFormModal can attach a photo to the new product.
             return { id };
           } catch (err) {
@@ -273,6 +494,7 @@ export default function Purchases() {
             caption="Recent stock purchases"
             rows={purchases}
             rowKey={(p) => p.id}
+            mobileLayout="row"
             columns={[
               {
                 key: 'productName',
@@ -280,7 +502,8 @@ export default function Purchases() {
                 primary: true,
                 render: (p) => (
                   <span className="text-ink-900">
-                    <span className="num">{p.quantity}</span> × {p.productName}
+                    <span className="num">{formatQuantityWithUnit(p.quantity, p.unit)}</span> × {p.productName}
+                    {p.variantLabel && <span className="text-ink-500"> ({p.variantLabel})</span>}
                   </span>
                 ),
               },
@@ -289,6 +512,7 @@ export default function Purchases() {
               {
                 key: 'paymentStatus',
                 header: 'Status',
+                mobileTrailing: true,
                 render: (p) =>
                   p.paymentStatus === 'paid'
                     ? <StatusPill tone="positive">Paid</StatusPill>
@@ -298,6 +522,7 @@ export default function Purchases() {
                 key: 'totalCost',
                 header: 'Total cost',
                 numeric: true,
+                mobileTrailing: true,
                 render: (p) => <span className="font-semibold"><Money value={p.totalCost} /></span>,
               },
             ]}

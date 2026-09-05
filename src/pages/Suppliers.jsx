@@ -65,7 +65,7 @@ export default function Suppliers() {
 
     const { queuedOffline, error: writeError } = await raceWithTimeout(write, 4000);
     if (writeError) { toast.error(friendlyErrorMessage(writeError)); throw writeError; }
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
+    toast.success(queuedOffline ? 'Saved offline. It will sync when you reconnect.' : (editing ? 'Supplier updated.' : 'Supplier added.'));
     await refetch();
     setModal(false); setEditing(null);
   };
@@ -73,14 +73,14 @@ export default function Suppliers() {
   const handleDel = async () => {
     const stillExists = suppliers.some((s) => s.id === pendDel.id);
     if (!stillExists) {
-      toast.success('Already removed.');
+      toast.success('That supplier was already removed.');
       await refetch();
       setPendDel(null);
       return;
     }
     const balance = owedMap[pendDel.id] || 0;
     if (balance > 0.005) {
-      toast.error(`Can't remove "${pendDel.name}" — they still have an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
+      toast.error(`"${pendDel.name}" still has an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
       setPendDel(null);
       return;
     }
@@ -88,7 +88,7 @@ export default function Suppliers() {
     const { queuedOffline, error: deleteError } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
     setDeleting(false);
     if (deleteError) { toast.error(friendlyErrorMessage(deleteError)); return; }
-    toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
+    toast.success(queuedOffline ? 'Removed offline. It will sync when you reconnect.' : 'Supplier removed.');
     setPendDel(null);
     await refetch();
   };
@@ -97,9 +97,9 @@ export default function Suppliers() {
     e.preventDefault();
     const amount = Number(payAmt);
     const balance = owedMap[selSupp?.id]||0;
-    if (amount<=0) { toast.error('Enter a positive amount.'); return; }
+    if (amount<=0) { toast.error('Enter an amount greater than zero.'); return; }
     if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatKES(balance)}.`); return; }
-    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
+    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter the M-Pesa transaction code.'); return; }
     setPaying(true);
     const batch = writeBatch(db);
     const expRef = doc(collection(db,'expenses'));
@@ -112,7 +112,7 @@ export default function Suppliers() {
     const { queuedOffline, error: commitError } = await raceWithTimeout(commit, 4000);
     setPaying(false);
     if (commitError) { toast.error(friendlyErrorMessage(commitError)); return; }
-    toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
+    toast.success(queuedOffline ? 'Payment saved offline. It will sync when you reconnect.' : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}.`);
     if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
     setPayModal(false); setPayAmt(''); setPayCode('');
   };
@@ -138,6 +138,7 @@ export default function Suppliers() {
           caption="Suppliers and outstanding balances"
           rows={suppliers}
           rowKey={(s) => s.id}
+          mobileLayout="row"
           columns={[
             {
               key: 'name',
@@ -158,6 +159,7 @@ export default function Suppliers() {
               key: 'balance',
               header: 'Outstanding',
               numeric: true,
+              mobileTrailing: true,
               render: (s) => {
                 const balance = owedMap[s.id] || 0;
                 return (
@@ -209,7 +211,7 @@ export default function Suppliers() {
         open={!!pendDel}
         title="Remove supplier?"
         message={(owedMap[pendDel?.id]||0) > 0.005
-          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)} — pay it off first.`
+          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)}. Pay it off first.`
           : `"${pendDel?.name}" will be removed. Purchase records stay intact.`}
         confirmLabel={deleting ? 'Removing…' : 'Remove'}
         confirmDisabled={deleting}

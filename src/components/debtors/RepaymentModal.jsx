@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import Modal from '../common/Modal';
-import { formatKES } from '../../utils/currency';
 import { Banknote, Smartphone } from 'lucide-react';
+import StatementBlock, { StatementRow } from '../ui/StatementBlock';
+import Money from '../ui/Money';
 
 export default function RepaymentModal({ open, customer, totalOwed, onClose, onSubmit }) {
   const [amount, setAmount]     = useState('');
@@ -30,19 +31,21 @@ export default function RepaymentModal({ open, customer, totalOwed, onClose, onS
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={`Repayment — ${customer.name}`}>
+    <Modal open={open} onClose={onClose} title={`Repayment: ${customer.name}`}>
       <form onSubmit={handle} className="space-y-3">
-        <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-danger-600">{formatKES(effectiveOwed)}</span></div>
+        <StatementBlock>
+          <StatementRow label="Outstanding" value={<Money value={effectiveOwed} tone="negative" />} />
+        </StatementBlock>
         <div>
           <label className="label">Amount received (KES)</label>
           <input type="number" min="0.01" max={effectiveOwed} step="0.01" className="input" value={amount} onChange={e=>setAmount(e.target.value)} autoFocus disabled={busy} />
-          {overRepayment && <p className="mt-1 text-xs text-danger-600">Amount exceeds the outstanding balance of {formatKES(effectiveOwed)}.</p>}
+          {overRepayment && <p className="mt-1 text-secondary text-danger-700">Amount exceeds the outstanding balance of <Money value={effectiveOwed} />.</p>}
         </div>
         <div>
           <label className="label">Payment method</label>
           <div className="grid grid-cols-2 gap-2">
             {['Cash','M-Pesa'].map(m=>(
-              <button key={m} type="button" disabled={busy} onClick={()=>setMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${method===m?'border-primary-600 bg-primary-50 text-primary-800':'border-ink-200 text-ink-500'}`}>
+              <button key={m} type="button" disabled={busy} onClick={()=>setMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-control border px-3 py-2.5 text-button transition-colors ${method===m?'border-primary-600 bg-primary-50 text-primary-800':'border-line text-ink-600 hover:bg-ink-50 hover:text-ink-900'}`}>
                 {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
               </button>
             ))}

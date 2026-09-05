@@ -52,7 +52,7 @@ export async function handlePaystackInitialize(request, env) {
 
   const business = await getDocument(env, 'businesses', callerProfile.businessId);
   if (business?.subscription?.plan === 'lifetime' && business?.subscription?.status === 'active') {
-    return errorResponse('This business already has a FlowBiz Lifetime license — nothing more to buy.', 400);
+    return errorResponse('This business already has a FlowBiz Lifetime license.', 400);
   }
 
   const email = callerProfile.email || caller.email;

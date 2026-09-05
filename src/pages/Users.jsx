@@ -14,6 +14,7 @@ import EmptyState from '../components/common/EmptyState';
 import Modal from '../components/common/Modal';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+import CashierPermissions from '../components/team/CashierPermissions';
 
 export default function Users() {
   const { createStaffInvite, cancelStaffInvite, removeStaffAccount, toggleMemberActive, profile, businessId, isPro } = useAuth();
@@ -44,9 +45,9 @@ export default function Users() {
   const copyLink = async (inviteId) => {
     try {
       await navigator.clipboard.writeText(inviteLink(inviteId));
-      toast.success('Invite link copied');
+      toast.success('Invite link copied.');
     } catch {
-      toast.error('Could not copy — long-press the link to copy it manually.');
+      toast.error('The link could not be copied. Press and hold it to copy it manually.');
     }
   };
 
@@ -55,7 +56,7 @@ export default function Users() {
     if (!newName.trim()) return;
 
     if (!isPro && (totalUsersCount + invites.length) >= 2) {
-      toast.error('Free plan allows a maximum of 1 Owner and 1 additional Staff member. Upgrade to FlowBiz Pro to add more, or cancel a pending invite first.');
+      toast.error('The free plan allows one owner and one other staff member. Upgrade to FlowBiz Pro to add more, or cancel a pending invite first.');
       return;
     }
 
@@ -63,7 +64,7 @@ export default function Users() {
     try {
       const invite = await createStaffInvite({ displayName: newName.trim(), role: newRole });
       if (invite.queuedOffline) {
-        toast.success("Invite saved — the link will be ready once you're back online.");
+        toast.success('Invite saved offline. The link will be ready when you reconnect.');
         setModal(false);
       } else {
         setFreshInvite({ id: invite.id, displayName: newName.trim(), role: newRole });
@@ -80,7 +81,7 @@ export default function Users() {
     if (!pendCancelInvite) return;
     try {
       await cancelStaffInvite(pendCancelInvite.id);
-      toast.success('Invite cancelled');
+      toast.success('Invite cancelled.');
     } catch (err) {
       toast.error(friendlyErrorMessage(err));
     } finally {
@@ -91,13 +92,13 @@ export default function Users() {
   const handleToggle = async () => {
     if (!pendToggle) return;
     if (pendToggle.role === 'owner' && pendToggle.active !== false && ownerCount <= 1) {
-      toast.error("This is the only active owner — deactivating them would lock everyone out. Invite another owner first.");
+      toast.error('This is the only active owner. Invite another owner before deactivating them.');
       setPendToggle(null);
       return;
     }
     try {
       await toggleMemberActive(pendToggle.id, pendToggle.active === false);
-      toast.success(pendToggle.active !== false ? 'Account deactivated' : 'Account reactivated');
+      toast.success(pendToggle.active !== false ? 'Account deactivated.' : 'Account reactivated.');
     } catch (err) {
       toast.error(friendlyErrorMessage(err));
     } finally {
@@ -149,6 +150,7 @@ export default function Users() {
             caption="Invites that have not been accepted yet"
             rows={invites}
             rowKey={(inv) => inv.id}
+            mobileLayout="row"
             columns={[
               {
                 key: 'displayName',
@@ -159,6 +161,7 @@ export default function Users() {
               {
                 key: 'role',
                 header: 'Role',
+                mobileTrailing: true,
                 render: (inv) => (
                   <StatusPill tone={inv.role === 'owner' ? 'info' : 'neutral'}>
                     {inv.role === 'owner' ? 'Owner' : 'Cashier'}
@@ -202,6 +205,7 @@ export default function Users() {
             caption="People with access to this business"
             rows={users}
             rowKey={(u) => u.id}
+            mobileLayout="row"
             columns={[
               {
                 key: 'displayName',
@@ -218,6 +222,7 @@ export default function Users() {
               {
                 key: 'role',
                 header: 'Role',
+                mobileTrailing: true,
                 render: (u) => (
                   <StatusPill tone={u.role === 'owner' ? 'info' : 'neutral'}>
                     {u.role === 'owner' ? 'Owner' : 'Cashier'}
@@ -227,6 +232,7 @@ export default function Users() {
               {
                 key: 'active',
                 header: 'Status',
+                mobileTrailing: true,
                 render: (u) => (
                   <StatusPill tone={u.active !== false ? 'positive' : 'neutral'}>
                     {u.active !== false ? 'Active' : 'Deactivated'}
@@ -256,6 +262,10 @@ export default function Users() {
         )}
       </Section>
 
+      {/* Who works here, and what they may do — one page, because they are
+          one question. See components/team/CashierPermissions.jsx. */}
+      <CashierPermissions />
+
       <Modal open={modal} onClose={() => setModal(false)} title={freshInvite ? 'Invite ready' : 'Invite someone'}>
         {!freshInvite ? (
           <form onSubmit={handleCreateInvite} className="space-y-3">
@@ -269,14 +279,14 @@ export default function Users() {
                 <button
                   type="button"
                   onClick={() => setNewRole('cashier')}
-                  className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole === 'cashier' ? 'border-success-600 bg-success-50 text-success-800' : 'border-ink-200 text-ink-500'}`}
+                  className={`rounded-control border px-3 py-2.5 text-button transition-colors ${newRole === 'cashier' ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-line text-ink-600 hover:bg-ink-50 hover:text-ink-900'}`}
                 >
                   Cashier
                 </button>
                 <button
                   type="button"
                   onClick={() => setNewRole('owner')}
-                  className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole === 'owner' ? 'border-success-600 bg-success-50 text-success-800' : 'border-ink-200 text-ink-500'}`}
+                  className={`rounded-control border px-3 py-2.5 text-button transition-colors ${newRole === 'owner' ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-line text-ink-600 hover:bg-ink-50 hover:text-ink-900'}`}
                 >
                   Owner
                 </button>
@@ -289,14 +299,14 @@ export default function Users() {
           </form>
         ) : (
           <div className="space-y-3">
-            <p className="text-sm text-ink-600">Send this link to <span className="font-semibold">{freshInvite.displayName}</span> ({freshInvite.role}).</p>
+            <p className="text-body text-ink-600">Send this link to <span className="font-semibold">{freshInvite.displayName}</span> ({freshInvite.role}).</p>
             <div className="flex items-center gap-2">
-              <input className="input font-mono text-xs" readOnly value={inviteLink(freshInvite.id)} onFocus={(e) => e.target.select()} />
+              <input className="input font-mono text-secondary" readOnly value={inviteLink(freshInvite.id)} onFocus={(e) => e.target.select()} />
               <button type="button" className="btn-secondary shrink-0" onClick={() => copyLink(freshInvite.id)}>
                 <Copy className="h-4 w-4" strokeWidth={1.75} /> Copy
               </button>
             </div>
-            <button type="button" className="btn-primary w-full" onClick={() => setModal(false)}>Done</button>
+            <button type="button" className="btn-primary w-full" onClick={() => setModal(false)}>Close</button>
           </div>
         )}
       </Modal>

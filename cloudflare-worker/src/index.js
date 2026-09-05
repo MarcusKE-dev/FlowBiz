@@ -11,6 +11,7 @@ import { handleProPrice, handlePricing } from './routes/proPrice.js';
 import { handleSendVerificationEmail } from './routes/sendVerificationEmail.js';
 import { handleSendPasswordReset } from './routes/sendPasswordResetEmail.js';
 import { handleDeleteOwnProfile } from './routes/deleteOwnProfile.js';
+import { handleLoginEvent } from './routes/authLoginEvent.js';
 
 // Admin Control Center Routes
 import { handleAdminVerify } from './routes/admin/adminVerify.js';
@@ -24,10 +25,24 @@ import {
   handleAdminSendVerification,
 } from './routes/admin/adminBusinesses.js';
 import { handleAdminBusinessData } from './routes/admin/adminBusinessData.js';
+import { handleAdminInspect, handleAdminInspectRecord } from './routes/admin/adminInspector.js';
+import { handleAdminBusinessUsage } from './routes/admin/adminBusinessUsage.js';
+import { handleAdminCloudUsage } from './routes/admin/adminCloudUsage.js';
+import {
+  handleAdminSystemHealth,
+  handleAdminPaymentHealth,
+  handleAdminOpsEvents,
+} from './routes/admin/adminOperations.js';
 import { handleAdminSubscriptionUpdate, handleAdminSupportToken } from './routes/admin/adminSubscription.js';
+import { handleAdminIndustryUpdate } from './routes/admin/adminIndustry.js';
 import { handleAdminAuditLogs } from './routes/admin/adminAuditLogs.js';
 import { handleAdminListAdmins, handleAdminAddAdmin, handleAdminRemoveAdmin } from './routes/admin/adminSystemAdmins.js';
 import { handleAdminSendEmail } from './routes/admin/adminCommunications.js';
+import {
+  handleAdminSecurityOverview,
+  handleAdminSecurityEvents,
+  handleAdminSecurityAction,
+} from './routes/admin/adminSecurity.js';
 
 function getAllowedOrigins(env) {
   return (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -82,6 +97,25 @@ export default {
       }
     }
 
+    // /api/admin/businesses/<businessId>[/<action>] — and nothing deeper.
+    // Anything with extra path segments is refused rather than guessed at.
+    const businessRoute = (() => {
+      const prefix = '/api/admin/businesses/';
+      if (!url.pathname.startsWith(prefix)) return null;
+      const rest = url.pathname.slice(prefix.length);
+      if (!rest) return null;
+      const parts = rest.split('/');
+      if (parts.length > 2) return null;
+      let businessId;
+      try {
+        businessId = decodeURIComponent(parts[0]);
+      } catch {
+        // A malformed percent-escape is not a business id.
+        return null;
+      }
+      return { businessId, action: parts[1] || null };
+    })();
+
     let response;
     try {
       // ── Admin Control Center Endpoints ──────────────────────────────
@@ -92,30 +126,57 @@ export default {
         response = await handleAdminOverview(request, env);
       } else if (url.pathname === '/api/admin/businesses' && request.method === 'GET') {
         response = await handleAdminBusinesses(request, env, url);
-      } else if (url.pathname.startsWith('/api/admin/businesses/') && url.pathname.endsWith('/data') && request.method === 'GET') {
-        const businessId = url.pathname.split('/')[4];
-        response = await handleAdminBusinessData(request, env, businessId, url);
-      } else if (url.pathname.startsWith('/api/admin/businesses/') && url.pathname.endsWith('/subscription') && request.method === 'POST') {
-        const businessId = url.pathname.split('/')[4];
-        response = await handleAdminSubscriptionUpdate(request, env, businessId);
-      } else if (url.pathname.startsWith('/api/admin/businesses/') && url.pathname.endsWith('/support-token') && request.method === 'POST') {
-        const businessId = url.pathname.split('/')[4];
-        response = await handleAdminSupportToken(request, env, businessId);
-      } else if (url.pathname.startsWith('/api/admin/businesses/') && url.pathname.endsWith('/status') && request.method === 'POST') {
-        const businessId = url.pathname.split('/')[4];
-        response = await handleAdminToggleBusinessStatus(request, env, businessId);
-      } else if (url.pathname.startsWith('/api/admin/businesses/') && url.pathname.endsWith('/send-password-reset') && request.method === 'POST') {
-        const businessId = url.pathname.split('/')[4];
-        response = await handleAdminSendPasswordReset(request, env, businessId);
-      } else if (url.pathname.startsWith('/api/admin/businesses/') && url.pathname.endsWith('/send-verification') && request.method === 'POST') {
-        const businessId = url.pathname.split('/')[4];
-        response = await handleAdminSendVerification(request, env, businessId);
-      } else if (url.pathname.startsWith('/api/admin/businesses/') && request.method === 'DELETE') {
-        const businessId = url.pathname.split('/')[4];
-        response = await handleAdminDeleteBusiness(request, env, businessId);
-      } else if (url.pathname.startsWith('/api/admin/businesses/') && request.method === 'GET' && url.pathname.split('/').length === 5) {
-        const businessId = url.pathname.split('/')[4];
-        response = await handleAdminBusinessDetail(request, env, businessId);
+      } else if (url.pathname === '/api/admin/cloud-usage' && request.method === 'GET') {
+        response = await handleAdminCloudUsage(request, env, url);
+      } else if (url.pathname === '/api/admin/system-health' && request.method === 'GET') {
+        response = await handleAdminSystemHealth(request, env);
+      } else if (url.pathname === '/api/admin/payments/health' && request.method === 'GET') {
+        response = await handleAdminPaymentHealth(request, env);
+      } else if (url.pathname === '/api/admin/ops-events' && request.method === 'GET') {
+        response = await handleAdminOpsEvents(request, env, url);
+
+      // ── Per-business admin routes ────────────────────────────────────
+      // `businessId` is extracted ONCE here and every handler validates it
+      // again with assertBusinessId() before it can reach a Firestore path.
+      // The action is decided by the fixed trailing segment, never by
+      // anything the caller can put in a body or a query string.
+      } else if (businessRoute) {
+        const { businessId, action } = businessRoute;
+        const method = request.method;
+
+        if (action === 'data' && method === 'GET') {
+          response = await handleAdminBusinessData(request, env, businessId, url);
+        } else if (action === 'inspect' && method === 'GET') {
+          response = await handleAdminInspect(request, env, businessId, url);
+        } else if (action === 'record' && method === 'GET') {
+          response = await handleAdminInspectRecord(request, env, businessId, url);
+        } else if (action === 'usage' && method === 'GET') {
+          response = await handleAdminBusinessUsage(request, env, businessId);
+        } else if (action === 'subscription' && method === 'POST') {
+          response = await handleAdminSubscriptionUpdate(request, env, businessId);
+        } else if (action === 'industry' && method === 'POST') {
+          response = await handleAdminIndustryUpdate(request, env, businessId);
+        } else if (action === 'support-token' && method === 'POST') {
+          response = await handleAdminSupportToken(request, env, businessId);
+        } else if (action === 'status' && method === 'POST') {
+          response = await handleAdminToggleBusinessStatus(request, env, businessId);
+        } else if (action === 'send-password-reset' && method === 'POST') {
+          response = await handleAdminSendPasswordReset(request, env, businessId);
+        } else if (action === 'send-verification' && method === 'POST') {
+          response = await handleAdminSendVerification(request, env, businessId);
+        } else if (action === null && method === 'DELETE') {
+          response = await handleAdminDeleteBusiness(request, env, businessId);
+        } else if (action === null && method === 'GET') {
+          response = await handleAdminBusinessDetail(request, env, businessId);
+        } else {
+          response = errorResponse('Not found.', 404);
+        }
+      } else if (url.pathname === '/api/admin/security' && request.method === 'GET') {
+        response = await handleAdminSecurityOverview(request, env, url);
+      } else if (url.pathname === '/api/admin/security/events' && request.method === 'GET') {
+        response = await handleAdminSecurityEvents(request, env, url);
+      } else if (url.pathname === '/api/admin/security/actions' && request.method === 'POST') {
+        response = await handleAdminSecurityAction(request, env);
       } else if (url.pathname === '/api/admin/audit-logs' && request.method === 'GET') {
         response = await handleAdminAuditLogs(request, env, url);
       } else if (url.pathname === '/api/admin/admins' && request.method === 'GET') {
@@ -141,6 +202,8 @@ export default {
         response = await handleProPrice();
       } else if (url.pathname === '/api/pricing' && request.method === 'GET') {
         response = await handlePricing();
+      } else if (url.pathname === '/api/auth/login-event' && request.method === 'POST') {
+        response = await handleLoginEvent(request, env);
       } else if (url.pathname === '/api/auth/delete-own-profile' && request.method === 'POST') {
         response = await handleDeleteOwnProfile(request, env);
       } else {

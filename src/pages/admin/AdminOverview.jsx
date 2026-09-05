@@ -1,20 +1,53 @@
-import { useEffect, useState } from 'react';
+// src/pages/admin/AdminOverview.jsx
+//
+// One screen that answers "is FlowBiz healthy?" — four bands, in the
+// order an operator actually asks the question: who is on the platform,
+// how much they are using, whether the machinery is working, and who has
+// been touching merchant data.
+//
+// It is deliberately not thirty cards. Each band is either a metric rail,
+// one chart, or one table; anything that needs more room has its own page
+// and a link from here.
+//
+// Nothing on this page is live. The Worker computes it on request and
+// caches it briefly, and the header says when it was computed rather than
+// implying a stream.
+
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { fetchAdminOverview } from '../../utils/adminService';
-import LoadingSpinner from '../../components/common/LoadingSpinner';
-import ErrorBanner from '../../components/common/ErrorBanner';
 import {
-  Building2,
-  Sparkles,
-  Store,
-  Users,
-  ArrowRight,
-  TrendingUp,
-  ScrollText,
-  Search,
-  Crown,
+  Building2, ShieldCheck, ArrowRight, RotateCw,
+  Search, AlertTriangle, CheckCircle2,
 } from 'lucide-react';
-import { formatDateTime } from '../../utils/dateRanges';
+import { fetchAdminOverview } from '../../utils/adminService';
+import PageHeader from '../../components/ui/PageHeader';
+import Section from '../../components/ui/Section';
+import MetricRail, { Metric } from '../../components/ui/MetricRail';
+import DataTable from '../../components/ui/DataTable';
+import StatusPill from '../../components/ui/StatusPill';
+import StatementBlock, { StatementRow } from '../../components/ui/StatementBlock';
+import EmptyState from '../../components/ui/EmptyState';
+import { SkeletonRows } from '../../components/ui/Skeleton';
+import AdminApiError from '../../components/admin/AdminApiError';
+import MiniLineChart from '../../components/charts/MiniLineChart';
+import { formatBytes } from '../../components/admin/inspector/UsagePanel';
+import { formatDate, formatDateTime } from '../../utils/dateRanges';
+
+const PLAN_TONE = { lifetime: 'info', pro: 'info', free: 'neutral' };
+
+const SENSITIVE_ACTIONS = new Set([
+  'DELETE_BUSINESS_COMPLETELY',
+  'TOGGLE_BUSINESS_STATUS',
+  'UPDATE_SUBSCRIPTION',
+  'ADD_SYSTEM_ADMIN',
+  'DEACTIVATE_SYSTEM_ADMIN',
+]);
+
+function n(metric) {
+  if (typeof metric === 'number') return metric.toLocaleString('en-KE');
+  if (!metric || !metric.available || metric.value === null) return '-';
+  return Number(metric.value).toLocaleString('en-KE');
+}
 
 export default function AdminOverview() {
   const [data, setData] = useState(null);
@@ -22,171 +55,291 @@ export default function AdminOverview() {
   const [error, setError] = useState(null);
   const [quickSearch, setQuickSearch] = useState('');
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
     fetchAdminOverview()
       .then(setData)
-      .catch((err) => setError(err.message))
+      // The whole error object is kept, not just its message: the
+      // version-skew case carries a flag the notice branches on.
+      .catch(setError)
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <LoadingSpinner label="Loading platform overview…" />;
-  if (error) return <ErrorBanner message={error} />;
+  useEffect(load, [load]);
 
-  const proPct = data.totalBusinesses > 0 ? ((data.proBusinesses / data.totalBusinesses) * 100).toFixed(0) : 0;
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-6xl space-y-6">
+        <PageHeader title="Platform overview" description="Loading…" />
+        <SkeletonRows rows={8} />
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="mx-auto max-w-6xl space-y-6">
+        <PageHeader title="Platform overview" />
+        <AdminApiError error={error} onRetry={load} />
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  const { counts, recent, signups30, truncated } = data.businesses;
+  const docs = data.usage?.documents || {};
+  const storage = data.usage?.imageStorage || {};
+
+  const paymentsHealthy = data.payments
+    ? data.payments.webhookProblems === 0 && data.payments.stuckPendingCount === 0
+    : null;
+  const errorsToday = data.errors?.last24h ?? null;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
-      {/* Header & Quick Search */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">Platform Overview</h1>
-          <p className="text-xs sm:text-sm text-ink-500 mt-0.5">Real-time status of all stores registered on FlowBiz.</p>
-        </div>
+      <PageHeader
+        title="Platform overview"
+        description={`Computed ${formatDateTime(data.computedAt)}. Refresh to recompute.`}
+        actions={
+          <>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (quickSearch.trim()) {
+                  window.location.href = `/admin/businesses?search=${encodeURIComponent(quickSearch.trim())}`;
+                }
+              }}
+              className="flex items-center gap-2"
+            >
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
+                <input
+                  type="search"
+                  placeholder="Business name or ID…"
+                  value={quickSearch}
+                  onChange={(e) => setQuickSearch(e.target.value)}
+                  className="input !w-56 !py-1.5 !pl-8 text-cell"
+                  aria-label="Quick business search"
+                />
+              </div>
+              <button type="submit" className="btn-outline !px-3 text-button">Find</button>
+            </form>
+            <button type="button" onClick={load} className="btn-outline !px-2.5 flex items-center gap-1.5 text-button">
+              <RotateCw className="h-3.5 w-3.5" strokeWidth={1.75} /> Refresh
+            </button>
+          </>
+        }
+      />
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (quickSearch.trim()) {
-              window.location.href = `/admin/businesses?search=${encodeURIComponent(quickSearch.trim())}`;
-            }
-          }}
-          className="flex items-center gap-2"
-        >
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-ink-400" />
-            <input
-              type="text"
-              placeholder="Quick search business ID or name…"
-              value={quickSearch}
-              onChange={(e) => setQuickSearch(e.target.value)}
-              className="input !py-1.5 !pl-8 text-xs w-64 bg-white"
+      {/* ── Businesses ── */}
+      <Section
+        title="Businesses"
+        hint={truncated ? 'The listing hit its ceiling. Counts cover the businesses read.' : undefined}
+        action={
+          <Link to="/admin/businesses" className="inline-flex items-center gap-1 text-cell text-primary-700 hover:underline">
+            Directory <ArrowRight className="h-3 w-3" strokeWidth={1.75} />
+          </Link>
+        }
+      >
+        <MetricRail columns={4}>
+          <Metric label="Total" value={n(counts.total)} hint={`+${counts.new30} in 30 days`} />
+          <Metric label="Lifetime licences" value={n(counts.lifetime)} hint="Perpetual" />
+          <Metric label="Pro subscriptions" value={n(counts.pro)} hint="Monthly" />
+          <Metric
+            label="Suspended"
+            value={n(counts.suspended)}
+            hint={`${counts.active} active`}
+            delta={counts.suspended > 0 ? 'Check' : undefined}
+            deltaTone={counts.suspended > 0 ? 'negative' : 'neutral'}
+          />
+        </MetricRail>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="rounded-panel border border-line bg-surface p-4">
+            <p className="mb-2 text-label uppercase text-ink-500">Sign-ups, last 30 days</p>
+            <MiniLineChart
+              data={signups30}
+              height={180}
+              formatValue={(v) => `${v} business${v === 1 ? '' : 'es'}`}
+              ariaLabel="New businesses per day over the last 30 days"
+              empty="No sign-ups in this window."
             />
           </div>
-          <button type="submit" className="btn-primary !min-h-0 !py-1.5 !px-3 text-xs">
-            Search
-          </button>
-        </form>
-      </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-1">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase text-ink-400">Total Registered</span>
-            <Building2 className="h-4 w-4 text-ink-400" />
-          </div>
-          <p className="font-display text-2xl font-extrabold text-ink-900">{data.totalBusinesses}</p>
-          <span className="text-[11px] text-success-700 font-semibold flex items-center gap-1">
-            <TrendingUp className="h-3 w-3" /> +{data.newBusinessesThisMonth} new in 30 days
-          </span>
-        </div>
-
-        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-1 border-warning-200">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase text-warning-700">Pro Subscriptions</span>
-            <Sparkles className="h-4 w-4 text-warning-600" />
-          </div>
-          <p className="font-display text-2xl font-extrabold text-warning-800">{data.proBusinesses}</p>
-          <span className="text-[11px] text-ink-400">
-            {proPct}% of total platform accounts
-          </span>
-        </div>
-
-        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-1 border-purple-200">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase text-purple-700">Lifetime Licenses</span>
-            <Crown className="h-4 w-4 text-purple-600" />
-          </div>
-          <p className="font-display text-2xl font-extrabold text-purple-800">{data.lifetimeBusinesses ?? 0}</p>
-          <span className="text-[11px] text-ink-400">
-            KSh {(data.revenue?.lifetimeRevenueKes ?? 0).toLocaleString('en-KE')} confirmed revenue
-          </span>
-        </div>
-
-        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-1">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase text-ink-400">Free Tier Stores</span>
-            <Store className="h-4 w-4 text-ink-400" />
-          </div>
-          <p className="font-display text-2xl font-extrabold text-ink-800">{data.freeBusinesses}</p>
-          <span className="text-[11px] text-ink-400">Standard Starter capacity</span>
-        </div>
-
-        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-1">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase text-ink-400">Active Workspaces</span>
-            <Users className="h-4 w-4 text-success-600" />
-          </div>
-          <p className="font-display text-2xl font-extrabold text-success-700">{data.activeBusinesses}</p>
-          <span className="text-[11px] text-ink-400">Unrestricted operational accounts</span>
-        </div>
-      </div>
-
-      {/* Grid: Recent Registrations & Live Audit Trail */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Recent Registrations */}
-        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-4">
-          <div className="flex items-center justify-between border-b border-ink-100 pb-3">
-            <h2 className="font-display text-sm font-bold text-ink-900">Recent Registrations</h2>
-            <Link to="/admin/businesses" className="text-xs font-semibold text-success-700 hover:underline flex items-center gap-1">
-              View All ({data.totalBusinesses}) <ArrowRight className="h-3 w-3" />
-            </Link>
-          </div>
-
-          <div className="divide-y divide-ink-100">
-            {data.recentBusinesses.map((b) => (
-              <div key={b.id} className="flex items-center justify-between py-2.5 text-xs">
-                <div>
-                  <Link to={`/admin/businesses/${b.id}`} className="font-semibold text-ink-900 hover:text-success-700 block">
-                    {b.name}
-                  </Link>
-                  <span className="text-[11px] text-ink-400 font-mono">{b.id}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className={`badge ${b.plan === 'lifetime' ? 'bg-purple-100 text-purple-800 font-bold' : b.plan === 'pro' ? 'bg-warning-100 text-warning-800 font-bold' : 'bg-ink-100 text-ink-600'}`}>
-                    {b.plan.toUpperCase()}
-                  </span>
-                  <Link to={`/admin/businesses/${b.id}`} className="btn-outline !min-h-0 !py-1 !px-2 text-[11px]">
-                    Inspect
-                  </Link>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Live Admin Audit Log Feed */}
-        <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-4">
-          <div className="flex items-center justify-between border-b border-ink-100 pb-3">
-            <div className="flex items-center gap-2">
-              <ScrollText className="h-4 w-4 text-ink-500" />
-              <h2 className="font-display text-sm font-bold text-ink-900">Live Audit Trail</h2>
-            </div>
-            <Link to="/admin/audit-logs" className="text-xs font-semibold text-success-700 hover:underline flex items-center gap-1">
-              All Logs <ArrowRight className="h-3 w-3" />
-            </Link>
-          </div>
-
-          <div className="divide-y divide-ink-100 max-h-72 overflow-y-auto">
-            {data.recentAuditLogs.length === 0 ? (
-              <p className="text-xs text-ink-400 py-6 text-center">No audit logs recorded yet.</p>
+          <div className="space-y-2">
+            <p className="text-label uppercase text-ink-500">Newest businesses</p>
+            {recent.length === 0 ? (
+              <EmptyState icon={Building2} title="No businesses yet" />
             ) : (
-              data.recentAuditLogs.map((log) => (
-                <div key={log.id} className="py-2 text-xs space-y-0.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-ink-800">{log.action}</span>
-                    <span className="text-[10px] text-ink-400">{formatDateTime(log.timestamp)}</span>
-                  </div>
-                  <p className="text-[11px] text-ink-500">
-                    By <strong className="text-ink-700">{log.adminName || log.adminEmail}</strong>
-                    {log.targetBusinessId && <span> &middot; Business: <code className="font-mono text-ink-700">{log.targetBusinessId}</code></span>}
-                  </p>
-                </div>
-              ))
+              <DataTable
+                mobileLayout="row"
+                columns={[
+                  {
+                    key: 'name', header: 'Business', primary: true,
+                    render: (b) => (
+                      <Link to={`/admin/businesses/${b.id}`} className="font-medium text-ink-900 hover:text-primary-700">
+                        {b.name}
+                      </Link>
+                    ),
+                  },
+                  {
+                    key: 'plan', header: 'Plan', mobileTrailing: true,
+                    render: (b) => <StatusPill tone={PLAN_TONE[b.plan] || 'neutral'}>{b.plan}</StatusPill>,
+                  },
+                  { key: 'createdAt', header: 'Joined', mobileTrailing: true, render: (b) => formatDate(b.createdAt) },
+                ]}
+                rows={recent}
+              />
             )}
           </div>
         </div>
-      </div>
+      </Section>
+
+      {/* ── Usage ── */}
+      <Section
+        title="Usage"
+        hint="Counted over FlowBiz's own documents. Not a Firebase bill."
+        action={
+          <Link to="/admin/cloud-usage" className="inline-flex items-center gap-1 text-cell text-primary-700 hover:underline">
+            Cloud usage <ArrowRight className="h-3 w-3" strokeWidth={1.75} />
+          </Link>
+        }
+      >
+        <MetricRail columns={4}>
+          <Metric label="Products" value={n(docs.products)} hint="Across all shops" />
+          <Metric label="Customers" value={n(docs.customers)} hint="Across all shops" />
+          <Metric label="Sales recorded" value={n(docs.sales)} hint="All time" />
+          <Metric
+            label="Image storage"
+            value={storage.totalBytes?.available ? formatBytes(storage.totalBytes.value) : '-'}
+            hint={`${n(storage.imageCount)} photos`}
+          />
+        </MetricRail>
+      </Section>
+
+      {/* ── Operations ── */}
+      <Section
+        title="Operations"
+        action={
+          <Link to="/admin/system-health" className="inline-flex items-center gap-1 text-cell text-primary-700 hover:underline">
+            System health <ArrowRight className="h-3 w-3" strokeWidth={1.75} />
+          </Link>
+        }
+      >
+        <div className="grid gap-6 lg:grid-cols-2">
+          {data.payments ? (
+            <div className="space-y-2">
+              <p className="flex items-center gap-2 text-label uppercase text-ink-500">
+                Payments & webhooks
+                <StatusPill tone={paymentsHealthy ? 'positive' : 'caution'}>
+                  {paymentsHealthy ? 'Clean' : 'Attention'}
+                </StatusPill>
+              </p>
+              <StatementBlock>
+                <StatementRow label="Confirmed successful" value={n(data.payments.counts.success)} />
+                <StatementRow label="Pending" value={n(data.payments.counts.pending)} tone="muted" />
+                <StatementRow label="Pending over 24 hours" value={data.payments.stuckPendingCount} tone={data.payments.stuckPendingCount > 0 ? 'negative' : 'default'} />
+                <StatementRow label="Recorded webhook problems" value={data.payments.webhookProblems} tone={data.payments.webhookProblems > 0 ? 'negative' : 'default'} />
+                <StatementRow
+                  label="Success rate"
+                  value={data.payments.successRate?.available ? `${data.payments.successRate.value}%` : '-'}
+                  strong
+                />
+              </StatementBlock>
+              <p className="section-hint">{data.payments.note}</p>
+            </div>
+          ) : (
+            <div className="rounded-panel border border-dashed border-line bg-surface p-4 text-cell text-ink-500">
+              Payment health is visible to FINANCE, ADMIN and SUPER_ADMIN roles.
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <p className="flex items-center gap-2 text-label uppercase text-ink-500">
+              Operational errors
+              <StatusPill tone={errorsToday ? 'caution' : 'positive'}>
+                {errorsToday ? `${errorsToday} in 24h` : 'Quiet'}
+              </StatusPill>
+            </p>
+            {data.errors?.recent?.length ? (
+              <DataTable
+                mobileLayout="row"
+                columns={[
+                  { key: 'createdAt', header: 'When', primary: true, render: (e) => formatDateTime(e.createdAt) },
+                  {
+                    key: 'severity', header: 'Severity', mobileTrailing: true,
+                    render: (e) => (
+                      <StatusPill tone={e.severity === 'error' ? 'negative' : e.severity === 'warning' ? 'caution' : 'neutral'}>
+                        {e.severity}
+                      </StatusPill>
+                    ),
+                  },
+                  { key: 'message', header: 'What happened', render: (e) => e.message },
+                ]}
+                rows={data.errors.recent}
+              />
+            ) : (
+              <div className="flex items-start gap-2.5 rounded-panel border border-line bg-surface px-4 py-3">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-ink-400" strokeWidth={1.75} />
+                <p className="text-cell text-ink-600">
+                  Nothing has failed in a way FlowBiz records. Webhook rejections, undeliverable
+                  emails and server-side errors would appear here.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </Section>
+
+      {/* ── Security ── */}
+      {data.security && (
+        <Section
+          title="Security"
+          hint="Administrative activity across the platform. Repeated inspections within ten minutes are recorded once."
+          action={
+            <Link to="/admin/audit-logs" className="inline-flex items-center gap-1 text-cell text-primary-700 hover:underline">
+              Audit trail <ArrowRight className="h-3 w-3" strokeWidth={1.75} />
+            </Link>
+          }
+        >
+          {data.security.sensitiveActions7d !== null && data.security.sensitiveActions7d > 0 && (
+            <div className="flex items-start gap-2.5 rounded-panel border border-line bg-surface px-4 py-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-ink-400" strokeWidth={1.75} />
+              <p className="text-cell text-ink-600">
+                <strong className="text-ink-900">{data.security.sensitiveActions7d}</strong> account-changing
+                administrative action{data.security.sensitiveActions7d === 1 ? '' : 's'} in the last 7 days
+                (suspensions and plan changes).
+              </p>
+            </div>
+          )}
+
+          {data.security.recentAdminEvents.length === 0 ? (
+            <EmptyState icon={ShieldCheck} title="No administrative activity recorded" />
+          ) : (
+            <DataTable
+              mobileLayout="row"
+              columns={[
+                { key: 'timestamp', header: 'When', primary: true, render: (l) => formatDateTime(l.timestamp) },
+                {
+                  key: 'action', header: 'Action', mobileTrailing: true,
+                  render: (l) => (
+                    <StatusPill tone={SENSITIVE_ACTIONS.has(l.action) ? 'caution' : 'neutral'}>{l.action}</StatusPill>
+                  ),
+                },
+                { key: 'adminEmail', header: 'Administrator', render: (l) => l.adminEmail || l.adminName || '-' },
+                { key: 'adminRole', header: 'Role', render: (l) => l.adminRole || '-' },
+                {
+                  key: 'targetBusinessId', header: 'Business',
+                  render: (l) => (l.targetBusinessId
+                    ? <Link to={`/admin/businesses/${l.targetBusinessId}`} className="num text-primary-700 hover:underline">{l.targetBusinessId}</Link>
+                    : '-'),
+                },
+              ]}
+              rows={data.security.recentAdminEvents}
+            />
+          )}
+        </Section>
+      )}
     </div>
   );
 }

@@ -58,12 +58,12 @@ export default function AdminProtectedRoute({ children }) {
   if (error || !adminProfile) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
-        <div className="rounded-panel border border-line bg-surface max-w-md w-full p-6 text-center space-y-4 shadow-xl border-danger-200">
-          <div className="h-12 w-12 mx-auto rounded-2xl bg-danger-50 text-danger-600 flex items-center justify-center">
+        <div className="rounded-panel border border-line bg-surface max-w-md w-full p-6 text-center space-y-4 border-danger-200">
+          <div className="h-12 w-12 mx-auto rounded-panel bg-danger-50 text-danger-600 flex items-center justify-center">
             <ShieldAlert className="h-6 w-6" strokeWidth={2} />
           </div>
-          <h2 className="font-display text-lg font-bold text-ink-900">Access Restricted</h2>
-          <p className="text-sm text-ink-500 leading-relaxed">
+          <h2 className="font-display text-page-title font-bold text-ink-900">Access Restricted</h2>
+          <p className="text-body text-ink-500 leading-relaxed">
             {error || 'This area is reserved for authorized FlowBiz platform administrators. Your account does not have platform-level administrative rights.'}
           </p>
           <div className="flex flex-col gap-2 pt-2">
@@ -73,7 +73,7 @@ export default function AdminProtectedRoute({ children }) {
             <Link to="/dashboard" className="btn-outline w-full flex items-center justify-center gap-2">
               <ArrowLeft className="h-4 w-4" /> Return to Merchant Dashboard
             </Link>
-            <button type="button" className="text-xs text-ink-400 hover:underline pt-1" onClick={logout}>
+            <button type="button" className="text-secondary text-ink-400 hover:underline pt-1" onClick={logout}>
               Sign out of this account
             </button>
           </div>

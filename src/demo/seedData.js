@@ -39,24 +39,44 @@ const SUPPLIERS = [
 // Intelligence's "Critical Stockout" / "REVENUE LOSS" insight has
 // something real to show — every other product already had at least 2
 // units.
+// DEMO PRODUCT PHOTOS — the one case where a product's photo is a plain
+// file rather than a Firestore document.
+//
+// Real products store their photo in `productImages/{businessId}__{id}`
+// (see utils/productImages.js). The demo store is localStorage, which
+// has a ~5MB quota for the ENTIRE dataset — 17 base64 photos would eat
+// most of it and start throwing QuotaExceededError mid-seed. So demo
+// products point `imageUrl` at a static file in the public folder
+// instead, which the app already renders directly, costs the demo store
+// nothing but a short string, and is served straight from the CDN.
+//
+// Drop `<slug>.webp` into public/product-photos/ for each `image` slug
+// below — see the README in that folder for the list and target size.
+// Any file that isn't there yet just falls back to the package icon;
+// nothing breaks.
+// BASE_URL, not a bare '/', because the demo build is served from
+// /demo/ (see vite.config.js) and a root-absolute path would 404 there.
+const demoPhotoUrl = (slug) =>
+  (slug ? `${import.meta.env.BASE_URL || '/'}product-photos/${slug}.webp`.replace(/\/{2,}/g, '/') : null);
+
 const PRODUCTS = [
-  { name: 'Wireless Mouse',            category: 'Electronics', costPrice: 650,   sellingPrice: 950,   stock: 40, lowStockThreshold: 8,  barcode: '6009880123451', supplierId: 'sup_nairobi_electronics' },
-  { name: 'Mechanical Keyboard',       category: 'Electronics', costPrice: 2800,  sellingPrice: 3999,  stock: 15, lowStockThreshold: 5,  barcode: '6009880123452', supplierId: 'sup_techhub' },
-  { name: 'USB Flash Disk 32GB',       category: 'Electronics', costPrice: 350,   sellingPrice: 599,   stock: 60, lowStockThreshold: 10, barcode: '6009880123453', supplierId: 'sup_nairobi_electronics' },
-  { name: 'External Hard Drive 1TB',   category: 'Electronics', costPrice: 4200,  sellingPrice: 5499,  stock: 12, lowStockThreshold: 4,  barcode: '6009880123454', supplierId: 'sup_techhub' },
-  { name: 'Power Bank 10000mAh',       category: 'Electronics', costPrice: 1100,  sellingPrice: 1699,  stock: 25, lowStockThreshold: 6,  barcode: '6009880123455', supplierId: 'sup_nairobi_electronics' },
-  { name: 'USB-C Charger 20W',         category: 'Electronics', costPrice: 550,   sellingPrice: 899,   stock: 4,  lowStockThreshold: 8,  barcode: '6009880123456', supplierId: 'sup_nairobi_electronics' },
-  { name: 'Phone Charger (Micro-USB)', category: 'Electronics', costPrice: 300,   sellingPrice: 549,   stock: 3,  lowStockThreshold: 8,  barcode: '6009880123457', supplierId: 'sup_nairobi_electronics' },
-  { name: 'HDMI Cable 1.5m',           category: 'Electronics', costPrice: 250,   sellingPrice: 449,   stock: 30, lowStockThreshold: 6,  barcode: '6009880123458', supplierId: 'sup_nairobi_electronics' },
-  { name: 'Monitor 24" LED',           category: 'Electronics', costPrice: 12500, sellingPrice: 15999, stock: 6,  lowStockThreshold: 3,  barcode: '6009880123459', supplierId: 'sup_techhub' },
-  { name: 'Laptop Stand',              category: 'Electronics', costPrice: 900,   sellingPrice: 1450,  stock: 18, lowStockThreshold: 5,  barcode: '6009880123460', supplierId: 'sup_techhub' },
-  { name: 'Bluetooth Speaker',         category: 'Electronics', costPrice: 1800,  sellingPrice: 2699,  stock: 2,  lowStockThreshold: 5,  barcode: '6009880123461', supplierId: 'sup_techhub' },
-  { name: 'Earbuds (Wireless)',        category: 'Electronics', costPrice: 1200,  sellingPrice: 1899,  stock: 22, lowStockThreshold: 6,  barcode: '6009880123462', supplierId: 'sup_nairobi_electronics' },
-  { name: 'Headphones (Over-ear)',     category: 'Electronics', costPrice: 2200,  sellingPrice: 3299,  stock: 10, lowStockThreshold: 4,  barcode: '6009880123463', supplierId: 'sup_techhub' },
-  { name: 'Extension Cable (4-way)',   category: 'Electronics', costPrice: 700,   sellingPrice: 1099,  stock: 20, lowStockThreshold: 5,  barcode: '6009880123464', supplierId: 'sup_nairobi_electronics' },
-  { name: 'Router (Wireless N)',       category: 'Electronics', costPrice: 2600,  sellingPrice: 3599,  stock: 9,  lowStockThreshold: 4,  barcode: '6009880123465', supplierId: 'sup_techhub' },
-  { name: 'Smart Watch',               category: 'Electronics', costPrice: 3500,  sellingPrice: 4999,  stock: 7,  lowStockThreshold: 3,  barcode: '6009880123466', supplierId: 'sup_techhub' },
-  { name: 'Wireless Charging Pad',     category: 'Electronics', costPrice: 950,   sellingPrice: 1499,  stock: 0,  lowStockThreshold: 5,  barcode: '6009880123467', supplierId: 'sup_techhub' },
+  { name: 'Wireless Mouse',            category: 'Electronics', costPrice: 650,   sellingPrice: 950,   stock: 40, lowStockThreshold: 8,  barcode: '6009880123451', supplierId: 'sup_nairobi_electronics', image: 'wireless-mouse' },
+  { name: 'Mechanical Keyboard',       category: 'Electronics', costPrice: 2800,  sellingPrice: 3999,  stock: 15, lowStockThreshold: 5,  barcode: '6009880123452', supplierId: 'sup_techhub', image: 'mechanical-keyboard' },
+  { name: 'USB Flash Disk 32GB',       category: 'Electronics', costPrice: 350,   sellingPrice: 599,   stock: 60, lowStockThreshold: 10, barcode: '6009880123453', supplierId: 'sup_nairobi_electronics', image: 'usb-flash-disk-32gb' },
+  { name: 'External Hard Drive 1TB',   category: 'Electronics', costPrice: 4200,  sellingPrice: 5499,  stock: 12, lowStockThreshold: 4,  barcode: '6009880123454', supplierId: 'sup_techhub', image: 'external-hard-drive-1tb' },
+  { name: 'Power Bank 10000mAh',       category: 'Electronics', costPrice: 1100,  sellingPrice: 1699,  stock: 25, lowStockThreshold: 6,  barcode: '6009880123455', supplierId: 'sup_nairobi_electronics', image: 'power-bank-10000mah' },
+  { name: 'USB-C Charger 20W',         category: 'Electronics', costPrice: 550,   sellingPrice: 899,   stock: 4,  lowStockThreshold: 8,  barcode: '6009880123456', supplierId: 'sup_nairobi_electronics', image: 'usb-c-charger-20w' },
+  { name: 'Phone Charger (Micro-USB)', category: 'Electronics', costPrice: 300,   sellingPrice: 549,   stock: 3,  lowStockThreshold: 8,  barcode: '6009880123457', supplierId: 'sup_nairobi_electronics', image: 'phone-charger-micro-usb' },
+  { name: 'HDMI Cable 1.5m',           category: 'Electronics', costPrice: 250,   sellingPrice: 449,   stock: 30, lowStockThreshold: 6,  barcode: '6009880123458', supplierId: 'sup_nairobi_electronics', image: 'hdmi-cable-1-5m' },
+  { name: 'Monitor 24" LED',           category: 'Electronics', costPrice: 12500, sellingPrice: 15999, stock: 6,  lowStockThreshold: 3,  barcode: '6009880123459', supplierId: 'sup_techhub', image: 'monitor-24-led' },
+  { name: 'Laptop Stand',              category: 'Electronics', costPrice: 900,   sellingPrice: 1450,  stock: 18, lowStockThreshold: 5,  barcode: '6009880123460', supplierId: 'sup_techhub', image: 'laptop-stand' },
+  { name: 'Bluetooth Speaker',         category: 'Electronics', costPrice: 1800,  sellingPrice: 2699,  stock: 2,  lowStockThreshold: 5,  barcode: '6009880123461', supplierId: 'sup_techhub', image: 'bluetooth-speaker' },
+  { name: 'Earbuds (Wireless)',        category: 'Electronics', costPrice: 1200,  sellingPrice: 1899,  stock: 22, lowStockThreshold: 6,  barcode: '6009880123462', supplierId: 'sup_nairobi_electronics', image: 'earbuds-wireless' },
+  { name: 'Headphones (Over-ear)',     category: 'Electronics', costPrice: 2200,  sellingPrice: 3299,  stock: 10, lowStockThreshold: 4,  barcode: '6009880123463', supplierId: 'sup_techhub', image: 'headphones-over-ear' },
+  { name: 'Extension Cable (4-way)',   category: 'Electronics', costPrice: 700,   sellingPrice: 1099,  stock: 20, lowStockThreshold: 5,  barcode: '6009880123464', supplierId: 'sup_nairobi_electronics', image: 'extension-cable-4-way' },
+  { name: 'Router (Wireless N)',       category: 'Electronics', costPrice: 2600,  sellingPrice: 3599,  stock: 9,  lowStockThreshold: 4,  barcode: '6009880123465', supplierId: 'sup_techhub', image: 'router-wireless-n' },
+  { name: 'Smart Watch',               category: 'Electronics', costPrice: 3500,  sellingPrice: 4999,  stock: 7,  lowStockThreshold: 3,  barcode: '6009880123466', supplierId: 'sup_techhub', image: 'smart-watch' },
+  { name: 'Wireless Charging Pad',     category: 'Electronics', costPrice: 950,   sellingPrice: 1499,  stock: 0,  lowStockThreshold: 5,  barcode: '6009880123467', supplierId: 'sup_techhub', image: 'wireless-charging-pad' },
 ];
 
 const DEMO_CUSTOMERS = [
@@ -253,7 +273,14 @@ function buildAndSeed() {
   PRODUCTS.forEach((p, i) => {
     const id = `demo_product_${i + 1}`;
     const internalCode = `FB-${String(i + 1).padStart(6, '0')}`;
-    seedDoc('products', id, { ...p, businessId: DEMO_BUSINESS_ID, internalCode, deleted: false, createdAt: now, updatedAt: now });
+    // `image` is a seed-file concern only; the product document carries
+    // the resolved URL, exactly the field the real app renders from.
+    const { image, ...fields } = p;
+    seedDoc('products', id, {
+      ...fields,
+      imageUrl: demoPhotoUrl(image),
+      businessId: DEMO_BUSINESS_ID, internalCode, deleted: false, createdAt: now, updatedAt: now,
+    });
     // Flat, businessId-prefixed doc id — matches utils/products.js exactly,
     // so a demo-seeded barcode round-trips through the same lookup code a
     // real business's products do.
@@ -305,7 +332,11 @@ function buildAndSeed() {
   seedDoc('businessSettings', DEMO_BUSINESS_ID, {
     shopName: 'FlowBiz Demo Store',
     cashierCanRecordExpenses: true,
-    categories: ['Groceries', 'Beverages', 'Electronics', 'Household', 'Personal Care', 'Stationery', 'Airtime/Float', 'Other'],
+    // No category list is seeded. The demo business runs on a real
+    // industry profile, and its categories are that profile's — seeding a
+    // mixed list here is precisely the fossil that made the Customize
+    // page show every trade's categories at once. See
+    // src/industry/categories.js.
   });
   touched.add('businessSettings');
 

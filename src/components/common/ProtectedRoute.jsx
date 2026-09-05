@@ -1,17 +1,28 @@
 import { useEffect, useState } from 'react';
-import { Navigate, Link } from 'react-router-dom';
+import { Navigate, Link, useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../contexts/AuthContext';
+import { usePermissions } from '../../hooks/usePermissions';
 import { isDemoMode } from '../../demo/demoMode';
 import LoadingSpinner from './LoadingSpinner';
 import { Ban, AlertCircle, RefreshCw, Store } from 'lucide-react';
 
-export default function ProtectedRoute({ children, adminOnly = false }) {
+// `requires` names a permission from src/industry/permissions.js. It is
+// the SECOND of three answers to "may this person open this page" — the
+// navigation does not offer it, this refuses the URL, and firestore.rules
+// refuses the write behind it. A route with neither `ownerOnly` nor
+// `requires` is open to anyone signed in.
+/** The one page every signed-in person is sent to when a page is not theirs. */
+const FALLBACK_PATH = '/counter';
+
+export default function ProtectedRoute({ children, adminOnly = false, requires = null }) {
   const {
-    firebaseUser, profile, loading, authError, accountRemoved, sessionRevoked,
-    isAdmin, isActive, emailVerified, logout, reloadProfile, resendVerificationEmail,
+    firebaseUser, profile, loading, authError, accountRemoved, sessionRevoked, sessionRevokedReason,
+    isAdmin, isActive, deactivationReason, emailVerified, logout, reloadProfile, resendVerificationEmail,
     refreshEmailVerification,
   } = useAuth();
+  const permissions = usePermissions();
+  const location = useLocation();
   const demo = isDemoMode();
 
   useEffect(() => {
@@ -52,12 +63,24 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
   
   if (loading) return <LoadingSpinner label="Checking your session…" />;
 
+  // Two different things end a session, and telling a merchant the wrong
+  // one is what made a suspension look permanent. A workspace suspension
+  // is a REVERSIBLE platform action: once it is lifted, signing in again
+  // works — there is nothing for the merchant to undo, and nobody's
+  // account has been deleted.
   if (sessionRevoked) {
+    const suspended = sessionRevokedReason === 'workspace_suspended';
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
         <div className="rounded-panel border border-line bg-surface max-w-sm w-full p-6 text-center space-y-4">
-          <h2 className="font-display text-lg font-bold text-ink-900">This device was signed out</h2>
-          <p className="text-sm text-ink-500">An owner revoked access for this device from Settings → Device Management.</p>
+          <h2 className="font-display text-page-title font-bold text-ink-900">
+            {suspended ? 'This workspace is suspended' : 'This device was signed out'}
+          </h2>
+          <p className="text-body text-ink-500">
+            {suspended
+              ? 'FlowBiz has paused access to this business. Nothing has been deleted. Contact FlowBiz support to have it lifted, then sign in again.'
+              : 'An owner revoked access for this device from Settings, under Device management.'}
+          </p>
           <button className="btn-primary w-full" onClick={() => (window.location.href = '/login')}>Go to sign in</button>
         </div>
       </div>
@@ -71,9 +94,9 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
       return (
         <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
           <div className="rounded-panel border border-line bg-surface max-w-sm w-full p-6 text-center space-y-4">
-            <Store className="h-12 w-12 mx-auto text-success-600" strokeWidth={1.5} />
-            <h2 className="font-display text-lg font-bold text-ink-900">Business Setup Required</h2>
-            <p className="text-sm text-ink-500">
+            <Store className="h-12 w-12 mx-auto text-ink-400" strokeWidth={1.75} />
+            <h2 className="font-display text-page-title font-bold text-ink-900">Business Setup Required</h2>
+            <p className="text-body text-ink-500">
               You are signed in as <span className="font-semibold text-ink-700">{firebaseUser.email}</span>, but your business workspace is not configured yet.
             </p>
             <div className="flex flex-col gap-2">
@@ -88,9 +111,9 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
         <div className="rounded-panel border border-line bg-surface max-w-md w-full p-6 text-center space-y-4">
-          <AlertCircle className="h-12 w-12 mx-auto text-amber-500" strokeWidth={1.5} />
-          <h2 className="font-display text-lg font-bold text-ink-900">Loading Account Profile</h2>
-          <p className="text-sm text-ink-500">
+          <AlertCircle className="h-12 w-12 mx-auto text-warning-600" strokeWidth={1.75} />
+          <h2 className="font-display text-page-title font-bold text-ink-900">Loading Account Profile</h2>
+          <p className="text-body text-ink-500">
             Connecting to your business workspace. If this takes more than a few moments, click below.
           </p>
           <div className="flex flex-col gap-2">
@@ -98,7 +121,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
               <RefreshCw className="h-4 w-4" /> Reload Profile
             </button>
             <Link to="/setup" className="btn-outline w-full">Set Up / Reconfigure Business</Link>
-            <button className="text-xs text-ink-400 hover:underline pt-1" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out</button>
+            <button className="text-secondary text-ink-400 hover:underline pt-1" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out</button>
           </div>
         </div>
       </div>
@@ -106,12 +129,19 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
   }
 
   if (!isActive) {
+    const suspended = deactivationReason === 'workspace_suspended';
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
         <div className="rounded-panel border border-line bg-surface max-w-sm p-6 text-center space-y-3">
           <Ban className="h-10 w-10 mx-auto text-danger-500" strokeWidth={1.5} />
-          <h2 className="font-display text-lg font-bold text-ink-900">Account deactivated</h2>
-          <p className="text-sm text-ink-500">Contact your business owner to regain access.</p>
+          <h2 className="font-display text-page-title font-bold text-ink-900">
+            {suspended ? 'This workspace is suspended' : 'Account deactivated'}
+          </h2>
+          <p className="text-body text-ink-500">
+            {suspended
+              ? 'FlowBiz has paused access to this business. Nothing has been deleted. Contact FlowBiz support to have it lifted, then sign in again.'
+              : 'Contact your business owner to regain access.'}
+          </p>
           <button className="btn-outline w-full" onClick={logout}>Sign Out</button>
         </div>
       </div>
@@ -122,8 +152,8 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
         <div className="rounded-panel border border-line bg-surface max-w-sm w-full p-6 text-center space-y-4">
-          <h2 className="font-display text-lg font-bold text-ink-900">Verify your email</h2>
-          <p className="text-sm text-ink-500">
+          <h2 className="font-display text-page-title font-bold text-ink-900">Verify your email</h2>
+          <p className="text-body text-ink-500">
             We sent a verification link to <span className="font-semibold text-ink-800">{firebaseUser.email}</span>. Please check your inbox (and spam/junk folder) and click the link to activate your account.
           </p>
           <div className="flex flex-col gap-2">
@@ -134,14 +164,14 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
                 setCheckingVerification(true);
                 try {
                   const verified = await refreshEmailVerification();
-                  if (!verified) toast.error("Not verified yet — check your inbox and click the link, then try again.");
-                  else toast.success("Email verified! Welcome.");
+                  if (!verified) toast.error('Not verified yet. Click the link in your inbox, then try again.');
+                  else toast.success("Email verified.");
                 } finally {
                   setCheckingVerification(false);
                 }
               }}
             >
-              {checkingVerification ? 'Checking…' : "I've verified — check now"}
+              {checkingVerification ? 'Checking…' : "I've verified, check now"}
             </button>
             <button
               className="btn-outline w-full"
@@ -150,7 +180,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
                 setResending(true);
                 try {
                   await resendVerificationEmail();
-                  toast.success('Verification email sent — check your inbox.');
+                  toast.success('Verification email sent. Check your inbox.');
                   setResendCooldown(60);
                 } catch (err) {
                   console.error('[FlowBiz] resendVerificationEmail error:', err.message);
@@ -167,7 +197,7 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
             >
               {resending ? 'Sending…' : resendCooldown > 0 ? `Resend available in ${resendCooldown}s` : 'Resend verification email'}
             </button>
-            <button className="text-xs text-ink-400 hover:underline" onClick={logout}>Sign out</button>
+            <button className="text-secondary text-ink-400 hover:underline" onClick={logout}>Sign out</button>
           </div>
         </div>
       </div>
@@ -175,5 +205,29 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
   }
 
   if (adminOnly && !isAdmin) return <Navigate to="/counter" replace />;
+
+  // A page the owner has not given this person. Sending them to the
+  // counter is the honest answer for any other page — there is nothing
+  // here for them, and a dead end with a sign on it helps nobody.
+  //
+  // THE COUNTER ITSELF IS THE EXCEPTION, and it has to be: an owner may
+  // revoke `sales.record` from a cashier, and redirecting the counter to
+  // the counter is a loop. That person gets told, once, plainly.
+  if (requires && !permissions.can(requires)) {
+    if (location.pathname !== FALLBACK_PATH) return <Navigate to={FALLBACK_PATH} replace />;
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
+        <div className="rounded-panel border border-line bg-surface max-w-sm w-full p-6 text-center space-y-3">
+          <Ban className="h-10 w-10 mx-auto text-ink-400" strokeWidth={1.5} />
+          <h2 className="font-display text-page-title font-bold text-ink-900">Nothing here for you yet</h2>
+          <p className="text-body text-ink-500">
+            Your owner has not given this account access to the counter. Ask them to turn it on
+            under Team, and sign in again.
+          </p>
+          <button className="btn-outline w-full" onClick={logout}>Sign out</button>
+        </div>
+      </div>
+    );
+  }
   return children;
 }

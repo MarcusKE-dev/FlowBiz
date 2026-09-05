@@ -100,7 +100,7 @@ export default function AdminLogin() {
       setFailedAttempts(0);
       setRemainingLockout(0);
 
-      toast.success('Administrator authenticated.');
+      toast.success('Signed in.');
       navigate('/admin', { replace: true });
     } catch (err) {
       const nextFailed = failedAttempts + 1;
@@ -140,7 +140,7 @@ export default function AdminLogin() {
           {isLockedOut
             ? <ShieldAlert className="mx-auto h-6 w-6 text-white/80" strokeWidth={1.75} aria-hidden="true" />
             : <ShieldCheck className="mx-auto h-6 w-6 text-white/80" strokeWidth={1.75} aria-hidden="true" />}
-          <p className="mt-3 font-display text-[22px] font-semibold leading-7 tracking-[-0.02em] text-white">
+          <p className="mt-3 font-display text-page-title font-semibold text-white">
             FlowBiz control centre
           </p>
           <p className="mt-1 text-secondary text-white/60">Platform administrator sign-in</p>
@@ -149,28 +149,28 @@ export default function AdminLogin() {
         <form onSubmit={handleSubmit} className="space-y-4 rounded-panel bg-surface p-6">
           {/* Active Security Lockout Banner */}
           {isLockedOut && (
-            <div className="rounded-xl border border-danger-200 bg-danger-50 p-4 text-xs font-semibold text-danger-800 space-y-1.5">
+            <div className="rounded-panel border border-danger-200 bg-danger-50 p-4 text-secondary font-semibold text-danger-800 space-y-1.5">
               <div className="flex items-center gap-2 font-bold text-danger-900">
                 <Clock className="h-4 w-4 text-danger-600 animate-spin" />
-                <span>Security Lockout Active</span>
+                <span>Signing in is locked</span>
               </div>
               <p>
                 Too many invalid password attempts. Login has been locked for your protection.
               </p>
-              <p className="font-mono text-sm font-black text-danger-900 pt-1">
+              <p className="font-mono text-body font-black text-danger-900 pt-1">
                 Time remaining: {formatRemainingTime(remainingLockout)}
               </p>
             </div>
           )}
 
           {error && !isLockedOut && (
-            <div className="rounded-lg border border-danger-200 bg-danger-50 px-3 py-2 text-xs font-medium text-danger-700">
+            <div className="rounded-panel border border-danger-200 bg-danger-50 px-3 py-2 text-secondary font-medium text-danger-700">
               {error}
             </div>
           )}
 
           <div>
-            <label className="label">Admin Email</label>
+            <label className="label">Admin email</label>
             <input
               type="email"
               required

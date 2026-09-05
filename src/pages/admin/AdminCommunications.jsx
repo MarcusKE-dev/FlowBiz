@@ -36,7 +36,7 @@ Thank you for signing up for FlowBiz! We noticed you recently created your busin
 Setting up a new system can take a few minutes, so we wanted to reach out personally and see if you need any assistance adding your products or testing your first sale.
 
 Here are 3 quick steps to get trading:
-1. Add your products: Go to Products → tap '+ Add product' to enter your stock items and buying costs.
+1. Add your products: go to Products and tap 'Add product' to enter your stock items and buying costs.
 2. Open Counter: Tap any item or scan its barcode to record a test cash or M-Pesa sale.
 3. Track Deni: Record customer credit sales without false profit illusions until debt is repaid.
 
@@ -63,7 +63,7 @@ The FlowBiz Support Team`,
 Congratulations on recording your first sales on FlowBiz! Your store is now actively tracking real-time inventory and revenue.
 
 Here are two essential daily habits for your shop:
-• Reconcile your till at closing: At the end of each shift, open the Close Day tab to verify your cash drawer against your M-Pesa till balance.
+• Reconcile your till at closing: At the end of each shift, open the Close day page to verify your cash drawer against your M-Pesa till balance.
 • Send WhatsApp receipts: After completing any sale, tap 'Send via WhatsApp' to deliver an official branded receipt with zero SMS costs.
 
 Have any questions or need extra staff accounts? Tap the WhatsApp button below to talk with our support team anytime!
@@ -132,8 +132,8 @@ Did you know that FlowBiz uses a cash-flow-first accounting model specifically d
 
 When a customer takes items on credit (Deni):
 • Physical stock is deducted immediately to prevent double-selling.
-• Revenue and profit remain at KES 0.00 until the customer repays—preventing false profit illusions on uncollected money.
-• When debt is repaid, revenue is recognized and you can send an official Debt Repayment Receipt straight to their WhatsApp in 1 tap!
+• Revenue and profit stay at KES 0.00 until the customer repays, so uncollected money never looks like profit.
+• When debt is repaid, revenue is recognised and you can send an official debt payment receipt straight to their WhatsApp in one tap.
 
 Open your Customers tab in FlowBiz to view your outstanding balances anytime.
 
@@ -156,14 +156,14 @@ FlowBiz Support`,
 We hope your business is thriving!
 
 If your catalog has grown and you need:
-✓ Unlimited products and catalog items
-✓ Unlimited cashier staff accounts
-✓ 1-tap WhatsApp digital receipts and debt reminders
-✓ Advanced profit margin analytics and inventory intelligence
+- Unlimited products and catalogue items
+- Unlimited cashier accounts
+- One-tap WhatsApp receipts and debt reminders
+- Advanced profit analytics and inventory intelligence
 
 You can upgrade to FlowBiz Pro for just KES 599 for 30 days prepaid (via M-Pesa or Card, with no auto-billing surprises).
 
-Upgrade anytime from Settings → Manage Subscription, or tap the WhatsApp button below if you would like a demo!
+You can upgrade at any time from Settings, under Manage Subscription. Tap the WhatsApp button below if you would like a demo.
 
 Best regards,
 FlowBiz Team`,
@@ -185,7 +185,7 @@ We noticed you haven't recorded transactions on FlowBiz recently and wanted to c
 
 Did you run into any challenges during setup, or is there a specific feature you needed that we can help you with?
 
-Your store data is safely saved in your account. If you would like help reorganizing your inventory or training your cashiers, tap the WhatsApp button below to chat with our team.
+Your store data is safely saved in your account. If you would like help reorganising your inventory or training your cashiers, tap the WhatsApp button below to chat with our team.
 
 We would love to help you get your shop running smoothly again!
 
@@ -241,7 +241,7 @@ export default function AdminCommunications() {
         showWhatsappButton: true,
         whatsappButtonLabel: 'WhatsApp Us',
       });
-      toast.success('Customer follow-up email dispatched.');
+      toast.success('Follow-up email sent.');
       setSentSuccess(true);
       setRecipient('');
     } catch (err) {
@@ -256,20 +256,20 @@ export default function AdminCommunications() {
       {/* Page Title */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">
+          <h1 className="font-display text-page-title font-bold text-ink-900">
             Customer Communications &amp; Follow-ups
           </h1>
-          <p className="text-xs sm:text-sm text-ink-500 mt-0.5">
+          <p className="text-secondary sm:text-body text-ink-500 mt-0.5">
             Send friendly support notices, check-ins, and onboarding follow-ups with 1-tap WhatsApp contact buttons.
           </p>
         </div>
 
         {/* View Mode Toggle */}
-        <div className="flex bg-white border border-ink-200 p-1 rounded-xl self-start sm:self-auto shadow-2xs">
+        <div className="flex bg-white border border-line p-1 rounded-panel self-start sm:self-auto">
           <button
             type="button"
             onClick={() => setViewMode('compose')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-panel text-secondary font-bold transition-colors ${
               viewMode === 'compose' ? 'bg-deep-600 text-white' : 'text-ink-600 hover:text-ink-900'
             }`}
           >
@@ -278,7 +278,7 @@ export default function AdminCommunications() {
           <button
             type="button"
             onClick={() => setViewMode('preview')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-panel text-secondary font-bold transition-colors ${
               viewMode === 'preview' ? 'bg-deep-600 text-white' : 'text-ink-600 hover:text-ink-900'
             }`}
           >
@@ -288,9 +288,9 @@ export default function AdminCommunications() {
       </div>
 
       {/* Preset Template Selector */}
-      <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-3 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-ink-100 pb-2.5">
-          <label className="text-xs font-bold uppercase tracking-wider text-ink-500 block">
+      <div className="rounded-panel border border-line bg-surface p-5 bg-white space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-divider pb-2.5">
+          <label className="text-secondary font-bold uppercase tracking-wider text-ink-500 block">
             Select Message Template
           </label>
           {/* Category Filter Pills */}
@@ -300,9 +300,9 @@ export default function AdminCommunications() {
                 key={cat}
                 type="button"
                 onClick={() => setSelectedCategory(cat)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 transition-colors ${
+                className={`px-2.5 py-1 rounded-panel text-label font-bold shrink-0 transition-colors ${
                   selectedCategory === cat
-                    ? 'bg-success-700 text-white'
+                    ? 'bg-primary-600 text-white'
                     : 'bg-canvas text-ink-600 hover:bg-ink-100'
                 }`}
               >
@@ -321,21 +321,21 @@ export default function AdminCommunications() {
                 key={tmpl.id}
                 type="button"
                 onClick={() => applyTemplate(tmpl)}
-                className={`p-3 rounded-xl border text-left flex items-start gap-2.5 transition-all ${
+                className={`p-3 rounded-panel border text-left flex items-start gap-2.5 transition-all ${
                   isSelected
-                    ? 'border-success-600 bg-success-50/60 ring-1 ring-success-600'
-                    : 'border-ink-200 hover:bg-ink-50'
+                    ? 'border-primary-600 bg-primary-50 ring-1 ring-primary-600'
+                    : 'border-line hover:bg-ink-50'
                 }`}
               >
-                <Icon className={`h-4 w-4 shrink-0 mt-0.5 ${isSelected ? 'text-success-700' : 'text-ink-400'}`} />
+                <Icon className={`h-4 w-4 shrink-0 mt-0.5 ${isSelected ? 'text-primary-700' : 'text-ink-400'}`} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-1">
-                    <p className="text-xs font-bold text-ink-900 truncate">{tmpl.name}</p>
-                    <span className="badge bg-canvas text-[9px] font-bold text-ink-600 uppercase shrink-0">
+                    <p className="text-secondary font-bold text-ink-900 truncate">{tmpl.name}</p>
+                    <span className="shrink-0 text-label font-bold uppercase text-ink-400">
                       {tmpl.category}
                     </span>
                   </div>
-                  <p className="text-[11px] text-ink-500 truncate mt-0.5">{tmpl.subject}</p>
+                  <p className="text-label text-ink-500 truncate mt-0.5">{tmpl.subject}</p>
                 </div>
               </button>
             );
@@ -345,10 +345,10 @@ export default function AdminCommunications() {
 
       {/* Main Composer or Live Preview */}
       {viewMode === 'compose' ? (
-        <div className="rounded-panel border border-line bg-surface p-6 bg-white space-y-5 shadow-sm">
+        <div className="rounded-panel border border-line bg-surface p-6 bg-white space-y-5">
           {sentSuccess && (
-            <div className="rounded-xl bg-success-50 border border-success-200 p-4 text-xs font-semibold text-success-800 flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-success-600 shrink-0" />
+            <div className="rounded-panel border border-primary-200 bg-primary-50 p-4 text-secondary font-semibold text-primary-800 flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-primary-600 shrink-0" />
               <span>Follow-up email dispatched successfully via Resend with official WhatsApp support links.</span>
             </div>
           )}
@@ -362,55 +362,55 @@ export default function AdminCommunications() {
                 value={recipient}
                 onChange={(e) => setRecipient(e.target.value)}
                 placeholder="e.g. shopowner@gmail.com"
-                className="input text-xs sm:text-sm"
+                className="input text-secondary sm:text-body"
                 autoFocus
               />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="sm:col-span-2">
-                <label className="label">Email Subject Line</label>
+                <label className="label">Email subject</label>
                 <input
                   type="text"
                   required
                   value={subject}
                   onChange={(e) => setSubject(e.target.value)}
                   placeholder="e.g. Welcome to FlowBiz! Need help setting up?"
-                  className="input text-xs sm:text-sm font-semibold"
+                  className="input text-secondary sm:text-body font-semibold"
                 />
               </div>
               <div>
-                <label className="label">Header Badge</label>
+                <label className="label">Header badge</label>
                 <input
                   type="text"
                   value={badge}
                   onChange={(e) => setBadge(e.target.value)}
                   placeholder="e.g. Customer Support"
-                  className="input text-xs sm:text-sm"
+                  className="input text-secondary sm:text-body"
                 />
               </div>
             </div>
 
             <div>
-              <label className="label">Banner Title</label>
+              <label className="label">Banner title</label>
               <input
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="e.g. Checking in on your shop setup"
-                className="input text-xs sm:text-sm font-bold"
+                className="input text-secondary sm:text-body font-bold"
               />
             </div>
 
             <div>
-              <label className="label">Message Body</label>
+              <label className="label">Message</label>
               <textarea
                 required
                 rows={10}
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 placeholder="Type your message..."
-                className="input text-xs sm:text-sm leading-relaxed font-sans"
+                className="input text-secondary sm:text-body leading-relaxed font-sans"
               />
             </div>
 
@@ -421,18 +421,18 @@ export default function AdminCommunications() {
                 value={whatsappText}
                 onChange={(e) => setWhatsappText(e.target.value)}
                 placeholder="Text pre-typed when the customer taps the WhatsApp button..."
-                className="input text-xs text-ink-700"
+                className="input text-secondary text-ink-700"
               />
-              <p className="mt-1 text-[11px] text-ink-400">
+              <p className="mt-1 text-label text-ink-400">
                 When the customer clicks the button, WhatsApp opens directly with your number <strong>+254 741 104 469</strong> and this message pre-filled.
               </p>
             </div>
 
-            <div className="flex items-center justify-between pt-2 border-t border-ink-100">
+            <div className="flex items-center justify-between pt-2 border-t border-divider">
               <button
                 type="button"
                 onClick={() => setViewMode('preview')}
-                className="btn-outline !min-h-0 !py-2 !px-3 text-xs font-bold"
+ className="btn-outline !px-3 text-secondary font-bold"
               >
                 Preview Email Render
               </button>
@@ -449,15 +449,15 @@ export default function AdminCommunications() {
       ) : (
         /* LIVE EMAIL PREVIEW */
         <div className="rounded-panel border border-line bg-surface p-4 sm:p-6 bg-canvas space-y-4">
-          <div className="flex items-center justify-between border-b border-ink-200 pb-3">
+          <div className="flex items-center justify-between border-b border-line pb-3">
             <div>
-              <span className="text-xs font-bold text-ink-700 block">Live HTML Email Preview</span>
-              <span className="text-[11px] text-ink-500">Subject: <strong className="text-ink-900">{subject || '(No Subject)'}</strong></span>
+              <span className="text-secondary font-bold text-ink-700 block">Live HTML Email Preview</span>
+              <span className="text-label text-ink-500">Subject: <strong className="text-ink-900">{subject || '(No Subject)'}</strong></span>
             </div>
             <button
               type="button"
               onClick={() => setViewMode('compose')}
-              className="btn-primary !min-h-0 !py-1.5 !px-3 text-xs font-bold"
+ className="btn-primary !px-3 text-secondary font-bold"
             >
               Back to Edit
             </button>
@@ -478,11 +478,11 @@ export default function AdminCommunications() {
             </div>
 
             {/* Body */}
-            <div className="p-5 sm:p-7 space-y-4 text-ink-800 text-sm leading-relaxed">
-              <h2 className="text-base sm:text-lg font-bold text-ink-900 leading-snug">
+            <div className="p-5 sm:p-7 space-y-4 text-ink-800 text-body leading-relaxed">
+              <h2 className="text-page-title font-bold text-ink-900">
                 {title || subject}
               </h2>
-              <div className="whitespace-pre-line text-ink-700 text-xs sm:text-sm">
+              <div className="whitespace-pre-line text-ink-700 text-secondary sm:text-body">
                 {content}
               </div>
 
@@ -492,7 +492,7 @@ export default function AdminCommunications() {
                   href={`https://wa.me/254741104469?text=${encodeURIComponent(whatsappText)}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-block bg-[#25D366] text-white font-bold text-xs sm:text-sm px-6 py-3 rounded-lg shadow-sm hover:bg-[#20ba5a] transition-colors"
+                  className="inline-block bg-[#25D366] text-white font-bold text-secondary sm:text-body px-6 py-3 rounded-panel hover:bg-[#20ba5a] transition-colors"
                 >
                   WhatsApp Us
                 </a>
@@ -502,13 +502,13 @@ export default function AdminCommunications() {
             {/* Footer */}
             <div className="space-y-1.5 border-t border-line bg-canvas p-5 text-secondary text-ink-600 sm:p-6">
               <p className="font-bold text-ink-800">Need help or have questions?</p>
-              <p className="leading-relaxed text-[11px] sm:text-xs">
+              <p className="leading-relaxed text-label sm:text-secondary">
                 Reply to this email or chat with our team on WhatsApp: 
                 <a href={`https://wa.me/254741104469?text=${encodeURIComponent(whatsappText)}`} className="ml-1 font-semibold text-primary-700">
                   +254 741 104 469
                 </a>.
               </p>
-              <p className="text-[10px] sm:text-[11px] text-ink-400 pt-1">
+              <p className="text-label sm:text-label text-ink-400 pt-1">
                 FlowBiz Business Manager · Nairobi, Kenya · support@flowbiz.co.ke
               </p>
             </div>

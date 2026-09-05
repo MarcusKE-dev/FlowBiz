@@ -2,21 +2,19 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import * as Lucide from 'lucide-react';
 import { Menu } from 'lucide-react';
-import { NAV_ITEMS, MOBILE_PRIMARY } from './navConfig';
+import { visibleMobileItems } from './navConfig';
 import { useAuth } from '../../contexts/AuthContext';
-import { useSettings } from '../../contexts/SettingsContext';
+import { useIndustry } from '../../hooks/useIndustry';
+import { usePermissions } from '../../hooks/usePermissions';
 import MobileMoreDrawer from './MobileMoreDrawer';
 
 export default function BottomNav() {
   const { isAdmin } = useAuth();
-  const { settings } = useSettings();
+  const industry = useIndustry();
+  const permissions = usePermissions();
   const [moreOpen, setMoreOpen] = useState(false);
 
-  const allowedPaths = MOBILE_PRIMARY[isAdmin ? 'admin' : 'cashier'];
-  const items = allowedPaths
-    .map((path) => NAV_ITEMS.find((item) => item.to === path))
-    .filter(Boolean)
-    .filter((item) => item.to !== '/expenses' || isAdmin || settings.cashierCanRecordExpenses);
+  const items = visibleMobileItems({ isAdmin, industry, permissions });
 
   const Icon = ({ name, className = 'h-5 w-5' }) => {
     const Component = Lucide[name] || Lucide.Circle;
@@ -37,7 +35,7 @@ export default function BottomNav() {
             to={item.to}
             end={item.to === '/'}
             className={({ isActive }) =>
-              `relative flex flex-1 flex-col items-center gap-0.5 pt-2.5 text-[11px] font-semibold transition-colors ${
+              `relative flex flex-1 flex-col items-center gap-0.5 pt-2.5 text-label font-semibold transition-colors ${
                 isActive
                   ? 'text-primary-700 before:absolute before:inset-x-4 before:top-0 before:h-0.5 before:rounded-full before:bg-primary-600 before:content-[""]'
                   : 'text-ink-500'
@@ -51,7 +49,7 @@ export default function BottomNav() {
         <button
           type="button"
           onClick={() => setMoreOpen(true)}
-          className="flex flex-1 flex-col items-center gap-0.5 pt-2.5 text-[11px] font-semibold text-ink-500"
+          className="flex flex-1 flex-col items-center gap-0.5 pt-2.5 text-label font-semibold text-ink-500"
         >
           <Menu className="h-5 w-5" strokeWidth={1.75} />
           More

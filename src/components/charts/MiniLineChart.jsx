@@ -1,85 +1,132 @@
 // src/components/charts/MiniLineChart.jsx
 //
-// A small, dependency-free SVG line chart. No new npm package needed —
-// this project has no chart library installed, and a handful of plain
-// SVG components is simpler to install (nothing to install) and audit
-// than adding one for three small charts.
+// A dependency-free SVG line chart. No chart library is installed in this
+// project, and a handful of plain SVG components is simpler to install
+// (nothing to install) and to audit than adding one for four small charts.
 //
-// Accessible by design rather than by adding interactivity: instead of
-// JS-driven hover tooltips, the start/end labels and the overall change
-// are always shown as real text under the chart, so the trend is never
-// locked behind a colour someone might not be able to distinguish.
+// Two very different jobs, one component:
+//
+//   default    a real instrument — gridlines, both axes, and a hover /
+//              tap readout. Sized in real pixels off a ResizeObserver, so
+//              nothing is scaled and nothing is letterboxed.
+//
+//   compact    a KPI sparkline. Deliberately stripped: no axes, no
+//              gridlines, no tooltip, no dots. It is a shape, not a chart,
+//              and at 36px tall an axis label would be noise. It is still
+//              measured, because a 36px sparkline in a default-150px SVG
+//              box was reserving four times the height it drew into.
 //
 // Colours come from theme/tokens.js as raw hex, not Tailwind classes, so
-// the chart, the PDF export and the screen all read the same source.
-import { CHART_SERIES, POSITIVE, NEGATIVE, INK_3 } from '../../theme/tokens';
+// the chart, the PDF export and the screen all read one source.
 
-export default function MiniLineChart({
-  data,
-  height = 140,
-  color = CHART_SERIES[0],
-  formatValue = (v) => String(v),
-  ariaLabel,
-  compact = false,
-}) {
-  if (!data || data.length === 0) return null;
+import { useElementWidth } from '../../hooks/useElementWidth';
+import { CHART_SERIES, PRIMARY, NEGATIVE, INK_3 } from '../../theme/tokens';
+import { isPlottable } from './chartGeometry';
+import PlotFrame from './PlotFrame';
+import ChartEmpty from './ChartEmpty';
 
-  const width = 300; // viewBox units — scales to container via className="w-full"
+// The sparkline path: same maths as the full chart, minus every axis.
+function Sparkline({ data, height, color }) {
+  const [ref, width] = useElementWidth();
   const values = data.map((d) => Number(d.value) || 0);
   const max = Math.max(...values, 0);
   const min = Math.min(...values, 0);
   const range = max - min || 1;
-  const padY = 10;
-  const stepX = data.length > 1 ? width / (data.length - 1) : 0;
+  const padY = 3;
 
-  const points = data.map((d, i) => {
-    const x = data.length > 1 ? i * stepX : width / 2;
-    const y = height - padY - ((Number(d.value) || 0) - min) / range * (height - padY * 2);
-    return { x, y };
-  });
+  const points = data.map((d, i) => ({
+    x: data.length > 1 ? (i * width) / (data.length - 1) : width / 2,
+    y: height - padY - (((Number(d.value) || 0) - min) / range) * (height - padY * 2),
+  }));
 
-  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
-  const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${height} L ${points[0].x.toFixed(1)} ${height} Z`;
+  const line = points
+    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
+    .join(' ');
+  const area = `${line} L ${points[points.length - 1]?.x.toFixed(1)} ${height} L ${points[0]?.x.toFixed(1)} ${height} Z`;
 
-  const first = values[0];
+  return (
+    <div ref={ref} className="w-full" style={{ height }}>
+      {width > 0 && (
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
+          <path d={area} fill={color} opacity="0.08" />
+          <path d={line} fill="none" stroke={color} strokeWidth="1.5" />
+        </svg>
+      )}
+    </div>
+  );
+}
+
+export default function MiniLineChart({
+  data,
+  height = 200,
+  color = CHART_SERIES[0],
+  formatValue = (v) => String(v),
+  ariaLabel,
+  compact = false,
+  empty,
+}) {
+  if (!data || data.length === 0) return compact ? null : <ChartEmpty>{empty}</ChartEmpty>;
+
+  const values = data.map((d) => Number(d.value) || 0);
+
+  // One point is not a trend and a flat run of zeroes is not a chart. A
+  // sparkline just disappears rather than pushing an empty block into a
+  // KPI cell that has no room for one.
+  if (!isPlottable(values)) {
+    return compact ? null : <ChartEmpty>{empty}</ChartEmpty>;
+  }
+
+  if (compact) return <Sparkline data={data} height={height} color={color} />;
+
   const last = values[values.length - 1];
+  const first = values[0];
   const change = first !== 0 ? ((last - first) / Math.abs(first)) * 100 : null;
-  const showDots = !compact && data.length <= 31;
 
   return (
     <div>
-      {/* preserveAspectRatio is deliberately left at its default. It used
-          to be "none", which stretched the viewBox to the container and
-          turned every data point into an ellipse. */}
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="w-full"
-        role="img"
-        aria-label={ariaLabel || 'Trend chart'}
-      >
-        <path d={areaPath} fill={color} opacity="0.08" />
-        <path d={linePath} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" />
-        {showDots && points.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r="2" fill={color} />
-        ))}
-      </svg>
+      <PlotFrame
+        data={data}
+        values={values}
+        height={height}
+        ariaLabel={ariaLabel || 'Trend chart'}
+        renderSeries={({ xAt, yAt, plot }) => {
+          const pts = data.map((d, i) => ({ x: xAt(i), y: yAt(d.value) }));
+          const line = pts
+            .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
+            .join(' ');
+          const floor = plot.top + plot.height;
+          const area = `${line} L ${pts[pts.length - 1].x.toFixed(1)} ${floor} L ${pts[0].x.toFixed(1)} ${floor} Z`;
+          return (
+            <g>
+              <path d={area} fill={color} opacity="0.08" />
+              <path d={line} fill="none" stroke={color} strokeWidth="2" />
+              {data.length <= 31 && pts.map((p, i) => (
+                <circle key={i} cx={p.x} cy={p.y} r="2" fill={color} />
+              ))}
+            </g>
+          );
+        }}
+        renderHovered={({ i, xAt, yAt }) => (
+          <circle cx={xAt(i)} cy={yAt(data[i].value)} r="4" fill={color} stroke="#FFFFFF" strokeWidth="1.5" />
+        )}
+        renderTooltip={(i) => (
+          <>
+            <div className="font-semibold text-ink-900">{data[i].label}</div>
+            <div className="num mt-0.5 whitespace-nowrap text-ink-700">{formatValue(values[i])}</div>
+          </>
+        )}
+      />
 
-      {!compact && (
-        <>
-          <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-500">
-            <span>{data[0].label}</span>
-            <span>{data[data.length - 1].label}</span>
-          </div>
-          {change !== null && (
-            <p
-              className="mt-1 text-secondary font-medium"
-              style={{ color: change >= 0 ? POSITIVE : NEGATIVE }}
-            >
-              {change >= 0 ? 'Up' : 'Down'} {Math.abs(change).toFixed(1)}% over this period, ending at{' '}
-              <span className="num" style={{ color: INK_3 }}>{formatValue(last)}</span>
-            </p>
-          )}
-        </>
+      {/* The trend as text as well as as a line, so it is never locked
+          behind a colour someone might not be able to distinguish. */}
+      {change !== null && (
+        <p
+          className="mt-2 text-secondary font-medium"
+          style={{ color: change >= 0 ? PRIMARY : NEGATIVE }}
+        >
+          {change >= 0 ? 'Up' : 'Down'} {Math.abs(change).toFixed(1)}% over this period, ending at{' '}
+          <span className="num" style={{ color: INK_3 }}>{formatValue(last)}</span>
+        </p>
       )}
     </div>
   );

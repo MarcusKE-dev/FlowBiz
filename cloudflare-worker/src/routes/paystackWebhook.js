@@ -11,6 +11,12 @@
 
 import { errorResponse } from '../lib/response.js';
 import { getDocument, patchDocument } from '../lib/firestore.js';
+// Observation only. Every recordOpsEvent() call below runs AFTER the
+// decision it reports has already been made, is awaited only so it lands
+// before the response, and cannot throw (see lib/opsEvents.js). The three
+// protections above — HMAC, idempotency, server-side re-verification —
+// and the subscription arithmetic are untouched.
+import { recordOpsEvent, EVENT_TYPES } from '../lib/opsEvents.js';
 
 function bytesToHex(bytes) {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -34,7 +40,20 @@ export async function handlePaystackWebhook(request, env) {
   const signature = request.headers.get('x-paystack-signature');
 
   const validSignature = await verifyPaystackSignature(rawBody, signature, env.PAYSTACK_SECRET_KEY);
-  if (!validSignature) return errorResponse('Invalid signature.', 401);
+  if (!validSignature) {
+    // A failed signature check is the one webhook event that is always
+    // worth seeing: either Paystack's secret has been rotated out from
+    // under us, or something is impersonating Paystack. The signature
+    // itself is never recorded.
+    await recordOpsEvent(env, {
+      type: EVENT_TYPES.WEBHOOK_SIGNATURE_INVALID,
+      severity: 'error',
+      source: 'webhook',
+      message: 'A Paystack webhook failed HMAC signature verification and was rejected.',
+      context: { hadSignatureHeader: Boolean(signature) },
+    });
+    return errorResponse('Invalid signature.', 401);
+  }
 
   let event;
   try {
@@ -51,7 +70,16 @@ export async function handlePaystackWebhook(request, env) {
   if (!reference) return errorResponse('Missing reference.', 400);
 
   const paymentRecord = await getDocument(env, 'payments', reference);
-  if (!paymentRecord) return errorResponse('Unknown payment reference.', 404);
+  if (!paymentRecord) {
+    await recordOpsEvent(env, {
+      type: EVENT_TYPES.WEBHOOK_UNKNOWN_REFERENCE,
+      severity: 'warning',
+      source: 'webhook',
+      message: 'A signed Paystack webhook referenced a payment FlowBiz has no record of.',
+      reference,
+    });
+    return errorResponse('Unknown payment reference.', 404);
+  }
 
   // IDEMPOTENCY — Paystack can and does redeliver webhooks.
   if (paymentRecord.status === 'success') {
@@ -66,18 +94,78 @@ export async function handlePaystackWebhook(request, env) {
   const tx = verifyData?.data;
 
   if (!verifyRes.ok || !verifyData.status || tx?.status !== 'success') {
+    await recordOpsEvent(env, {
+      type: EVENT_TYPES.WEBHOOK_VERIFY_FAILED,
+      severity: 'error',
+      source: 'webhook',
+      message: 'Paystack re-verification did not confirm this transaction as successful; no subscription was granted.',
+      businessId: paymentRecord.businessId || null,
+      reference,
+      context: { paystackStatus: tx?.status || 'none', httpOk: verifyRes.ok },
+    });
     return errorResponse('Transaction could not be verified as successful.', 400);
   }
   const expectedAmountKobo = Math.round((paymentRecord.amountKes || 0) * 100);
   if (tx.amount !== expectedAmountKobo || tx.currency !== 'KES') {
-    return errorResponse('Amount/currency mismatch — refusing to activate subscription.', 400);
+    await recordOpsEvent(env, {
+      type: EVENT_TYPES.WEBHOOK_AMOUNT_MISMATCH,
+      severity: 'error',
+      source: 'webhook',
+      message: 'A verified Paystack transaction did not match the amount FlowBiz recorded at initialisation; the subscription was NOT activated.',
+      businessId: paymentRecord.businessId || null,
+      reference,
+      context: { expectedKobo: expectedAmountKobo, receivedKobo: tx.amount, currency: tx.currency },
+    });
+    return errorResponse('Amount or currency mismatch. The subscription was not activated.', 400);
   }
 
   const businessId = paymentRecord.businessId;
   const business = await getDocument(env, 'businesses', businessId);
-  if (!business) return errorResponse('Business not found for this payment.', 404);
+  if (!business) {
+    await recordOpsEvent(env, {
+      type: EVENT_TYPES.WEBHOOK_BUSINESS_MISSING,
+      severity: 'error',
+      source: 'webhook',
+      message: 'A confirmed payment could not be applied: the business it belongs to no longer exists.',
+      businessId,
+      reference,
+    });
+    return errorResponse('Business not found for this payment.', 404);
+  }
 
   const now = new Date();
+
+  // A CONFIRMED PRO PAYMENT MUST NEVER DEMOTE A LIFETIME LICENCE.
+  //
+  // /initialize refuses to start a Pro checkout for a business that
+  // already holds Lifetime, but that check happens when the checkout
+  // OPENS, and this one happens when it is PAID. A merchant who opened a
+  // Pro checkout, changed their mind, bought Lifetime instead, and then
+  // went back and completed the abandoned Pro tab would have had their
+  // perpetual licence overwritten with a 30-day subscription by the code
+  // below. The payment itself is real and stays recorded as successful;
+  // what it must not do is take away something the business already
+  // bought outright.
+  const holdsLifetime =
+    business.subscription?.plan === 'lifetime' && business.subscription?.status === 'active';
+  if (holdsLifetime && paymentRecord.plan !== 'lifetime') {
+    await recordOpsEvent(env, {
+      type: EVENT_TYPES.WEBHOOK_VERIFY_FAILED,
+      severity: 'warning',
+      source: 'webhook',
+      message: 'A confirmed Pro payment arrived for a business that already holds a Lifetime licence. The payment is recorded; the licence was left alone.',
+      businessId,
+      reference,
+    });
+    await patchDocument(env, 'payments', reference, {
+      status: 'success',
+      confirmedAt: now,
+      paystackTransactionId: String(tx.id || ''),
+      supersededByLifetime: true,
+    });
+    return new Response('ok', { status: 200 });
+  }
+
   let newSubscription;
   if (paymentRecord.plan === 'lifetime') {
     // One-time, perpetual — no expiry, no extension math. Idempotency

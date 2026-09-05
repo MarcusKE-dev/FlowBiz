@@ -9,12 +9,14 @@
 // Three rules this palette exists to enforce:
 //   1. Surfaces only where the data has a real boundary.
 //   2. Numbers are the hero.
-//   3. Blue is a verb — primary action, active nav, focus, selection,
-//      primary data series. Nothing else.
+//   3. Filled blue is an ACTION. Blue text or a blue tint is DATA.
+//      That distinction is what keeps buttons and numbers apart now
+//      that positive money is also blue.
 //
-// The old FlowBiz green (#1a623c) and sand (#faf6ef) are gone. A cool
-// emerald survives as `positive`, but ONLY as a data colour on numbers
-// and status chips — never on a button, link, nav item or icon.
+// The old FlowBiz green (#1a623c) and sand (#faf6ef) are gone, and so
+// is the cool emerald that briefly replaced them. Green now survives in
+// exactly one thing: the WhatsApp button, which wears WhatsApp's own
+// brand colour and is not part of this palette at all.
 
 // ── Core surfaces ───────────────────────────────────────────────────
 export const CANVAS  = '#F4F6F9'; // the page itself
@@ -37,6 +39,11 @@ export const PRIMARY_TINT   = '#EEF4FE'; // selection, active nav fill
 export const DEEP = '#1B2CC1';
 
 // ── Data / status ───────────────────────────────────────────────────
+// The green below is RETIRED. Nothing in the app renders it any more —
+// positive money, positive status and positive chart series are all blue
+// — and tailwind.config.js no longer imports the ramp, so Tailwind
+// generates no classes for it and any survivor fails loudly in review.
+// It stays here only as a record of what the palette used to be.
 export const POSITIVE = '#0F9D74';
 export const NEGATIVE = '#D3402F';
 export const CAUTION  = '#C77A0B';
@@ -128,9 +135,10 @@ export const warning = {
 
 // ── Charts ──────────────────────────────────────────────────────────
 // Fixed series order. Blue leads because the primary series is the one
-// the reader is meant to follow; positive/negative sit at the end so a
-// two-series chart never accidentally reads as good-vs-bad.
-export const CHART_SERIES = [PRIMARY, DEEP, INK_3, CAUTION, NEGATIVE, POSITIVE];
+// the reader is meant to follow. Green is gone entirely: a sixth series
+// takes a light blue rather than POSITIVE, so no chart can ever read as
+// good-vs-bad by hue alone.
+export const CHART_SERIES = [PRIMARY, DEEP, INK_3, CAUTION, NEGATIVE, primary[300]];
 
 // ── jsPDF ───────────────────────────────────────────────────────────
 // jsPDF wants [r, g, b]. Kept here so the printed receipt, the emailed
@@ -154,10 +162,9 @@ export const PDF = {
   surface:  rgb(SURFACE),
   primary:  rgb(PRIMARY),
   deep:     rgb(DEEP),
-  positive: rgb(POSITIVE),
   negative: rgb(NEGATIVE),
   caution:  rgb(CAUTION),
-  positiveTint: rgb(success[50]),
+  primaryTint:  rgb(primary[50]),
   negativeTint: rgb(danger[50]),
 };
 

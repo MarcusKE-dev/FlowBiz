@@ -8,7 +8,7 @@ import { CURRENCY, amountOnly } from './format';
 
 export default function Money({ value, masked = false, tone, className = '' }) {
   const toneClass =
-    tone === 'positive' ? 'text-success-700'
+    tone === 'positive' ? 'text-primary-700'
     : tone === 'negative' ? 'text-danger-700'
     : tone === 'muted' ? 'text-ink-500'
     : '';

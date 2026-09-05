@@ -1,5 +1,8 @@
-import { Pencil, Package } from 'lucide-react';
+import { Pencil } from 'lucide-react';
 import { amountOnly, CURRENCY } from '../ui/format';
+import ProductThumb from '../products/ProductThumb';
+import { DEFAULT_UNIT, getUnit } from '../../industry/units';
+import { hasVariants, totalVariantStock } from '../../utils/variants';
 
 // `cartQuantities` is an optional map of productId -> quantity currently
 // in the Counter page's cart. When a product is in the cart, its tile
@@ -12,13 +15,24 @@ import { amountOnly, CURRENCY } from '../ui/format';
 // else: this is a fast scan-and-tap surface, not a product detail view.
 // Every tile is the same height and the price always sits on the same
 // baseline, so the eye can run across a row without re-finding it.
-// `p.imageUrl` is read defensively so a thumbnail appears the moment
-// product images exist; until then the tile shows a neutral placeholder.
+// The photo is resolved by ProductThumb, which handles all three
+// sources (a plain URL on the product, a lazily-fetched Firestore
+// sidecar, or nothing) and shows a neutral placeholder until one
+// arrives — see utils/productImages.js.
 export default function ProductGrid({ products, onSelect, isAdmin = false, onEdit, cartQuantities = {} }) {
   return (
     <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
       {products.map((p) => {
-        const out = p.stock <= 0;
+        // A service never runs out; a product sold by the metre still
+        // shows "out" at zero, exactly as a piece does.
+        const isService = p.kind === 'service';
+        // A product with versions is out of stock only when EVERY version
+        // is — the parent's own `stock` is their sum, which is what makes
+        // this the same comparison as for a plain product.
+        const variantProduct = hasVariants(p);
+        const available = variantProduct ? totalVariantStock(p) : p.stock;
+        const out = !isService && available <= 0;
+        const unit = p.unit && p.unit !== DEFAULT_UNIT ? getUnit(p.unit) : null;
         const inCartQty = cartQuantities[p.id] || 0;
         const inCart = inCartQty > 0;
         return (
@@ -31,7 +45,7 @@ export default function ProductGrid({ products, onSelect, isAdmin = false, onEdi
             }`}
           >
             {inCart && (
-              <span className="num absolute right-1 top-1 z-10 flex h-5 min-w-[20px] items-center justify-center rounded-pill bg-primary-600 px-1 text-[11px] font-semibold text-white">
+              <span className="num absolute right-1 top-1 z-10 flex h-5 min-w-[20px] items-center justify-center rounded-pill bg-primary-600 px-1 text-label font-semibold text-white">
                 {inCartQty}
               </span>
             )}
@@ -40,13 +54,13 @@ export default function ProductGrid({ products, onSelect, isAdmin = false, onEdi
               onClick={() => onSelect(p)}
               className="flex w-full flex-1 flex-col items-stretch text-left disabled:pointer-events-none"
             >
-              <span className="flex h-16 w-full items-center justify-center overflow-hidden bg-ink-50 text-ink-400">
-                {p.imageUrl ? (
-                  <img src={p.imageUrl} alt="" className="h-full w-full object-cover" loading="lazy" />
-                ) : (
-                  <Package className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
-                )}
-              </span>
+              <ProductThumb
+                product={p}
+                size="h-16 w-full"
+                rounded="rounded-none"
+                bordered={false}
+                iconSize="h-5 w-5"
+              />
               <span className="flex flex-1 flex-col justify-between gap-1 px-2 py-1.5">
                 {/* Two lines reserved either way, so the price below it
                     lands on the same baseline across the whole row. */}
@@ -55,10 +69,19 @@ export default function ProductGrid({ products, onSelect, isAdmin = false, onEdi
                 </span>
                 {out ? (
                   <span className="text-secondary font-semibold text-danger-700">Out of stock</span>
+                ) : variantProduct ? (
+                  <span className="num text-cell font-semibold text-ink-900">
+                    <span className="text-label font-medium text-ink-400">{CURRENCY}</span>{' '}
+                    {amountOnly(p.sellingPrice)}
+                    <span className="ml-1 text-label font-medium text-ink-400">
+                      · {p.variants.length} version{p.variants.length === 1 ? '' : 's'}
+                    </span>
+                  </span>
                 ) : (
                   <span className="num text-cell font-semibold text-ink-900">
-                    <span className="text-[11px] font-medium text-ink-400">{CURRENCY}</span>{' '}
+                    <span className="text-label font-medium text-ink-400">{CURRENCY}</span>{' '}
                     {amountOnly(p.sellingPrice)}
+                    {unit && <span className="text-label font-medium text-ink-400">/{unit.short}</span>}
                   </span>
                 )}
               </span>

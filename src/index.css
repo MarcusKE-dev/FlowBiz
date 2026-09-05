@@ -23,15 +23,14 @@
   --primary-tint:   #EEF4FE;
   --deep:           #1B2CC1;
 
-  --positive: #0F9D74;
   --negative: #D3402F;
   --caution:  #C77A0B;
 
   --radius-control: 4px;
   --radius-panel:   8px;
 
-  --control-h:       36px;
-  --control-h-touch: 44px;
+  --control-h:       2.25rem;
+  --control-h-touch: 2.75rem;
 
   color-scheme: light;
 }
@@ -42,6 +41,14 @@
     touch-action: manipulation;
     box-sizing: border-box;
   }
+
+  /* The one place the app's scale is set. Every type step, every gap
+     and every control height is rem, so raising the root here grows the
+     whole layout proportionally rather than just the text. Phones and
+     tablets keep 16px — the app is already dense enough on a phone. */
+  html { font-size: 16px; }
+  @media (min-width: 1280px) { html { font-size: 17px; } }
+  @media (min-width: 1680px) { html { font-size: 18px; } }
 
   html {
     @apply font-sans text-ink-900;
@@ -102,6 +109,52 @@
   :focus:not(:focus-visible) { outline: none; }
 }
 
+/* ── App shell viewport ──────────────────────────────────────────────
+   The application chrome fills EXACTLY the viewport, so the navigation
+   rail and the header hold still and the page area is the one thing that
+   scrolls.
+
+   Why a class and not `h-screen`. The shell used to be `min-h-screen`,
+   which leaves its height indefinite: a flex column whose own height is
+   content-derived resolves `flex-basis: 0%` against nothing, so the main
+   area grew to fit its content, the whole row grew with it, and the
+   document — rail included — was what scrolled. A definite height is what
+   turns the main area back into the scroll container.
+
+   `dvh` where it exists, so a phone's retracting address bar is accounted
+   for, and `vh` everywhere else. The safe-area inset is subtracted
+   because <body> carries it as padding, and 100dvh inside a padded body
+   overflows by exactly that much on a notched phone.                    */
+.app-viewport {
+  height: calc(100vh - env(safe-area-inset-bottom, 0px));
+}
+@supports (height: 100dvh) {
+  .app-viewport { height: calc(100dvh - env(safe-area-inset-bottom, 0px)); }
+}
+
+/* ── Quiet scroll region ─────────────────────────────────────────────
+   For panels that must be scrollable when they overflow but must not
+   wear a permanent gutter when they do not — the navigation rail, above
+   all. No track, no thumb until the pointer is actually in the region;
+   `auto` still means nothing at all is shown when the content fits.
+
+   Never use this on the main page area: a person needs to see where
+   they are in a long page.                                              */
+.scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  overscroll-behavior: contain;
+}
+.scroll-quiet:hover,
+.scroll-quiet:focus-within {
+  scrollbar-color: var(--line) transparent;
+}
+.scroll-quiet::-webkit-scrollbar { width: 6px; height: 6px; }
+.scroll-quiet::-webkit-scrollbar-track { background: transparent; }
+.scroll-quiet::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
+.scroll-quiet:hover::-webkit-scrollbar-thumb,
+.scroll-quiet:focus-within::-webkit-scrollbar-thumb { background: var(--line); }
+
 @layer components {
   /* ── Buttons ──────────────────────────────────────────────────────
      Blue is a verb: .btn-primary is the only filled blue in the app.
@@ -137,7 +190,7 @@
      carries a word, never colour alone.                              */
   .badge {
     @apply inline-flex items-center gap-1 rounded-pill px-2 py-0.5
-           text-[11px] font-semibold leading-[16px];
+           text-label leading-4;
   }
 
   /* ── Ledger primitives ────────────────────────────────────────── */

@@ -10,9 +10,12 @@ import { formatKES } from '../utils/currency';
 import { computeFinancials, isExpenseExcluded } from '../utils/financials';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import MiniLineChart from '../components/charts/MiniLineChart';
+import PlotFrame from '../components/charts/PlotFrame';
+import ChartEmpty from '../components/charts/ChartEmpty';
+import { isPlottable } from '../components/charts/chartGeometry';
 import MiniBarChart from '../components/charts/MiniBarChart';
 import DonutChart from '../components/charts/DonutChart';
-import { CHART_SERIES, CAUTION, PRIMARY, DEEP, NEGATIVE, DIVIDER } from '../theme/tokens';
+import { CHART_SERIES, CAUTION, PRIMARY, DEEP, NEGATIVE } from '../theme/tokens';
 import UiSection from '../components/ui/Section';
 import Toolbar from '../components/ui/Toolbar';
 import SegmentedControl from '../components/ui/SegmentedControl';
@@ -39,7 +42,7 @@ function KpiCard({ label, value, tone = 'text-ink-900', deltaPct, sparkline, spa
       <p className="text-label uppercase text-ink-500">{label}</p>
       <p className={`num mt-1.5 text-money ${tone}`}>{value}</p>
       {deltaPct !== null && deltaPct !== undefined && Number.isFinite(deltaPct) && (
-        <div className={`mt-2 flex items-center gap-1.5 text-xs font-semibold ${isPositive ? 'text-success-700' : 'text-danger-600'}`}>
+        <div className={`mt-2 flex items-center gap-1.5 text-secondary font-semibold ${isPositive ? 'text-primary-700' : 'text-danger-600'}`}>
           {isPositive ? <TrendingUp className="h-3.5 w-3.5" strokeWidth={2.5} /> : <TrendingDown className="h-3.5 w-3.5" strokeWidth={2.5} />}
           <span>{Math.abs(deltaPct).toFixed(1)}% vs prior period</span>
         </div>
@@ -65,63 +68,84 @@ function Section({ title, subtitle, className = '', children }) {
 }
 
 function NoData({ children }) {
-  return <div className="py-8 flex flex-col items-center justify-center text-center"><Info className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5} /><p className="text-sm text-ink-500">{children}</p></div>;
+  return <div className="py-8 flex flex-col items-center justify-center text-center"><Info className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5} /><p className="text-body text-ink-500">{children}</p></div>;
 }
 
-// Custom dual-series trend chart (no chart library installed in this
-// project — built the same hand-rolled-SVG way MiniLineChart already is,
-// just extended to plot two series with a shared scale and a legend).
-function DualTrendChart({ data, series, height = 220, ariaLabel }) {
-  if (!data || data.length === 0) return null;
-  const width = 600;
-  const padY = 16;
-  const padBottom = 24;
-  const plotHeight = height - padY - padBottom;
-  const allValues = data.flatMap((d) => series.map((s) => Number(d[s.key]) || 0));
-  const max = Math.max(...allValues, 0);
-  const min = Math.min(...allValues, 0);
-  const range = (max - min) || 1;
-  const stepX = data.length > 1 ? width / (data.length - 1) : 0;
-  const zeroY = padY + plotHeight - ((0 - min) / range) * plotHeight;
-
-  const pointsFor = (key) => data.map((d, i) => {
-    const x = data.length > 1 ? i * stepX : width / 2;
-    const v = Number(d[key]) || 0;
-    const y = padY + plotHeight - ((v - min) / range) * plotHeight;
-    return { x, y };
-  });
+// Custom dual-series trend chart. No chart library is installed in this
+// project — built the same hand-rolled-SVG way MiniLineChart is, extended
+// to plot two series on a shared scale, and sharing MiniLineChart's frame
+// so both charts get the same axes, gridlines and hover readout.
+function DualTrendChart({ data, series, height = 260, ariaLabel }) {
+  const all = data ? data.flatMap((d) => series.map((sv) => Number(d[sv.key]) || 0)) : [];
+  if (!data || !isPlottable(all)) {
+    return <ChartEmpty>Not enough data to chart this period yet.</ChartEmpty>;
+  }
 
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-4">
-        {series.map((s) => (
-          <span key={s.key} className="flex items-center gap-1.5 text-xs font-semibold text-ink-600">
-            <span className="h-2 w-2 rounded-pill" style={{ background: s.color }} aria-hidden="true" />
-            {s.label}
+        {series.map((sv) => (
+          <span key={sv.key} className="flex items-center gap-1.5 text-secondary font-semibold text-ink-600">
+            <span className="h-2 w-2 rounded-pill" style={{ background: sv.color }} aria-hidden="true" />
+            {sv.label}
           </span>
         ))}
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label={ariaLabel || 'Trend chart'}>
-        <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke={DIVIDER} strokeWidth="1" />
-        {series.map((s) => {
-          const points = pointsFor(s.key);
-          const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
-          const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${zeroY} L ${points[0].x.toFixed(1)} ${zeroY} Z`;
-          return (
-            <g key={s.key}>
-              <path d={areaPath} fill={s.color} opacity="0.06" />
-              <path d={linePath} fill="none" stroke={s.color} strokeWidth="2.25" vectorEffect="non-scaling-stroke" />
-              {points.length <= 31 && points.map((p, i) => (
-                <circle key={i} cx={p.x} cy={p.y} r="2.5" fill={s.color} />
-              ))}
-            </g>
-          );
-        })}
-      </svg>
-      <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-400">
-        <span>{data[0].label}</span>
-        <span>{data[data.length - 1].label}</span>
-      </div>
+
+      <PlotFrame
+        data={data}
+        values={all}
+        height={height}
+        ariaLabel={ariaLabel || 'Trend chart'}
+        renderSeries={({ xAt, yAt, plot }) => (
+          <g>
+            {series.map((sv) => {
+              const pts = data.map((d, i) => ({ x: xAt(i), y: yAt(d[sv.key]) }));
+              const line = pts
+                .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
+                .join(' ');
+              const floor = plot.top + plot.height;
+              const area = `${line} L ${pts[pts.length - 1].x.toFixed(1)} ${floor} L ${pts[0].x.toFixed(1)} ${floor} Z`;
+              return (
+                <g key={sv.key}>
+                  <path d={area} fill={sv.color} opacity="0.06" />
+                  <path d={line} fill="none" stroke={sv.color} strokeWidth="2.25" />
+                  {data.length <= 31 && pts.map((p, i) => (
+                    <circle key={i} cx={p.x} cy={p.y} r="2.5" fill={sv.color} />
+                  ))}
+                </g>
+              );
+            })}
+          </g>
+        )}
+        renderHovered={({ i, xAt, yAt }) => (
+          <g>
+            {series.map((sv) => (
+              <circle
+                key={sv.key}
+                cx={xAt(i)}
+                cy={yAt(data[i][sv.key])}
+                r="4.5"
+                fill={sv.color}
+                stroke="#FFFFFF"
+                strokeWidth="1.5"
+              />
+            ))}
+          </g>
+        )}
+        renderTooltip={(i) => (
+          <>
+            <div className="font-semibold text-ink-900">{data[i].label}</div>
+            {series.map((sv) => (
+              <div key={sv.key} className="mt-0.5 flex items-center gap-2 whitespace-nowrap">
+                <span className="h-2 w-2 shrink-0 rounded-pill" style={{ background: sv.color }} aria-hidden="true" />
+                <span className="text-ink-500">{sv.label}</span>
+                <span className="num ml-auto text-ink-900">{formatKES(Number(data[i][sv.key]) || 0)}</span>
+              </div>
+            ))}
+          </>
+        )}
+      />
     </div>
   );
 }
@@ -330,8 +354,8 @@ export default function AdvancedAnalytics() {
         <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
           <Lock className="h-7 w-7" strokeWidth={2} />
         </div>
-        <h2 className="font-display text-2xl font-bold text-ink-900">Advanced analytics is a Pro feature</h2>
-        <p className="mt-3 text-sm text-ink-500 leading-relaxed">See profit margins, capital exposure and staff performance trends over any period. Available on FlowBiz Pro.</p>
+        <h2 className="font-display text-page-title font-bold text-ink-900">Advanced analytics is a Pro feature</h2>
+        <p className="mt-3 text-body text-ink-500 leading-relaxed">See profit margins, capital exposure and staff performance trends over any period. Available on FlowBiz Pro.</p>
         <Link to="/pro" className="mt-8 btn-primary w-full">See FlowBiz Pro</Link>
       </div>
     );
@@ -374,9 +398,9 @@ export default function AdvancedAnalytics() {
         <h2 className="section-title mb-2">Financial performance</h2>
         <div className="grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-line bg-line lg:grid-cols-4">
           <KpiCard label="Recognised revenue" value={formatKES(summary.revenue)} deltaPct={revenueChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.revenue }))} sparklineColor={PRIMARY} />
-          <KpiCard label="Gross profit" value={formatKES(summary.grossProfit)} tone={summary.grossProfit < 0 ? 'text-danger-700' : 'text-success-700'} sparkline={trend.map((t) => ({ label: t.label, value: t.grossProfit }))} sparklineColor={PRIMARY} />
-          <KpiCard label="Net profit" value={formatKES(summary.netProfit)} tone={summary.netProfit < 0 ? 'text-danger-700' : 'text-success-700'} deltaPct={profitChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.netProfit }))} sparklineColor={DEEP} />
-          <KpiCard label="Profit margin" value={`${margin.toFixed(1)}%`} tone={margin > 20 ? 'text-success-700' : margin < 10 ? 'text-danger-600' : 'text-ink-900'} sparkline={trend.map((t) => ({ label: t.label, value: t.margin }))} sparklineColor={margin >= 0 ? PRIMARY : NEGATIVE} />
+          <KpiCard label="Gross profit" value={formatKES(summary.grossProfit)} tone={summary.grossProfit < 0 ? 'text-danger-700' : 'text-primary-700'} sparkline={trend.map((t) => ({ label: t.label, value: t.grossProfit }))} sparklineColor={PRIMARY} />
+          <KpiCard label="Net profit" value={formatKES(summary.netProfit)} tone={summary.netProfit < 0 ? 'text-danger-700' : 'text-primary-700'} deltaPct={profitChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.netProfit }))} sparklineColor={DEEP} />
+          <KpiCard label="Profit margin" value={`${margin.toFixed(1)}%`} tone={margin > 20 ? 'text-primary-700' : margin < 10 ? 'text-danger-600' : 'text-ink-900'} sparkline={trend.map((t) => ({ label: t.label, value: t.margin }))} sparklineColor={margin >= 0 ? PRIMARY : NEGATIVE} />
         </div>
       </div>
 
@@ -418,7 +442,7 @@ export default function AdvancedAnalytics() {
                   { label: 'Credit (uncollected)', value: summary.totalCreditSales, color: CAUTION },
                 ]}
               />
-              <p className="mt-3 text-[11px] leading-relaxed text-ink-400">Credit is not counted as revenue until it is repaid.</p>
+              <p className="mt-3 text-label leading-relaxed text-ink-400">Credit is not counted as revenue until it is repaid.</p>
             </>
           ) : (
             <NoData>No sales recorded yet this period.</NoData>
@@ -467,17 +491,17 @@ export default function AdvancedAnalytics() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Section title="Capital and credit exposure" subtitle="Cash tied up in customer credit">
           <div className="space-y-4 pt-1">
-            <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
+            <div className="flex items-center justify-between border-b border-divider pb-3 text-body">
               <span className="text-ink-600 font-medium">Credit Issued (This Period)</span>
               <span className="font-semibold text-ink-900">{formatKES(summary.totalCreditSales)}</span>
             </div>
-            <div className="flex items-center justify-between border-b border-ink-100 pb-3 text-sm">
+            <div className="flex items-center justify-between border-b border-divider pb-3 text-body">
               <span className="text-ink-600 font-medium">Debt Collected (This Period)</span>
-              <span className="font-semibold text-success-700">{formatKES(summary.totalDebtRepayments)}</span>
+              <span className="font-semibold text-primary-700">{formatKES(summary.totalDebtRepayments)}</span>
             </div>
-            <div className="flex items-center justify-between pt-1 text-sm bg-danger-50 p-3 rounded-lg border border-danger-100">
-              <span className="font-bold text-danger-800 uppercase tracking-wide text-xs">Total Market Exposure</span>
-              <span className="font-bold text-danger-700 text-base">{formatKES(totalOutstanding)}</span>
+            <div className="flex items-center justify-between pt-1 text-body bg-danger-50 p-3 rounded-panel border border-danger-100">
+              <span className="font-bold text-danger-800 uppercase tracking-wide text-secondary">Total outstanding</span>
+              <span className="num text-money font-bold text-danger-700">{formatKES(totalOutstanding)}</span>
             </div>
           </div>
         </Section>
@@ -485,12 +509,12 @@ export default function AdvancedAnalytics() {
           {topDebtors.length > 0 ? (
             <div className="space-y-1">
               {topDebtors.map((d, i) => (
-                <Link key={d.customerId || d.name} to={d.customerId ? `/customers/${d.customerId}` : '/customers'} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2.5 hover:bg-ink-50 transition-colors">
+                <Link key={d.customerId || d.name} to={d.customerId ? `/customers/${d.customerId}` : '/customers'} className="flex items-center justify-between gap-3 rounded-panel px-2 py-2.5 hover:bg-ink-50 transition-colors">
                   <div className="flex items-center gap-3 min-w-0">
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-danger-50 text-xs font-bold text-danger-700">{i + 1}</span>
-                    <span className="truncate text-sm font-medium text-ink-800">{d.name}</span>
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-danger-50 text-secondary font-bold text-danger-700">{i + 1}</span>
+                    <span className="truncate text-body font-medium text-ink-800">{d.name}</span>
                   </div>
-                  <span className="shrink-0 text-sm font-bold text-danger-600">{formatKES(d.balance)}</span>
+                  <span className="shrink-0 text-body font-bold text-danger-600">{formatKES(d.balance)}</span>
                 </Link>
               ))}
             </div>
@@ -504,20 +528,20 @@ export default function AdvancedAnalytics() {
         {staffPerformance.length === 0 ? (
           <NoData>No staff attribution data found.</NoData>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-ink-200">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-ink-50 text-xs uppercase tracking-wider font-semibold text-ink-500">
-                <tr><th className="px-4 py-3 border-b border-ink-200">Staff Member</th><th className="px-4 py-3 border-b border-ink-200 text-right">Items Sold</th><th className="px-4 py-3 border-b border-ink-200 text-right">Revenue Generated</th></tr>
+          <div className="overflow-x-auto rounded-panel border border-line">
+            <table className="w-full min-w-[22rem] text-body text-left">
+              <thead className="bg-ink-50 text-secondary uppercase tracking-wider font-semibold text-ink-500">
+                <tr><th className="px-4 py-3 border-b border-line">Staff member</th><th className="px-4 py-3 border-b border-line text-right">Items sold</th><th className="px-4 py-3 border-b border-line text-right">Revenue</th></tr>
               </thead>
-              <tbody className="divide-y divide-ink-100 bg-white">
+              <tbody className="divide-y divide-divider bg-white">
                 {staffPerformance.map((st, i) => (
                   <tr key={st.name} className="hover:bg-ink-50/50 transition-colors">
                     <td className="px-4 py-3 font-semibold text-ink-900">
                       {st.name}
-                      {i === 0 && <span className="badge ml-2 bg-warning-100 text-warning-800">Top</span>}
+                      {i === 0 && <span className="ml-2 text-label font-semibold text-warning-700">Top</span>}
                     </td>
                     <td className="px-4 py-3 text-right text-ink-600">{st.qty.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-success-700">{formatKES(st.revenue)}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-primary-700">{formatKES(st.revenue)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -530,9 +554,9 @@ export default function AdvancedAnalytics() {
         {insights.length > 0 ? (
           <div className="space-y-3 pt-1">
             {insights.map((insight, i) => (
-              <div key={i} className="flex items-start gap-3 text-sm bg-ink-50 p-3 rounded-lg border border-ink-100">
+              <div key={i} className="flex items-start gap-3 text-body bg-ink-50 p-3 rounded-panel border border-divider">
                 <div className="shrink-0 mt-0.5">
-                  {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-success-600" strokeWidth={2} /> :
+                  {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-primary-600" strokeWidth={1.75} /> :
                    insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-danger-600" strokeWidth={2} /> :
                    <Info className="h-5 w-5 text-ink-500" strokeWidth={2} />}
                 </div>

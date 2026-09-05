@@ -70,7 +70,7 @@ try {
       });
       const { queuedOffline, error } = await raceWithTimeout(write, 4000);
       if (error) throw error;
-      toast.success(queuedOffline ? "Day closed offline. It'll sync later!" : 'Day closed. See you tomorrow!');
+      toast.success(queuedOffline ? 'Day closed offline. It will sync when you reconnect.' : 'Day closed. See you tomorrow.');
     } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setSubmit(false); }
   };
 
@@ -219,7 +219,9 @@ function varianceLabel(v) {
   return v < 0 ? 'Short by' : 'Over by';
 }
 function varianceTone(v) {
-  if (v === 0) return 'positive';
+  // A balanced till is correct, not "good" — 'info' reads as neutral,
+  // which is what a reconciliation that came out even actually means.
+  if (v === 0) return 'info';
   return v < 0 ? 'negative' : 'caution';
 }
 

@@ -1,9 +1,44 @@
 rules_version = '2';
+
+// DORMANT. Firebase Storage requires the Blaze plan, and FlowBiz is on
+// Spark, so nothing in the app writes here today — product photos are
+// compressed in the browser and stored in the `productImages` Firestore
+// collection instead (see src/utils/productImages.js and the matching
+// rule in firestore.rules).
+//
+// This file is kept so that moving photos to Storage later is a one-file
+// switch on the client rather than a rules exercise. Two things to note
+// if that day comes:
+//
+//   The path below matches exactly ONE segment after the business id: a
+//   nested businesses/<id>/products/<file> would NOT match and would be
+//   denied.
+//
+//   The tenant check is a Firestore lookup, not a custom claim, because
+//   FlowBiz issues no custom claims — a business is a user's
+//   `users/{uid}.businessId` field and nothing else. This mirrors
+//   myBusinessId() in firestore.rules; if custom claims are ever
+//   introduced, both files change together.
+//
+// Reads are tenant-scoped too. If publicly shared documents ever need to
+// embed a logo from here, give that ONE object its own public path
+// rather than opening this one.
 service firebase.storage {
   match /b/{bucket}/o {
+    function myBusinessId() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.businessId;
+    }
+
+    function isMyBusiness(businessId) {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && myBusinessId() == businessId;
+    }
+
     match /businesses/{businessId}/{fileName} {
-      allow read: if true;
-      allow write: if request.auth != null && request.resource.size < 5 * 1024 * 1024;
+      allow read: if isMyBusiness(businessId);
+      allow write: if isMyBusiness(businessId)
+        && request.resource.size < 5 * 1024 * 1024;
     }
   }
 }

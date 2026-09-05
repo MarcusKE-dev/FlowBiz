@@ -4,6 +4,7 @@ import { orderBy, where } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { tenantQuery } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { isStockItem } from '../utils/inventory';
 import { formatKES } from '../utils/currency';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import MiniBarChart from '../components/charts/MiniBarChart';
@@ -12,12 +13,15 @@ import { PRIMARY, DEEP, CAUTION, NEGATIVE, INK_3 } from '../theme/tokens';
 import UiSection from '../components/ui/Section';
 import PageHeader from '../components/ui/PageHeader';
 import { Lock, ArrowLeft, AlertCircle, CheckCircle2, Info, PackageOpen } from 'lucide-react';
+import { roundQuantity } from '../industry/units';
 
 const LOOKBACK_DAYS = 30;
 
-function KpiCard({ label, value, tone = 'text-ink-900', bg = 'bg-white' }) {
+// A cell inside the bordered strip its parent grid draws — the strip
+// owns the boundary, so the cell only paints its own surface.
+function KpiCard({ label, value, tone = 'text-ink-900' }) {
   return (
-    <div className={`card p-4 sm:p-5 ${bg} hover:shadow-md transition-shadow`}>
+    <div className="flex flex-col justify-between bg-surface p-4">
       <p className="text-label uppercase text-ink-500">{label}</p>
       <p className={`num mt-1.5 text-money ${tone}`}>{value}</p>
     </div>
@@ -36,7 +40,7 @@ function Section({ title, subtitle, className = '', children }) {
 }
 
 function NoData({ children }) {
-  return <div className="py-8 flex flex-col items-center justify-center text-center"><PackageOpen className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5} /><p className="text-sm text-ink-500">{children}</p></div>;
+  return <div className="py-8 flex flex-col items-center justify-center text-center"><PackageOpen className="h-6 w-6 text-ink-300 mb-2" strokeWidth={1.5} /><p className="text-body text-ink-500">{children}</p></div>;
 }
 
 export default function InventoryIntelligence() {
@@ -46,7 +50,15 @@ export default function InventoryIntelligence() {
     () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
     [businessId]
   );
-  const { data: products, loading } = useFirestoreCollection(productsQ);
+  const { data: allProducts, loading } = useFirestoreCollection(productsQ);
+  // Inventory intelligence is about STOCK. A service has none — a salon
+  // cannot be out of haircuts, cannot be overstocked on them and cannot
+  // have capital tied up in them — and a dish assembled to order has no
+  // stock of its own either (its ingredients do, and they appear here in
+  // their own right). Without this filter every service on a salon's
+  // price list was counted as a dead, out-of-stock item, and any stale
+  // cost figure left on one was added to the value of the shelf.
+  const products = useMemo(() => allProducts.filter(isStockItem), [allProducts]);
 
   const suppliersQ = useMemo(() => (businessId ? tenantQuery('suppliers', businessId, orderBy('name')) : null), [businessId]);
   const { data: suppliers } = useFirestoreCollection(suppliersQ);
@@ -142,7 +154,9 @@ export default function InventoryIntelligence() {
     return (products || [])
       .filter((p) => (Number(p.stock) || 0) > 0)
       .map((p) => {
-        const unitsSold = velocityData.units[p.id] || 0;
+        // Rounded to the unit grid: with measured units this is a sum of
+        // decimals, and an un-rounded total shows as 12.300000000000002.
+        const unitsSold = roundQuantity(velocityData.units[p.id] || 0, 'metre');
         const valueMoved = velocityData.value[p.id] || 0;
         const velocityPerDay = unitsSold / LOOKBACK_DAYS;
         const daysOfStock = velocityPerDay > 0 ? (Number(p.stock) || 0) / velocityPerDay : null;
@@ -233,8 +247,8 @@ export default function InventoryIntelligence() {
         <div className="h-16 w-16 bg-ink-100 text-ink-500 rounded-full flex items-center justify-center mb-5">
           <Lock className="h-7 w-7" strokeWidth={2} />
         </div>
-        <h2 className="font-display text-2xl font-bold text-ink-900">Inventory Intelligence Locked</h2>
-        <p className="mt-3 text-sm text-ink-500 leading-relaxed">Instantly uncover dead stock holding up capital and detect urgent re-order limits before stockouts hit. Requires FlowBiz Pro.</p>
+        <h2 className="font-display text-page-title font-bold text-ink-900">Inventory intelligence is a Pro feature</h2>
+        <p className="mt-3 text-body text-ink-500 leading-relaxed">Instantly uncover dead stock holding up capital and detect urgent re-order limits before stockouts hit. Requires FlowBiz Pro.</p>
         <Link to="/pro" className="mt-8 btn-primary w-full">Unlock Pro Features</Link>
       </div>
     );
@@ -294,7 +308,7 @@ export default function InventoryIntelligence() {
           <KpiCard label="Out of stock" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-danger-700' : 'text-ink-900'} />
           <KpiCard label="Overstocked products" value={metrics.overstocked.length} tone={metrics.overstocked.length > 0 ? 'text-warning-700' : 'text-ink-900'} />
           <KpiCard label="Capital trapped" value={formatKES(totalOverstockValue)} tone={totalOverstockValue > 0 ? 'text-warning-700' : 'text-ink-900'} />
-          <KpiCard label="Average days of stock" value={avgDaysOfStock != null ? `${avgDaysOfStock.toFixed(0)} days` : '—'} />
+          <KpiCard label="Average days of stock" value={avgDaysOfStock != null ? `${avgDaysOfStock.toFixed(0)} days` : '-'} />
         </div>
       </UiSection>
 
@@ -304,7 +318,7 @@ export default function InventoryIntelligence() {
             <h2 className="section-title">Capital health</h2>
             <p className="section-hint mt-0.5">The share of your inventory capital that is healthy, rather than tied up in overstock or slow movers.</p>
           </div>
-          <span className={`num text-money ${capitalHealth.pct >= 80 ? 'text-success-700' : capitalHealth.pct >= 60 ? 'text-warning-700' : 'text-danger-700'}`}>{capitalHealth.pct.toFixed(0)}%</span>
+          <span className={`num text-money ${capitalHealth.pct >= 80 ? 'text-primary-700' : capitalHealth.pct >= 60 ? 'text-warning-700' : 'text-danger-700'}`}>{capitalHealth.pct.toFixed(0)}%</span>
         </div>
         <div className="h-1.5 w-full overflow-hidden rounded-pill bg-divider">
           <div className="h-full rounded-pill bg-primary-600 transition-all" style={{ width: `${capitalHealth.pct}%` }} />
@@ -354,32 +368,32 @@ export default function InventoryIntelligence() {
         <Section title="Value analysis" subtitle="Which products drive most of your sales value">
           {abcClassification.tiered.length > 0 ? (
             <>
-              <div className="mb-4 grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-lg bg-success-50 p-3">
-                  <p className="font-display text-lg font-bold text-success-700">{abcClassification.counts.A}</p>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-success-600">A — Top value</p>
+              <div className="mb-4 grid grid-cols-3 gap-px overflow-hidden rounded-panel border border-line bg-line">
+                <div className="bg-surface p-3">
+                  <p className="num text-money text-ink-900">{abcClassification.counts.A}</p>
+                  <p className="mt-0.5 text-label uppercase text-ink-500">A: top value</p>
                 </div>
-                <div className="rounded-lg bg-warning-50 p-3">
-                  <p className="font-display text-lg font-bold text-warning-700">{abcClassification.counts.B}</p>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-warning-600">B — Moderate</p>
+                <div className="bg-surface p-3">
+                  <p className="num text-money text-ink-900">{abcClassification.counts.B}</p>
+                  <p className="mt-0.5 text-label uppercase text-ink-500">B: moderate</p>
                 </div>
-                <div className="rounded-lg bg-ink-50 p-3">
-                  <p className="font-display text-lg font-bold text-ink-700">{abcClassification.counts.C}</p>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">C — Long tail</p>
+                <div className="bg-surface p-3">
+                  <p className="num text-money text-ink-900">{abcClassification.counts.C}</p>
+                  <p className="mt-0.5 text-label uppercase text-ink-500">C: long tail</p>
                 </div>
               </div>
-              <div className="divide-y divide-ink-100">
+              <div className="divide-y divide-divider">
                 {abcClassification.tiered.slice(0, 8).map((p) => (
-                  <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
+                  <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-body">
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <span className={`badge shrink-0 ${p.tier === 'A' ? 'bg-success-100 text-success-700' : p.tier === 'B' ? 'bg-warning-100 text-warning-700' : 'bg-ink-100 text-ink-500'}`}>{p.tier}</span>
+                      <span className={`w-3 shrink-0 text-label font-bold leading-4 ${p.tier === 'A' ? 'text-primary-700' : p.tier === 'B' ? 'text-ink-700' : 'text-ink-400'}`}>{p.tier}</span>
                       <span className="truncate font-medium text-ink-800">{p.name}</span>
                     </div>
                     <span className="shrink-0 font-semibold text-ink-700">{formatKES(p.valueMoved)}</span>
                   </div>
                 ))}
               </div>
-              <p className="mt-3 text-[11px] leading-relaxed text-ink-400">Based on sales value over the last {LOOKBACK_DAYS} days. "A" products drive roughly 80% of your sales value, protect their stock levels first.</p>
+              <p className="mt-3 text-secondary leading-relaxed text-ink-500">Based on sales value over the last {LOOKBACK_DAYS} days. "A" products drive roughly 80% of your sales value, protect their stock levels first.</p>
             </>
           ) : (
             <NoData>Not enough recent sales to classify products yet.</NoData>
@@ -398,14 +412,14 @@ export default function InventoryIntelligence() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Section title="Reorder priority" subtitle="Fast-moving items running low, with a suggested two-week restock quantity">
           {reorderPriority.length > 0 ? (
-            <div className="divide-y divide-ink-100">
+            <div className="divide-y divide-divider">
               {reorderPriority.map((p) => (
-                <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
+                <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-body">
                   <div className="min-w-0">
                     <p className="truncate font-medium text-ink-800">{p.name}</p>
-                    <p className="text-[11px] text-ink-400">{p.supplierName || 'No supplier assigned'} &middot; {p.daysOfStock != null ? `${p.daysOfStock.toFixed(0)} days of stock left` : 'Stock estimate unavailable'}</p>
+                    <p className="text-secondary text-ink-500">{p.supplierName || 'No supplier assigned'} &middot; {p.daysOfStock != null ? `${p.daysOfStock.toFixed(0)} days of stock left` : 'Stock estimate unavailable'}</p>
                   </div>
-                  <span className="shrink-0 rounded-lg bg-danger-50 px-2.5 py-1 text-xs font-bold text-danger-700">+{p.suggestedQty} units</span>
+                  <span className="num shrink-0 text-label font-semibold leading-4 text-danger-700">+{p.suggestedQty} units</span>
                 </div>
               ))}
             </div>
@@ -416,12 +430,12 @@ export default function InventoryIntelligence() {
 
         <Section title="Slow-moving stock" subtitle={`In stock, but no sales in the last ${LOOKBACK_DAYS} days`}>
           {slowMoving.length > 0 ? (
-            <div className="divide-y divide-ink-100">
+            <div className="divide-y divide-divider">
               {slowMoving.map((p) => (
-                <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
+                <div key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-body">
                   <div className="min-w-0">
                     <p className="truncate font-medium text-ink-800">{p.name}</p>
-                    <p className="text-[11px] text-ink-400">{p.stock} units on the shelf</p>
+                    <p className="text-secondary text-ink-500">{p.stock} units on the shelf</p>
                   </div>
                   <span className="shrink-0 font-semibold text-warning-700">{formatKES(p.stock * p.costPrice)}</span>
                 </div>
@@ -436,13 +450,13 @@ export default function InventoryIntelligence() {
       <Section title="Summary" subtitle="What the figures above add up to">
         <div className="space-y-4 pt-1">
           {insights.map((insight, i) => (
-            <div key={i} className={`flex items-start gap-3 text-sm p-4 rounded-lg border ${insight.tone === 'positive' ? 'bg-success-50 border-success-200' : insight.tone === 'negative' ? 'bg-danger-50 border-danger-200' : 'bg-ink-50 border-ink-200'}`}>
-              <div className="shrink-0 mt-0.5">
-                {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-success-600" strokeWidth={2} /> :
-                 insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-danger-600" strokeWidth={2} /> :
-                 <Info className="h-5 w-5 text-ink-600" strokeWidth={2} />}
+            <div key={i} className="flex items-start gap-3 rounded-panel border border-line bg-surface p-4 text-body">
+              <div className="mt-0.5 shrink-0">
+                {insight.tone === 'positive' ? <CheckCircle2 className="h-5 w-5 text-primary-600" strokeWidth={1.75} /> :
+                 insight.tone === 'negative' ? <AlertCircle className="h-5 w-5 text-danger-600" strokeWidth={1.75} /> :
+                 <Info className="h-5 w-5 text-ink-500" strokeWidth={1.75} />}
               </div>
-              <span className={`font-medium leading-relaxed ${insight.tone === 'positive' ? 'text-success-800' : insight.tone === 'negative' ? 'text-danger-800' : 'text-ink-800'}`}>{insight.text}</span>
+              <span className="font-medium leading-relaxed text-ink-800">{insight.text}</span>
             </div>
           ))}
         </div>

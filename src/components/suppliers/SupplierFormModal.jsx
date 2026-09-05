@@ -22,7 +22,7 @@ export default function SupplierFormModal({ open, onClose, onSave, initialSuppli
     setBusy(true);
     try {
       await onSave({...form,name:form.name.trim()});
-    } catch (err) {
+    } catch {
       // Already surfaced via toast by onSave — nothing further to do
       // here besides letting the form become usable again (below).
     } finally {

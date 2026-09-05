@@ -4,7 +4,7 @@
 // That file is the source of truth; this one only teaches Tailwind about it.
 // If a value needs to change, change it there.
 import {
-  ink, primary, deep, success, danger, warning,
+  ink, primary, deep, danger, warning,
   CANVAS, SURFACE, LINE, DIVIDER,
 } from './src/theme/tokens.js';
 
@@ -35,10 +35,17 @@ export default {
         primary,
         deep,
 
-        // Data colours. `success` is the cool emerald and `danger` the
-        // cool red — both are DATA colours: numbers, status pills, chart
+        // Data colours. `danger` is the cool red and `warning` the
+        // amber — both are DATA colours: numbers, status pills, chart
         // series. Never a button, link, nav item or icon.
-        success,
+        //
+        // The green ramp is deliberately NOT imported. Green is gone
+        // from the app: profit, positive money and positive status are
+        // blue now, and red is reserved for negatives, losses and
+        // errors. The ramp still exists in tokens.js as a record of the
+        // old palette, but Tailwind must not generate classes for it —
+        // that way any survivor fails to render and is caught in review
+        // rather than quietly staying green.
         danger,
         warning,
         // `info` is kept as a scale name (existing classes depend on it)
@@ -51,32 +58,43 @@ export default {
         control: '4px',  // buttons, inputs, tiles
         panel:   '8px',  // panels, tables, modals
         pill:    '999px',// status pills only
-        // Clamp the oversized defaults to the panel radius so nothing
-        // renders over-rounded while pages are still being swept.
-        xl:  '8px',
-        '2xl': '8px',
-        '3xl': '8px',
+        // Tailwind's oversized xl/2xl/3xl used to be clamped to 8px here
+        // while pages were still being swept off them. The sweep is done
+        // — nothing in src/ uses them — so the clamp is gone and a stray
+        // `rounded-xl` now renders at its real 12px, visibly wrong,
+        // rather than being quietly absorbed.
       },
 
       spacing: {
         // The 4/8/12/16/24/32 scale is Tailwind's 1/2/3/4/6/8 already.
-        // These two are the control heights.
-        control: '36px',
-        touch:   '44px',
+        // These two are the control heights. In rem, not px, so they
+        // grow with the root size the desktop breakpoints set — a 36px
+        // button under 18px text reads as a cramped 36px button.
+        control: '2.25rem', // 36px at a 16px root
+        touch:   '2.75rem', // 44px at a 16px root
+        // The mobile "All pages" tile. Tall enough for an icon over a
+        // label without either crowding the tile's border.
+        tile:    '5.5rem',  // 88px at a 16px root
       },
-      minHeight: { touch: '44px', control: '36px' },
-      minWidth:  { touch: '44px' },
+      minHeight: { touch: '2.75rem', control: '2.25rem' },
+      minWidth:  { touch: '2.75rem' },
 
       fontSize: {
         // The type scale, as [size, {lineHeight, letterSpacing, weight}].
-        'page-title':    ['20px', { lineHeight: '24px', letterSpacing: '-0.02em', fontWeight: '600' }],
-        'section-title': ['13px', { lineHeight: '18px', fontWeight: '600' }],
-        'body':          ['14px', { lineHeight: '20px' }],
-        'secondary':     ['13px', { lineHeight: '18px' }],
-        'label':         ['11px', { lineHeight: '14px', letterSpacing: '0.04em', fontWeight: '600' }],
-        'cell':          ['13px', { lineHeight: '18px' }],
-        'button':        ['13px', { lineHeight: '16px', fontWeight: '600' }],
-        'money':         ['20px', { lineHeight: '24px', fontWeight: '600' }],
+        //
+        // rem, not px. The sizes below are identical to the old pixel
+        // values at the 16px root mobile uses; index.css raises the root
+        // at >=1280px and >=1680px, and because Tailwind's spacing scale
+        // is rem too, padding, gaps and control heights grow with them.
+        // A 27-inch monitor stops rendering phone-sized type.
+        'page-title':    ['1.25rem',   { lineHeight: '1.5rem',   letterSpacing: '-0.02em', fontWeight: '600' }],
+        'section-title': ['0.8125rem', { lineHeight: '1.125rem', fontWeight: '600' }],
+        'body':          ['0.875rem',  { lineHeight: '1.25rem',  fontWeight: '400' }],
+        'secondary':     ['0.8125rem', { lineHeight: '1.125rem', fontWeight: '400' }],
+        'label':         ['0.6875rem', { lineHeight: '0.875rem', letterSpacing: '0.04em', fontWeight: '600' }],
+        'cell':          ['0.8125rem', { lineHeight: '1.125rem', fontWeight: '400' }],
+        'button':        ['0.8125rem', { lineHeight: '1rem',     fontWeight: '600' }],
+        'money':         ['1.25rem',   { lineHeight: '1.5rem',   fontWeight: '600' }],
       },
 
       boxShadow: {

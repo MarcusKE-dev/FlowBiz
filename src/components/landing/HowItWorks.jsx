@@ -30,7 +30,7 @@ export function HowItWorks() {
           <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-ink-900 tracking-tight">
             Get started in 3 simple steps
           </h2>
-          <p className="text-sm sm:text-base text-ink-600">
+          <p className="text-body sm:text-base text-ink-600">
             No technicians. No complicated setup. No expensive POS hardware.
           </p>
         </div>
@@ -45,7 +45,7 @@ export function HowItWorks() {
               >
                 <div className="space-y-3">
                   <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-lg bg-primary-50 text-primary-600 flex items-center justify-center">
+                    <div className="h-10 w-10 rounded-panel bg-primary-50 text-primary-600 flex items-center justify-center">
                       <Icon className="h-5 w-5" strokeWidth={2} />
                     </div>
                     <span className="text-xl font-black text-primary-600">
@@ -55,7 +55,7 @@ export function HowItWorks() {
                   <h3 className="text-lg font-bold text-ink-900">
                     {step.title}
                   </h3>
-                  <p className="text-xs text-ink-600 leading-relaxed">
+                  <p className="text-secondary text-ink-600 leading-relaxed">
                     {step.description}
                   </p>
                 </div>
@@ -67,7 +67,7 @@ export function HowItWorks() {
         <div className="text-center pt-4">
           <Link
             to="/setup"
-            className="inline-flex items-center justify-center gap-2 bg-primary-600 text-white px-8 py-3.5 rounded-xl font-bold text-sm hover:bg-primary-700 transition-all shadow-sm"
+            className="inline-flex items-center justify-center gap-2 bg-primary-600 text-white px-8 py-3.5 rounded-panel font-bold text-body hover:bg-primary-700 transition-all"
           >
             Create Your Business in 60 Seconds
           </Link>
