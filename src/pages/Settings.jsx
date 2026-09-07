@@ -448,32 +448,26 @@ export default function Settings() {
             window it routes the protocol through the browser, which is
             more likely to find a handler than the app window is. */}
         <Section title="Support" description="Stuck on something? Reach us directly.">
-          <CopyRow
-            label="Email"
-            copyValue={SUPPORT_EMAIL}
-            copiedMessage="Support email copied."
-          >
-            <a
-              className="font-semibold text-primary-600 underline underline-offset-2 hover:text-primary-700"
-              href={SUPPORT_EMAIL_HREF}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {SUPPORT_EMAIL}
-            </a>
-          </CopyRow>
+ <SupportRow label="Email">
+  <a
+    className="font-semibold text-primary-600 underline underline-offset-2 hover:text-primary-700"
+    href="mailto:support@flowbiz.co.ke"
+  >
+    support@flowbiz.co.ke
+  </a>
+</SupportRow>
 
-          <SupportRow label="Chat">
-            <a
-              className="font-semibold text-primary-600 underline underline-offset-2 hover:text-primary-700"
-              href={whatsappHref('Hello FlowBiz support, I need help with my account.')}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {SUPPORT_WHATSAPP_LABEL}
-            </a>
-          </SupportRow>
-        </Section>
+  <SupportRow label="Chat">
+    <a
+      className="font-semibold text-primary-600 underline underline-offset-2 hover:text-primary-700"
+      href={whatsappHref('Hello FlowBiz support, I need help with my account.')}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      {SUPPORT_WHATSAPP_LABEL}
+    </a>
+  </SupportRow>
+</Section>
 
         <Section
           title="Business information"

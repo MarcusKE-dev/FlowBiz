@@ -181,17 +181,6 @@ export function PricingComparison() {
                 <p className="mt-0.5 text-label text-ink-500">
                   Cloud services, maintenance, updates &amp; support
                 </p>
-
-                {/* THE SENTENCE THAT MAKES THE MODEL HONEST. The card
-                    shows a one-time price and an annual fee side by
-                    side, and without this line the obvious reading is
-                    that the software stops when the fee is not paid.
-                    It does not. Pinned by legal/legalLinks.test.js. */}
-                <p className="mt-1.5 text-label text-ink-600">
-                  Your licence is permanent. It{' '}
-                  does not expire if you choose not to renew{' '}
-                  &mdash; renewal covers cloud services, updates and support only.
-                </p>
               </div>
 
               <ul className="space-y-3 border-t border-line pt-5 text-secondary font-medium text-ink-700">
@@ -219,12 +208,6 @@ export function PricingComparison() {
             >
               Get the Lifetime Licence
             </Link>
-
-            <p className="mt-3 text-center text-label text-ink-500">
-              <Link to="/terms" className="underline underline-offset-2 hover:text-ink-700">
-                Terms of Service
-              </Link>
-            </p>
           </div>
         </div>
       </div>
