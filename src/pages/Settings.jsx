@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useRef } from 'react'; // Added useRef im
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { Copy } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useIndustry } from '../hooks/useIndustry';
@@ -421,24 +422,46 @@ export default function Settings() {
         <Section title="Account and security">
           <Row label="Email verification" value={demo ? 'Not applicable in demo mode' : emailVerified ? 'Verified' : 'Not verified'} tone={!demo && !emailVerified ? 'text-danger-700' : ''} />
           <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
+          <CopyRow
+            label="Business ID"
+            value={businessId || '-'}
+            copyValue={businessId}
+            copiedMessage="Business ID copied."
+            mono
+          />
         </Section>
 
-        {/* CONTACT SUPPORT. The internal business id used to sit here and
-            meant nothing to the person reading it; what an owner actually
-            wants from this panel is a way to reach a human being.
-
+        {/* CONTACT SUPPORT.
             The WhatsApp line shows the WORD, never the number — it is a
             business line, not a published switchboard, and the number
-            lives only in the href. See lib/support.js. */}
+            lives only in the href. See lib/support.js.
+
+            THE EMAIL CARRIES A COPY BUTTON, and that is not decoration.
+            FlowBiz is installed as a standalone PWA (`display:
+            'standalone'`), so a `mailto:` has to be handed off to an
+            external mail app — and on a device with no mail handler
+            registered, that hand-off fails SILENTLY. Nothing opens and
+            nothing says why, which is exactly what an owner reported.
+            The link stays, because it is right when it works; the copy
+            button is what makes the address reachable when it does not.
+            `target="_blank"` is the other half: from inside a standalone
+            window it routes the protocol through the browser, which is
+            more likely to find a handler than the app window is. */}
         <Section title="Support" description="Stuck on something? Reach us directly.">
-          <SupportRow label="Email">
+          <CopyRow
+            label="Email"
+            copyValue={SUPPORT_EMAIL}
+            copiedMessage="Support email copied."
+          >
             <a
               className="font-semibold text-primary-600 underline underline-offset-2 hover:text-primary-700"
               href={SUPPORT_EMAIL_HREF}
+              target="_blank"
+              rel="noopener noreferrer"
             >
               {SUPPORT_EMAIL}
             </a>
-          </SupportRow>
+          </CopyRow>
 
           <SupportRow label="Chat">
             <a
@@ -866,6 +889,56 @@ function Section({ title, description, action, tone, as = 'div', children, ...re
       </div>
       {children}
     </Tag>
+  );
+}
+
+/**
+ * A row whose value can be copied to the clipboard.
+ *
+ * Used for the two values on this page a person needs to hand to somebody
+ * else — the business id support will ask for, and the support address
+ * itself. `children` renders the value when it should be a link (the
+ * support email); otherwise `value` is rendered as plain text.
+ *
+ * The clipboard write is guarded because it genuinely fails: it needs a
+ * secure context and, in some browsers, a permission the person may have
+ * refused. A silent no-op would be the same bug this row exists to fix,
+ * so a failure says so and tells them what to do instead.
+ */
+function CopyRow({ label, value, copyValue, copiedMessage, mono = false, children }) {
+  const copy = async () => {
+    const text = String(copyValue ?? value ?? '');
+    if (!text || text === '-') return;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(copiedMessage);
+    } catch {
+      toast.error('Could not copy automatically. Press and hold the text to copy it.');
+    }
+  };
+
+  return (
+    <div className="flex items-baseline justify-between gap-4 py-1 text-body">
+      <span className="text-ink-600">{label}</span>
+
+      <span className="flex items-baseline gap-2">
+        {children || (
+          <span className={`num font-semibold ${mono ? 'font-mono text-secondary' : ''} text-ink-900`}>
+            {value}
+          </span>
+        )}
+
+        <button
+          type="button"
+          onClick={copy}
+          className="shrink-0 self-center rounded p-1 text-ink-400 transition-colors hover:bg-canvas hover:text-ink-700"
+          title={`Copy ${label.toLowerCase()}`}
+          aria-label={`Copy ${label.toLowerCase()}`}
+        >
+          <Copy className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      </span>
+    </div>
   );
 }
 

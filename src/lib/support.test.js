@@ -65,3 +65,48 @@ test('the support link opens safely in a new tab', () => {
   assert.match(block, /rel="noopener noreferrer"/,
     'a target=_blank link without noopener hands the opener to the other page');
 });
+
+// ── What the settings panel does with these ───────────────────────────
+//
+// The reported bug: tapping the support email did nothing at all. FlowBiz
+// installs as a standalone PWA, so a `mailto:` must be handed to an
+// external mail app, and on a device with no mail handler that hand-off
+// fails silently. The link is still right when it works — so it stays,
+// and a copy button is what makes the address reachable when it does not.
+
+test('the support email is a real mailto link that escapes the standalone window', () => {
+  const settings = readFileSync(new URL('../pages/Settings.jsx', import.meta.url), 'utf8');
+  const at = settings.indexOf('href={SUPPORT_EMAIL_HREF}');
+  assert.ok(at > -1, 'the mailto link must still be there');
+  const block = settings.slice(at, at + 300);
+  assert.match(block, /target="_blank"/,
+    'from a standalone PWA window the protocol has to be routed through the browser');
+  assert.match(block, /rel="noopener noreferrer"/);
+});
+
+test('THE FIX: the support email can be copied when the mail app does not open', () => {
+  const settings = readFileSync(new URL('../pages/Settings.jsx', import.meta.url), 'utf8');
+  assert.match(settings, /<CopyRow\s+label="Email"/,
+    'the email row must offer a copy, not only a link that can fail silently');
+  assert.match(settings, /copyValue=\{SUPPORT_EMAIL\}/,
+    'and it must copy the address itself, from the shared module');
+});
+
+test('the business id is back, with a copy button', () => {
+  const settings = readFileSync(new URL('../pages/Settings.jsx', import.meta.url), 'utf8');
+  assert.match(settings, /label="Business ID"/, 'the business id row must exist again');
+  assert.match(settings, /copyValue=\{businessId\}/, 'and it must be copyable');
+  assert.match(settings, /copiedMessage="Business ID copied\."/);
+});
+
+test('a copy that fails says so rather than doing nothing', () => {
+  // A silent failure here would be the same class of bug as the mailto:
+  // the person taps, nothing happens, and nothing explains why.
+  const settings = readFileSync(new URL('../pages/Settings.jsx', import.meta.url), 'utf8');
+  const at = settings.indexOf('function CopyRow');
+  assert.ok(at > -1);
+  const fn = settings.slice(at, at + 1200);
+  assert.match(fn, /navigator\.clipboard\.writeText/);
+  assert.match(fn, /catch/, 'the clipboard genuinely fails outside a secure context');
+  assert.match(fn, /toast\.error/, 'and the failure must be visible');
+});
