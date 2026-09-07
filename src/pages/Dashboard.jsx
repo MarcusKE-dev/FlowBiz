@@ -349,7 +349,7 @@ export default function Dashboard() {
             {privacyMode
               ? <EyeOff className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
               : <Eye className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />}
-            {privacyMode ? 'Show figures' : 'Hide figures'}
+            
           </button>
         }
       />

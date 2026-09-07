@@ -16,10 +16,6 @@ import {
   PRO_PLAN_ID,
 } from '../licensing';
 import { SERVICE_PRICE_PER_YEAR } from '../components/licensing/licensingCopy';
-import LifetimeDisclosure from '../components/licensing/LifetimeDisclosure';
-import {
-  SUPPORT_EMAIL, SUPPORT_EMAIL_HREF, SUPPORT_WHATSAPP_LABEL, whatsappHref,
-} from '../lib/support';
 import {
   Check,
   X,
@@ -158,21 +154,14 @@ function LifetimeCard({
         </div>
       </div>
 
-      {/* ABOVE THE BUTTON, DELIBERATELY. A customer has to be able to
-          read what happens in year two before they can commit to year
-          one — see LifetimeDisclosure.jsx and legalLinks.test.js. */}
-      <div className="mt-6">
-        <LifetimeDisclosure />
-      </div>
-
       <button
         onClick={() => startCheckout(LIFETIME_PLAN_ID)}
         disabled={Boolean(loadingPlan)}
-        className="mt-4 w-full rounded-panel bg-deep-600 py-3 text-body font-bold text-white transition-colors hover:bg-deep-700 disabled:cursor-not-allowed disabled:opacity-60"
+        className="mt-6 w-full rounded-panel bg-deep-600 py-3 text-body font-bold text-white transition-colors hover:bg-deep-700 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {loadingPlan === LIFETIME_PLAN_ID
           ? 'Loading…'
-          : `Buy the Lifetime Licence${
+          : `Buy Lifetime Licence${
               lifetimePrice != null
                 ? ` for ${formatPrice(lifetimePrice)}`
                 : ''
@@ -269,8 +258,7 @@ export default function Pro() {
 
                 <p className="mt-3 text-body text-ink-600">
                   Get Pro features with a simple prepaid subscription.<br/>
-                  Manual renewal, no automatic billing.
-
+                  Manual renewal, no automatic billing
                 </p>
               </div>
 
@@ -412,37 +400,9 @@ export default function Pro() {
         </div>
       </Section>
 
-      <div className="space-y-2 text-secondary text-ink-400">
-        <p>
-          Built for Kenyan shops. Pay in KES via M-Pesa or card, powered by
-          Paystack.
-        </p>
-
-        {/* ON THE PAGE, not only inside the Lifetime card. A customer who
-            already has Pro never sees that card, and this is the screen
-            where they are charged. */}
-        <p>
-          Read our{' '}
-          <Link to="/terms" className="font-semibold text-ink-600 underline underline-offset-2">
-            Terms of Service
-          </Link>{' '}
-          and{' '}
-          <Link to="/privacy" className="font-semibold text-ink-600 underline underline-offset-2">
-            Privacy Policy
-          </Link>. Need a hand?{' '}
-          <a href={SUPPORT_EMAIL_HREF} className="font-semibold text-ink-600 underline underline-offset-2">
-            {SUPPORT_EMAIL}
-          </a>{' '}
-          or{' '}
-          <a
-            href={whatsappHref('Hello FlowBiz, I have a question about billing.')}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-semibold text-ink-600 underline underline-offset-2"
-          >
-            {SUPPORT_WHATSAPP_LABEL}
-          </a>.
-        </p>
+      <div className="flex items-center gap-2 text-secondary text-ink-400">
+        Built for Kenyan shops. Pay in KES via M-Pesa or card, powered by
+        Paystack.
       </div>
     </div>
   );
