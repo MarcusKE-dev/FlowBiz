@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { fetchAdminBusinesses } from '../../utils/adminService';
+import WhatsAppContact from '../../components/admin/WhatsAppContact';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import ErrorBanner from '../../components/common/ErrorBanner';
 import {
@@ -170,6 +171,13 @@ export default function AdminBusinesses() {
 
                 <div className="text-secondary text-ink-600 space-y-0.5 border-t border-divider pt-2">
                   <p><strong className="text-ink-800">{b.owner?.name || 'Owner'}</strong> &middot; {b.owner?.email || b.settings?.email || 'No email'}</p>
+                  <p>
+                    <WhatsAppContact
+                      phone={b.owner?.phone}
+                      ownerName={b.owner?.name}
+                      businessName={b.name}
+                    />
+                  </p>
                   <p className="text-label text-ink-400">Registered on {formatDate(b.createdAt)}</p>
                 </div>
 
@@ -216,7 +224,13 @@ export default function AdminBusinesses() {
                       </td>
                       <td className="px-4 py-3">
                         <span className="font-semibold text-ink-800 block">{b.owner?.name || 'Owner'}</span>
-                        <span className="text-label text-ink-500">{b.owner?.email || b.settings?.email || 'No email on file'}</span>
+                        <span className="text-label text-ink-500 block">{b.owner?.email || b.settings?.email || 'No email on file'}</span>
+                        <WhatsAppContact
+                          className="text-label"
+                          phone={b.owner?.phone}
+                          ownerName={b.owner?.name}
+                          businessName={b.name}
+                        />
                       </td>
                       <td className="px-4 py-3">
                         <span className={`text-label leading-4 ${PLAN_BADGE_CLASS[b.plan] || PLAN_BADGE_CLASS.free}`}>

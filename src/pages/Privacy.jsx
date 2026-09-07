@@ -70,8 +70,8 @@ export default function Privacy() {
             <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
               <li>
                 <strong>Account Information:</strong> email address, display name,
-                authentication information, business name, and business profile
-                information.
+                account phone number, authentication information, business name,
+                and business profile information.
               </li>
 
               <li>
@@ -203,6 +203,40 @@ export default function Privacy() {
             <p>
               FlowBiz does not sell customer contact information or use merchant
               customer records to build advertising profiles.
+            </p>
+
+            <h3 className="text-section-title pt-2 text-ink-900">
+              3.1 The account phone number
+            </h3>
+
+            <p>
+              The phone number provided when a business account is created is
+              used by FlowBiz for one purpose: contacting the account holder
+              about their own account. That means help with setting up, support,
+              and occasional follow-up about the service.
+            </p>
+
+            <p>
+              Where the number is registered on WhatsApp, that contact may be
+              made over WhatsApp rather than by email, because it is the channel
+              most account holders answer. Messages are written and sent by a
+              person at FlowBiz. The number is not connected to any automated or
+              bulk messaging system.
+            </p>
+
+            <p>
+              The account phone number is not used for advertising, is not sold,
+              rented or shared with third parties for their own purposes, and is
+              not added to any marketing list. An account holder who does not
+              wish to be contacted on it may say so, and may ask for the number
+              to be removed from their account, using the contact details at the
+              end of this policy.
+            </p>
+
+            <p>
+              This is separate from the business contact phone number a merchant
+              may enter in Settings, which belongs to the merchant's own business
+              records and appears on their receipts and invoices.
             </p>
           </section>
 

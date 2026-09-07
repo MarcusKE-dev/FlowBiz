@@ -27,6 +27,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import WhatsAppContact from '../../components/admin/WhatsAppContact';
 import {
   fetchAdminBusinessDetail,
   fetchBusinessUsage,
@@ -677,7 +678,10 @@ export default function AdminBusinessDetail() {
             </div>
           )}
 
-          <Section title={`Team (${staff.length})`} hint="Owner and staff accounts on this business.">
+          <Section
+            title={`Team (${staff.length})`}
+            hint="Owner and staff accounts on this business. A phone number opens a WhatsApp chat with a follow-up already typed — it is sent from whichever WhatsApp account you are signed in to, and nothing sends until you press send."
+          >
             {staff.length === 0 ? (
               <EmptyState icon={Users} title="No staff accounts" />
             ) : (
@@ -686,6 +690,18 @@ export default function AdminBusinessDetail() {
                 columns={[
                   { key: 'displayName', header: 'Name', primary: true, render: (u) => u.displayName || 'Staff' },
                   { key: 'email', header: 'Email', render: (u) => u.email || u.id },
+                  {
+                    key: 'phone',
+                    header: 'Phone',
+                    render: (u) => (
+                      <WhatsAppContact
+                        phone={u.phone}
+                        ownerName={u.displayName}
+                        businessName={business.name}
+                        emptyLabel="-"
+                      />
+                    ),
+                  },
                   { key: 'role', header: 'Role', mobileTrailing: true, render: (u) => <StatusPill tone={u.role === 'owner' ? 'info' : 'neutral'}>{u.role}</StatusPill> },
                   {
                     key: 'active', header: 'Status', mobileTrailing: true,

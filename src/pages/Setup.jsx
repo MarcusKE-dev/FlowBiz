@@ -23,6 +23,7 @@ import {
   resolveSignupProfile,
   DEFAULT_PROFILE_ID,
 } from '../industry/profiles';
+import { toWhatsAppE164 } from '../lib/whatsapp';
 
 const FLOWBIZ_API_URL =
   import.meta.env.VITE_FLOWBIZ_API_URL ||
@@ -53,6 +54,7 @@ export default function Setup() {
     useState(DEFAULT_PROFILE_ID);
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -69,6 +71,19 @@ export default function Setup() {
 
     if (!displayName.trim()) {
       setError('Enter your name.');
+      return;
+    }
+
+    // Checked with the same normaliser the admin console builds its
+    // contact link from, so a number that passes here is a number that
+    // can actually be reached later.
+    if (!phone.trim()) {
+      setError('Enter your phone number.');
+      return;
+    }
+
+    if (!toWhatsAppE164(phone)) {
+      setError('Enter a valid phone number.');
       return;
     }
 
@@ -189,6 +204,12 @@ export default function Setup() {
         uid: targetUser.uid,
         email: email.trim(),
         displayName: displayName.trim(),
+        // The owner's own contact number, kept as typed. It is stored on
+        // the USER, not on the business: businessSettings.phone is the
+        // shop's public number that prints on receipts, and the two are
+        // not the same thing — one is for customers, this one is for
+        // reaching the owner. The admin console already reads this field.
+        phone: phone.trim(),
         role: 'owner',
         businessId,
         active: true,
@@ -345,6 +366,21 @@ export default function Setup() {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="owner@yourbusiness.co.ke"
             autoComplete="username"
+            disabled={submitting}
+          />
+        </div>
+
+        <div>
+          <label className="label">Phone number</label>
+          <input
+            type="tel"
+            inputMode="tel"
+            className="input"
+            required
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="07xx xxx xxx"
+            autoComplete="tel"
             disabled={submitting}
           />
         </div>
