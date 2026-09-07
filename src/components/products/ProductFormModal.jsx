@@ -15,6 +15,7 @@ import ModifierEditor from './ModifierEditor';
 import RecipeEditor from './RecipeEditor';
 import { normalizeModifierGroups } from '../../utils/modifiers';
 import { generateVariants, hasVariants, totalVariantStock } from '../../utils/variants';
+import { findBarcodeClash } from '../../utils/scannerService';
 import { raceWithTimeout } from '../../utils/offlineWrite';
 import { friendlyErrorMessage } from '../../utils/errorMessages';
 import { optimizeImage, formatBytes, blobToDataUrl } from '../../utils/imageOptimizer';
@@ -180,16 +181,23 @@ export default function ProductFormModal({
   // `allProducts` is already loaded for the recipe editor below, so this
   // costs no read. It warns rather than blocks: a shop that already has a
   // clash must still be able to open the product and fix it.
+  // The id of the product THIS form has just created, once it has one.
+  // See findBarcodeClash: the catalogue listener reports a new product
+  // before its save finishes, so without this the form ends up warning
+  // about its own work. State rather than a ref because the warning below
+  // has to recompute when it lands.
+  const [createdId, setCreatedId] = useState(null);
+
   const barcodeClash = useMemo(() => {
-    const typed = form.barcode.trim();
-    if (!typed) return null;
-    return allProducts.find((p) => (
-      p.id !== initialProduct?.id
-      && !p.deleted
-      && typeof p.barcode === 'string'
-      && p.barcode.trim() === typed
-    )) || null;
-  }, [form.barcode, allProducts, initialProduct]);
+    // A save in flight is exactly the window in which the listener starts
+    // reporting the new product, and it is too late to act on the warning
+    // anyway — the button already says "Adding Product…". Nothing useful
+    // can be said here, so nothing is said.
+    if (busy) return null;
+    return findBarcodeClash(allProducts, form.barcode, {
+      excludeIds: [initialProduct?.id, createdId],
+    });
+  }, [form.barcode, allProducts, initialProduct, busy, createdId]);
 
   // Only true if we are editing an existing product that already has a Firestore document ID
   const isEditing = Boolean(initialProduct && initialProduct.id);
@@ -218,6 +226,7 @@ export default function ProductFormModal({
   // Sync form state when modal opens
   useEffect(() => {
     setBusy(false);
+    setCreatedId(null);
     setShowAddCategory(false);
     setNewCategoryName('');
     revokePreview();
@@ -521,6 +530,7 @@ export default function ProductFormModal({
 
       const saved = await onSave(payload);
       const productId = isEditing ? initialProduct.id : saved?.id;
+      if (!isEditing && saved?.id) setCreatedId(saved.id);
 
       if (clearing && productId) {
         await deleteProductImage(businessId, productId);
