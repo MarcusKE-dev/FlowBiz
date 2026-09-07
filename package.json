@@ -8,7 +8,11 @@
     "dev:demo": "vite --mode demo",
     "build": "vite build && vite build --mode demo",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test 'src/**/*.test.js' && npm --prefix cloudflare-worker test",
+    "test:rules": "firebase emulators:exec --only firestore --project flowbiz-rules-test \"node --test test/rules/*.test.mjs\"",
+    "dev:emulator": "vite --mode emulator --port 5273 --strictPort",
+    "emulators": "firebase emulators:start --only firestore,auth --project flowbiz-audit-test"
   },
   "dependencies": {
     "@zxing/browser": "^0.2.1",

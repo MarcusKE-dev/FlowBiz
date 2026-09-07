@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Printer, Download, MessageCircle, CheckCircle2, Clock } from 'lucide-react';
+import { Printer, Download, MessageCircle } from 'lucide-react';
 import Modal from '../common/Modal';
 import { useAuth } from '../../contexts/AuthContext';
-import { useSettings } from '../../hooks/useSettings';
+import { useSettings } from '../../contexts/SettingsContext';
 import { formatKES } from '../../utils/currency';
 import { openWhatsApp, buildDebtPaymentReceiptMessage, isValidWhatsAppPhone } from '../../utils/whatsapp';
 import { printDebtPaymentReceipt, generateDebtPaymentReceiptPDF } from '../../utils/documentService';
 import { getOrCreateShareLink } from '../../utils/documentSharing';
+import { useCloudDocuments } from '../../hooks/useCloudDocuments';
+import StatementBlock, { StatementRow } from '../ui/StatementBlock';
+import StatusPill from '../ui/StatusPill';
+import Money from '../ui/Money';
 
 // Shown right after a debt repayment is successfully recorded (never
 // before — see CustomerDetail.jsx's handleRepayment).
@@ -20,6 +24,7 @@ import { getOrCreateShareLink } from '../../utils/documentSharing';
 // sharing stays Pro-gated below.
 export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
   const { isPro, businessId, profile } = useAuth();
+  const { canPublish: canShareLink, blockedMessage } = useCloudDocuments();
   const { settings } = useSettings();
   const [phone, setPhone] = useState('');
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
@@ -34,6 +39,12 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
   const handleWhatsApp = async () => {
     if (!phone.trim() || !isValidWhatsAppPhone(phone)) {
       toast.error('Add a valid phone number for this customer before sending a WhatsApp reminder.');
+      return;
+    }
+    // Publishing the public receipt link is a cloud service; Print and
+    // Download above are not and stay available either way.
+    if (!canShareLink) {
+      toast.error(blockedMessage);
       return;
     }
     setSendingWhatsApp(true);
@@ -63,7 +74,7 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
       });
       const opened = openWhatsApp(phone, message);
       toast[opened ? 'success' : 'error'](opened ? 'WhatsApp opened.' : 'WhatsApp could not be opened.');
-    } catch (err) {
+    } catch {
       toast.error('Unable to generate the receipt link. Please try again.');
     } finally {
       setSendingWhatsApp(false);
@@ -73,25 +84,22 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
   return (
     <Modal open={open} onClose={onClose} title="Debt Payment Receipt">
       <div className="space-y-4">
-        <div className={`flex flex-col items-center justify-center py-4 rounded-2xl border ${receipt.isCleared ? 'bg-moss-50 border-moss-200' : 'bg-amber-50 border-amber-200'}`}>
-          <div className={`h-10 w-10 rounded-full flex items-center justify-center mb-2 ${receipt.isCleared ? 'bg-moss-100 text-moss-700' : 'bg-amber-100 text-amber-700'}`}>
-            {receipt.isCleared ? <CheckCircle2 className="h-5 w-5" strokeWidth={2} /> : <Clock className="h-5 w-5" strokeWidth={2} />}
-          </div>
-          <h2 className={`font-display font-bold ${receipt.isCleared ? 'text-moss-800' : 'text-amber-800'}`}>
+        <div className="flex flex-col items-center justify-center gap-2 rounded-panel border border-line bg-surface py-5 text-center">
+          <StatusPill tone={receipt.isCleared ? 'positive' : 'caution'}>
             {receipt.isCleared ? 'Debt cleared' : 'Partially paid'}
-          </h2>
-          <p className="text-sm font-semibold mt-2 text-ink-800">{receipt.customerName}</p>
-          <p className="text-lg font-bold text-ink-900">{formatKES(receipt.amountPaid)} received</p>
-          <p className="text-xs mt-1 font-semibold text-ink-500">
+          </StatusPill>
+          <p className="text-body font-semibold text-ink-800">{receipt.customerName}</p>
+          <p className="num text-money text-ink-900"><Money value={receipt.amountPaid} /> received</p>
+          <p className="text-secondary font-semibold text-ink-500">
             {receipt.method}{receipt.mpesaCode ? ` · ${receipt.mpesaCode}` : ''}
           </p>
         </div>
 
-        <div className="card divide-y divide-ink-100">
-          <Row label="Previous balance" value={formatKES(receipt.previousBalance)} />
-          <Row label="Payment received" value={formatKES(receipt.amountPaid)} />
-          <Row label="Remaining balance" value={formatKES(receipt.remainingBalance)} bold />
-        </div>
+        <StatementBlock>
+          <StatementRow label="Previous balance" value={<Money value={receipt.previousBalance} />} />
+          <StatementRow label="Payment received" value={<Money value={receipt.amountPaid} />} />
+          <StatementRow label="Remaining balance" value={<Money value={receipt.remainingBalance} tone={receipt.isCleared ? undefined : 'negative'} />} strong />
+        </StatementBlock>
 
         <div className="grid grid-cols-2 gap-2">
           <button className="btn-outline flex items-center justify-center gap-2" onClick={handlePrint}>
@@ -102,14 +110,14 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
           </button>
         </div>
 
-        <div className="rounded-lg border border-ink-100 p-3 space-y-2">
+        <div className="rounded-panel border border-line p-3 space-y-2">
           <label className="label">
-            Send receipt via WhatsApp {!isPro && <span className="text-amber-600">— PRO</span>}
+            Send receipt via WhatsApp {!isPro && <span className="text-warning-700">(Pro)</span>}
           </label>
           <div className="flex gap-2">
             <input className="input flex-1" placeholder="Customer phone" value={phone} onChange={(e) => setPhone(e.target.value)} disabled={sendingWhatsApp} />
             {isPro ? (
-              <button className="btn-primary flex items-center justify-center gap-2 shrink-0" onClick={handleWhatsApp} disabled={sendingWhatsApp}>
+              <button className="btn-primary flex items-center justify-center gap-2 shrink-0" onClick={handleWhatsApp} disabled={sendingWhatsApp || !canShareLink}>
                 <MessageCircle className="h-4 w-4" /> {sendingWhatsApp ? 'Preparing…' : 'Send'}
               </button>
             ) : (
@@ -118,19 +126,14 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
               </Link>
             )}
           </div>
+          {!canShareLink && (
+            <p className="text-secondary leading-relaxed text-ink-500">{blockedMessage}</p>
+          )}
         </div>
 
-        <button className="btn-secondary w-full" onClick={onClose}>Done</button>
+        <button className="btn-secondary w-full" onClick={onClose}>Close</button>
       </div>
     </Modal>
   );
 }
 
-function Row({ label, value, bold }) {
-  return (
-    <div className={`flex items-center justify-between px-4 py-2.5 text-sm ${bold ? 'bg-ink-50/60' : ''}`}>
-      <span className={bold ? 'font-bold text-ink-900' : 'text-ink-500'}>{label}</span>
-      <span className={bold ? 'font-bold text-ink-900' : 'text-ink-700'}>{value}</span>
-    </div>
-  );
-}

@@ -9,7 +9,10 @@ import { useFinancialsForRange } from '../hooks/useFinancials';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
 import ErrorBanner from '../components/common/ErrorBanner';
-import { formatKES } from '../utils/currency';
+import PageHeader from '../components/ui/PageHeader';
+import Section from '../components/ui/Section';
+import StatementBlock, { StatementRow, StatementResult } from '../components/ui/StatementBlock';
+import { amountOnly } from '../components/ui/format';
 import { startOfDay, endOfDay } from '../utils/dateRanges';
 import { computeExpectedTillBalances } from '../utils/financials';
 import { raceWithTimeout } from '../utils/offlineWrite';
@@ -67,75 +70,158 @@ try {
       });
       const { queuedOffline, error } = await raceWithTimeout(write, 4000);
       if (error) throw error;
-      toast.success(queuedOffline ? "Day closed offline. It'll sync later!" : 'Day closed. See you tomorrow!');
+      toast.success(queuedOffline ? 'Day closed offline. It will sync when you reconnect.' : 'Day closed. See you tomorrow.');
     } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setSubmit(false); }
   };
 
-  if (isClosed) return (
-    <div className="mx-auto max-w-2xl space-y-4">
-      <EmptyState title="Today's session is closed" description="Counting resumes when the counter opens tomorrow." />
-      <div className="card divide-y divide-ink-100">
-        <SRow label="Expected cash"   value={expectedCashAtClose} />
-        <SRow label="Actual cash"     value={session.actualCashAtClose||0} />
-        <SRow label="Cash variance"   value={(session.actualCashAtClose||0)-expectedCashAtClose} variance />
-        <SRow label="Expected M-Pesa" value={expectedMpesaAtClose} />
-        <SRow label="Actual M-Pesa"   value={session.actualMpesaAtClose||0} />
-        <SRow label="M-Pesa variance" value={(session.actualMpesaAtClose||0)-expectedMpesaAtClose} variance />
+  if (isClosed) {
+    const closedCashVar  = (session.actualCashAtClose  || 0) - expectedCashAtClose;
+    const closedMpesaVar = (session.actualMpesaAtClose || 0) - expectedMpesaAtClose;
+    return (
+      <div className="mx-auto max-w-2xl space-y-6">
+        <PageHeader
+          title="Day closed"
+          description="Counting resumes when the counter opens tomorrow."
+          actions={<button className="btn-primary" onClick={reopenSession}>Reopen session</button>}
+        />
+        <Section title="Cash drawer">
+          <StatementBlock>
+            <StatementRow label="Expected cash" prefix="KES" value={amountOnly(expectedCashAtClose)} />
+            <StatementRow label="Counted cash"  prefix="KES" value={amountOnly(session.actualCashAtClose || 0)} />
+            <StatementResult
+              label={varianceLabel(closedCashVar)}
+              prefix="KES"
+              value={amountOnly(Math.abs(closedCashVar))}
+              tone={varianceTone(closedCashVar)}
+            />
+          </StatementBlock>
+        </Section>
+        <Section title="M-Pesa till">
+          <StatementBlock>
+            <StatementRow label="Expected balance" prefix="KES" value={amountOnly(expectedMpesaAtClose)} />
+            <StatementRow label="Counted balance"  prefix="KES" value={amountOnly(session.actualMpesaAtClose || 0)} />
+            <StatementResult
+              label={varianceLabel(closedMpesaVar)}
+              prefix="KES"
+              value={amountOnly(Math.abs(closedMpesaVar))}
+              tone={varianceTone(closedMpesaVar)}
+            />
+          </StatementBlock>
+        </Section>
       </div>
-      <button className="btn-primary w-full" onClick={reopenSession}>Reopen session</button>
-    </div>
-  );
+    );
+  }
 
   if (finErr) return <ErrorBanner message={`Failed to load figures: ${finErr}`} />;
 
   return (
-    <div className="mx-auto max-w-2xl space-y-4">
-      <h1 className="font-display text-xl font-bold text-ink-900">Close Day</h1>
-      <div className="card divide-y divide-ink-100">
-        <div className="px-4 py-3 text-sm font-bold text-ink-800">Cash drawer</div>
-        <Row label="Opening float"             value={session.openingCashFloat} />
-        <Row label="+ Cash sales"              value={summary.totalCashSales} />
-        <Row label="+ Debt repayments (cash)"  value={summary.totalDebtRepaymentsCash} />
-        <Row label="− Expenses (cash)"         value={-summary.totalExpensesCash} />
-        <Row label="− Refunds (cash)"          value={-summary.totalRefundsCash} />
-        <Row label="− Purchases paid (cash)" value={-cashPurchases} />
-        <Row label="− Supplier debt payments (cash)" value={-cashSupplierPay} />
-        <Row label="= Expected cash"           value={expectedCashAtClose} bold />
+    <div className="mx-auto max-w-2xl space-y-6">
+      <PageHeader
+        title="Close day"
+        description="Count what is actually in the drawer and the till, and record the difference."
+      />
+
+      <Section title="Cash drawer">
+        <StatementBlock>
+          <StatementRow label="Opening float"               prefix="KES" value={amountOnly(session.openingCashFloat)} />
+          <StatementRow label="Cash sales"                  prefix="KES" value={amountOnly(summary.totalCashSales)} />
+          <StatementRow label="Debt repayments in cash"     prefix="KES" value={amountOnly(summary.totalDebtRepaymentsCash)} />
+          <StatementRow label="Expenses paid in cash"       prefix="KES" value={amountOnly(-summary.totalExpensesCash)} tone={summary.totalExpensesCash ? 'negative' : 'muted'} />
+          <StatementRow label="Refunds paid in cash"        prefix="KES" value={amountOnly(-summary.totalRefundsCash)} tone={summary.totalRefundsCash ? 'negative' : 'muted'} />
+          <StatementRow label="Purchases paid in cash"      prefix="KES" value={amountOnly(-cashPurchases)} tone={cashPurchases ? 'negative' : 'muted'} />
+          <StatementRow label="Supplier payments in cash"   prefix="KES" value={amountOnly(-cashSupplierPay)} tone={cashSupplierPay ? 'negative' : 'muted'} />
+          <StatementRow label="Expected in the drawer"      prefix="KES" value={amountOnly(expectedCashAtClose)} strong />
+
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <label htmlFor="closeday-cash" className="text-body font-medium text-ink-900">
+              Cash you counted
+            </label>
+            <div className="flex items-center gap-1.5">
+              <span className="text-label uppercase text-ink-400">KES</span>
+              <input
+                id="closeday-cash"
+                type="number"
+                className="input num w-36 text-right"
+                value={cash}
+                onChange={(e) => setCash(e.target.value)}
+                placeholder="0"
+              />
+            </div>
+          </div>
+
+          {cash !== '' && (
+            <StatementResult
+              label={varianceLabel(cashVar)}
+              prefix="KES"
+              value={amountOnly(Math.abs(cashVar))}
+              tone={varianceTone(cashVar)}
+            />
+          )}
+        </StatementBlock>
+      </Section>
+
+      <Section title="M-Pesa till">
+        <StatementBlock>
+          <StatementRow label="Opening balance"              prefix="KES" value={amountOnly(session.openingMpesaFloat)} />
+          <StatementRow label="M-Pesa sales"                 prefix="KES" value={amountOnly(summary.totalMpesaSales)} />
+          <StatementRow label="Debt repayments on M-Pesa"    prefix="KES" value={amountOnly(summary.totalDebtRepaymentsMpesa)} />
+          <StatementRow label="Expenses paid on M-Pesa"      prefix="KES" value={amountOnly(-summary.totalExpensesMpesa)} tone={summary.totalExpensesMpesa ? 'negative' : 'muted'} />
+          <StatementRow label="Refunds paid on M-Pesa"       prefix="KES" value={amountOnly(-summary.totalRefundsMpesa)} tone={summary.totalRefundsMpesa ? 'negative' : 'muted'} />
+          <StatementRow label="Purchases paid on M-Pesa"     prefix="KES" value={amountOnly(-mpesaPurchases)} tone={mpesaPurchases ? 'negative' : 'muted'} />
+          <StatementRow label="Supplier payments on M-Pesa"  prefix="KES" value={amountOnly(-mpesaSupplierPay)} tone={mpesaSupplierPay ? 'negative' : 'muted'} />
+          <StatementRow label="Expected in the till"         prefix="KES" value={amountOnly(expectedMpesaAtClose)} strong />
+
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <label htmlFor="closeday-mpesa" className="text-body font-medium text-ink-900">
+              M-Pesa balance you counted
+            </label>
+            <div className="flex items-center gap-1.5">
+              <span className="text-label uppercase text-ink-400">KES</span>
+              <input
+                id="closeday-mpesa"
+                type="number"
+                className="input num w-36 text-right"
+                value={mpesa}
+                onChange={(e) => setMpesa(e.target.value)}
+                placeholder="0"
+              />
+            </div>
+          </div>
+
+          {mpesa !== '' && (
+            <StatementResult
+              label={varianceLabel(mpesaVar)}
+              prefix="KES"
+              value={amountOnly(Math.abs(mpesaVar))}
+              tone={varianceTone(mpesaVar)}
+            />
+          )}
+        </StatementBlock>
+      </Section>
+
+      <div className="flex justify-end">
+        <button
+          className="btn-primary"
+          disabled={cash === '' || mpesa === '' || submitting}
+          onClick={handleClose}
+        >
+          {submitting ? 'Closing…' : 'Confirm and close day'}
+        </button>
       </div>
-      <div className="card p-4 space-y-2">
-        <label className="label">Actual cash counted (KES)</label>
-        <input type="number" className="input" value={cash} onChange={e=>setCash(e.target.value)} placeholder="0" />
-        {cash!==''&&<Variance v={cashVar} />}
-      </div>
-      <div className="card divide-y divide-ink-100">
-        <div className="px-4 py-3 text-sm font-bold text-ink-800">M-Pesa till</div>
-        <Row label="Opening balance"             value={session.openingMpesaFloat} />
-        <Row label="+ M-Pesa sales"              value={summary.totalMpesaSales} />
-        <Row label="+ Debt repayments (M-Pesa)"  value={summary.totalDebtRepaymentsMpesa} />
-        <Row label="− Expenses (M-Pesa)"         value={-summary.totalExpensesMpesa} />
-        <Row label="− Refunds (M-Pesa)"          value={-summary.totalRefundsMpesa} />
-        <Row label="− Purchases paid (M-Pesa)" value={-mpesaPurchases} />
-        <Row label="− Supplier debt payments (M-Pesa)" value={-mpesaSupplierPay} />
-        <Row label="= Expected M-Pesa"           value={expectedMpesaAtClose} bold />
-      </div>
-      <div className="card p-4 space-y-2">
-        <label className="label">Actual M-Pesa balance (KES)</label>
-        <input type="number" className="input" value={mpesa} onChange={e=>setMpesa(e.target.value)} placeholder="0" />
-        {mpesa!==''&&<Variance v={mpesaVar} />}
-      </div>
-      <button className="btn-primary w-full" disabled={cash===''||mpesa===''||submitting} onClick={handleClose}>{submitting?'Closing…':'Confirm and close day'}</button>
     </div>
   );
 }
 
-function Row({ label, value, bold }) {
-  return <div className={`flex items-center justify-between px-4 py-2.5 text-sm ${bold?'bg-ink-50/60':''}`}><span className={bold?'font-bold text-ink-900':'text-ink-500'}>{label}</span><span className={bold?'font-bold text-ink-900':'text-ink-700'}>{formatKES(value)}</span></div>;
+// Variance is described in words first — "Short by", "Over by", "Balanced"
+// — so the reconciliation never depends on the tint alone to be read.
+function varianceLabel(v) {
+  if (v === 0) return 'Balanced';
+  return v < 0 ? 'Short by' : 'Over by';
 }
-function SRow({ label, value, variance }) {
-  const tone = variance ? (value===0?'text-moss-700':value<0?'text-rust-600':'text-amber-600') : 'text-ink-700';
-  return <div className="flex items-center justify-between px-4 py-2.5 text-sm"><span className="text-ink-500">{label}</span><span className={`font-semibold ${tone}`}>{formatKES(value)}</span></div>;
+function varianceTone(v) {
+  // A balanced till is correct, not "good" — 'info' reads as neutral,
+  // which is what a reconciliation that came out even actually means.
+  if (v === 0) return 'info';
+  return v < 0 ? 'negative' : 'caution';
 }
-function Variance({ v }) {
-  const tone = v===0?'text-moss-700':v<0?'text-rust-600':'text-amber-600';
-  return <p className={`text-sm font-semibold ${tone}`}>{v===0?'✓ Matches exactly':v<0?`Shortage of ${formatKES(Math.abs(v))}`:`Surplus of ${formatKES(v)}`}</p>;
-}
+

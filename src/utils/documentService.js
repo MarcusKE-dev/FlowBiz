@@ -1,7 +1,10 @@
 import { jsPDF } from 'jspdf';
 import { formatKES } from './currency';
 import { formatDateTime } from './dateRanges';
+import { formatQuantityWithUnit } from '../industry/units';
+import { lineItemDetail } from './lineItems';
 import { openWhatsApp, buildReceiptMessage } from './whatsapp';
+import { PDF } from '../theme/tokens';
 
 export async function loadImageAsDataUrl(url) {
   if (!url) return null;
@@ -38,13 +41,13 @@ async function drawDocumentHeader(doc, settings, marginX, startY, paperWidthMm =
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(paperWidthMm <= 58 ? 9.5 : 11.5);
-  doc.setTextColor(21, 23, 29);
+  doc.setTextColor(...PDF.ink);
   doc.text((settings.shopName || 'FLOWBIZ STORE').toUpperCase(), centerX, y + 2, { align: 'center' });
 
   y += 5.5;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
-  doc.setTextColor(90, 98, 115);
+  doc.setTextColor(...PDF.ink2);
 
   if (settings.phone) {
     doc.text(`Tel: ${settings.phone}`, centerX, y, { align: 'center' });
@@ -80,7 +83,10 @@ async function buildDocument(data, settings, typeLabel) {
   const paperWidthMm = resolvePaperWidthMm(settings);
   const items = resolveDocumentItems(data);
 
-  const estimatedHeight = Math.max(160, 85 + items.length * 11);
+  // Detail lines (versions, modifiers, notes) add a row each, so the
+  // paper has to grow with them or a long ticket runs off the end.
+  const detailLines = items.reduce((n, item) => n + (lineItemDetail(item) ? 1 : 0), 0);
+  const estimatedHeight = Math.max(160, 85 + items.length * 11 + detailLines * 4);
   const doc = new jsPDF('p', 'mm', [paperWidthMm, estimatedHeight]);
   const marginX = 4;
   const pageWidth = paperWidthMm - marginX;
@@ -90,11 +96,21 @@ async function buildDocument(data, settings, typeLabel) {
   let y = await drawDocumentHeader(doc, settings, marginX, 5, paperWidthMm);
 
   const drawDivider = (currentY) => {
-    doc.setDrawColor(180, 185, 195);
+    doc.setDrawColor(...PDF.line);
     doc.setLineWidth(0.2);
     doc.setLineDashPattern([1, 1], 0);
     doc.line(marginX, currentY, pageWidth, currentY);
     doc.setLineDashPattern([], 0);
+  };
+
+  // A solid, heavier rule. The dashed divider above separates sections;
+  // this one bounds the block a reader looks for first — the total — so
+  // it has to survive a thermal printer with no fill to lean on.
+  const drawRule = (currentY) => {
+    doc.setDrawColor(...PDF.ink);
+    doc.setLineWidth(0.35);
+    doc.setLineDashPattern([], 0);
+    doc.line(marginX, currentY, pageWidth, currentY);
   };
 
   drawDivider(y);
@@ -103,24 +119,24 @@ async function buildDocument(data, settings, typeLabel) {
   const docRef = data.id ? `#${data.id.slice(-6).toUpperCase()}` : '#REC';
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
-  doc.setTextColor(21, 23, 29);
+  doc.setTextColor(...PDF.ink);
   doc.text(`${typeLabel} ${docRef}`, marginX, y);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
-  doc.setTextColor(90, 98, 115);
+  doc.setTextColor(...PDF.ink2);
   doc.text(formatDateTime(data.soldAt || data.recordedAt || new Date()), pageWidth, y, { align: 'right' });
 
   y += 3.5;
   if (data.customerName) {
     doc.setFont('helvetica', 'bold');
-    doc.setTextColor(21, 23, 29);
+    doc.setTextColor(...PDF.ink);
     doc.text(`Customer: ${data.customerName}`, marginX, y);
     y += 3.5;
   }
   if (data.soldByName) {
     doc.setFont('helvetica', 'normal');
-    doc.setTextColor(90, 98, 115);
+    doc.setTextColor(...PDF.ink2);
     doc.text(`Served by: ${data.soldByName}`, marginX, y);
     y += 3.5;
   }
@@ -130,7 +146,7 @@ async function buildDocument(data, settings, typeLabel) {
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
-  doc.setTextColor(54, 59, 72);
+  doc.setTextColor(...PDF.ink2);
   doc.text('ITEM', marginX, y);
   doc.text('AMOUNT', pageWidth, y, { align: 'right' });
 
@@ -140,7 +156,7 @@ async function buildDocument(data, settings, typeLabel) {
     y += 3.5;
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
-    doc.setTextColor(21, 23, 29);
+    doc.setTextColor(...PDF.ink);
 
     const itemName = item.productName || 'Item';
     const splitName = doc.splitTextToSize(itemName, contentWidth - 22);
@@ -153,8 +169,26 @@ async function buildDocument(data, settings, typeLabel) {
     if (item.quantity) {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(6.8);
-      doc.setTextColor(110, 115, 125);
-      doc.text(`${item.quantity} x @ ${formatKES(item.unitPrice || 0)}`, marginX, y);
+      doc.setTextColor(...PDF.ink3);
+      // "2.5 m x @ KES 120.00" for a measured item, and the unchanged
+      // "3 x @ KES 150.00" for anything sold by the piece.
+      doc.text(
+        `${formatQuantityWithUnit(item.quantity, item.unit)} x @ ${formatKES(item.unitPrice || 0)}`,
+        marginX, y
+      );
+    }
+    // What was actually served: the version, the choices made on the line
+    // and any note. Absent on every line that has none, so a receipt from
+    // a shop that does not use them is unchanged down to the millimetre.
+    const detail = lineItemDetail(item);
+    if (detail) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.8);
+      doc.setTextColor(...PDF.ink3);
+      const splitDetail = doc.splitTextToSize(detail, contentWidth - 4);
+      y += 3;
+      doc.text(splitDetail, marginX + 1.5, y);
+      y += (splitDetail.length - 1) * 3;
     }
   });
 
@@ -163,34 +197,42 @@ async function buildDocument(data, settings, typeLabel) {
   y += 4.5;
 
   if (data.isCredit) {
-    doc.setFillColor(253, 244, 239);
-    doc.roundedRect(marginX, y - 3, contentWidth, 10.5, 1, 1, 'F');
-    doc.setFont('helvetica', 'bold');
+    drawRule(y - 3);
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
-    doc.setTextColor(196, 68, 29);
-    doc.text('AMOUNT DUE (DENI):', marginX + 2, y + 3.5);
-    doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth - 2, y + 3.5, { align: 'right' });
+    doc.setTextColor(...PDF.ink2);
+    doc.text('AMOUNT DUE (DENI):', marginX, y + 3.5);
+    // Ink, not red. A receipt is ink on paper: thermal printers are
+    // monochrome, so a colour that survives on screen is flattened on
+    // the artifact that actually reaches the customer. Emphasis here
+    // comes from weight, uppercase and the two solid rules around it.
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...PDF.ink);
+    doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth, y + 3.5, { align: 'right' });
+    drawRule(y + 7.5);
     y += 12;
   } else {
-    doc.setFillColor(241, 250, 244);
-    doc.roundedRect(marginX, y - 3, contentWidth, 11.5, 1, 1, 'F');
-    doc.setFont('helvetica', 'bold');
+    drawRule(y - 3);
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(8.5);
-    doc.setTextColor(26, 98, 60);
-    doc.text('TOTAL PAID:', marginX + 2, y + 2.5);
-    doc.text(formatKES(data.totalAmount || data.amount || 0), pageWidth - 2, y + 2.5, { align: 'right' });
+    doc.setTextColor(...PDF.ink2);
+    doc.text('TOTAL PAID:', marginX, y + 2.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...PDF.ink);
+    doc.text(formatKES(data.totalAmount || data.amount || 0), pageWidth, y + 2.5, { align: 'right' });
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
-    doc.setTextColor(54, 59, 72);
+    doc.setTextColor(...PDF.ink2);
     const methodStr = `${data.paymentMethod || data.method || 'Cash'}${data.mpesaCode ? ` (${data.mpesaCode})` : ''}`;
-    doc.text(`Tender: ${methodStr}`, marginX + 2, y + 6.8);
+    doc.text(`Tender: ${methodStr}`, marginX, y + 6.8);
+    drawRule(y + 8.5);
     y += 13.5;
   }
 
   doc.setFontSize(7);
   doc.setFont('helvetica', 'italic');
-  doc.setTextColor(120, 125, 135);
+  doc.setTextColor(...PDF.ink3);
   doc.text(data.isCredit ? 'Payment due · Thank you!' : 'Thank you for shopping with us!', centerX, y, { align: 'center' });
 
   return doc;
@@ -202,17 +244,26 @@ async function buildDebtPaymentDocument(receipt, settings) {
   const doc = new jsPDF('p', 'mm', [paperWidthMm, 155]);
   const marginX = 4;
   const pageWidth = paperWidthMm - marginX;
-  const contentWidth = pageWidth - marginX;
   const centerX = paperWidthMm / 2;
 
   let y = await drawDocumentHeader(doc, settings, marginX, 5, paperWidthMm);
 
   const drawDivider = (currentY) => {
-    doc.setDrawColor(180, 185, 195);
+    doc.setDrawColor(...PDF.line);
     doc.setLineWidth(0.2);
     doc.setLineDashPattern([1, 1], 0);
     doc.line(marginX, currentY, pageWidth, currentY);
     doc.setLineDashPattern([], 0);
+  };
+
+  // A solid, heavier rule. The dashed divider above separates sections;
+  // this one bounds the block a reader looks for first — the total — so
+  // it has to survive a thermal printer with no fill to lean on.
+  const drawRule = (currentY) => {
+    doc.setDrawColor(...PDF.ink);
+    doc.setLineWidth(0.35);
+    doc.setLineDashPattern([], 0);
+    doc.line(marginX, currentY, pageWidth, currentY);
   };
 
   drawDivider(y);
@@ -221,12 +272,12 @@ async function buildDebtPaymentDocument(receipt, settings) {
   const recNo = receipt.receiptDocId ? `#PAY-${receipt.receiptDocId.slice(-6).toUpperCase()}` : '#PAYMENT';
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
-  doc.setTextColor(21, 23, 29);
+  doc.setTextColor(...PDF.ink);
   doc.text(`DEBT RECEIPT ${recNo}`, marginX, y);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
-  doc.setTextColor(90, 98, 115);
+  doc.setTextColor(...PDF.ink2);
   doc.text(formatDateTime(receipt.paidAt || new Date()), pageWidth, y, { align: 'right' });
 
   y += 3.5;
@@ -238,40 +289,42 @@ async function buildDebtPaymentDocument(receipt, settings) {
   drawDivider(y);
   y += 4.5;
 
-  const row = (label, val, boldVal = false, color = [21, 23, 29]) => {
+  // No colour parameter: every value on this document is ink. It used to
+  // take one so the remaining balance could be red, and with that gone
+  // the argument would only ever have carried its own default.
+  const row = (label, val, boldVal = false) => {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
-    doc.setTextColor(90, 98, 115);
+    doc.setTextColor(...PDF.ink2);
     doc.text(label, marginX, y);
 
     doc.setFont('helvetica', boldVal ? 'bold' : 'normal');
-    doc.setTextColor(color[0], color[1], color[2]);
+    doc.setTextColor(...PDF.ink);
     doc.text(val, pageWidth, y, { align: 'right' });
     y += 4.8;
   };
 
   row('Previous Total Debt:', formatKES(receipt.previousBalance));
-  row('Payment Received:', `- ${formatKES(receipt.amountPaid)}`, true, [26, 98, 60]);
+  row('Payment Received:', `- ${formatKES(receipt.amountPaid)}`, true);
 
   drawDivider(y - 1);
   y += 3.5;
 
-  row('Remaining Debt:', formatKES(receipt.remainingBalance), true, receipt.isCleared ? [26, 98, 60] : [196, 68, 29]);
+  row('Remaining Debt:', formatKES(receipt.remainingBalance), true);
 
   y += 1.5;
   const isCleared = !!receipt.isCleared;
-  const statusColor = isCleared ? [26, 98, 60] : [196, 68, 29];
-  doc.setFillColor(isCleared ? 241 : 253, isCleared ? 250 : 244, isCleared ? 244 : 239);
-  doc.roundedRect(marginX, y, contentWidth, 6.5, 1, 1, 'F');
+  drawRule(y);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.5);
-  doc.setTextColor(statusColor[0], statusColor[1], statusColor[2]);
-  doc.text(isCleared ? '✓ DEBT FULLY CLEARED' : '⚠ PARTIALLY PAID', centerX, y + 4.5, { align: 'center' });
+  doc.setTextColor(...PDF.ink);
+  doc.text(isCleared ? 'PAID IN FULL' : 'PARTIALLY PAID', centerX, y + 4.5, { align: 'center' });
+  drawRule(y + 6.5);
 
   y += 12;
   doc.setFontSize(7);
   doc.setFont('helvetica', 'italic');
-  doc.setTextColor(120, 125, 135);
+  doc.setTextColor(...PDF.ink3);
   doc.text('Thank you for settling your balance!', centerX, y, { align: 'center' });
 
   return doc;

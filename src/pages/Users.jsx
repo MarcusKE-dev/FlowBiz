@@ -6,9 +6,15 @@ import { useAuth } from '../contexts/AuthContext';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { tenantQuery } from '../lib/tenant';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import PageHeader from '../components/ui/PageHeader';
+import Section from '../components/ui/Section';
+import DataTable from '../components/ui/DataTable';
+import StatusPill from '../components/ui/StatusPill';
+import EmptyState from '../components/common/EmptyState';
 import Modal from '../components/common/Modal';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+import CashierPermissions from '../components/team/CashierPermissions';
 
 export default function Users() {
   const { createStaffInvite, cancelStaffInvite, removeStaffAccount, toggleMemberActive, profile, businessId, isPro } = useAuth();
@@ -39,9 +45,9 @@ export default function Users() {
   const copyLink = async (inviteId) => {
     try {
       await navigator.clipboard.writeText(inviteLink(inviteId));
-      toast.success('Invite link copied');
+      toast.success('Invite link copied.');
     } catch {
-      toast.error('Could not copy — long-press the link to copy it manually.');
+      toast.error('The link could not be copied. Press and hold it to copy it manually.');
     }
   };
 
@@ -50,7 +56,7 @@ export default function Users() {
     if (!newName.trim()) return;
 
     if (!isPro && (totalUsersCount + invites.length) >= 2) {
-      toast.error('Free plan allows a maximum of 1 Owner and 1 additional Staff member. Upgrade to FlowBiz Pro to add more, or cancel a pending invite first.');
+      toast.error('The free plan allows one owner and one other staff member. Upgrade to FlowBiz Pro to add more, or cancel a pending invite first.');
       return;
     }
 
@@ -58,7 +64,7 @@ export default function Users() {
     try {
       const invite = await createStaffInvite({ displayName: newName.trim(), role: newRole });
       if (invite.queuedOffline) {
-        toast.success("Invite saved — the link will be ready once you're back online.");
+        toast.success('Invite saved offline. The link will be ready when you reconnect.');
         setModal(false);
       } else {
         setFreshInvite({ id: invite.id, displayName: newName.trim(), role: newRole });
@@ -75,7 +81,7 @@ export default function Users() {
     if (!pendCancelInvite) return;
     try {
       await cancelStaffInvite(pendCancelInvite.id);
-      toast.success('Invite cancelled');
+      toast.success('Invite cancelled.');
     } catch (err) {
       toast.error(friendlyErrorMessage(err));
     } finally {
@@ -86,13 +92,13 @@ export default function Users() {
   const handleToggle = async () => {
     if (!pendToggle) return;
     if (pendToggle.role === 'owner' && pendToggle.active !== false && ownerCount <= 1) {
-      toast.error("This is the only active owner — deactivating them would lock everyone out. Invite another owner first.");
+      toast.error('This is the only active owner. Invite another owner before deactivating them.');
       setPendToggle(null);
       return;
     }
     try {
       await toggleMemberActive(pendToggle.id, pendToggle.active === false);
-      toast.success(pendToggle.active !== false ? 'Account deactivated' : 'Account reactivated');
+      toast.success(pendToggle.active !== false ? 'Account deactivated.' : 'Account reactivated.');
     } catch (err) {
       toast.error(friendlyErrorMessage(err));
     } finally {
@@ -118,92 +124,147 @@ export default function Users() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Team</h1>
-          <p className="text-sm text-ink-400">Manage who has access to this business.</p>
-        </div>
-        <button
-          className="btn-primary"
-          type="button"
-          onClick={() => {
-            setFreshInvite(null);
-            setNewName('');
-            setNewRole('cashier');
-            setModal(true);
-          }}
-        >
-          + Invite someone
-        </button>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-6">
+      <PageHeader
+        title="Team"
+        description="Who has access to this business."
+        actions={
+          <button
+            className="btn-primary"
+            type="button"
+            onClick={() => {
+              setFreshInvite(null);
+              setNewName('');
+              setNewRole('cashier');
+              setModal(true);
+            }}
+          >
+            Invite someone
+          </button>
+        }
+      />
 
       {invites.length > 0 && (
-        <div className="card p-4 space-y-2">
-          <h2 className="font-display text-sm font-bold text-ink-800">Pending invites</h2>
-          <div className="divide-y divide-ink-100">
-            {invites.map((inv) => (
-              <div key={inv.id} className="flex items-center justify-between gap-2 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <p className="font-semibold text-ink-800">
-                    {inv.displayName}
-                    <span className={`badge ml-2 ${inv.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{inv.role}</span>
-                  </p>
-                  <p className="text-xs text-ink-400 truncate font-mono">{inviteLink(inv.id)}</p>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => copyLink(inv.id)}>
-                    <Copy className="h-3.5 w-3.5" strokeWidth={1.75} /> Copy link
-                  </button>
-                  <button
-                    className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
-                    title="Cancel invite"
-                    onClick={() => setPendCancelInvite(inv)}
-                  >
-                    <X className="h-4 w-4" strokeWidth={1.75} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <Section title="Pending invites" hint="Anyone with one of these links can join the business.">
+          <DataTable
+            caption="Invites that have not been accepted yet"
+            rows={invites}
+            rowKey={(inv) => inv.id}
+            mobileLayout="row"
+            columns={[
+              {
+                key: 'displayName',
+                header: 'Name',
+                primary: true,
+                render: (inv) => <span className="font-medium text-ink-900">{inv.displayName}</span>,
+              },
+              {
+                key: 'role',
+                header: 'Role',
+                mobileTrailing: true,
+                render: (inv) => (
+                  <StatusPill tone={inv.role === 'owner' ? 'info' : 'neutral'}>
+                    {inv.role === 'owner' ? 'Owner' : 'Cashier'}
+                  </StatusPill>
+                ),
+              },
+              {
+                key: 'link',
+                header: 'Invite link',
+                render: (inv) => (
+                  <span className="block max-w-xs truncate font-mono text-secondary text-ink-500">
+                    {inviteLink(inv.id)}
+                  </span>
+                ),
+              },
+            ]}
+            rowActions={(inv) => (
+              <>
+                <button className="btn-ghost !px-2 text-ink-600" onClick={() => copyLink(inv.id)}>
+                  <Copy className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Copy
+                </button>
+                <button
+                  className="btn-ghost !px-2 text-ink-500 hover:text-danger-700"
+                  title="Cancel this invite"
+                  aria-label={`Cancel the invite for ${inv.displayName}`}
+                  onClick={() => setPendCancelInvite(inv)}
+                >
+                  <X className="h-4 w-4" strokeWidth={1.75} />
+                </button>
+              </>
+            )}
+          />
+        </Section>
       )}
 
-      {loading || invitesLoading ? (
-        <LoadingSpinner />
-      ) : (
-        <div className="card divide-y divide-ink-100">
-          {users.map((u) => (
-            <div key={u.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-ink-800 truncate">
-                  {u.displayName || u.email?.split('@')[0] || 'Unnamed'}
-                  {u.id === profile?.uid && <span className="text-xs font-normal text-ink-400"> (you)</span>}
-                </p>
-                <p className="text-xs text-ink-400 truncate">{u.email || 'No email'}</p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={`badge ${u.role === 'owner' ? 'bg-ink-900 text-white' : 'bg-moss-100 text-moss-700'}`}>{u.role || '—'}</span>
-                <span className={`badge ${u.active !== false ? 'bg-moss-100 text-moss-700' : 'bg-rust-100 text-rust-700'}`}>{u.active !== false ? 'Active' : 'Deactivated'}</span>
-                <button className="btn-outline !px-2.5 !py-1 !min-h-0 text-xs" onClick={() => setPendToggle(u)}>
+      <Section title="People">
+        {loading || invitesLoading ? (
+          <LoadingSpinner />
+        ) : (
+          <DataTable
+            caption="People with access to this business"
+            rows={users}
+            rowKey={(u) => u.id}
+            mobileLayout="row"
+            columns={[
+              {
+                key: 'displayName',
+                header: 'Name',
+                primary: true,
+                render: (u) => (
+                  <span className="font-medium text-ink-900">
+                    {u.displayName || u.email?.split('@')[0] || 'Unnamed'}
+                    {u.id === profile?.uid && <span className="font-normal text-ink-500"> (you)</span>}
+                  </span>
+                ),
+              },
+              { key: 'email', header: 'Email', render: (u) => <span className="text-ink-600">{u.email || 'No email'}</span> },
+              {
+                key: 'role',
+                header: 'Role',
+                mobileTrailing: true,
+                render: (u) => (
+                  <StatusPill tone={u.role === 'owner' ? 'info' : 'neutral'}>
+                    {u.role === 'owner' ? 'Owner' : 'Cashier'}
+                  </StatusPill>
+                ),
+              },
+              {
+                key: 'active',
+                header: 'Status',
+                mobileTrailing: true,
+                render: (u) => (
+                  <StatusPill tone={u.active !== false ? 'positive' : 'neutral'}>
+                    {u.active !== false ? 'Active' : 'Deactivated'}
+                  </StatusPill>
+                ),
+              },
+            ]}
+            rowActions={(u) => (
+              <>
+                <button className="btn-ghost !px-2 text-ink-600" onClick={() => setPendToggle(u)}>
                   {u.active !== false ? 'Deactivate' : 'Reactivate'}
                 </button>
-                {u.id === profile?.uid ? (
-                  <span className="text-xs text-ink-300 px-2">You</span>
-                ) : (
+                {u.id !== profile?.uid && (
                   <button
-                    className="rounded-lg p-2 text-rust-400 hover:bg-rust-50 min-h-[44px] min-w-[44px] flex items-center justify-center"
-                    title="Remove account"
+                    className="btn-ghost !px-2 text-ink-500 hover:text-danger-700"
+                    title="Remove this account"
+                    aria-label={`Remove ${u.displayName || u.email || 'this account'}`}
                     onClick={() => setPendDelete(u)}
                   >
                     <Trash2 className="h-4 w-4" strokeWidth={1.75} />
                   </button>
                 )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+              </>
+            )}
+            empty={<EmptyState title="No team members yet" description="Invite someone to give them access to this business." />}
+          />
+        )}
+      </Section>
+
+      {/* Who works here, and what they may do — one page, because they are
+          one question. See components/team/CashierPermissions.jsx. */}
+      <CashierPermissions />
 
       <Modal open={modal} onClose={() => setModal(false)} title={freshInvite ? 'Invite ready' : 'Invite someone'}>
         {!freshInvite ? (
@@ -218,14 +279,14 @@ export default function Users() {
                 <button
                   type="button"
                   onClick={() => setNewRole('cashier')}
-                  className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole === 'cashier' ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}
+                  className={`rounded-control border px-3 py-2.5 text-button transition-colors ${newRole === 'cashier' ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-line text-ink-600 hover:bg-ink-50 hover:text-ink-900'}`}
                 >
                   Cashier
                 </button>
                 <button
                   type="button"
                   onClick={() => setNewRole('owner')}
-                  className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${newRole === 'owner' ? 'border-moss-600 bg-moss-50 text-moss-800' : 'border-ink-200 text-ink-500'}`}
+                  className={`rounded-control border px-3 py-2.5 text-button transition-colors ${newRole === 'owner' ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-line text-ink-600 hover:bg-ink-50 hover:text-ink-900'}`}
                 >
                   Owner
                 </button>
@@ -238,21 +299,21 @@ export default function Users() {
           </form>
         ) : (
           <div className="space-y-3">
-            <p className="text-sm text-ink-600">Send this link to <span className="font-semibold">{freshInvite.displayName}</span> ({freshInvite.role}).</p>
+            <p className="text-body text-ink-600">Send this link to <span className="font-semibold">{freshInvite.displayName}</span> ({freshInvite.role}).</p>
             <div className="flex items-center gap-2">
-              <input className="input font-mono text-xs" readOnly value={inviteLink(freshInvite.id)} onFocus={(e) => e.target.select()} />
-              <button type="button" className="btn-outline shrink-0" onClick={() => copyLink(freshInvite.id)}>
+              <input className="input font-mono text-secondary" readOnly value={inviteLink(freshInvite.id)} onFocus={(e) => e.target.select()} />
+              <button type="button" className="btn-secondary shrink-0" onClick={() => copyLink(freshInvite.id)}>
                 <Copy className="h-4 w-4" strokeWidth={1.75} /> Copy
               </button>
             </div>
-            <button type="button" className="btn-primary w-full" onClick={() => setModal(false)}>Done</button>
+            <button type="button" className="btn-primary w-full" onClick={() => setModal(false)}>Close</button>
           </div>
         )}
       </Modal>
 
-      <ConfirmDialog open={!!pendToggle} title="Change Account Status?" confirmLabel="Confirm" onConfirm={handleToggle} onCancel={() => setPendToggle(null)} />
-      <ConfirmDialog open={!!pendDelete} title="Remove Account?" confirmLabel="Remove" danger onConfirm={handleDelete} onCancel={() => setPendDelete(null)} />
-      <ConfirmDialog open={!!pendCancelInvite} title="Cancel Invite?" confirmLabel="Cancel" danger onConfirm={handleCancelInvite} onCancel={() => setPendCancelInvite(null)} />
+      <ConfirmDialog open={!!pendToggle} title="Change this account status?" confirmLabel="Change status" onConfirm={handleToggle} onCancel={() => setPendToggle(null)} />
+      <ConfirmDialog open={!!pendDelete} title="Remove this account?" confirmLabel="Remove account" danger onConfirm={handleDelete} onCancel={() => setPendDelete(null)} />
+      <ConfirmDialog open={!!pendCancelInvite} title="Cancel this invite?" confirmLabel="Cancel invite" danger onConfirm={handleCancelInvite} onCancel={() => setPendCancelInvite(null)} />
     </div>
   );
 }

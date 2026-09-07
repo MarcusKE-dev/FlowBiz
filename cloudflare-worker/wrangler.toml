@@ -8,3 +8,11 @@ ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://flowbiz.p
 PAYSTACK_CALLBACK_URL = "https://flowbiz.co.ke/pro"
 APP_BASE_URL = "https://flowbiz.co.ke"
 ADMIN_EMAILS = "admin@flowbiz.co.ke"
+
+# Annual cloud services renewal reminders.
+#
+# The job is idempotent: a business is emailed at most once per reminder
+# stage per service period, so a missed run catches up and a repeated run
+# sends nothing. 06:00 UTC is 09:00 in Nairobi.
+[triggers]
+crons = ["0 6 * * *"]

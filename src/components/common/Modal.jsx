@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { X } from 'lucide-react';
 
 export default function Modal({
   open,
@@ -45,20 +46,20 @@ export default function Modal({
     >
       <div
         ref={containerRef}
-        className={`max-h-[92vh] w-full ${widthClass} overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-xl2`}
+        className={`max-h-[92vh] w-full ${widthClass} overflow-y-auto rounded-t-panel bg-surface p-5 shadow-overlay sm:rounded-panel`}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="font-display text-base font-bold text-ink-900">
+          <h3 className="font-display text-page-title text-ink-900">
             {title}
           </h3>
 
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 min-h-[44px] min-w-[44px] flex items-center justify-center"
+            className="flex items-center justify-center rounded-control p-1.5 text-ink-500 hover:bg-ink-100 hover:text-ink-900"
             aria-label="Close"
           >
-            ✕
+            <X className="h-4 w-4" strokeWidth={1.75} />
           </button>
         </div>
 

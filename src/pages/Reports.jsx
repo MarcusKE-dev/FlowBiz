@@ -1,39 +1,37 @@
 import { useMemo, useState } from 'react';
-import { where, orderBy } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { tenantQuery } from '../lib/tenant';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { useFinancialsForRange } from '../hooks/useFinancials';
 import { useDailySession } from '../hooks/useDailySession';
-import { useSettings } from '../hooks/useSettings';
+import { useSettings } from '../contexts/SettingsContext';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import ErrorBanner from '../components/common/ErrorBanner';
 import Modal from '../components/common/Modal';
 import { formatKES } from '../utils/currency';
 import { formatDate, formatDateTime, getRangeForPreset, startOfDay, endOfDay, todayKey } from '../utils/dateRanges';
-import { computeSupplierBalances, computeExpectedTillBalances } from '../utils/financials';
+import { computeExpectedTillBalances } from '../utils/financials';
 import { Printer, TrendingUp } from 'lucide-react';
+import PageHeader from '../components/ui/PageHeader';
+import Toolbar from '../components/ui/Toolbar';
+import Section from '../components/ui/Section';
+import SegmentedControl from '../components/ui/SegmentedControl';
+import MetricRail, { Metric } from '../components/ui/MetricRail';
+import StatementBlock, { StatementRow, StatementResult } from '../components/ui/StatementBlock';
+import DataTable from '../components/ui/DataTable';
+import EmptyState from '../components/common/EmptyState';
+import Money from '../components/ui/Money';
+import { amountOnly } from '../components/ui/format';
+import { PDF } from '../theme/tokens';
 import toast from 'react-hot-toast';
+import { roundQuantity } from '../industry/units';
 
 const PRESETS = [
   { id: 'today', label: 'Today' },
-  { id: 'week', label: 'This Week' },
-  { id: 'month', label: 'This Month' },
+  { id: 'week', label: 'This week' },
+  { id: 'month', label: 'This month' },
   { id: 'custom', label: 'Custom' },
 ];
 
-function Card({ label, value, tone = 'text-ink-900' }) {
-  return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <p className={`mt-1 font-display text-lg font-bold ${tone}`}>{value}</p>
-    </div>
-  );
-}
-
 export default function Reports() {
-  const { businessId } = useAuth();
   const [preset, setPreset] = useState('today');
   const [cStart, setCStart] = useState('');
   const [cEnd, setCEnd] = useState('');
@@ -59,45 +57,50 @@ export default function Reports() {
   const { session } = useDailySession();
   const { settings } = useSettings();
 
-  const productsQ = useMemo(
-    () => (businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null),
-    [businessId]
-  );
-  const purchasesQ = useMemo(
-    () => (businessId ? tenantQuery('purchases', businessId, where('paymentStatus', '==', 'pending_supplier_credit')) : null),
-    [businessId]
-  );
-  const outstandingCreditQ = useMemo(
-    () => (businessId ? tenantQuery('creditSales', businessId, where('status', 'in', ['pending', 'partial'])) : null),
-    [businessId]
-  );
-  const supplierPaymentsQ = useMemo(
-    () => (businessId ? tenantQuery('supplierPayments', businessId) : null),
-    [businessId]
-  );
-  const suppliersQ = useMemo(
-    () => (businessId ? tenantQuery('suppliers', businessId) : null),
-    [businessId]
-  );
+  // FIVE WHOLE-BUSINESS LISTENERS USED TO OPEN HERE and feed nothing.
+  // The products and outstanding-credit ones had their results discarded
+  // outright (a comment claimed they fed the PDF; nothing read them), and
+  // the purchases / supplierPayments / suppliers three existed only for
+  // the "current supplier balance" line, which was wrong to compute from
+  // this page's data and has been replaced by the period figure the PDF
+  // already had in hand. Every number on this page and in its export now
+  // comes from useFinancialsForRange, which is date-bounded — so opening
+  // Reports no longer streams a shop's entire catalogue, purchase history
+  // and open credit book to the device for nothing.
 
-  const { data: products } = useFirestoreCollection(productsQ);
-  const { data: purchasesData } = useFirestoreCollection(purchasesQ);
-  const { data: outstandingCreditSales } = useFirestoreCollection(outstandingCreditQ);
-  const { data: supplierPaymentsData } = useFirestoreCollection(supplierPaymentsQ);
-  const { data: suppliersData } = useFirestoreCollection(suppliersQ);
-
-  const totalInventoryValue = useMemo(() => {
-    return products.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
-  }, [products]);
-
-  const lowStock = useMemo(() => {
-    return products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
-  }, [products]);
-
-  const supplierBalances = useMemo(
-    () => computeSupplierBalances(purchasesData, supplierPaymentsData, suppliersData),
-    [purchasesData, supplierPaymentsData, suppliersData]
-  );
+  const bestSellers = useMemo(() => {
+    const map = {};
+    const ensure = (name) => {
+      const key = name || 'Unnamed product';
+      if (!map[key]) map[key] = { name: key, qty: 0, revenue: 0, profit: 0 };
+      return map[key];
+    };
+    (sales || []).forEach((sale) => {
+      if (sale.isVoided) return;
+      if (Array.isArray(sale.items) && sale.items.length > 0) {
+        sale.items.forEach((it) => {
+          const row = ensure(it.productName);
+          row.qty += Number(it.quantity) || 0;
+          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
+          row.profit += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
+        });
+      } else {
+        const row = ensure(sale.productName);
+        row.qty += Number(sale.quantity) || 0;
+        row.revenue += Number(sale.totalAmount) || 0;
+        row.profit += Number(sale.profit) || 0;
+      }
+    });
+    (creditSales || []).forEach((cs) => {
+      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
+      if (Array.isArray(cs.items) && cs.items.length > 0) {
+        cs.items.forEach((it) => { ensure(it.productName).qty += Number(it.quantity) || 0; });
+      } else {
+        ensure(cs.productName).qty += Number(cs.quantity) || 0;
+      }
+    });
+    return Object.values(map).sort((a, b) => b.qty - a.qty).slice(0, 8);
+  }, [sales, creditSales]);
 
   // Cash and M-Pesa purchase/supplier payment breakdowns (same as Close Day)
   const cashPurchases = useMemo(
@@ -201,12 +204,12 @@ export default function Reports() {
 
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(16);
-      doc.setTextColor(21, 23, 29);
+      doc.setTextColor(...PDF.ink);
       doc.text(businessName.toUpperCase(), textX, y + 6);
 
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8.5);
-      doc.setTextColor(90, 98, 115);
+      doc.setTextColor(...PDF.ink2);
       const metaLine = [settings.phone, settings.email, settings.address].filter(Boolean).join(' · ');
       if (metaLine) {
         doc.text(metaLine, textX, y + 11);
@@ -214,38 +217,38 @@ export default function Reports() {
       doc.text(`FINANCIAL AUDIT & PERFORMANCE STATEMENT  |  ${formatDate(start)} to ${formatDate(end)}`, textX, y + 15.5);
 
       y += 22;
-      doc.setDrawColor(21, 23, 29);
+      doc.setDrawColor(...PDF.ink);
       doc.setLineWidth(0.4);
       doc.line(marginX, y, pageWidth - marginX, y);
       y += 6;
 
       // Helper for clean subsection headers
       const drawSectionHeader = (title) => {
-        doc.setFillColor(246, 241, 231); // warm subtle sand
+        doc.setFillColor(...PDF.canvas);
         doc.roundedRect(marginX, y, contentWidth, 6.5, 1, 1, 'F');
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(9);
-        doc.setTextColor(21, 23, 29);
+        doc.setTextColor(...PDF.ink);
         doc.text(title.toUpperCase(), marginX + 3, y + 4.6);
         y += 9.5;
       };
 
       // Helper for clean data rows
-      const drawDataRow = (label, value, isBold = false, isHighlight = false, valueColor = [21, 23, 29]) => {
+      const drawDataRow = (label, value, isBold = false, isHighlight = false, valueColor = PDF.ink) => {
         if (isHighlight) {
-          doc.setFillColor(241, 250, 244);
+          doc.setFillColor(...PDF.primaryTint);
           doc.roundedRect(marginX, y - 3.5, contentWidth, 6, 0.8, 0.8, 'F');
         }
         doc.setFont('helvetica', isBold ? 'bold' : 'normal');
         doc.setFontSize(8.5);
-        doc.setTextColor(54, 59, 72);
+        doc.setTextColor(...PDF.ink2);
         doc.text(label, marginX + 3, y + 0.8);
 
-        doc.setTextColor(valueColor[0], valueColor[1], valueColor[2]);
+        doc.setTextColor(...valueColor);
         doc.setFont('helvetica', isBold ? 'bold' : 'normal');
         doc.text(value, pageWidth - marginX - 3, y + 0.8, { align: 'right' });
 
-        doc.setDrawColor(232, 234, 237);
+        doc.setDrawColor(...PDF.divider);
         doc.setLineWidth(0.12);
         doc.line(marginX + 3, y + 2.5, pageWidth - marginX - 3, y + 2.5);
 
@@ -259,11 +262,11 @@ export default function Reports() {
       }
       drawDataRow('+ Cash Sales Received', formatKES(summary.totalCashSales));
       drawDataRow('+ Debt Repayments Collected (Cash)', formatKES(summary.totalDebtRepaymentsCash));
-      drawDataRow('− Shop Expenses Paid (Cash)', `- ${formatKES(summary.totalExpensesCash)}`);
-      drawDataRow('− Customer Refunds Issued (Cash)', `- ${formatKES(summary.totalRefundsCash)}`);
-      drawDataRow('− Direct Stock Purchases Paid (Cash)', `- ${formatKES(cashPurchases)}`);
-      drawDataRow('− Supplier Debt Payments (Cash)', `- ${formatKES(cashSupplierPay)}`);
-      drawDataRow('= Net Expected Cash in Drawer', formatKES(expectedCashAtClose), true, true, [26, 98, 60]);
+      drawDataRow('- Shop Expenses Paid (Cash)', `- ${formatKES(summary.totalExpensesCash)}`);
+      drawDataRow('- Customer Refunds Issued (Cash)', `- ${formatKES(summary.totalRefundsCash)}`);
+      drawDataRow('- Direct Stock Purchases Paid (Cash)', `- ${formatKES(cashPurchases)}`);
+      drawDataRow('- Supplier Debt Payments (Cash)', `- ${formatKES(cashSupplierPay)}`);
+      drawDataRow('= Net Expected Cash in Drawer', formatKES(expectedCashAtClose), true, true, PDF.primary);
       y += 3;
 
       // 3. M-Pesa Till Reconciliation Breakdown
@@ -273,42 +276,54 @@ export default function Reports() {
       }
       drawDataRow('+ M-Pesa Sales Received', formatKES(summary.totalMpesaSales));
       drawDataRow('+ Debt Repayments Collected (M-Pesa)', formatKES(summary.totalDebtRepaymentsMpesa));
-      drawDataRow('− Shop Expenses Paid (M-Pesa)', `- ${formatKES(summary.totalExpensesMpesa)}`);
-      drawDataRow('− Customer Refunds Issued (M-Pesa)', `- ${formatKES(summary.totalRefundsMpesa)}`);
-      drawDataRow('− Direct Stock Purchases Paid (M-Pesa)', `- ${formatKES(mpesaPurchases)}`);
-      drawDataRow('− Supplier Debt Payments (M-Pesa)', `- ${formatKES(mpesaSupplierPay)}`);
-      drawDataRow('= Net Expected M-Pesa Till Balance', formatKES(expectedMpesaAtClose), true, true, [26, 98, 60]);
+      drawDataRow('- Shop Expenses Paid (M-Pesa)', `- ${formatKES(summary.totalExpensesMpesa)}`);
+      drawDataRow('- Customer Refunds Issued (M-Pesa)', `- ${formatKES(summary.totalRefundsMpesa)}`);
+      drawDataRow('- Direct Stock Purchases Paid (M-Pesa)', `- ${formatKES(mpesaPurchases)}`);
+      drawDataRow('- Supplier Debt Payments (M-Pesa)', `- ${formatKES(mpesaSupplierPay)}`);
+      drawDataRow('= Net Expected M-Pesa Till Balance', formatKES(expectedMpesaAtClose), true, true, PDF.primary);
       y += 3;
 
       // 4. Profit & Loss Statement (Cash-Flow / Operating)
       drawSectionHeader('3. Cash-Flow Profit & Loss Statement');
-      drawDataRow('Recognized Cash-Flow Revenue (Sales + Debt Repaid − Refunds)', formatKES(summary.revenue));
-      drawDataRow('− Cost of Goods Sold (COGS)', `- ${formatKES(summary.costOfGoodsSold)}`);
-      drawDataRow('= Gross Profit', formatKES(summary.grossProfit), true, true, [26, 98, 60]);
-      drawDataRow('− Total Operating Expenses', `- ${formatKES(summary.totalExpenses)}`);
-      drawDataRow('= Net Operating Profit', formatKES(summary.netProfit), true, true, summary.netProfit >= 0 ? [26, 98, 60] : [196, 68, 29]);
+      drawDataRow('Recognized Cash-Flow Revenue (Sales + Debt Repaid - Refunds)', formatKES(summary.revenue));
+      drawDataRow('- Cost of Goods Sold (COGS)', `- ${formatKES(summary.costOfGoodsSold)}`);
+      drawDataRow('= Gross Profit', formatKES(summary.grossProfit), true, true, PDF.primary);
+      drawDataRow('- Total Operating Expenses', `- ${formatKES(summary.totalExpenses)}`);
+      drawDataRow('= Net Operating Profit', formatKES(summary.netProfit), true, true, summary.netProfit >= 0 ? PDF.primary : PDF.negative);
       y += 3;
 
       // 5. Purchases & Supplier Restocking Summary
       drawSectionHeader('4. Stock Purchases & Supplier Credit Activity');
       drawDataRow('Total Stock Purchases (Cash & M-Pesa Paid)', formatKES(cashPurchases + mpesaPurchases));
-      drawDataRow('Stock Taken on Supplier Credit (Payables Added)', formatKES(creditPurchases), false, false, [196, 68, 29]);
-      drawDataRow('Supplier Debt Payments Cleared', formatKES(cashSupplierPay + mpesaSupplierPay), false, false, [26, 98, 60]);
-      drawDataRow('Total Current Supplier Balance Outstanding', formatKES(supplierBalances.reduce((a, b) => a + b.balance, 0)), true);
+      drawDataRow('Stock Taken on Supplier Credit (Payables Added)', formatKES(creditPurchases), false, false, PDF.negative);
+      drawDataRow('Supplier Debt Payments Cleared', formatKES(cashSupplierPay + mpesaSupplierPay));
+      // This is the PERIOD's net movement, and it is labelled as such.
+      // It used to say "Total Current Supplier Balance Outstanding" while
+      // being computed from the date-ranged purchase and payment lists
+      // this page already listens to — so a report run for "Today"
+      // announced that a shop owed its suppliers almost nothing, and a
+      // payment made in the period against a purchase from before it was
+      // dropped entirely. What a business owes right now is a balance,
+      // not a period figure; the Suppliers page computes it from the
+      // whole ledger and remains the place to read it.
+      drawDataRow('Net Change in Supplier Credit This Period', formatKES(creditPurchases - (cashSupplierPay + mpesaSupplierPay)), true);
       y += 3;
 
       // 6. Top Sellers & Low Stock (compact)
       if (bestSelling.length > 0) {
         drawSectionHeader('5. Top-Performing Product Sales');
         bestSelling.forEach((p, idx) => {
-          drawDataRow(`${idx + 1}. ${p.name} (${p.qty} units)`, formatKES(p.revenue));
+          // Rounded at the point of display: summing decimal quantities
+          // across a month accumulates the usual binary noise, and a
+          // report that says "50.30900000000001 units" is a bug report.
+          drawDataRow(`${idx + 1}. ${p.name} (${roundQuantity(p.qty, 'metre')} units)`, formatKES(p.revenue));
         });
         y += 3;
       }
 
       // Footer
       doc.setFontSize(7.5);
-      doc.setTextColor(140, 145, 155);
+      doc.setTextColor(...PDF.ink3);
       doc.text(`Generated on ${formatDateTime(new Date())} · Official Record from FlowBiz Workstation`, marginX, 287);
       doc.text(`Page 1 of 1`, pageWidth - marginX, 287, { align: 'right' });
 
@@ -321,40 +336,50 @@ export default function Reports() {
       toast.success('Report ready.');
       setPdfModalOpen(false);
     } catch (err) {
-      toast.error('Failed to generate PDF. Check console.');
+      toast.error('The report could not be generated. Try a shorter date range, or reload the page.');
       console.error(err);
     }
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
-      <div className="flex justify-between items-center">
-        <h1 className="font-display text-xl font-bold text-ink-900">Reports</h1>
-        <Link to="/advanced-analytics" className="btn-outline">
-          <TrendingUp className="h-4 w-4" /> Advanced Analytics
-        </Link>
-      </div>
+    <div className="mx-auto max-w-5xl space-y-6">
+      <PageHeader
+        title="Reports"
+        description="Where the money went over the period you choose."
+        actions={
+          <Link to="/advanced-analytics" className="btn-secondary">
+            <TrendingUp className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Advanced analytics
+          </Link>
+        }
+      />
 
-      <div className="flex flex-wrap items-center gap-2">
-        {PRESETS.map((p) => (
-          <button
-            key={p.id}
-            onClick={() => setPreset(p.id)}
-            className={`rounded-full px-3.5 py-1.5 text-sm font-semibold ${
-              preset === p.id ? 'bg-ink-900 text-white' : 'bg-ink-100 text-ink-600 hover:bg-ink-200'
-            }`}
-          >
-            {p.label}
-          </button>
-        ))}
+      <Toolbar>
+        <SegmentedControl
+          ariaLabel="Reporting period"
+          options={PRESETS.map((p) => ({ value: p.id, label: p.label }))}
+          value={preset}
+          onChange={setPreset}
+        />
         {preset === 'custom' && (
           <div className="flex items-center gap-2">
-            <input type="date" className="input !w-auto" value={cStart} onChange={(e) => setCStart(e.target.value)} />
-            <span className="text-ink-400">to</span>
-            <input type="date" className="input !w-auto" value={cEnd} onChange={(e) => setCEnd(e.target.value)} />
+            <input
+              type="date"
+              className="input !w-auto"
+              value={cStart}
+              onChange={(e) => setCStart(e.target.value)}
+              aria-label="Start date"
+            />
+            <span className="text-secondary text-ink-500">to</span>
+            <input
+              type="date"
+              className="input !w-auto"
+              value={cEnd}
+              onChange={(e) => setCEnd(e.target.value)}
+              aria-label="End date"
+            />
           </div>
         )}
-      </div>
+      </Toolbar>
 
       <ErrorBanner message={error ? `${error}` : null} />
 
@@ -362,49 +387,89 @@ export default function Reports() {
         <LoadingSpinner />
       ) : (
         <>
-          <div>
-            <h2 className="mb-2 font-display text-sm font-bold text-ink-800">Financial Summary</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Card label="Cash Balance" value={formatKES(expectedCashAtClose)} />
-              <Card label="M-Pesa Balance" value={formatKES(expectedMpesaAtClose)} />
-              <Card label="Credit Sales" value={formatKES(summary.totalCreditSales)} tone="text-rust-600" />
-              <Card label="Repayments Collected" value={formatKES(summary.totalDebtRepayments)} tone="text-moss-700" />
-            </div>
-          </div>
-          <div>
-            <h2 className="mb-2 font-display text-sm font-bold text-ink-800">Profit Calculation</h2>
-            <div className="card divide-y divide-ink-100">
-              {[
-                ['Revenue', summary.revenue, false],
-                ['− Cost of goods sold', -summary.costOfGoodsSold, false],
-                ['= Gross profit', summary.grossProfit, true],
-                ['− Total expenses', -summary.totalExpenses, false],
-                ['= Net profit', summary.netProfit, true],
-              ].map(([label, value, bold], i) => (
-                <div key={label} className={`flex items-center justify-between px-4 py-3 ${bold ? 'bg-ink-50/60' : ''}`}>
-                  <span className={`text-sm ${bold ? 'font-bold text-ink-900' : 'text-ink-600'}`}>{label}</span>
-                  <span className={`font-semibold ${value < 0 ? 'text-rust-600' : i === 4 ? 'text-moss-700' : 'text-ink-800'}`}>
-                    {formatKES(value)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <Section title="Position">
+            <MetricRail columns={4}>
+              <Metric label="Cash balance"        prefix="KES" value={amountOnly(expectedCashAtClose)} />
+              <Metric label="M-Pesa balance"      prefix="KES" value={amountOnly(expectedMpesaAtClose)} />
+              <Metric label="Credit sales"        prefix="KES" value={amountOnly(summary.totalCreditSales)} />
+              <Metric label="Repayments collected" prefix="KES" value={amountOnly(summary.totalDebtRepayments)} />
+            </MetricRail>
+          </Section>
 
-          <div className="flex flex-wrap gap-2">
-            <button className="btn-primary" onClick={() => setPdfModalOpen(true)}>
-              <Printer className="h-4 w-4" strokeWidth={1.75} /> Get PDF Report
+          <Section title="How the profit is made">
+            <StatementBlock>
+              <StatementRow label="Revenue"            prefix="KES" value={amountOnly(summary.revenue)} />
+              <StatementRow label="Cost of goods sold" prefix="KES" value={amountOnly(-summary.costOfGoodsSold)} tone={summary.costOfGoodsSold ? 'negative' : 'muted'} />
+              <StatementRow label="Gross profit"       prefix="KES" value={amountOnly(summary.grossProfit)} strong />
+              <StatementRow label="Total expenses"     prefix="KES" value={amountOnly(-summary.totalExpenses)} tone={summary.totalExpenses ? 'negative' : 'muted'} />
+              <StatementResult
+                label="Net profit"
+                prefix="KES"
+                value={amountOnly(summary.netProfit)}
+                tone={summary.netProfit < 0 ? 'negative' : 'positive'}
+              />
+            </StatementBlock>
+          </Section>
+
+          <Section title="Best sellers" hint="By units sold over this period">
+            <DataTable
+              caption="Best selling products over the selected period"
+              rows={bestSellers}
+              rowKey={(r) => r.name}
+              mobileLayout="row"
+              columns={[
+                {
+                  key: 'name',
+                  header: 'Product',
+                  primary: true,
+                  render: (r) => <span className="font-medium text-ink-900">{r.name}</span>,
+                },
+                { key: 'qty', header: 'Units', numeric: true, mobileTrailing: true, render: (r) => <span className="font-semibold text-ink-900">{roundQuantity(r.qty, 'metre')}</span> },
+                { key: 'revenue', header: 'Revenue', numeric: true, mobileTrailing: true, render: (r) => <Money value={r.revenue} /> },
+                {
+                  key: 'profit',
+                  header: 'Profit',
+                  numeric: true,
+                  render: (r) => (
+                    <span className="font-semibold">
+                      <Money value={r.profit} tone={r.profit < 0 ? 'negative' : 'positive'} />
+                    </span>
+                  ),
+                },
+              ]}
+              empty={
+                <EmptyState
+                  title="No sales in this period"
+                  description="Pick a wider date range, or record a sale at the counter."
+                />
+              }
+            />
+          </Section>
+
+          {/* The export is an action on this period's data, not on the
+              page, so it sits at the end of the data rather than in the
+              header — you decide to export after reading the report. */}
+          <div className="flex flex-col gap-3 rounded-panel border border-line bg-surface p-4
+                          sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-body text-ink-600">
+              A print-ready accounting statement for this period, including full till reconciliation.
+            </p>
+            <button
+              className="btn-primary shrink-0 sm:w-auto"
+              onClick={() => setPdfModalOpen(true)}
+            >
+              <Printer className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Export report
             </button>
           </div>
         </>
       )}
 
-      <Modal open={pdfModalOpen} onClose={() => setPdfModalOpen(false)} title="Export Financial Report">
+      <Modal open={pdfModalOpen} onClose={() => setPdfModalOpen(false)} title="Export financial report">
         <div className="space-y-3">
-          <p className="text-sm text-ink-500 mb-4">Export clean, print-ready accounting reports with full till reconciliation and purchases for your records.</p>
-          <button className="btn-primary w-full" onClick={() => doExport('download')}>Download PDF Report</button>
-          <button className="btn-outline w-full" onClick={() => doExport('print')}>Print Report Directly</button>
-          <button className="btn-secondary w-full mt-2" onClick={() => setPdfModalOpen(false)}>Cancel</button>
+          <p className="text-body text-ink-600">A print-ready accounting report for this period, with full till reconciliation and purchases.</p>
+          <button className="btn-primary w-full" onClick={() => doExport('download')}>Download PDF</button>
+          <button className="btn-secondary w-full" onClick={() => doExport('print')}>Print report</button>
+          <button className="btn-ghost w-full" onClick={() => setPdfModalOpen(false)}>Cancel</button>
         </div>
       </Modal>
     </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { doc, setDoc, updateDoc, deleteField, serverTimestamp, onSnapshot, getDoc } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, deleteField, onSnapshot, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { todayKey } from '../utils/dateRanges';

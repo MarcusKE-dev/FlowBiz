@@ -9,7 +9,11 @@ export function corsHeaders(origin, allowedOrigins) {
   const allowOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0] || 'null';
   return {
     'Access-Control-Allow-Origin': allowOrigin,
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    // DELETE belongs here: /api/admin/businesses/:id is a DELETE route, and
+    // without it in the preflight response every browser refused the
+    // request before it ever reached the Worker — the "delete business"
+    // action could not have worked from the console at all.
+    'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin',

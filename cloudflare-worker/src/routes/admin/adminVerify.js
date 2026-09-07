@@ -1,5 +1,5 @@
 import { json, errorResponse } from '../../lib/response.js';
-import { verifyAdminAuth, logAdminAction } from '../../lib/adminAuth.js';
+import { verifyAdminAuth, logAdminAction, permissionsFor } from '../../lib/adminAuth.js';
 import { patchDocument } from '../../lib/firestore.js';
 
 export async function handleAdminVerify(request, env) {
@@ -28,6 +28,10 @@ export async function handleAdminVerify(request, env) {
       name: admin.name,
       role: admin.role,
       isSuperAdmin: admin.isSuperAdmin,
+      // What the console may RENDER. It is a UI hint only — every route
+      // re-derives the same answer server-side before it does anything,
+      // so editing this in the browser changes nothing but the menu.
+      permissions: permissionsFor(admin),
     },
   });
 }

@@ -9,7 +9,7 @@ export default function WhatsAppFloatingButton({
   return (
     <div className="group fixed bottom-5 right-5 z-40 flex items-center gap-2.5">
       {/* Floating Tooltip on Desktop Hover */}
-      <span className="pointer-events-none hidden rounded-xl bg-[#15171d] px-3 py-1.5 text-xs font-bold text-white shadow-xl transition-all duration-200 opacity-0 translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 sm:inline-block whitespace-nowrap">
+      <span className="pointer-events-none hidden rounded-panel bg-[#15171d] px-3 py-1.5 text-secondary font-bold text-white shadow-pop transition-all duration-200 opacity-0 translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 sm:inline-block whitespace-nowrap">
         Chat with us
       </span>
 
@@ -19,7 +19,7 @@ export default function WhatsAppFloatingButton({
         target="_blank"
         rel="noopener noreferrer"
         aria-label="Chat with FlowBiz on WhatsApp"
-        className="flex h-12 w-12 sm:h-13 sm:w-13 items-center justify-center rounded-full bg-[#25D366] text-white shadow-xl transition-all duration-300 hover:bg-[#20ba5a] hover:shadow-2xl hover:scale-105 active:scale-95 shrink-0"
+        className="flex h-12 w-12 sm:h-13 sm:w-13 items-center justify-center rounded-full bg-[#25D366] text-white shadow-pop transition-all duration-300 hover:bg-[#20ba5a] hover:scale-105 active:scale-95 shrink-0"
       >
         {/* Centered Official WhatsApp SVG Icon */}
         <svg

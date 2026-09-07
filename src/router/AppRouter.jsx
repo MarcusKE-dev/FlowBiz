@@ -21,6 +21,9 @@ const routeLoaders = {
   authAction: () => import('../pages/AuthAction'),
   dashboard: () => import('../pages/Dashboard'),
   counter: () => import('../pages/Counter'),
+  orders: () => import('../pages/Orders'),
+  production: () => import('../pages/Production'),
+  expiry: () => import('../pages/Expiry'),
   customers: () => import('../pages/Customers'),
   customerDetail: () => import('../pages/CustomerDetail'),
   expenses: () => import('../pages/Expenses'),
@@ -32,6 +35,7 @@ const routeLoaders = {
   closeDay: () => import('../pages/CloseDay'),
   users: () => import('../pages/Users'),
   settings: () => import('../pages/Settings'),
+  customize: () => import('../pages/CustomizeBusiness'),
   helpGuide: () => import('../pages/HelpGuide'),
   pro: () => import('../pages/Pro'),
   advancedAnalytics: () => import('../pages/AdvancedAnalytics'),
@@ -48,6 +52,9 @@ const routeLoaders = {
   adminAuditLogs: () => import('../pages/admin/AdminAuditLogs'),
   adminSystemAdmins: () => import('../pages/admin/AdminSystemAdmins'),
   adminCommunications: () => import('../pages/admin/AdminCommunications'),
+  adminCloudUsage: () => import('../pages/admin/AdminCloudUsage'),
+  adminSystemHealth: () => import('../pages/admin/AdminSystemHealth'),
+  adminSecurity: () => import('../pages/admin/AdminSecurity'),
 };
 
 const Setup                 = lazy(routeLoaders.setup);
@@ -57,6 +64,9 @@ const JoinStaff             = lazy(routeLoaders.joinStaff);
 const AuthAction            = lazy(routeLoaders.authAction);
 const Dashboard             = lazy(routeLoaders.dashboard);
 const Counter               = lazy(routeLoaders.counter);
+const Orders                = lazy(routeLoaders.orders);
+const Production            = lazy(routeLoaders.production);
+const Expiry                = lazy(routeLoaders.expiry);
 const Customers             = lazy(routeLoaders.customers);
 const CustomerDetail        = lazy(routeLoaders.customerDetail);
 const Expenses              = lazy(routeLoaders.expenses);
@@ -68,6 +78,7 @@ const Reports               = lazy(routeLoaders.reports);
 const CloseDay              = lazy(routeLoaders.closeDay);
 const Users                 = lazy(routeLoaders.users);
 const Settings              = lazy(routeLoaders.settings);
+const CustomizeBusiness     = lazy(routeLoaders.customize);
 const HelpGuide             = lazy(routeLoaders.helpGuide);
 const Pro                   = lazy(routeLoaders.pro);
 const AdvancedAnalytics     = lazy(routeLoaders.advancedAnalytics);
@@ -83,10 +94,13 @@ const AdminSupportMode      = lazy(routeLoaders.adminSupportMode);
 const AdminAuditLogs        = lazy(routeLoaders.adminAuditLogs);
 const AdminSystemAdmins     = lazy(routeLoaders.adminSystemAdmins);
 const AdminCommunications   = lazy(routeLoaders.adminCommunications);
+const AdminCloudUsage       = lazy(routeLoaders.adminCloudUsage);
+const AdminSystemHealth     = lazy(routeLoaders.adminSystemHealth);
+const AdminSecurity         = lazy(routeLoaders.adminSecurity);
 
-function Page({ children, adminOnly = false, requireOpenDay = false }) {
+function Page({ children, adminOnly = false, requires = null, requireOpenDay = false }) {
   return (
-    <ProtectedRoute adminOnly={adminOnly}>
+    <ProtectedRoute adminOnly={adminOnly} requires={requires}>
       <AppShell>
         <Suspense fallback={<LoadingSpinner />}>
           {requireOpenDay ? <RequireOpenSession>{children}</RequireOpenSession> : children}
@@ -108,9 +122,26 @@ function AdminPage({ children }) {
   );
 }
 
+// WHAT A FIRST-TIME VISITOR SEES WHILE AUTH IS STILL RESOLVING: nothing.
+//
+// This used to be a spinner captioned "Starting FlowBiz…", which is the
+// wrong promise to make to somebody who has just typed flowbiz.co.ke and
+// has no account. It reads as an app booting — so on a slow connection
+// the first impression of the product was a stalled launch screen for a
+// thing they had not launched.
+//
+// A blank canvas is the honest state: nothing has been decided yet, so
+// nothing is claimed. The moment auth resolves, the landing page (or the
+// dashboard) paints. This is deliberately NOT a spinner — a spinner on a
+// public marketing page is a load-bearing apology for latency, and the
+// page underneath it is what the person actually came for.
+function AuthResolving() {
+  return <div className="min-h-screen bg-canvas" aria-hidden="true" />;
+}
+
 function PublicOnly({ children }) {
   const { firebaseUser, loading } = useAuth();
-  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
+  if (loading) return <AuthResolving />;
   if (firebaseUser) return <Navigate to="/dashboard" replace />;
   return children;
 }
@@ -137,13 +168,7 @@ function RootRoute() {
     return <Navigate to="/admin" replace />;
   }
 
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-sand">
-        <LoadingSpinner label="Starting FlowBiz…" />
-      </div>
-    );
-  }
+  if (loading) return <AuthResolving />;
 
   if (firebaseUser) {
     return <Navigate to={isAdmin ? '/dashboard' : '/counter'} replace />;
@@ -161,7 +186,7 @@ function RoutePrefetcher() {
   useEffect(() => {
     if (!firebaseUser) return;
     const common = [routeLoaders.counter, routeLoaders.customers, routeLoaders.customerDetail, routeLoaders.expenses, routeLoaders.helpGuide];
-    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
+    const adminOnly = [routeLoaders.dashboard, routeLoaders.products, routeLoaders.purchases, routeLoaders.suppliers, routeLoaders.stockTake, routeLoaders.reports, routeLoaders.closeDay, routeLoaders.users, routeLoaders.settings, routeLoaders.customize, routeLoaders.pro, routeLoaders.advancedAnalytics, routeLoaders.inventoryIntelligence];
     prefetchRoutes(isAdmin ? [...common, ...adminOnly] : common);
   }, [firebaseUser, isAdmin]);
   return null;
@@ -195,17 +220,28 @@ export default function AppRouter() {
         <Route path="/inventory-intelligence" element={<Page adminOnly><InventoryIntelligence /></Page>} />
 
         <Route path="/counter" element={<Page><Counter /></Page>} />
-        <Route path="/customers" element={<Page><Customers /></Page>} />
-        <Route path="/customers/:customerId" element={<Page><CustomerDetail /></Page>} />
-        <Route path="/expenses" element={<Page requireOpenDay><Expenses /></Page>} />
-        <Route path="/purchases" element={<Page adminOnly><Purchases /></Page>} />
-        <Route path="/products" element={<Page adminOnly><Products /></Page>} />
-        <Route path="/suppliers" element={<Page adminOnly><Suppliers /></Page>} />
-        <Route path="/stock-take" element={<Page adminOnly><StockTake /></Page>} />
-        <Route path="/reports" element={<Page adminOnly><Reports /></Page>} />
-        <Route path="/close-day" element={<Page adminOnly requireOpenDay><CloseDay /></Page>} />
+        {/* Industry pages. They are always routable — a capability decides
+            whether they are OFFERED in the navigation, never whether the
+            URL resolves, because a bookmark that 404s after a profile
+            change is worse than a page that says it is empty. */}
+        <Route path="/orders" element={<Page requires="orders.view"><Orders /></Page>} />
+        <Route path="/production" element={<Page requires="stock.production"><Production /></Page>} />
+        <Route path="/expiry" element={<Page requires="stock.expiry"><Expiry /></Page>} />
+        <Route path="/customers" element={<Page requires="customers.view"><Customers /></Page>} />
+        <Route path="/customers/:customerId" element={<Page requires="customers.view"><CustomerDetail /></Page>} />
+        <Route path="/expenses" element={<Page requires="expenses.record" requireOpenDay><Expenses /></Page>} />
+        <Route path="/purchases" element={<Page requires="stock.receive"><Purchases /></Page>} />
+        <Route path="/products" element={<Page requires="catalogue.view"><Products /></Page>} />
+        <Route path="/suppliers" element={<Page requires="stock.suppliers"><Suppliers /></Page>} />
+        <Route path="/stock-take" element={<Page requires="stock.count"><StockTake /></Page>} />
+        <Route path="/reports" element={<Page requires="reports.view"><Reports /></Page>} />
+        <Route path="/close-day" element={<Page requires="day.close" requireOpenDay><CloseDay /></Page>} />
         <Route path="/users" element={<Page adminOnly><Users /></Page>} />
         <Route path="/settings" element={<Page adminOnly><Settings /></Page>} />
+        {/* Owner-only. What FlowBiz OFFERS this business — never who may
+            read or write anything, which stays with the rules and the
+            Worker. See CustomizeBusiness.jsx. */}
+        <Route path="/customize" element={<Page adminOnly><CustomizeBusiness /></Page>} />
         <Route path="/help" element={<Page><HelpGuide /></Page>} />
 
         {/* ── FLOWBIZ ADMIN CONTROL CENTER ROUTES ─────────────────────── */}
@@ -217,6 +253,9 @@ export default function AppRouter() {
         <Route path="/admin/audit-logs" element={<AdminPage><AdminAuditLogs /></AdminPage>} />
         <Route path="/admin/admins" element={<AdminPage><AdminSystemAdmins /></AdminPage>} />
         <Route path="/admin/communications" element={<AdminPage><AdminCommunications /></AdminPage>} />
+        <Route path="/admin/cloud-usage" element={<AdminPage><AdminCloudUsage /></AdminPage>} />
+        <Route path="/admin/system-health" element={<AdminPage><AdminSystemHealth /></AdminPage>} />
+        <Route path="/admin/security" element={<AdminPage><AdminSecurity /></AdminPage>} />
 
         {/* Subdomain fallback route aliases */}
         <Route path="/businesses" element={<Navigate to="/admin/businesses" replace />} />

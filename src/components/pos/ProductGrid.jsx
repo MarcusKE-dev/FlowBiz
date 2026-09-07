@@ -1,47 +1,113 @@
-import { formatKES } from '../../utils/currency';
-import { Pencil, ShoppingCart } from 'lucide-react';
+import { Pencil } from 'lucide-react';
+import { amountOnly, CURRENCY } from '../ui/format';
+import ProductThumb from '../products/ProductThumb';
+import { DEFAULT_UNIT, getUnit } from '../../industry/units';
+import { hasVariants, totalVariantStock } from '../../utils/variants';
+import { useAuth } from '../../contexts/AuthContext';
+import { ENTITLEMENTS } from '../../licensing';
 
-// FIX (cart visibility): `cartQuantities` is an optional map of
-// productId -> quantity currently in the Counter page's cart. When a
-// product is in the cart, its card gets a moss highlight and a small
-// "N in cart" badge — persistent visual confirmation that a tap/scan
-// actually registered, instead of relying on a toast that disappears.
-// Pages that don't pass this prop (Products.jsx) render exactly as
-// before.
-export default function ProductGrid({ products, onSelect, isAdmin=false, onEdit, cartQuantities = {} }) {
+// `cartQuantities` is an optional map of productId -> quantity currently
+// in the Counter page's cart. When a product is in the cart, its tile
+// gets a primary-blue border and a quantity badge — persistent visual
+// confirmation that a tap or scan actually registered, instead of
+// relying on a toast that disappears. Pages that don't pass this prop
+// (Products.jsx) render exactly as before.
+//
+// Tile content is intentionally minimal — image, name, price, nothing
+// else: this is a fast scan-and-tap surface, not a product detail view.
+// Every tile is the same height and the price always sits on the same
+// baseline, so the eye can run across a row without re-finding it.
+// The photo is resolved by ProductThumb, which handles all three
+// sources (a plain URL on the product, a lazily-fetched Firestore
+// sidecar, or nothing) and shows a neutral placeholder until one
+// arrives — see utils/productImages.js.
+//
+// EXCEPT FOR A BUSINESS WITH NO PHOTO ENTITLEMENT. Product photos are a
+// licensed feature (src/licensing/entitlements.js), so a Starter shop
+// cannot have one — which makes the placeholder a picture of something
+// that will never arrive, repeated across every tile on the counter.
+// Those tiles drop the image row entirely and give the space to the name
+// and price. A photo the business already owns — bought on Pro, or kept
+// from before — still renders, because the entitlement decides whether a
+// MISSING photo reserves space, not whether a REAL one is shown.
+export default function ProductGrid({ products, onSelect, isAdmin = false, onEdit, cartQuantities = {} }) {
+  const { entitlements } = useAuth();
+  const photosEntitled = entitlements?.can(ENTITLEMENTS.PRODUCT_PHOTOS) === true;
+
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-      {products.map(p => {
-        const out = p.stock <= 0;
-        const low = !out && p.stock <= (p.lowStockThreshold ?? 5);
+    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+      {products.map((p) => {
+        // A service never runs out; a product sold by the metre still
+        // shows "out" at zero, exactly as a piece does.
+        const isService = p.kind === 'service';
+        // A product with versions is out of stock only when EVERY version
+        // is — the parent's own `stock` is their sum, which is what makes
+        // this the same comparison as for a plain product.
+        const variantProduct = hasVariants(p);
+        const available = variantProduct ? totalVariantStock(p) : p.stock;
+        const out = !isService && available <= 0;
+        const unit = p.unit && p.unit !== DEFAULT_UNIT ? getUnit(p.unit) : null;
         const inCartQty = cartQuantities[p.id] || 0;
         const inCart = inCartQty > 0;
         return (
           <div
             key={p.id}
-            className={`relative flex flex-col rounded-xl border bg-white p-3 transition-shadow ${
-              out ? 'opacity-50 border-ink-100'
-              : inCart ? 'border-moss-400 ring-1 ring-moss-300 shadow-sm'
-              : low ? 'border-rust-200 shadow-sm'
-              : 'border-ink-100 shadow-sm hover:shadow-md'
+            className={`relative flex flex-col overflow-hidden rounded-control border bg-surface transition-colors ${
+              out ? 'border-line opacity-60'
+              : inCart ? 'border-primary-600'
+              : 'border-line hover:border-ink-300'
             }`}
           >
             {inCart && (
-              <span className="absolute -top-2 -right-2 z-10 flex items-center gap-1 rounded-full bg-moss-600 px-2 py-0.5 text-[11px] font-bold text-white shadow">
-                <ShoppingCart className="h-3 w-3" strokeWidth={2} />{inCartQty}
+              <span className="num absolute right-1 top-1 z-10 flex h-5 min-w-[20px] items-center justify-center rounded-pill bg-primary-600 px-1 text-label font-semibold text-white">
+                {inCartQty}
               </span>
             )}
-            <button disabled={out} onClick={()=>onSelect(p)} className="flex-1 flex flex-col items-start gap-1 text-left w-full disabled:pointer-events-none">
-              <span className="badge bg-ink-100 text-ink-400 text-[10px] mb-0.5">{p.category}</span>
-              <span className="font-semibold text-[13px] leading-tight text-ink-800 line-clamp-2">{p.name}</span>
-              <span className="font-display text-sm font-bold text-moss-700">{formatKES(p.sellingPrice)}</span>
-              <span className={`text-[11px] font-medium ${out ? 'text-rust-600' : low ? 'text-rust-500' : 'text-ink-400'}`}>
-                {out ? 'Out of stock' : `${p.stock} left${low ? ' ⚠️' : ''}`}
+            <button
+              disabled={out}
+              onClick={() => onSelect(p)}
+              className="flex w-full flex-1 flex-col items-stretch text-left disabled:pointer-events-none"
+            >
+              <ProductThumb
+                product={p}
+                size="h-16 w-full"
+                rounded="rounded-none"
+                bordered={false}
+                iconSize="h-5 w-5"
+                placeholder={photosEntitled}
+              />
+              <span className="flex flex-1 flex-col justify-between gap-1 px-2 py-1.5">
+                {/* Two lines reserved either way, so the price below it
+                    lands on the same baseline across the whole row. */}
+                <span className="line-clamp-2 min-h-[32px] text-secondary font-medium leading-4 text-ink-800">
+                  {p.name}
+                </span>
+                {out ? (
+                  <span className="text-secondary font-semibold text-danger-700">Out of stock</span>
+                ) : variantProduct ? (
+                  <span className="num text-cell font-semibold text-ink-900">
+                    <span className="text-label font-medium text-ink-400">{CURRENCY}</span>{' '}
+                    {amountOnly(p.sellingPrice)}
+                    <span className="ml-1 text-label font-medium text-ink-400">
+                      · {p.variants.length} version{p.variants.length === 1 ? '' : 's'}
+                    </span>
+                  </span>
+                ) : (
+                  <span className="num text-cell font-semibold text-ink-900">
+                    <span className="text-label font-medium text-ink-400">{CURRENCY}</span>{' '}
+                    {amountOnly(p.sellingPrice)}
+                    {unit && <span className="text-label font-medium text-ink-400">/{unit.short}</span>}
+                  </span>
+                )}
               </span>
             </button>
             {isAdmin && onEdit && (
-              <button onClick={e=>{e.stopPropagation();onEdit(p);}} className="absolute top-1 right-1 p-1 rounded text-ink-300 hover:bg-ink-50 hover:text-ink-600">
-                <Pencil className="h-3 w-3" strokeWidth={2} />
+              <button
+                onClick={(e) => { e.stopPropagation(); onEdit(p); }}
+                className="absolute left-1 top-1 rounded-control bg-surface/90 p-1 text-ink-500 hover:text-ink-900"
+                aria-label={`Edit ${p.name}`}
+              >
+                <Pencil className="h-3 w-3" strokeWidth={1.75} />
               </button>
             )}
           </div>

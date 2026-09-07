@@ -6,6 +6,18 @@ export const EXPORT_COLLECTIONS = [
   'customers', 'suppliers', 'products', 'sales', 'creditSales', 'purchases',
   'expenses', 'dailySessions', 'repayments', 'supplierPayments',
   'stockAdjustments', 'refunds', 'debtPaymentReceipts', 'sharedDocuments', 'staffInvites',
+  // The industry collections. They were missing from this list, which
+  // meant "download everything this business has stored" quietly left out
+  // a restaurant's tickets, a bakery's production runs and a pharmacy's
+  // batch and expiry ledger — for exactly the businesses the industry
+  // layer exists to serve. Keep this list, IMPORT_COLLECTIONS and
+  // RESET_COLLECTIONS in step: a collection missing from any one of them
+  // is data that cannot be backed up, cannot be restored, or survives a
+  // reset that promised to clear it.
+  'orders', 'productions', 'productBatches',
+  // Product photos. Base64, so this is the one collection that can make
+  // a backup large — roughly 62KB per product that has a photo.
+  'productImages',
 ];
 
 function timestampToIso(value) {

@@ -1,309 +1,356 @@
+import { ChevronDown, ChevronLeft } from 'lucide-react';
 import { useState } from 'react';
+import PageHeader from '../components/ui/PageHeader';
 import { Link } from 'react-router-dom';
+
+// The manual, rewritten short.
+//
+// It used to explain each screen in several paragraphs, and several of
+// those paragraphs had gone out of date: it sent owners to Settings for
+// the team (Team is its own page now), it described a cashier as having
+// "Counter, Customers, and Expenses if the owner allows it" (there is a
+// whole permission catalogue now), and it promised backup and restore as
+// a future section when Settings already does it. Everything below has
+// been checked against the application as it stands.
+
+/** One instruction: what to do, then the shortest true sentence about it. */
+function Step({ title, children }) {
+  return (
+    <div>
+      <h4 className="section-title">{title}</h4>
+      <p className="mt-0.5 text-body text-ink-600">{children}</p>
+    </div>
+  );
+}
 
 const SECTIONS = [
   {
     id: 'getting-started',
-    title: '1. Getting Started',
-    desc: 'The essential daily workflows: adding inventory, recording purchases, making sales, and logging daily expenses.',
+    title: '1. Getting started',
+    desc: 'The five things you do every day.',
     content: (
       <div className="space-y-4">
-        <p className="text-sm text-ink-600">
-          Welcome to FlowBiz! To run your shop efficiently every day, follow these five essential steps:
-        </p>
-        <div className="space-y-3">
-          <div className="rounded-lg bg-ink-50 p-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 1: Add Your Products</h4>
-            <p className="text-sm text-ink-600 mt-1">
-              Go to <strong className="text-ink-800">Products</strong> and tap <strong className="text-ink-800">+ Add product</strong>. Enter the product name, its buying price (cost), and selling price. If the item has a barcode, scan it using your device's camera or standard USB scanner.
-            </p>
-          </div>
-          <div className="rounded-lg bg-ink-50 p-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 2: Record Purchases (Restocking)</h4>
-            <p className="text-sm text-ink-600 mt-1">
-              When a supplier delivers new stock, record it on the <strong className="text-ink-800">Purchases</strong> page. Select the supplier, pick the product, enter the quantity received, and specify if you paid them now or took the stock on credit. FlowBiz will automatically increase your stock levels.
-            </p>
-          </div>
-          <div className="rounded-lg bg-ink-50 p-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 3: Record Sales (Counter)</h4>
-            <p className="text-sm text-ink-600 mt-1">
-              On the <strong className="text-ink-800">Counter</strong> page, tap any product card or scan its barcode to sell. Select whether the customer paid in Cash, via M-Pesa, or took it on credit (Deni). Tap confirm, and inventory levels will update in real-time.
-            </p>
-          </div>
-          <div className="rounded-lg bg-ink-50 p-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 4: Record Expenses</h4>
-            <p className="text-sm text-ink-600 mt-1">
-              Keep a record of rent, electricity, transport, wages, or airtime float under <strong className="text-ink-800">Expenses</strong>. Logging every small expense ensures your end-of-day net profit calculations remain accurate.
-            </p>
-          </div>
-          <div className="rounded-lg bg-ink-50 p-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-800">Step 5: Record Debt Repayments</h4>
-            <p className="text-sm text-ink-600 mt-1">
-              When a debtor pays off what they owe, go to <strong className="text-ink-800">Customers</strong>, click their name, and record the repayment amountWhen a debtor pays off what they owe, go to <strong className="text-ink-800">Customers</strong>, click their name, and record the repayment amount (Cash or M-Pesa). Do not create a new sale; this updates their remaining balance and logs the cash received.
-            </p>
-          </div>
-        </div>
+        <Step title="Add your products">
+          On <strong className="text-ink-900">Products</strong>, enter a name, buying price and
+          selling price. Scan the barcode if it has one.
+        </Step>
+        <Step title="Record purchases">
+          On <strong className="text-ink-900">Purchases</strong>, pick the supplier and product,
+          enter the quantity, and say whether you paid or took it on credit. Stock goes up
+          automatically.
+        </Step>
+        <Step title="Sell at the counter">
+          On <strong className="text-ink-900">Counter</strong>, tap a product or scan it, choose
+          Cash, M-Pesa or credit, and confirm. Stock comes down as you sell.
+        </Step>
+        <Step title="Record expenses">
+          Log rent, electricity, transport and the rest on{' '}
+          <strong className="text-ink-900">Expenses</strong>. Anything you miss overstates your
+          profit.
+        </Step>
+        <Step title="Take debt repayments">
+          Open the customer under <strong className="text-ink-900">Customers</strong> and enter the
+          repayment. Never record it as a new sale.
+        </Step>
       </div>
-    )
+    ),
   },
   {
     id: 'understanding-dashboard',
-    title: "2. Understanding the Dashboard",
-    desc: "A brief guide to today's summary cards, tracking balances, and checking inventory health.",
+    title: '2. The dashboard',
+    desc: "Today's figures, and what each one counts.",
     content: (
       <div className="space-y-4">
-        <p className="text-sm text-ink-600">
-          The dashboard is your shop's cockpit, offering a real-time summary of today's events:
+        <p className="text-body text-ink-600">
+          Which panels appear, and in what order, is yours to set under Settings, Customize your
+          business.
         </p>
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="border border-ink-100 rounded-lg p-3">
-            <span className="font-semibold text-xs text-ink-800 block">Cash Received Today</span>
-            <p className="text-xs text-ink-600 mt-1">All the physical cash collected today from direct cash sales and debtor repayments combined.</p>
-          </div>
-          <div className="border border-ink-100 rounded-lg p-3">
-            <span className="font-semibold text-xs text-ink-800 block">M-Pesa Received Today</span>
-            <p className="text-xs text-ink-600 mt-1">All digital payments transferred to your till today from direct M-Pesa sales and debtor repayments.</p>
-          </div>
-          <div className="border border-ink-100 rounded-lg p-3">
-            <span className="font-semibold text-xs text-ink-800 block">Today's Net Profit</span>
-            <p className="text-xs text-ink-600 mt-1">Today's realized gross profit minus today's recorded shop expenses. Shows exactly what you made in hand.</p>
-          </div>
-          <div className="border border-ink-100 rounded-lg p-3">
-            <span className="font-semibold text-xs text-ink-800 block">Today's Expenses</span>
-            <p className="text-xs text-ink-600 mt-1">The sum of all shop operational expenses recorded today (excluding purchases made on credit).</p>
-          </div>
-          <div className="border border-ink-100 rounded-lg p-3">
-            <span className="font-semibold text-xs text-ink-800 block">Inventory Value (Cost)</span>
-            <p className="text-xs text-ink-600 mt-1">The total buying price of all items currently on your shelves. Helps you see exactly how much capital is tied up in stock.</p>
-          </div>
-          <div className="border border-ink-100 rounded-lg p-3">
-            <span className="font-semibold text-xs text-ink-800 block">Outstanding Debt (Deni)</span>
-            <p className="text-xs text-ink-600 mt-1">The total amount of money your credit customers still owe you. Keep this number as close to zero as possible!</p>
-          </div>
+          {[
+            ['Cash received', 'Cash sales plus cash debt repayments, today.'],
+            ['M-Pesa received', 'M-Pesa sales plus M-Pesa debt repayments, today.'],
+            ['Net profit', "Today's gross profit less today's expenses."],
+            ['Expenses', 'What you recorded today, excluding stock bought on credit.'],
+            ['Inventory value at cost', 'What the stock on your shelves cost you.'],
+            ['Outstanding debt', 'What your credit customers still owe.'],
+          ].map(([label, text]) => (
+            <div key={label} className="rounded-panel border border-divider p-3">
+              <span className="block text-secondary font-semibold text-ink-800">{label}</span>
+              <p className="mt-1 text-secondary text-ink-600">{text}</p>
+            </div>
+          ))}
         </div>
       </div>
-    )
+    ),
   },
   {
     id: 'understanding-reports',
-    title: '3. Understanding Reports',
-    desc: 'How the reports compile and measure credit sales, margins, expenses, and profits over time.',
+    title: '3. Reports',
+    desc: 'What each line means over the period you choose.',
     content: (
-      <div className="space-y-3 text-sm text-ink-600">
-        <p>Reports allow you to view the shop's financial performance over preset periods (Today, This Week, This Month, or Custom dates):</p>
-        <ul className="list-disc pl-5 space-y-1.5 mt-2">
-          <li><strong>Gross Revenue:</strong> Represents actual money in your hand, direct cash/M-Pesa sales plus whatever portion of debtor repayments was collected in this period.</li>
-          <li><strong>Cost of Goods Sold (COGS):</strong> The total wholesale cost of the items you sold during this period. For credit repayments, COGS is recognized proportionally.</li>
-          <li><strong>Gross Profit:</strong> Gross Revenue minus Cost of Goods Sold. Tells you how much markup you earned on items sold.</li>
-          <li><strong>Expenses:</strong> Rent, bills, wages, etc., logged during this period.</li>
-          <li><strong>Net Profit:</strong> Gross Profit minus Expenses. The ultimate bottom-line earnings of your business during this reporting window.</li>
+      <div className="space-y-3 text-body text-ink-600">
+        <p>Choose Today, This week, This month or a custom range, then export a PDF if you need one.</p>
+        <ul className="mt-2 list-disc space-y-1.5 pl-5">
+          <li><strong>Revenue:</strong> money actually received: cash and M-Pesa sales, plus debt repaid in the period, less refunds.</li>
+          <li><strong>Cost of goods sold:</strong> what the goods sold cost you. On a debt repayment it is recognised in proportion to the amount paid.</li>
+          <li><strong>Gross profit:</strong> revenue less cost of goods sold.</li>
+          <li><strong>Total expenses:</strong> what you recorded in the period.</li>
+          <li><strong>Net profit:</strong> gross profit less total expenses.</li>
         </ul>
+        <p className="text-secondary text-ink-500">
+          What you owe suppliers right now is on the Suppliers page, not here. Reports cover a
+          period; a balance does not.
+        </p>
       </div>
-    )
+    ),
   },
   {
     id: 'credit-sales',
-    title: '4. How Credit Sales (Deni) Work',
-    desc: 'The cash-flow-first model: why profit stays at zero until money is collected.',
+    title: '4. Credit sales (deni)',
+    desc: 'Why profit stays at zero until the money arrives.',
     content: (
-      <div className="space-y-4 text-sm text-ink-600">
+      <div className="space-y-4 text-body text-ink-600">
         <p>
-          Most standard software registers revenue the moment you sell an item, even if the customer leaves without empty pockets. This is called *accrual accounting*, but it can be confusing for everyday Kenyan businesses where cash flow is king.
+          FlowBiz counts revenue when you are paid, not when you hand over the goods. That way the
+          profit on your screen is money you can actually spend.
         </p>
-        <p>
-          <strong>FlowBiz uses a cash-flow-first hybrid model</strong> designed specifically for Kenyan SMEs:
-        </p>
-        <div className="border-l-2 border-moss-600 pl-4 space-y-2 py-1 font-mono text-xs bg-moss-50/50 rounded-r">
-          <div>Customer buys on credit (e.g., KES 15,000)</div>
-          <div className="text-ink-400">↓</div>
-          <div>Inventory decreases immediately (real-time stock health)</div>
-          <div className="text-ink-400">↓</div>
-          <div>Outstanding Debt (Deni) increases by KES 15,000</div>
-          <div className="text-ink-400">↓</div>
-          <div className="text-rust-600 font-semibold">Revenue and Profit remain at KES 0.00 (not collected yet)</div>
-          <div className="text-ink-400">↓</div>
-          <div>Customer pays KES 5,000 partial payment later</div>
-          <div className="text-ink-400">↓</div>
-          <div className="text-moss-700 font-semibold">KES 5,000 is recognized as Revenue</div>
-          <div className="text-moss-700 font-semibold font-bold">COGS &amp; proportional profit are recognized at last!</div>
-          <div className="text-ink-400">↓</div>
-          <div>Outstanding Debt reduces to KES 10,000</div>
+        <div className="space-y-2 rounded-panel border border-line bg-surface p-4 font-mono text-secondary">
+          <div>Customer buys on credit, KES 15,000</div>
+          <ChevronDown className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
+          <div>Stock comes down straight away</div>
+          <ChevronDown className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
+          <div>Outstanding debt goes up by KES 15,000</div>
+          <ChevronDown className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
+          <div className="font-semibold text-danger-600">Revenue and profit stay at KES 0.00</div>
+          <ChevronDown className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
+          <div>Customer pays KES 5,000</div>
+          <ChevronDown className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
+          <div className="font-semibold text-ink-900">KES 5,000 becomes revenue, with its share of cost and profit</div>
+          <ChevronDown className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
+          <div>Outstanding debt falls to KES 10,000</div>
         </div>
-        <p className="mt-2 text-xs text-ink-500">
-          This system ensures you only see, report, and spend profits that have actually entered your cash drawer or M-Pesa till.
-        </p>
       </div>
-    )
+    ),
   },
   {
     id: 'cash-mpesa',
-    title: '5. Cash, M-Pesa, & Close Day',
-    desc: 'Reconciling floats, recording withdrawals, and closing today’s session correctly.',
+    title: '5. Opening and closing the day',
+    desc: 'Floats, expected balances and the till count.',
     content: (
-      <div className="space-y-3 text-sm text-ink-600">
-        <p>
-          Every morning, open the Counter by entering your starting balances (the <strong>Opening Float</strong>). This is the cash in your drawer and the float on your phone.
-        </p>
-        <p>
-          During the day, every sale, expense, debtor repayment, and refund adjusts the "Expected" balances inside the system. 
-        </p>
-        <p>
-          At closing time, visit the <strong>Close Day</strong> page:
-        </p>
-        <ol className="list-decimal pl-5 space-y-1.5 mt-2">
-          <li>Count the physical cash in your drawer and type the amount into the input.</li>
-          <li>Check your M-Pesa statement balance and type it.</li>
-          <li>FlowBiz will instantly compare these to the "Expected" amounts and display a <strong>Shortage</strong> (rust) or <strong>Surplus</strong> (amber) if there's any variance.</li>
-          <li>Press <strong>Confirm and Close Day</strong>. This locks the sales log and stores today's records.</li>
+      <div className="space-y-3 text-body text-ink-600">
+        <p>Open the counter each morning with the cash in the drawer and the float on your phone.</p>
+        <p>During the day, every sale, expense, repayment and refund moves the expected balances.</p>
+        <p>At closing, on <strong>Close day</strong>:</p>
+        <ol className="mt-2 list-decimal space-y-1.5 pl-5">
+          <li>Count the cash and type it in.</li>
+          <li>Check your M-Pesa balance and type it in.</li>
+          <li>FlowBiz shows Short by, Over by, or Balanced.</li>
+          <li>Confirm and close. An owner can reopen the session from the same page to correct a mistake.</li>
         </ol>
       </div>
-    )
+    ),
   },
   {
     id: 'inventory-management',
-    title: '6. Inventory & Stock Take',
-    desc: 'Understanding stock movements, low stock limits, and discrepancy audits.',
+    title: '6. Stock',
+    desc: 'What moves your stock, and how to correct it.',
     content: (
-      <div className="space-y-3 text-sm text-ink-600">
-        <p>Inventory level is updated automatically through three daily events:</p>
-        <ul className="list-disc pl-5 space-y-1.5">
-          <li><strong>Purchases (+):</strong> Increases your stock when you record incoming stock from a supplier.</li>
-          <li><strong>Sales &amp; Credit Sales (-):</strong> Decreases your stock the second an item leaves your counter.</li>
-          <li><strong>Stock Take (+/-):</strong> Used to override the system count with a physical hand-count (e.g. to adjust for damage, expiration, or theft).</li>
+      <div className="space-y-3 text-body text-ink-600">
+        <ul className="list-disc space-y-1.5 pl-5">
+          <li><strong>Purchases</strong> add stock.</li>
+          <li><strong>Sales</strong>, including credit sales, take it away as the goods leave.</li>
+          <li><strong>Stock take</strong> replaces the recorded figure with what you counted.</li>
         </ul>
-        <div className="rounded bg-rust-50 p-3 text-xs text-rust-700">
-          <strong>Discrepancy Note:</strong> Stock Take is purely an auditing tool. Correcting a stock discrepancy does not create cash transactions or expenses automatically. It logs the audit discrepancy under <strong>stockAdjustments</strong> for tracking.
-        </div>
+        <p>
+          Use a stock take for damage, expiry and shrinkage. It is an audit tool: it moves no money
+          and creates no expense, and each adjustment is recorded so the change is traceable.
+        </p>
       </div>
-    )
+    ),
   },
   {
     id: 'suppliers-team',
-    title: '7. Suppliers & Team',
-    desc: 'Tracking what you owe suppliers, and managing owner and cashier access.',
+    title: '7. Suppliers and team',
+    desc: 'What you owe suppliers, and who can do what.',
     content: (
-      <div className="space-y-4 text-sm text-ink-600">
-        <p>The <strong className="text-ink-800">Suppliers</strong> page tracks who you buy stock from and what you owe them. Every purchase recorded "on credit" (Purchases page) adds to that supplier's outstanding balance automatically record a payment from the Suppliers page when you pay them, and it logs both the payment and the matching expense in one step.</p>
-        <p><strong className="text-ink-800">Team</strong> (under Settings) is where an owner invites staff. There are two roles:</p>
-        <ul className="list-disc pl-5 space-y-1.5">
-          <li><strong>Owner:</strong> full access Products, Purchases, Suppliers, Reports, Settings, Team, and Close Day.</li>
-          <li><strong>Cashier:</strong> Counter, Customers, and Expenses (if the owner allows it) enough to run daily sales without touching sensitive business data.</li>
-        </ul>
-        <p>An owner can deactivate a staff account at any time from Team, or sign a device out remotely from Settings → Device Management if a phone is lost or a staff member leaves.</p>
+      <div className="space-y-4 text-body text-ink-600">
+        <p>
+          <strong className="text-ink-900">Suppliers</strong> tracks who you buy from and what you
+          owe. A purchase on credit adds to that supplier's balance; recording a payment there logs
+          the payment and its expense together.
+        </p>
+        <p>
+          <strong className="text-ink-900">Team</strong> is where you invite owners and cashiers,
+          and where you set what cashiers can do. Each permission is a switch: selling, credit
+          sales, refunds, the product list, receiving stock, stock takes, customers, expenses,
+          closing the day, reports. What is offered depends on your business type, so a restaurant
+          is asked about orders and a shop is not.
+        </p>
+        <p>
+          Settings, the team, the plan, the business type and your data stay with owners. No switch
+          can grant them.
+        </p>
+        <p>
+          You can deactivate a staff account from Team, or sign a device out from Settings under
+          Devices, if a phone is lost or someone leaves.
+        </p>
+      </div>
+    ),
+  },
+  {
+    id: 'customize',
+    title: '8. Customize your business',
+    desc: 'Pages, units, dashboard, words and categories.',
+    content: (
+      <div className="space-y-3 text-body text-ink-600">
+        <p>
+          Settings, Customize your business is where you turn off anything you do not use, choose
+          which units the product form offers, arrange your dashboard, rename what FlowBiz calls the
+          things you sell, and manage both your product and your expense categories.
+        </p>
+        <p>
+          Nothing there deletes anything. Turning a page off hides it, and turning it back on brings
+          everything back. Removing a category takes the word off the list; whatever was already
+          filed under it keeps it.
+        </p>
+        <p>
+          Your business type is not editable, because your products, prices, stock and reports are
+          all recorded against it. Contact FlowBiz support if it was set up wrongly.
+        </p>
+      </div>
+    ),
+  },
+  {
+    id: 'backup',
+    title: '9. Backup and restore',
+    desc: 'Taking a copy of your data, and putting one back.',
+    content: (
+      <div className="space-y-3 text-body text-ink-600">
+        <p>
+          Settings, Backup and restore downloads everything this business has stored as a .zip:
+          CSVs you can open in a spreadsheet, plus a FlowBiz backup file.
+        </p>
+        <p>
+          Importing that file adds its records to this business and overwrites any record with the
+          same ID. It never clears what is already there, so import into an empty business unless
+          you mean to merge.
+        </p>
+      </div>
+    ),
+  },
+  {
+    id: 'offline',
+    title: '10. Working offline',
+    desc: 'What happens when the signal drops.',
+    content: (
+      <div className="space-y-3 text-body text-ink-600">
+        <p>
+          Keep selling. Sales, expenses, purchases, customers, repayments and stock takes are saved
+          on the device and sync on their own when you reconnect. The indicator in the header says
+          Offline while you are, and a message says so when something is saved that way.
+        </p>
+        <p>
+          Two things do need a connection, because they are not stored data: signing in for the
+          first time on a device, and anything that sends an email or takes a payment.
+        </p>
       </div>
     ),
   },
   {
     id: 'pro-analytics',
-    title: '8. FlowBiz Pro & Analytics',
-    desc: 'What Advanced Analytics, Inventory Intelligence, and WhatsApp sharing add on top of the free plan.',
+    title: '11. FlowBiz Pro',
+    desc: 'What Pro adds to the free plan.',
     content: (
-      <div className="space-y-4 text-sm text-ink-600">
-        <p><strong className="text-ink-800">Advanced Analytics</strong> (Pro) goes beyond the standard Reports page: it compares the current period against the one before it, breaks down which products drive the most volume versus the most profit, and attributes revenue per staff member.</p>
-        <p><strong className="text-ink-800">Inventory Intelligence</strong> (Pro) looks at your stock from a capital point of view: how much cash is tied up in inventory right now, which products are overstocked and quietly locking up that cash, and which are close to running out.</p>
-        <p><strong className="text-ink-800">WhatsApp sharing</strong> (Pro) lets you send a receipt, invoice, or debt reminder straight to a customer's phone with one tap.</p>
-        <p className="text-xs text-ink-500">Printing and downloading receipts/invoices as PDF is available on every plan Pro specifically unlocks Analytics, Inventory Intelligence, WhatsApp sharing, and unlimited products/staff.</p>
+      <div className="space-y-3 text-body text-ink-600">
+        <ul className="list-disc space-y-1.5 pl-5">
+          <li><strong className="text-ink-900">Advanced analytics:</strong> this period against the last, which products drive volume against profit, and revenue per staff member.</li>
+          <li><strong className="text-ink-900">Inventory intelligence:</strong> cash tied up in stock, what is overstocked, and what is about to run out.</li>
+          <li><strong className="text-ink-900">WhatsApp sharing:</strong> send a receipt, invoice or debt reminder to a customer in one tap.</li>
+          <li>Unlimited products and staff.</li>
+        </ul>
+        <p className="text-secondary text-ink-500">
+          Printing and downloading receipts, invoices and reports as PDF is on every plan.
+        </p>
       </div>
     ),
   },
   {
     id: 'faq',
-    title: '7. Frequently Asked Questions',
-    desc: 'Troubleshooting and immediate answers to common user questions.',
+    title: '12. Common questions',
+    desc: 'Short answers to what people ask most.',
     content: (
       <div className="space-y-4">
-        <div className="space-y-2">
-          <strong className="text-sm text-ink-800 block">Q: Why is my profit still zero after a credit sale?</strong>
-          <p className="text-xs text-ink-600 pl-4">A: Since no cash or M-Pesa has been collected yet, no revenue is earned. Once the customer repays, profit is recognized proportionally based on the amount paid.</p>
-        </div>
-        <div className="space-y-2">
-          <strong className="text-sm text-ink-800 block">Q: Why did my inventory reduce before I received any money?</strong>
-          <p className="text-xs text-ink-600 pl-4">A: Real-time inventory tracking is crucial. Even on credit, physical stock leaves the shelves, so the system must deduct it immediately to prevent double-selling.</p>
-        </div>
-        <div className="space-y-2">
-          <strong className="text-sm text-ink-800 block">Q: Can I edit or void a closed session?</strong>
-          <p className="text-xs text-ink-600 pl-4">A: No. Once a daily session is closed, it is securely saved. If you made an error, an administrator can click "Reopen session" on the Close Day page to make adjustments.</p>
-        </div>
-        <div className="space-y-2">
-          <strong className="text-sm text-ink-800 block">Q: Where do I edit or delete products?</strong>
-          <p className="text-xs text-ink-600 pl-4">A: Editing and deleting products is restricted to administrators and must be done on the dedicated <strong>Products</strong> page, keeping the Counter screen clean and secure.</p>
-        </div>
+        {[
+          ['Why is my profit zero after a credit sale?', 'No money has come in yet. Profit is recognised as the customer repays, in proportion to what they pay.'],
+          ['Why did stock go down before I was paid?', 'The goods left the shelf. Counting them out immediately is what stops you selling them twice.'],
+          ['Can I edit a closed day?', 'An owner can reopen the session on the Close day page, make the correction, and close it again.'],
+          ['Where do I edit or delete a product?', 'On the Products page. Deleting is owner-only, and a deleted product is archived in Settings before it is destroyed.'],
+          ['I need an expense category FlowBiz does not have.', 'Add it under Settings, Customize your business, Expense categories.'],
+        ].map(([q, a]) => (
+          <div key={q} className="space-y-1">
+            <strong className="block text-body text-ink-800">{q}</strong>
+            <p className="pl-4 text-secondary text-ink-600">{a}</p>
+          </div>
+        ))}
       </div>
-    )
+    ),
   },
   {
     id: 'best-practices',
-    title: '8. FlowBiz Best Practices',
-    desc: 'Golden rules for keeping your shop books accurate and reliable.',
+    title: '13. Habits worth keeping',
+    desc: 'Four things that keep the books honest.',
     content: (
-      <ul className="list-disc pl-5 space-y-1.5 text-sm text-ink-600">
-        <li><strong>Record expenses immediately:</strong> Log your County Council fees, electricity, and lunch costs right when they occur so you do not forget at close-of-day.</li>
-        <li><strong>Record credit repayments inside Customers:</strong> Never create a new direct sale to record a repayment, this would double-count your revenue and duplicate items sold.</li>
-        <li><strong>Perform Stock Take regularly:</strong> Plan a quick physical stock take every weekend or fortnight to ensure physical inventory matches your screens exactly.</li>
-        <li><strong>Keep the general settings updated:</strong> Shop name edits immediately personalize your generated PDF reports for presentation to accountants.</li>
+      <ul className="list-disc space-y-1.5 pl-5 text-body text-ink-600">
+        <li><strong>Record expenses as they happen.</strong> Nobody remembers them at closing time.</li>
+        <li><strong>Record repayments under Customers.</strong> A new sale would double-count the revenue and the stock.</li>
+        <li><strong>Do a stock take regularly.</strong> Weekly or fortnightly keeps the shelf and the screen in agreement.</li>
+        <li><strong>Keep your business details current.</strong> They print on every receipt, invoice and report.</li>
       </ul>
-    )
+    ),
   },
-  {
-    id: 'about-flowbiz',
-    title: '9. About FlowBiz',
-    desc: 'Who we are and our vision for empowering Kenyan small businesses.',
-    content: (
-      <p className="text-sm text-ink-600">
-        FlowBiz is a localized, production-ready Business Manager custom-built to meet the unique operational challenges of Kenyan SMBs. By prioritizing cash-flow visibility, offering native barcode scanning, and supporting local transaction models like Deni and M-Pesa, we aim to make day-to-day recordkeeping effortless and stress-free.
-      </p>
-    )
-  }
 ];
 
 export default function HelpGuide() {
   const [activeTab, setActiveTab] = useState('getting-started');
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900"> Help &amp; Guide</h1>
-          <p className="text-sm text-ink-400">FlowBiz user guide and best-practice operating manual.</p>
-        </div>
-        <Link to="/settings" className="btn-outline text-xs !px-3 !py-1.5 !min-h-0">
-          ← Back to Settings
-        </Link>
-      </div>
+    <div className="mx-auto max-w-5xl space-y-6">
+      <PageHeader
+        title="Help and guide"
+        description="How to run a shop on FlowBiz."
+        actions={
+          <Link to="/settings" className="btn-secondary">
+            <ChevronLeft className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> Back to settings
+          </Link>
+        }
+      />
 
       <div className="flex flex-col gap-4 lg:flex-row">
-        {/* Navigation panel */}
-        <div className="w-full lg:w-1/3 space-y-2">
+        <div className="w-full space-y-2 lg:w-1/3">
           {SECTIONS.map((sec) => (
             <button
               key={sec.id}
               onClick={() => setActiveTab(sec.id)}
-              className={`w-full text-left p-3 rounded-lg border transition-all flex flex-col gap-1 min-h-[50px] ${
+              className={`relative flex w-full flex-col gap-0.5 rounded-control p-3 text-left transition-colors ${
                 activeTab === sec.id
-                  ? 'border-moss-600 bg-moss-50 text-moss-800 shadow-sm'
-                  : 'border-ink-100 bg-white text-ink-600 hover:bg-ink-50'
+                  ? 'bg-primary-50 text-primary-800 before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-primary-600 before:content-[""]'
+                  : 'text-ink-700 hover:bg-ink-50'
               }`}
             >
-              <span className="font-semibold text-sm block">{sec.title}</span>
-              <span className="text-xs text-ink-400 line-clamp-1">{sec.desc}</span>
+              <span className="block text-body font-medium">{sec.title}</span>
+              <span className="line-clamp-1 text-secondary text-ink-500">{sec.desc}</span>
             </button>
           ))}
-          
-          <div className="rounded-lg bg-moss-50/50 border border-dashed border-moss-200 p-4 text-center mt-4">
-            <span className="text-xs font-semibold uppercase tracking-wider text-moss-800 block">Need more topics?</span>
-            <p className="text-[11px] text-ink-500 mt-1">We periodically update this manual. Future sections including Cashiers, eTIMS, VAT, Backup &amp; Restore, and loyalty schemes will appear here automatically.</p>
-          </div>
         </div>
 
-        {/* Content Display Panel */}
-        <div className="flex-1 card bg-white p-5 sm:p-6 min-h-[300px]">
+        <div className="min-h-[300px] flex-1 rounded-panel border border-line bg-surface p-5 sm:p-6">
           {SECTIONS.map((sec) => {
             if (activeTab !== sec.id) return null;
             return (
-              <div key={sec.id} className="space-y-4 animate-fade-in">
-                <div className="border-b border-ink-100 pb-3">
-                  <h2 className="font-display text-lg font-bold text-ink-900">{sec.title}</h2>
-                  <p className="text-xs text-ink-400 mt-1">{sec.desc}</p>
+              <div key={sec.id} className="animate-fade-in space-y-4">
+                <div className="border-b border-line pb-3">
+                  <h2 className="font-display text-page-title text-ink-900">{sec.title}</h2>
+                  <p className="mt-1 text-secondary text-ink-500">{sec.desc}</p>
                 </div>
                 <div className="pt-2">{sec.content}</div>
               </div>

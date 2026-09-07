@@ -13,7 +13,7 @@ import { db } from '../firebase';
 // collection that holds business-owned data.
 export function tenantQuery(collectionName, businessId, ...constraints) {
   if (!businessId) {
-    throw new Error(`tenantQuery('${collectionName}') called with no businessId — is the profile loaded yet?`);
+    throw new Error(`tenantQuery('${collectionName}') called with no businessId. Is the profile loaded yet?`);
   }
   return query(collection(db, collectionName), where('businessId', '==', businessId), ...constraints);
 }

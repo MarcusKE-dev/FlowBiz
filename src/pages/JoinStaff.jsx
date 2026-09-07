@@ -1,3 +1,6 @@
+import { Link2, CheckCircle2 } from 'lucide-react';
+import AuthShell from '../components/common/AuthShell';
+import ErrorBanner from '../components/common/ErrorBanner';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, deleteUser, sendEmailVerification } from 'firebase/auth';
@@ -78,7 +81,7 @@ export default function JoinStaff() {
     }
     const { businessId, role, displayName } = freshSnap.data();
 
-    let targetUser = null;
+    let targetUser;
     let isNewAuthUser = false;
 
     try {
@@ -127,7 +130,7 @@ export default function JoinStaff() {
     } catch (dbErr) {
       console.error('[JoinStaff] Firestore write failed:', dbErr);
       if (isNewAuthUser) {
-        try { await deleteUser(targetUser); } catch {}
+        try { await deleteUser(targetUser); } catch { /* best effort: the orphaned sign-in is less bad than blocking the error message below */ }
       }
       setError('Something went wrong completing your signup. Please contact your business owner.');
       setSubmitting(false);
@@ -143,7 +146,7 @@ export default function JoinStaff() {
       if (!response.ok) throw new Error('send-verification-failed');
       toast.success(`Welcome, ${displayName}! Please check your email to verify your account.`);
     } catch {
-      try { await sendEmailVerification(targetUser); } catch {}
+      try { await sendEmailVerification(targetUser); } catch { /* the account is usable either way; verification can be resent from Settings */ }
       toast.success(`Welcome, ${displayName}! Your account is ready.`);
     }
 
@@ -151,48 +154,53 @@ export default function JoinStaff() {
     navigate('/', { replace: true });
   };
 
-  if (checking) return <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4"><p className="text-sm text-ink-400">Checking invite…</p></div>;
+  if (checking) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-deep-900 px-4">
+        <p className="text-body text-white/70">Checking invite…</p>
+      </div>
+    );
+  }
 
   if (notFound || !invite) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-        <div className="w-full max-w-sm card p-6 text-center space-y-3">
-          <div className="text-3xl">🔗</div>
-          <h1 className="font-display text-lg font-bold text-ink-900">Invite not found</h1>
-          <p className="text-sm text-ink-500">This link may be invalid or was cancelled by the business owner.</p>
-          <Link to="/login" className="btn-outline w-full">Go to sign in</Link>
+      <AuthShell>
+        <div className="space-y-3 text-center">
+          <Link2 className="mx-auto h-5 w-5 text-ink-500" strokeWidth={1.75} aria-hidden="true" />
+          <h1 className="font-display text-page-title text-ink-900">Invite not found</h1>
+          <p className="text-body text-ink-600">
+            This link is either invalid or the business owner cancelled it. Ask them for a new one.
+          </p>
+          <Link to="/login" className="btn-secondary w-full">Go to sign in</Link>
         </div>
-      </div>
+      </AuthShell>
     );
   }
 
   if (invite.claimed) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-        <div className="w-full max-w-sm card p-6 text-center space-y-3">
-          <div className="text-3xl">✅</div>
-          <h1 className="font-display text-lg font-bold text-ink-900">Invite Already Claimed</h1>
-          <p className="text-sm text-ink-500">This invite link has already been used. Please sign in with your email and password.</p>
+      <AuthShell>
+        <div className="space-y-3 text-center">
+          <CheckCircle2 className="mx-auto h-5 w-5 text-primary-600" strokeWidth={1.75} aria-hidden="true" />
+          <h1 className="font-display text-page-title text-ink-900">This invite is already used</h1>
+          <p className="text-body text-ink-600">
+            Sign in with the email and password you set up.
+          </p>
           <Link to="/login" className="btn-primary w-full">Go to sign in</Link>
         </div>
-      </div>
+      </AuthShell>
     );
   }
 
   const roleLabel = invite.role === 'owner' ? 'an owner' : 'a cashier';
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4 py-8">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center text-center gap-3">
-          <img src="/icons/icon-192.png" alt="FlowBiz" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <div>
-            <h1 className="font-display text-2xl font-bold text-white">Welcome, {invite.displayName}</h1>
-            <p className="text-sm text-ink-400">You have been invited as {roleLabel}.</p>
-          </div>
-        </div>
-        <form onSubmit={handleSubmit} className="card space-y-4 p-6">
-          {error && <div className="rounded-lg border border-rust-200 bg-rust-50 px-3 py-2 text-sm text-rust-700">{error}</div>}
+    <AuthShell
+      title={`Welcome, ${invite.displayName}`}
+      description={`You have been invited to join as ${roleLabel}. Choose a password to finish setting up.`}
+    >
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <ErrorBanner message={error} />
 
           <div>
             <label className="label">Your email</label>
@@ -210,7 +218,6 @@ export default function JoinStaff() {
             {submitting ? 'Setting up…' : 'Create my sign-in'}
           </button>
         </form>
-      </div>
-    </div>
+    </AuthShell>
   );
 }

@@ -4,16 +4,18 @@ import { db, auth } from '../firebase';
 
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
+// Every tenant-scoped collection, because a reset that leaves some behind
+// is worse than no reset: the leftovers point at products that no longer
+// exist. `orders`, `productions` and `productBatches` were missing, so a
+// restaurant kept its open tickets, a bakery its production runs and a
+// pharmacy its batch and expiry ledger through a "delete everything".
+// Keep in step with EXPORT_COLLECTIONS and IMPORT_COLLECTIONS.
 const RESET_COLLECTIONS = [
   'products', 'sales', 'customers', 'suppliers', 'creditSales', 'expenses',
   'purchases', 'dailySessions', 'repayments', 'supplierPayments',
-  'stockAdjustments', 'barcodeIndex', 'refunds',
+  'stockAdjustments', 'barcodeIndex', 'refunds', 'productImages',
   'debtPaymentReceipts', 'sharedDocuments', 'staffInvites', 'sessions',
-];
-
-const DEFAULT_CATEGORIES = [
-'Beverages', 'Hardware', 'Household',
-  'Personal Care', 'Stationery', 'Airtime/Float', 'Other'
+  'orders', 'productions', 'productBatches',
 ];
 
 async function deleteTenantCollection(name, businessId, chunkSize = 400) {
@@ -82,7 +84,20 @@ export async function resetBusinessData(businessId, ownerUid) {
   try {
     await setDoc(doc(db, 'businessSettings', businessId), {
       shopName: 'FlowBiz Store', phone: '', email: '', address: '', logoUrl: '',
-      cashierCanRecordExpenses: true, categories: DEFAULT_CATEGORIES, receiptPaperWidth: 80,
+      // Clearing the list, not replacing it with a shop's: with no stored
+      // categories the industry layer hands the business its own trade's
+      // starting list again, so a pharmacy resets to pharmacy categories
+      // rather than to a general shop's. The business type itself is
+      // untouched — a reset empties a business, it does not re-found it.
+      cashierCanRecordExpenses: true, receiptPaperWidth: 80,
+      // Clearing BOTH halves of the category model: the legacy full list
+      // and the diff-against-the-trade that replaced it. With nothing
+      // stored the industry layer hands the business its own trade's
+      // starting list again.
+      categories: null, customCategories: [], hiddenCategories: [], categoryOrder: [],
+      // The expense list is stored the same way and is cleared the same
+      // way, so a reset business is offered FlowBiz's own list again.
+      customExpenseCategories: [], hiddenExpenseCategories: [], expenseCategoryOrder: [],
       resetAt: new Date(), resetBy: ownerUid || null,
     }, { merge: true });
     results.businessSettings = 1;

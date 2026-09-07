@@ -54,7 +54,14 @@ function getNativeSupportedFormats() {
   return nativeFormatsPromise;
 }
 
-export function useCameraScanner({ onDetected, active }) {
+// `continuous` keeps the native detector loop armed after a hit. It
+// defaults to false, which is exactly the previous behaviour: the fast
+// path stopped scheduling frames once it found a code, on the assumption
+// that the caller immediately flips `active` off — true for the one-shot
+// ScannerModal, but not for the Counter's ScannerDock, which stays open
+// and expects the next barcode. (The ZXing fallback was always
+// continuous, so only the native path needed this.)
+export function useCameraScanner({ onDetected, active, continuous = false }) {
   const [retryToken, setRetryToken] = useState(0);
   const retry = useCallback(() => setRetryToken((t) => t + 1), []);
 
@@ -172,7 +179,10 @@ export function useCameraScanner({ onDetected, active }) {
               if (results.length > 0 && !loop.cancelled) {
                 onDetected(results[0].rawValue);
                 busy = false;
-                return; // caller flips `active` off once a code is found
+                // One-shot callers flip `active` off as soon as they have
+                // a code, so stopping here is right for them. Continuous
+                // ones stay armed and need the next frame scheduled.
+                if (!continuous) return;
               }
             } catch (err) {
               devError('[native] detect() failed', err);
@@ -244,7 +254,7 @@ export function useCameraScanner({ onDetected, active }) {
     })();
 
     return () => { cancelled = true; stop(); };
-  }, [active, onDetected, stop, retryToken]);
+  }, [active, onDetected, stop, retryToken, continuous]);
 
   const toggleTorch = useCallback(async () => {
     const track = streamRef.current?.getVideoTracks?.()[0];

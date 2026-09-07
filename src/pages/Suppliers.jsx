@@ -13,6 +13,9 @@ import ErrorBanner from '../components/common/ErrorBanner'; // Added Import
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import Modal from '../components/common/Modal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
+import PageHeader from '../components/ui/PageHeader';
+import DataTable from '../components/ui/DataTable';
+import Money from '../components/ui/Money';
 import { formatKES } from '../utils/currency';
 import { computeSupplierBalances } from '../utils/financials';
 import { raceWithTimeout } from '../utils/offlineWrite';
@@ -62,7 +65,7 @@ export default function Suppliers() {
 
     const { queuedOffline, error: writeError } = await raceWithTimeout(write, 4000);
     if (writeError) { toast.error(friendlyErrorMessage(writeError)); throw writeError; }
-    toast.success(queuedOffline ? "Saved — it'll sync once you're back online." : (editing ? 'Supplier updated' : 'Supplier added'));
+    toast.success(queuedOffline ? 'Saved offline. It will sync when you reconnect.' : (editing ? 'Supplier updated.' : 'Supplier added.'));
     await refetch();
     setModal(false); setEditing(null);
   };
@@ -70,14 +73,14 @@ export default function Suppliers() {
   const handleDel = async () => {
     const stillExists = suppliers.some((s) => s.id === pendDel.id);
     if (!stillExists) {
-      toast.success('Already removed.');
+      toast.success('That supplier was already removed.');
       await refetch();
       setPendDel(null);
       return;
     }
     const balance = owedMap[pendDel.id] || 0;
     if (balance > 0.005) {
-      toast.error(`Can't remove "${pendDel.name}" — they still have an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
+      toast.error(`"${pendDel.name}" still has an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
       setPendDel(null);
       return;
     }
@@ -85,7 +88,7 @@ export default function Suppliers() {
     const { queuedOffline, error: deleteError } = await raceWithTimeout(deleteDoc(doc(db,'suppliers',pendDel.id)), 4000);
     setDeleting(false);
     if (deleteError) { toast.error(friendlyErrorMessage(deleteError)); return; }
-    toast.success(queuedOffline ? "Removed — it'll sync once you're back online." : 'Supplier removed');
+    toast.success(queuedOffline ? 'Removed offline. It will sync when you reconnect.' : 'Supplier removed.');
     setPendDel(null);
     await refetch();
   };
@@ -94,9 +97,9 @@ export default function Suppliers() {
     e.preventDefault();
     const amount = Number(payAmt);
     const balance = owedMap[selSupp?.id]||0;
-    if (amount<=0) { toast.error('Enter a positive amount.'); return; }
+    if (amount<=0) { toast.error('Enter an amount greater than zero.'); return; }
     if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatKES(balance)}.`); return; }
-    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter M-Pesa code.'); return; }
+    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter the M-Pesa transaction code.'); return; }
     setPaying(true);
     const batch = writeBatch(db);
     const expRef = doc(collection(db,'expenses'));
@@ -109,42 +112,106 @@ export default function Suppliers() {
     const { queuedOffline, error: commitError } = await raceWithTimeout(commit, 4000);
     setPaying(false);
     if (commitError) { toast.error(friendlyErrorMessage(commitError)); return; }
-    toast.success(queuedOffline ? "Payment saved — it'll sync once you're back online." : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}`);
+    toast.success(queuedOffline ? 'Payment saved offline. It will sync when you reconnect.' : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}.`);
     if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
     setPayModal(false); setPayAmt(''); setPayCode('');
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="font-display text-xl font-bold text-ink-900">Suppliers</h1><p className="text-sm text-ink-400">Total owed: <span className="font-semibold text-rust-600">{formatKES(totalOwed)}</span></p></div>
-        <button className="btn-primary" onClick={()=>{setEditing(null);setModal(true);}}>+ Add supplier</button>
-      </div>
-      <ErrorBanner message={error} /> {/* Display error if it occurs */}
-      {loading?<LoadingSpinner />:suppliers.length===0?<EmptyState title="No suppliers yet" description="Add suppliers to track restocking and balances." />:(
-        <div className="space-y-3">
-          {suppliers.map(s=>{
-            const balance = owedMap[s.id]||0;
+    <div className="mx-auto max-w-5xl space-y-6">
+      <PageHeader
+        title="Suppliers"
+        description={<>Total owed <Money value={totalOwed} tone={totalOwed > 0 ? 'negative' : undefined} /></>}
+        actions={
+          <button className="btn-primary" onClick={() => { setEditing(null); setModal(true); }}>
+            Add supplier
+          </button>
+        }
+      />
+
+      <ErrorBanner message={error} />
+
+      {loading ? (
+        <LoadingSpinner />
+      ) : (
+        <DataTable
+          caption="Suppliers and outstanding balances"
+          rows={suppliers}
+          rowKey={(s) => s.id}
+          mobileLayout="row"
+          columns={[
+            {
+              key: 'name',
+              header: 'Supplier',
+              primary: true,
+              render: (s) => <span className="font-medium text-ink-900">{s.name}</span>,
+            },
+            {
+              key: 'contact',
+              header: 'Contact',
+              render: (s) => (
+                <span className="text-ink-600">
+                  {s.contactPerson ? `${s.contactPerson} · ` : ''}{s.phone || 'No phone'}
+                </span>
+              ),
+            },
+            {
+              key: 'balance',
+              header: 'Outstanding',
+              numeric: true,
+              mobileTrailing: true,
+              render: (s) => {
+                const balance = owedMap[s.id] || 0;
+                return (
+                  <span className="font-semibold">
+                    <Money value={balance} tone={balance > 0 ? 'negative' : 'muted'} />
+                  </span>
+                );
+              },
+            },
+          ]}
+          rowActions={(s) => {
+            const balance = owedMap[s.id] || 0;
             return (
-              <div key={s.id} className="card flex flex-wrap items-center justify-between gap-3 p-4">
-                <div><p className="font-semibold text-ink-800">{s.name}</p><p className="text-xs text-ink-400">{s.contactPerson&&`${s.contactPerson} · `}{s.phone||'No phone'}</p></div>
-                <div className="flex items-center gap-3">
-                  <div className="text-right"><p className="text-xs text-ink-400">Outstanding</p><p className={`font-semibold ${balance>0?'text-rust-600':'text-moss-600'}`}>{formatKES(balance)}</p></div>
-                  {balance>0&&<button className="btn-primary !text-xs !px-3 !py-1.5 !min-h-0" onClick={()=>{setSelSupp(s);setPayModal(true);}}>Pay</button>}
-                  <button className="rounded-lg p-2 text-ink-400 hover:bg-ink-100" onClick={()=>{setEditing(s);setModal(true);}}><Pencil className="h-4 w-4" strokeWidth={1.75}/></button>
-                  <button className="rounded-lg p-2 text-rust-400 hover:bg-rust-50" onClick={()=>setPendDel(s)}><Trash2 className="h-4 w-4" strokeWidth={1.75}/></button>
-                </div>
-              </div>
+              <>
+                {balance > 0 && (
+                  <button className="btn-secondary" onClick={() => { setSelSupp(s); setPayModal(true); }}>
+                    Pay
+                  </button>
+                )}
+                <button
+                  className="btn-ghost !px-2 text-ink-500 hover:text-ink-900"
+                  onClick={() => { setEditing(s); setModal(true); }}
+                  aria-label={`Edit ${s.name}`}
+                >
+                  <Pencil className="h-4 w-4" strokeWidth={1.75} />
+                </button>
+                <button
+                  className="btn-ghost !px-2 text-ink-500 hover:text-danger-700"
+                  onClick={() => setPendDel(s)}
+                  aria-label={`Remove ${s.name}`}
+                >
+                  <Trash2 className="h-4 w-4" strokeWidth={1.75} />
+                </button>
+              </>
             );
-          })}
-        </div>
+          }}
+          empty={
+            <EmptyState
+              title="No suppliers yet"
+              description="Add suppliers to track restocking and balances."
+              action={<button className="btn-primary" onClick={() => { setEditing(null); setModal(true); }}>Add supplier</button>}
+            />
+          }
+        />
       )}
+
       <SupplierFormModal open={modal} onClose={()=>{setModal(false);setEditing(null);}} onSave={handleSave} initialSupplier={editing} />
       <ConfirmDialog
         open={!!pendDel}
         title="Remove supplier?"
         message={(owedMap[pendDel?.id]||0) > 0.005
-          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)} — pay it off first.`
+          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)}. Pay it off first.`
           : `"${pendDel?.name}" will be removed. Purchase records stay intact.`}
         confirmLabel={deleting ? 'Removing…' : 'Remove'}
         confirmDisabled={deleting}
@@ -154,12 +221,12 @@ export default function Suppliers() {
       />      
       <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
         <form onSubmit={handlePay} className="space-y-3">
-          <div className="rounded-lg bg-ink-50 px-3 py-2 text-sm">Outstanding: <span className="font-semibold text-rust-600">{formatKES(owedMap[selSupp?.id]||0)}</span></div>
+          <div className="rounded-control border border-line bg-ink-50 px-3 py-2 text-body">Outstanding <span className="font-semibold"><Money value={owedMap[selSupp?.id]||0} tone="negative" /></span></div>
           <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
           <div><label className="label">Method</label>
             <div className="grid grid-cols-2 gap-2">
               {['Cash','M-Pesa'].map(m=>(
-                <button key={m} type="button" onClick={()=>setPayMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold ${payMethod===m?'border-moss-600 bg-moss-50 text-moss-800':'border-ink-200 text-ink-500'}`}>
+                <button key={m} type="button" onClick={()=>setPayMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-control border text-button transition-colors ${payMethod===m?'border-primary-600 bg-primary-50 text-primary-800':'border-line text-ink-600 hover:bg-ink-50'}`}>
                   {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
                 </button>
               ))}

@@ -42,14 +42,17 @@ export async function sendEmail(env, { to, subject, html, text }) {
     // rejection) — never rethrow err.message verbatim in case it ever
     // contains request internals; log a fixed, safe message instead.
     console.error('[resend] network error contacting Resend API');
-    throw new Error('Could not reach the email delivery service.');
+    // The cause carries the original for a stack trace; the MESSAGE stays
+    // fixed, which is what keeps request internals out of anything a
+    // caller might surface.
+    throw new Error('Could not reach the email delivery service.', { cause: err });
   }
 
   if (!res.ok) {
     // Resend's error body is diagnostic-only (it never contains the API
     // key), so it's safe to log — but it's never returned to the caller,
     // which only ever gets a generic message back.
-    let detail = '';
+    let detail;
     try {
       const body = await res.json();
       detail = body?.message || JSON.stringify(body);

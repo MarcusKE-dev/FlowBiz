@@ -31,9 +31,32 @@ export const db = initializeFirestore(app, {
   experimentalForceLongPolling: true, // was experimentalAutoDetectLongPolling: true
 });
 
+// TEST HARNESS ONLY. This branch is entered only when
+// VITE_USE_FIREBASE_EMULATORS is the literal string 'true', which is set
+// in .env.emulator and in no other environment — so production and demo
+// builds do not execute a line of it.
+//
+// The host and port are read from the environment rather than hardcoded
+// because the QA harness pins the browser to ONE origin and reaches the
+// emulators same-origin through the dev server's proxy (see
+// vite.config.js). With 127.0.0.1:9099 baked in, the SDK went straight to
+// that port, the browser's origin lock refused it, and every sign-in in
+// the harness failed with ERR_BLOCKED_BY_CLIENT.
+//
+// THE DEFAULTS ARE THE OLD VALUES, so anyone running a plain local
+// emulator suite with nothing else configured gets exactly the previous
+// behaviour.
 if (import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true') {
-  connectAuthEmulator(auth, 'http://127.0.0.1:9099');
-  connectFirestoreEmulator(db, '127.0.0.1', 8080);
+  connectAuthEmulator(
+    auth,
+    import.meta.env.VITE_AUTH_EMULATOR_URL || 'http://127.0.0.1:9099',
+    { disableWarnings: true }
+  );
+  connectFirestoreEmulator(
+    db,
+    import.meta.env.VITE_FIRESTORE_EMULATOR_HOST || '127.0.0.1',
+    Number(import.meta.env.VITE_FIRESTORE_EMULATOR_PORT) || 8080
+  );
 }
 
 export default app;

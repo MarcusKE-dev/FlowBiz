@@ -1,46 +1,69 @@
-
-
 import { useState } from 'react';
 import { ChevronDown, ChevronUp, Minus, Plus, X } from 'lucide-react';
-import { formatKES, roundMoney } from '../../utils/currency';
+import Money from '../ui/Money';
+import { sumLineTotals, buildLineItem, minimumQuantity } from '../../utils/lineItems';
+import { DEFAULT_UNIT, getUnit, unitStep, roundQuantity } from '../../industry/units';
 
-export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemove, onClear, onCheckout }) {
+// The mobile cart bar, pinned to the top of the Counter. This is the
+// most touch-critical surface in the app, so every control here is a
+// full 44px target — no control-height overrides, which is what had
+// quietly dropped the quantity and price fields to 38px and the remove
+// button to 36px. As of pass 3 no such override survives anywhere in
+// src/, so this is now the rule rather than this file's exception.
+export default function CartList({
+  cart, onUpdateQuantity, onUpdatePrice, onRemove, onClear, onCheckout,
+  // Food only. Absent for every other profile, so the bar keeps exactly
+  // the one button it has always had.
+  onSaveOrder = null, saveOrderLabel = 'Save order', savingOrder = false,
+}) {
   const [expanded, setExpanded] = useState(true);
   if (!cart || cart.length === 0) return null;
 
-  const total = roundMoney(cart.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0));
+  // The same builder the sale uses, so the bar the cashier reads and the
+  // document Firestore stores can never disagree by a rounding step.
+  const total = sumLineTotals(cart.map(buildLineItem));
 
   return (
-    <div className="card border-moss-200 shadow-md p-3 sm:p-4 space-y-3">
+    <div className="space-y-3 rounded-panel border border-line bg-surface p-3 shadow-pop sm:p-4">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between gap-2 text-left min-h-[36px]"
+        className="flex w-full items-center justify-between gap-2 text-left"
         aria-expanded={expanded}
       >
-        <div className="flex items-center gap-2 min-w-0">
-          <h2 className="font-display text-sm font-bold text-ink-800 shrink-0">
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="shrink-0 text-section-title text-ink-900">
             Cart · {cart.length} product{cart.length !== 1 ? 's' : ''}
-          </h2>
-          <span className="font-display text-sm font-bold text-moss-700 shrink-0">{formatKES(total)}</span>
-        </div>
-        {expanded ? <ChevronUp className="h-4 w-4 text-ink-400 shrink-0" strokeWidth={2} /> : <ChevronDown className="h-4 w-4 text-ink-400 shrink-0" strokeWidth={2} />}
+          </span>
+          <span className="shrink-0 text-body font-semibold text-ink-900">
+            <Money value={total} />
+          </span>
+        </span>
+        {expanded
+          ? <ChevronUp className="h-4 w-4 shrink-0 text-ink-500" strokeWidth={1.75} aria-hidden="true" />
+          : <ChevronDown className="h-4 w-4 shrink-0 text-ink-500" strokeWidth={1.75} aria-hidden="true" />}
       </button>
 
       {expanded && (
-        <div className="-mt-1">
-      
-          <div className="max-h-[220px] overflow-y-auto pr-1 divide-y divide-ink-100">
+        <div>
+          <div className="max-h-[220px] divide-y divide-divider overflow-y-auto pr-1">
             {cart.map((item) => {
-              const lineTotal = roundMoney((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0));
+              const unit = item.unit || DEFAULT_UNIT;
+              const step = unitStep(unit);
+              const short = getUnit(unit).short;
+              const isMeasured = unit !== DEFAULT_UNIT;
+              const lineTotal = buildLineItem(item).lineTotal;
+              // A cart row is addressed by its rowKey — the product id for
+              // a plain product, product+version for one with versions.
+              const key = item.rowKey || item.productId;
               return (
-                <div key={item.productId} className="py-3 space-y-2">
+                <div key={key} className="space-y-2 py-3">
                   <div className="flex items-start justify-between gap-2">
-                    <p className="font-medium text-ink-800 text-sm leading-snug">{item.productName}</p>
+                    <p className="text-body font-medium leading-snug text-ink-900">{item.productName}</p>
                     <button
                       type="button"
-                      onClick={() => onRemove(item.productId)}
-                      className="shrink-0 rounded-lg p-1.5 text-ink-300 hover:bg-rust-50 hover:text-rust-500 min-h-[36px] min-w-[36px] flex items-center justify-center"
+                      onClick={() => onRemove(key)}
+                      className="-mr-1 flex shrink-0 items-center justify-center rounded-control p-2 text-ink-500 hover:bg-danger-50 hover:text-danger-700"
                       aria-label={`Remove ${item.productName}`}
                     >
                       <X className="h-4 w-4" strokeWidth={1.75} />
@@ -51,58 +74,86 @@ export default function CartList({ cart, onUpdateQuantity, onUpdatePrice, onRemo
                     <div className="flex items-center gap-1.5">
                       <button
                         type="button"
-                        onClick={() => onUpdateQuantity(item.productId, (Number(item.quantity) || 1) - 1)}
-                        className="flex h-9 w-9 items-center justify-center rounded-lg border border-ink-200 text-ink-600 hover:bg-ink-50"
-                        aria-label="Decrease quantity"
+                        onClick={() => onUpdateQuantity(key, roundQuantity((Number(item.quantity) || minimumQuantity(unit)) - 1, unit))}
+                        className="flex items-center justify-center rounded-control border border-line text-ink-700 hover:bg-ink-50"
+                        aria-label={`Decrease quantity of ${item.productName}`}
                       >
-                        <Minus className="h-3.5 w-3.5" strokeWidth={2} />
+                        <Minus className="h-4 w-4" strokeWidth={1.75} />
                       </button>
+                      {/* A measured unit gets a wider field and its own
+                          step, so 2.5 m can be typed rather than fought
+                          with. A piece behaves exactly as it always did. */}
                       <input
                         type="number"
-                        min="1"
-                        className="input !w-16 !py-2 !min-h-0 text-center"
+                        min={step}
+                        step={step}
+                        inputMode={isMeasured ? 'decimal' : 'numeric'}
+                        className={`input num text-center ${isMeasured ? '!w-24' : '!w-16'}`}
                         value={item.quantity}
-                        onChange={(e) => onUpdateQuantity(item.productId, e.target.value)}
+                        onChange={(e) => onUpdateQuantity(key, e.target.value)}
+                        aria-label={`Quantity of ${item.productName}${isMeasured ? ` in ${short}` : ''}`}
                       />
+                      {isMeasured && <span className="text-label uppercase text-ink-400">{short}</span>}
                       <button
                         type="button"
-                        onClick={() => onUpdateQuantity(item.productId, (Number(item.quantity) || 0) + 1)}
-                        className="flex h-9 w-9 items-center justify-center rounded-lg border border-ink-200 text-ink-600 hover:bg-ink-50"
-                        aria-label="Increase quantity"
+                        onClick={() => onUpdateQuantity(key, roundQuantity((Number(item.quantity) || 0) + 1, unit))}
+                        className="flex items-center justify-center rounded-control border border-line text-ink-700 hover:bg-ink-50"
+                        aria-label={`Increase quantity of ${item.productName}`}
                       >
-                        <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+                        <Plus className="h-4 w-4" strokeWidth={1.75} />
                       </button>
                     </div>
 
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-ink-400">@ KES</span>
+                      <span className="text-label uppercase text-ink-400">KES</span>
                       <input
                         type="number"
                         min="0"
                         step="0.01"
-                        className="input !w-24 !py-2 !min-h-0 text-right"
+                        className="input num !w-24 text-right"
                         value={item.unitPrice}
-                        onChange={(e) => onUpdatePrice(item.productId, e.target.value)}
+                        onChange={(e) => onUpdatePrice(key, e.target.value)}
+                        aria-label={`Price per ${isMeasured ? short : 'item'} for ${item.productName}`}
                       />
+                      {isMeasured && <span className="text-label uppercase text-ink-400">/{short}</span>}
                     </div>
 
-                    <span className="ml-auto font-display text-sm font-bold text-ink-800">{formatKES(lineTotal)}</span>
+                    <span className="ml-auto text-body font-semibold text-ink-900">
+                      <Money value={lineTotal} />
+                    </span>
                   </div>
                 </div>
               );
             })}
           </div>
+
           <div className="pt-2 text-right">
-            <button type="button" onClick={onClear} className="text-xs font-semibold text-rust-500 hover:underline">
+            <button
+              type="button"
+              onClick={onClear}
+              className="btn-ghost !px-2 text-ink-600 hover:text-danger-700"
+            >
               Clear cart
             </button>
           </div>
         </div>
       )}
 
-      <button type="button" className="btn-primary w-full" onClick={onCheckout}>
-        Sell  {formatKES(total)}
-      </button>
+      <div className="flex gap-2">
+        {onSaveOrder && (
+          <button
+            type="button"
+            className="btn-secondary shrink-0"
+            onClick={onSaveOrder}
+            disabled={savingOrder}
+          >
+            {savingOrder ? 'Saving…' : saveOrderLabel}
+          </button>
+        )}
+        <button type="button" className="btn-primary flex-1" onClick={onCheckout}>
+          Sell <Money value={total} />
+        </button>
+      </div>
     </div>
   );
 }

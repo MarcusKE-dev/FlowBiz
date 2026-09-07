@@ -1,10 +1,35 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ANNUAL_SERVICE_PRICE_KES, LIFETIME_LICENSE_PRICE_KES, GRACE_PERIOD_DAYS, formatPrice } from '../../licensing';
+
+const LIFETIME_PRICE = formatPrice(LIFETIME_LICENSE_PRICE_KES);
+const SERVICE_PRICE = formatPrice(ANNUAL_SERVICE_PRICE_KES);
 
 export function FaqSection() {
   const [openIndex, setOpenIndex] = useState(0);
 
   const faqs = [
+    // THE THREE QUESTIONS A LIFETIME BUYER ACTUALLY ASKS, answered before
+    // they buy rather than in a support ticket afterwards. They lead the
+    // list on purpose: the commercial model is the thing most likely to
+    // be misunderstood, and a landing page that buries it is a landing
+    // page that mis-sells.
+    {
+      question: `What exactly do I get for the ${LIFETIME_PRICE} Lifetime Licence?`,
+      answer: `A permanent licence to use the licensed FlowBiz application. It is a one-time purchase and the licence itself never expires. The first 12 months of cloud services, maintenance, updates and support are included with it. From the second year those services cost ${SERVICE_PRICE} per year.`,
+    },
+    {
+      question: `Why is there a ${SERVICE_PRICE} annual fee if the licence is for life?`,
+      answer: `The licence and the services are two different things. The licence is software you own outright, permanently. The annual fee pays for what FlowBiz keeps running for you month after month: cloud services, cloud synchronisation between your devices, cloud storage for things like product photos, backups where applicable, ongoing software maintenance, updates and new versions, security fixes, and technical support. It is not a second software licence and it is not a subscription to the application.`,
+    },
+    {
+      question: 'What happens if I do not renew the annual service fee?',
+      answer: `You keep your Lifetime Licence, and you keep your business data. Nothing is deleted. After the service period ends there is a ${GRACE_PERIOD_DAYS}-day grace period during which everything keeps working normally and FlowBiz reminds you to renew. After that, cloud services, maintenance, updates and support pause until you renew, while FlowBiz continues to run on your devices with the records already on them. Renewing switches the hosted services back on.`,
+    },
+    {
+      question: 'If I renew early, do I lose the days I already paid for?',
+      answer: 'No. An early renewal extends your existing expiry date by 12 months rather than restarting the period from the payment date. Paying two weeks before your services lapse gives you 12 months and two weeks, not 12 months.',
+    },
     {
       question: 'Does FlowBiz work when there is no internet connection?',
       answer: 'Yes. FlowBiz uses an offline-first architecture with persistent local caching. Sales, credit purchases, and expenses are saved immediately in your browser or phone storage and sync automatically with the cloud database the moment connectivity is restored.',
@@ -15,7 +40,7 @@ export function FaqSection() {
     },
     {
       question: 'Why does profit stay at zero when I record a Credit (Deni) sale?',
-      answer: 'FlowBiz uses a cash-flow-first accounting model specifically designed for retail businesses. While physical stock is deducted immediately to prevent double-selling, revenue and gross profit are only recognized when the customer pays off their debt. This prevents false profit illusions on uncollected credit.',
+      answer: 'FlowBiz uses a cash-flow-first accounting model specifically designed for retail businesses. While physical stock is deducted immediately to prevent double-selling, revenue and gross profit are only recognised when the customer pays off their debt. This prevents false profit illusions on uncollected credit.',
     },
     {
       question: 'Do I need to purchase specialized POS hardware or barcode scanners?',
@@ -36,14 +61,14 @@ export function FaqSection() {
   };
 
   return (
-    <section id="faq" className="py-16 md:py-24 border-t border-[#e8eaed] bg-white">
+    <section id="faq" className="py-16 md:py-24 border-t border-line bg-white">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
         <div className="text-center space-y-3">
          
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-[#15171d] tracking-tight">
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-ink-900 tracking-tight">
             Frequently Asked Questions
           </h2>
-          <p className="text-sm text-[#5a6273]">
+          <p className="text-body text-ink-600">
             Everything you need to know about setting up and running FlowBiz in your shop.
           </p>
         </div>
@@ -52,21 +77,21 @@ export function FaqSection() {
           {faqs.map((faq, idx) => {
             const isOpen = openIndex === idx;
             return (
-              <div key={idx} className="border-b border-[#e8eaed] pb-4 transition-all">
+              <div key={idx} className="border-b border-line pb-4 transition-all">
                 <button
                   type="button"
                   onClick={() => toggleFaq(idx)}
-                  className="w-full flex items-center justify-between gap-4 text-left font-bold text-[#15171d] text-sm sm:text-base py-2 hover:text-[#1a623c] transition-colors"
+                  className="w-full flex items-center justify-between gap-4 text-left font-bold text-ink-900 text-body sm:text-base py-2 hover:text-primary-600 transition-colors"
                 >
                   <span>{faq.question}</span>
                   {isOpen ? (
-                    <ChevronUp className="h-4 w-4 text-[#1a623c] shrink-0" />
+                    <ChevronUp className="h-4 w-4 text-primary-600 shrink-0" />
                   ) : (
-                    <ChevronDown className="h-4 w-4 text-[#767f8f] shrink-0" />
+                    <ChevronDown className="h-4 w-4 text-ink-500 shrink-0" />
                   )}
                 </button>
                 {isOpen && (
-                  <p className="text-xs sm:text-sm text-[#5a6273] leading-relaxed pt-2 pb-1">
+                  <p className="text-secondary sm:text-body text-ink-600 leading-relaxed pt-2 pb-1">
                     {faq.answer}
                   </p>
                 )}

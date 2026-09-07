@@ -2,23 +2,63 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Design tokens ──────────────────────────────────────────────────
+   Mirrors src/theme/tokens.js for anything that needs a raw CSS value
+   (third-party widgets, inline styles, the print stylesheet). Tailwind
+   classes should be preferred everywhere they can express the same
+   thing — these exist so nothing has to type a hex literal.            */
+:root {
+  --canvas:  #F4F6F9;
+  --surface: #FFFFFF;
+  --line:    #E2E6EC;
+  --divider: #EDF0F4;
+
+  --ink:   #0F1522;
+  --ink-2: #4A5468;
+  --ink-3: #7A8598;
+
+  --primary:        #1D70F5;
+  --primary-hover:  #1659CC;
+  --primary-active: #1247A6;
+  --primary-tint:   #EEF4FE;
+  --deep:           #1B2CC1;
+
+  --negative: #D3402F;
+  --caution:  #C77A0B;
+
+  --radius-control: 4px;
+  --radius-panel:   8px;
+
+  --control-h:       2.25rem;
+  --control-h-touch: 2.75rem;
+
+  color-scheme: light;
+}
+
 @layer base {
-  /* Prevent double-tap zoom on interactive elements — smooth POS experience */
   * {
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
     box-sizing: border-box;
   }
 
+  /* The one place the app's scale is set. Every type step, every gap
+     and every control height is rem, so raising the root here grows the
+     whole layout proportionally rather than just the text. Phones and
+     tablets keep 16px — the app is already dense enough on a phone. */
+  html { font-size: 16px; }
+  @media (min-width: 1280px) { html { font-size: 17px; } }
+  @media (min-width: 1680px) { html { font-size: 18px; } }
+
   html {
     @apply font-sans text-ink-900;
-    /* Prevent iOS bounce / overscroll that breaks fixed bottom nav */
+    /* Prevent iOS bounce / overscroll that breaks the fixed bottom nav */
     overscroll-behavior: none;
     -webkit-text-size-adjust: 100%;
   }
 
   body {
-    @apply bg-sand m-0 p-0;
+    @apply bg-canvas m-0 p-0;
     overscroll-behavior: none;
     /* Safe area insets for notched phones */
     padding-bottom: env(safe-area-inset-bottom);
@@ -28,44 +68,168 @@
 
   h1, h2, h3, h4 { @apply font-display; }
 
-  /* Smooth scrolling for all scrollable areas */
+  ::selection { background: var(--primary-tint); color: var(--ink); }
+
   * { scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
 
-  /* Remove iOS input shadows while preserving default native checkboxes and radios */
+  /* Remove iOS input chrome while preserving native checkboxes and radios */
   input:not([type="checkbox"]):not([type="radio"]), select, textarea, button {
     -webkit-appearance: none;
     appearance: none;
   }
 
-  /* Minimum touch target for all interactive elements */
-  button, a, [role="button"] {
-    min-height: 44px;
-    min-width: 44px;
+  /* Minimum touch target.
+     Deliberately NOT applied to bare `a`: it used to be, which turned
+     every inline text link into a 44x44 block and broke sentence flow.
+     Links that need a touch target opt in via .btn or [role="button"]. */
+  button, [role="button"], .btn, input, select, textarea {
+    min-height: var(--control-h);
   }
+  button, [role="button"], .btn {
+    min-width: var(--control-h);
+  }
+  /* Touch devices get the full 44px. */
+  @media (pointer: coarse) {
+    button, [role="button"], .btn, input, select, textarea {
+      min-height: var(--control-h-touch);
+    }
+    button, [role="button"], .btn {
+      min-width: var(--control-h-touch);
+    }
+  }
+
+  /* One focus treatment, everywhere. 2px primary ring, 2px offset. */
+  :focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-control);
+  }
+  /* Tailwind's preflight leaves a UA outline on :focus for some controls;
+     we only ever want the :focus-visible one above. */
+  :focus:not(:focus-visible) { outline: none; }
 }
 
-@layer components {
-  .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold
-           transition-colors disabled:opacity-40 disabled:cursor-not-allowed
-           min-h-[44px] active:scale-95;
-  }
-  .btn-primary   { @apply btn bg-moss-600  text-white   hover:bg-moss-700  active:bg-moss-800; }
-  .btn-secondary { @apply btn bg-ink-100   text-ink-800 hover:bg-ink-200   active:bg-ink-300; }
-  .btn-danger    { @apply btn bg-rust-600  text-white   hover:bg-rust-700  active:bg-rust-800; }
-  .btn-outline   { @apply btn border border-ink-200 text-ink-700 hover:bg-ink-50 active:bg-ink-100; }
+/* ── App shell viewport ──────────────────────────────────────────────
+   The application chrome fills EXACTLY the viewport, so the navigation
+   rail and the header hold still and the page area is the one thing that
+   scrolls.
 
-  .input {
-    @apply w-full rounded-lg border border-ink-200 bg-white px-3 py-2.5 text-sm text-ink-900
-           placeholder:text-ink-300 focus:outline-none focus:ring-2 focus:ring-moss-500
-           focus:border-moss-500 min-h-[44px];
+   Why a class and not `h-screen`. The shell used to be `min-h-screen`,
+   which leaves its height indefinite: a flex column whose own height is
+   content-derived resolves `flex-basis: 0%` against nothing, so the main
+   area grew to fit its content, the whole row grew with it, and the
+   document — rail included — was what scrolled. A definite height is what
+   turns the main area back into the scroll container.
+
+   `dvh` where it exists, so a phone's retracting address bar is accounted
+   for, and `vh` everywhere else. The safe-area inset is subtracted
+   because <body> carries it as padding, and 100dvh inside a padded body
+   overflows by exactly that much on a notched phone.                    */
+.app-viewport {
+  height: calc(100vh - env(safe-area-inset-bottom, 0px));
+}
+@supports (height: 100dvh) {
+  .app-viewport { height: calc(100dvh - env(safe-area-inset-bottom, 0px)); }
+}
+
+/* ── Quiet scroll region ─────────────────────────────────────────────
+   For panels that must be scrollable when they overflow but must not
+   wear a permanent gutter when they do not — the navigation rail, above
+   all. No track, no thumb until the pointer is actually in the region;
+   `auto` still means nothing at all is shown when the content fits.
+
+   Never use this on the main page area: a person needs to see where
+   they are in a long page.                                              */
+.scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  overscroll-behavior: contain;
+}
+.scroll-quiet:hover,
+.scroll-quiet:focus-within {
+  scrollbar-color: var(--line) transparent;
+}
+.scroll-quiet::-webkit-scrollbar { width: 6px; height: 6px; }
+.scroll-quiet::-webkit-scrollbar-track { background: transparent; }
+.scroll-quiet::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
+.scroll-quiet:hover::-webkit-scrollbar-thumb,
+.scroll-quiet:focus-within::-webkit-scrollbar-thumb { background: var(--line); }
+
+@layer components {
+  /* ── Buttons ──────────────────────────────────────────────────────
+     Blue is a verb: .btn-primary is the only filled blue in the app.
+     Nothing else — not a status, not a nav item, not an icon — is
+     allowed to wear it.                                              */
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-control px-3
+           text-button font-semibold transition-colors
+           disabled:opacity-40 disabled:cursor-not-allowed;
   }
-  .label  { @apply block text-xs font-semibold uppercase tracking-wide text-ink-500 mb-1.5; }
-  .card   { @apply bg-white rounded-xl2 border border-ink-100 shadow-sm; }
-  .badge  { @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+  .btn-primary   { @apply btn bg-primary-600 text-white hover:bg-primary-700 active:bg-primary-800; }
+  .btn-secondary { @apply btn border border-line bg-surface text-ink-800 hover:bg-ink-50 active:bg-ink-100; }
+  .btn-ghost     { @apply btn text-ink-700 hover:bg-ink-100 active:bg-ink-200; }
+  .btn-danger    { @apply btn bg-danger-600 text-white hover:bg-danger-700 active:bg-danger-800; }
+  /* Retained alias — .btn-outline and .btn-secondary are the same thing
+     now. Call sites collapse to .btn-secondary as pages are swept. */
+  .btn-outline   { @apply btn-secondary; }
+
+  /* ── Form controls ────────────────────────────────────────────── */
+  .input {
+    @apply w-full rounded-control border border-line bg-surface px-3 py-2
+           text-body text-ink-900 placeholder:text-ink-400
+           focus:outline-none focus:border-primary-600
+           focus:ring-2 focus:ring-primary-600 focus:ring-offset-0
+           disabled:bg-ink-50 disabled:text-ink-400;
+  }
+  .label {
+    @apply block text-label uppercase text-ink-500 mb-1;
+  }
+
+  /* ── Status ───────────────────────────────────────────────────────
+     999px is reserved for status pills and nothing else. Every pill
+     carries a word, never colour alone.                              */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-pill px-2 py-0.5
+           text-label leading-4;
+  }
+
+  /* ── Ledger primitives ────────────────────────────────────────── */
+
+  /* Tabular figures. Goes on every currency and quantity in the app so
+     digits line up column to column and never jitter as they update. */
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+
+  /* A section heading on the canvas — no surface, no icon chip, no
+     uppercase eyebrow above it. At 13px it takes no negative tracking:
+     -0.02em there closes the word space up ("M-Pesa till" reading as
+     "M-Pesatill"). The tighter tracking belongs to the 20px page title,
+     which carries it from its own type-scale token. */
+  .section-title {
+    @apply text-section-title text-ink-900;
+    letter-spacing: normal;
+  }
+  .section-hint {
+    @apply text-secondary text-ink-500;
+  }
+
+  /* The only rule this design draws: 1px, --line, full bleed. */
+  .hairline {
+    @apply border-0 border-t border-line;
+  }
 
   /* Bottom nav safe area support on iOS notched devices */
   .bottom-nav-safe {
     padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
   }
+}
+
+@layer utilities {
+  /* font-display now means Inter tracked tighter, not a second family.
+     Kept gentle because the class is applied at every size from 13px up;
+     the full -0.02em the spec asks for on page titles is carried by the
+     `text-page-title` step itself. */
+  .font-display { letter-spacing: -0.01em; }
 }

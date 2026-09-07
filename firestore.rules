@@ -38,6 +38,192 @@ service cloud.firestore {
       return owns(existing) && owns(incoming);
     }
 
+    // ── Cashier permissions ─────────────────────────────────────────────
+    //
+    // THE ENFORCEMENT HALF of src/industry/permissions.js. The catalogue,
+    // its industry-awareness and its wording live in the client; what
+    // lives HERE is the only thing that actually stops a write, which is
+    // why every default below is duplicated from that file and why a test
+    // asserts the two never drift (src/industry/permissions.test.js).
+    //
+    // Shape of the stored map: businessSettings/{businessId} carries
+    // `cashierPermissions`, a map of permission key -> boolean, written by
+    // the OWNER alone (see the businessSettings rules). A key that is
+    // absent means "whatever the default is", which is what lets a
+    // business that has never opened the Team page keep working exactly
+    // as it did.
+    //
+    // Two invariants this section must keep:
+    //
+    //   An owner is never asked. `may()` short-circuits on isOwner(), so
+    //   no permission map can ever lock an owner out of their own
+    //   business — including an empty or malformed one.
+    //
+    //   A missing settings document is not a denial. A business that has
+    //   no businessSettings yet resolves to the defaults, exactly as the
+    //   client resolver does.
+
+    function settingsPath() {
+      return /databases/$(database)/documents/businessSettings/$(myBusinessId());
+    }
+
+    function myCashierPermissions() {
+      return exists(settingsPath()) && 'cashierPermissions' in get(settingsPath()).data
+             ? get(settingsPath()).data.cashierPermissions
+             : {};
+    }
+
+    /** The stored grant if there is one, otherwise the catalogue default. */
+    function cashierMay(permission, fallback) {
+      let perms = myCashierPermissions();
+      return perms is map && permission in perms ? perms[permission] == true : fallback;
+    }
+
+    function may(permission, fallback) {
+      return isStaff() && (isOwner() || cashierMay(permission, fallback));
+    }
+
+    // `cashierCanRecordExpenses` was FlowBiz's only cashier permission.
+    // An owner who switched it off meant it, so it remains the default for
+    // `expenses.record` until this business saves a permission of its own.
+    function legacyExpensesDefault() {
+      return !exists(settingsPath())
+             || !('cashierCanRecordExpenses' in get(settingsPath()).data)
+             || get(settingsPath()).data.cashierCanRecordExpenses != false;
+    }
+
+    function mayRecordExpenses() {
+      return isStaff() && (isOwner() || cashierMay('expenses.record', legacyExpensesDefault()));
+    }
+
+    // ── Cloud service entitlement ───────────────────────────────────────
+    //
+    // THE ENFORCEMENT HALF of src/licensing/. The resolver in that
+    // directory is the readable, testable model of the whole commercial
+    // arrangement; what lives HERE is the only thing that actually stops
+    // a write when a business's hosted services are not entitled.
+    //
+    // Rules cannot run that resolver, so the Worker reduces the entire
+    // question to ONE stored timestamp when it writes a service period:
+    // `licensing.cloudEntitledUntil` is the instant the grace window
+    // closes. A business with no `licensing` map at all — every free
+    // account, every monthly Pro account, every business created before
+    // this existed — has no such field and is entitled, which is exactly
+    // today's behaviour.
+    //
+    // WHAT THIS GATES, AND WHAT IT DELIBERATELY DOES NOT. It gates the
+    // two surfaces that consume real hosted resources and can be withheld
+    // without destroying anything: cloud STORAGE (productImages) and
+    // cloud-hosted DOCUMENT PUBLISHING (sharedDocuments). It does NOT
+    // gate sales, stock, customers, expenses or any other business
+    // record, and that is a decision, not an omission — FlowBiz records a
+    // sale into a local cache that syncs later, so denying that write
+    // would mean a rejected mutation, a reverted local write, and a
+    // shop's takings gone. Withholding a hosted convenience is a
+    // legitimate way to collect a service fee; destroying a customer's
+    // records is not. See docs/LICENSING.md.
+    //
+    // READS ARE NEVER GATED. A business whose services have lapsed can
+    // still see every product photo and every document it already owns.
+    // Nothing here deletes anything, ever.
+
+    // A MISSING BUSINESS DOCUMENT IS NOT A SUSPENSION. Every business
+    // created through Setup.jsx has one, but a rule that errors when it
+    // is absent would fail closed and stop a shop saving a product photo
+    // over a data problem that has nothing to do with billing. The
+    // absence of a licensing record means "no service period applies",
+    // which is the entitled answer.
+    function myBusiness() {
+      let bizPath = /databases/$(database)/documents/businesses/$(myBusinessId());
+      return exists(bizPath) ? get(bizPath).data : {};
+    }
+
+    function myLicensing() {
+      return myBusiness().get('licensing', {});
+    }
+
+    function mySubscription() {
+      return myBusiness().get('subscription', {});
+    }
+
+    function cloudServicesActive() {
+      let lic = myLicensing();
+      return lic.get('cloudSuspended', false) != true
+             && (lic.get('cloudEntitledUntil', null) == null
+                 || request.time < lic.get('cloudEntitledUntil', null));
+    }
+
+    // ── The LICENSED feature set ────────────────────────────────────────
+    //
+    // `features.pro` in src/licensing/entitlements.js, restated in the one
+    // language that can actually refuse a write. This is a DIFFERENT
+    // question from cloudServicesActive() above and the two must not be
+    // conflated: a lifetime customer whose annual services lapsed keeps
+    // every licensed feature and loses only the hosted ones.
+    //
+    // Both records the resolver reads are here, and neither is
+    // client-writable (see the businesses rules below) — a browser cannot
+    // grant itself a plan, so reading them is safe.
+    //
+    //   licensing.licenseType == 'lifetime'      the modern record
+    //   subscription.plan     == 'lifetime'      every licence sold before
+    //                                            that record existed
+    //   subscription.plan     == 'pro'           the monthly plan
+    //
+    // A revoked licence is not a licence. An `expiresAt` that is not a
+    // timestamp cannot be compared, and is treated as no expiry — the same
+    // direction the client resolver fails in, which is "the customer keeps
+    // working" rather than "the customer is locked out over a bad write".
+    function ownsPerpetualLicense() {
+      let lic = myLicensing();
+      let sub = mySubscription();
+      return (lic.get('licenseType', '') == 'lifetime'
+              || (sub.get('plan', '') == 'lifetime' && sub.get('status', '') != 'cancelled'))
+             && lic.get('licenseStatus', '') != 'revoked';
+    }
+
+    function proSubscriptionActive() {
+      let sub = mySubscription();
+      return sub.get('plan', '') == 'pro'
+             && sub.get('status', '') == 'active'
+             && (!(sub.get('expiresAt', null) is timestamp)
+                 || request.time < sub.get('expiresAt', null));
+    }
+
+    /** `can('features.pro')`, and with it `can('features.productPhotos')`. */
+    function hasProFeatures() {
+      return ownsPerpetualLicense() || proSubscriptionActive();
+    }
+
+    // ── Product photos as a licensed feature ────────────────────────────
+    //
+    // Whether a product document CLAIMS to have a photo — either the
+    // sidecar pointer the form writes, or a plain URL. Both are checked,
+    // because pointing `imageUrl` at somebody else's picture would be a
+    // photo obtained without the licence just as much as uploading one.
+    function claimsProductPhoto(data) {
+      return data.get('hasImage', false) == true
+             || (data.get('imageUrl', null) is string && data.get('imageUrl', '').size() > 0);
+    }
+
+    function touchesPhotoPointer(existing, incoming) {
+      return incoming.diff(existing).affectedKeys().hasAny(['hasImage', 'imageUrl', 'imageUpdatedAt']);
+    }
+
+    /**
+     * ADDING a photo pointer needs the licence. CLEARING one never does,
+     * and neither does an edit that leaves the pointer exactly as it was —
+     * so a business that had photos and no longer has the entitlement can
+     * still rename, reprice and restock every product it owns, and can
+     * still remove a photo it no longer wants. Nothing here deletes a
+     * stored image, and nothing here rewrites one.
+     */
+    function photoClaimAllowed(existing, incoming) {
+      return !touchesPhotoPointer(existing, incoming)
+             || !claimsProductPhoto(incoming)
+             || hasProFeatures();
+    }
+
     function isValidInviteClaim(inviteId, businessId, role) {
       let invite = get(/databases/$(database)/documents/staffInvites/$(inviteId)).data;
       return invite.claimed == false && invite.businessId == businessId && invite.role == role;
@@ -52,31 +238,229 @@ service cloud.firestore {
       allow read, write: if false; // Accessible only by backend Service Account
     }
 
+    // Operational events (webhook failures, delivery failures, server-side
+    // errors). Written ONLY by the Cloudflare Worker through the service
+    // account, which bypasses these rules; read only through the admin API,
+    // which re-verifies the caller is a platform administrator. No browser
+    // — merchant or admin — ever touches this collection directly, so a
+    // signed-in user cannot read the platform's error log or forge an
+    // entry into it.
+    match /opsEvents/{eventId} {
+      allow read, write: if false; // Accessible only by backend Service Account
+    }
+
+    // Authentication activity: who signed in, who failed, from where.
+    //
+    // NO BROWSER TOUCHES THIS COLLECTION. It is written only by the
+    // Cloudflare Worker through the service account (which bypasses these
+    // rules) at POST /api/auth/login-event, and read only through the
+    // admin API, which re-verifies the caller is a platform administrator
+    // holding `security.read`. That is the whole point: telemetry a
+    // client can write directly is telemetry a client can forge, and a
+    // security log nobody can trust is worse than none.
+    match /loginEvents/{eventId} {
+      allow read, write: if false; // Accessible only by backend Service Account
+    }
+
     // ── Businesses ──────────────────────────────────────────────────────
     match /businesses/{businessId} {
       allow get: if isStaff() && myBusinessId() == businessId;
+      // `createdBy` MUST NAME THE CALLER. It is the proof the owner-profile
+      // rule below leans on, so if a caller could pick it freely that rule
+      // would be built on sand: forge a business in a victim's name, then
+      // create an owner profile against it.
       allow create: if isSignedIn()
+                    && request.resource.data.createdBy == request.auth.uid
                     && request.resource.data.subscription.plan == 'free';
+      // NEITHER BILLING RECORD IS CLIENT-WRITABLE. `subscription` is the
+      // monthly plan; `licensing` is the perpetual licence, the annual
+      // services period, the grace window and the administrative cloud
+      // suspension. Both are written only by the Cloudflare Worker
+      // through the service account, which bypasses these rules — so a
+      // browser cannot grant itself a licence, push its own expiry date
+      // out, or lift a suspension an administrator applied.
       allow update: if isOwner() && myBusinessId() == businessId
-                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription']);
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription', 'licensing']);
       allow delete: if false;
     }
 
+    // The barcode index and the product-code counter are not data in
+    // their own right — they are bookkeeping that createProduct() and
+    // updateProduct() write in the same batch as the product. Whoever may
+    // manage the catalogue must be able to write them, or every product
+    // save with a barcode fails half-way.
     match /barcodeIndex/{docId} {
-      allow read: if isOwner() && owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && owns(request.resource.data);
+      allow read: if owns(resource.data) && may('catalogue.manage', false);
+      allow create: if owns(request.resource.data) && may('catalogue.manage', false);
+      allow update: if owns(request.resource.data) && may('catalogue.manage', false);
       allow delete: if isOwner() && owns(resource.data);
     }
 
     match /productCodeCounters/{businessId} {
-      allow read, write: if isOwner() && myBusinessId() == businessId;
+      allow read, write: if myBusinessId() == businessId && may('catalogue.manage', false);
+    }
+
+    // ── Industry configuration ────────────────────────────────────────
+    //
+    // `industryProfile` and `capabilityOverrides` live here because this
+    // document already has exactly one shared listener per signed-in
+    // business, so the whole industry layer costs zero extra reads.
+    //
+    // They are PRESENTATION AND BEHAVIOUR, never authorisation. Nothing a
+    // client can write into this document widens what it may read or
+    // write anywhere else — every other rule in this file still decides
+    // that on `businessId` and `role` alone. What these two functions do
+    // is stop a client storing arbitrary data in a document the whole
+    // business reads, and stop it granting itself a capability that the
+    // product deliberately moves only with the profile (`orders`,
+    // `batches`), which is why those two are absent from the list below.
+
+    function isKnownIndustryProfile(value) {
+      return value in [
+        'GENERAL_RETAIL', 'SUPERMARKET', 'HARDWARE', 'BOUTIQUE', 'ELECTRONICS', 'WINES_AND_SPIRITS',
+        'RESTAURANT', 'CAFE', 'FAST_FOOD', 'BAKERY', 'BAR',
+        'SALON', 'BARBER', 'GENERAL_SERVICES',
+        'PHARMACY'
+      ];
+    }
+
+    function industryProfileOk(data) {
+      return !('industryProfile' in data.keys())
+             || data.industryProfile == null
+             || isKnownIndustryProfile(data.industryProfile);
+    }
+
+    // Only the owner-configurable capabilities may appear, and each one
+    // must be a boolean. Keys the client invents are refused outright
+    // rather than silently stored.
+    function capabilityOverridesOk(data) {
+      return !('capabilityOverrides' in data.keys())
+             || (
+               data.capabilityOverrides is map
+               && data.capabilityOverrides.keys().hasOnly([
+                 'units', 'variants', 'barcodeLabels', 'services',
+                 'tables', 'modifiers', 'diningModes', 'kitchen',
+                 'recipes', 'production', 'packSizes', 'ageRestriction', 'expiryAlerts'
+               ])
+               && data.capabilityOverrides.values().hasOnly([true, false])
+             );
+    }
+
+    // Table names for the food profiles are a plain list of labels on the
+    // settings document — there is no floor plan and no table collection.
+    // Bounded so it cannot be used to grow a document everyone reads.
+    function tablesOk(data) {
+      return !('tables' in data.keys())
+             || (data.tables is list && data.tables.size() <= 100);
+    }
+
+    // The three presentation overrides an owner may store from the
+    // Customize page. Bounded exactly as the capability overrides are,
+    // and for the same reason: this is a document every device in the
+    // business reads and renders on every screen.
+    //
+    // They are checked for SHAPE here, not for meaning. Which unit or
+    // widget is valid depends on the profile, and re-deriving a profile
+    // table inside a security rule would be a fourth copy of it to keep
+    // in step. The client resolver and the Worker both drop anything the
+    // profile does not offer, and an unknown value renders as nothing —
+    // so shape and bounds are what the rules must actually guarantee.
+    function unitOverridesOk(data) {
+      return !('unitOverrides' in data.keys())
+             || data.unitOverrides == null
+             || (data.unitOverrides is list && data.unitOverrides.size() <= 20);
+    }
+
+    function dashboardOverridesOk(data) {
+      return !('dashboardOverrides' in data.keys())
+             || data.dashboardOverrides == null
+             || (data.dashboardOverrides is list && data.dashboardOverrides.size() <= 20);
+    }
+
+    // Only the three words an owner may rename, each a short string. The
+    // whole terms object is deliberately NOT exposed — see
+    // OVERRIDABLE_TERMS in src/industry/config.js.
+    function termOverridesOk(data) {
+      return !('termOverrides' in data.keys())
+             || (
+               data.termOverrides is map
+               && data.termOverrides.keys().hasOnly([
+                 'catalogue', 'catalogueItem', 'catalogueItemPlural'
+               ])
+             );
+    }
+
+    // The business's own half of the category list — the words it added,
+    // the trade defaults it took off, and the running order it arranged.
+    // The trade's own list is code, never data, so nothing here can be
+    // used to store one.
+    //
+    // Shape and bounds only, exactly as the other override lists: which
+    // words are meaningful depends on the profile, and re-deriving a
+    // profile table inside a security rule would be a fourth copy of it
+    // to keep in step. `categories` is still bounded because the legacy
+    // full list is still written as a compatibility mirror.
+    function categoryListOk(data, field) {
+      return !(field in data.keys())
+             || data[field] == null
+             || (data[field] is list && data[field].size() <= 60);
+    }
+
+    function categoryModelOk(data) {
+      return categoryListOk(data, 'categories')
+             && categoryListOk(data, 'customCategories')
+             && categoryListOk(data, 'hiddenCategories')
+             && categoryListOk(data, 'categoryOrder');
+    }
+
+    // The EXPENSE category list, in the same two-part shape and bounded
+    // for the same reason — it rides on the document every device in the
+    // business reads. FlowBiz's own defaults are code, so nothing here can
+    // be used to store a list; only the diff against them.
+    function expenseCategoryModelOk(data) {
+      return categoryListOk(data, 'customExpenseCategories')
+             && categoryListOk(data, 'hiddenExpenseCategories')
+             && categoryListOk(data, 'expenseCategoryOrder');
+    }
+
+    // The cashier permission map: known keys only, booleans only. Keys a
+    // client invents are refused outright rather than silently stored, and
+    // the list is duplicated from src/industry/permissions.js with a test
+    // asserting the two never drift.
+    function cashierPermissionsOk(data) {
+      return !('cashierPermissions' in data.keys())
+             || (
+               data.cashierPermissions is map
+               && data.cashierPermissions.keys().hasOnly([
+                 'sales.record', 'sales.credit', 'sales.return', 'sales.history',
+                 'orders.view', 'orders.create', 'orders.update', 'orders.close',
+                 'catalogue.view', 'catalogue.manage',
+                 'stock.receive', 'stock.count', 'stock.suppliers', 'stock.expiry', 'stock.production',
+                 'customers.view', 'customers.manage', 'debtors.collect',
+                 'expenses.record', 'day.open', 'day.close', 'reports.view'
+               ])
+               && data.cashierPermissions.values().hasOnly([true, false])
+             );
+    }
+
+    function industryConfigOk(data) {
+      return industryProfileOk(data)
+             && cashierPermissionsOk(data)
+             && capabilityOverridesOk(data)
+             && categoryModelOk(data)
+             && expenseCategoryModelOk(data)
+             && tablesOk(data)
+             && unitOverridesOk(data)
+             && dashboardOverridesOk(data)
+             && termOverridesOk(data);
     }
 
     match /businessSettings/{businessId} {
       allow read: if isStaff() && myBusinessId() == businessId;
-      allow create: if isSignedIn() && request.resource.data.businessId == businessId;
-      allow update: if isOwner() && myBusinessId() == businessId;
+      allow create: if isSignedIn() && request.resource.data.businessId == businessId
+                    && industryConfigOk(request.resource.data);
+      allow update: if isOwner() && myBusinessId() == businessId
+                    && industryConfigOk(request.resource.data);
       allow delete: if false;
     }
 
@@ -85,23 +469,67 @@ service cloud.firestore {
       allow get: if isSignedIn() && request.auth.uid == userId;
       allow list: if isOwner() && resource.data.businessId == myBusinessId();
 
+      // CROSS-TENANT TAKEOVER, and what stops it.
+      //
+      // This rule validated the INVITE path properly and let the OWNER
+      // path through on any `businessId` string at all. A businessId is
+      // not secret — `staffInvites` is deliberately `allow get: if true`
+      // so a join link works before sign-in — so any account that could
+      // sign up could write itself an owner profile carrying a victim's
+      // businessId and inherit that entire workspace: every product,
+      // customer, sale and setting, with read, write and delete.
+      //
+      // An owner profile may now only be created for a business whose
+      // `createdBy` is the caller.
+      //
+      // getAfter(), NOT get(), and this is the crux. Sign-up writes the
+      // business, the profile and the settings in ONE writeBatch, so when
+      // this rule runs the business does not exist yet and a plain get()
+      // sees nothing — the check would refuse every genuine sign-up.
+      // getAfter() evaluates against the state the commit PROPOSES, which
+      // is what makes an atomic batch and an ownership check compatible.
+      // The businesses rule above is what makes `createdBy` trustworthy.
       allow create: if isSignedIn() && request.auth.uid == userId
                     && request.resource.data.role in ['owner', 'cashier']
                     && request.resource.data.businessId is string
                     && request.resource.data.businessId.size() > 0
                     && (
-                      request.resource.data.role == 'owner'
+                      (
+                        request.resource.data.role == 'owner'
+                        && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.createdBy == request.auth.uid
+                      )
                       ||
                       (
                         request.resource.data.claimedFromInviteId is string
                         && isValidInviteClaim(request.resource.data.claimedFromInviteId, request.resource.data.businessId, request.resource.data.role)
                       )
                     );
+      // Two update paths, and the second one is the dangerous one.
+      //
+      // An OWNER may edit anyone in their own business, in either
+      // direction, which is how staff are stood down and brought back.
+      //
+      // A PERSON editing their OWN record may correct their details, and
+      // that is all. It already could not change `role` or `businessId`;
+      // it must also not be able to change the fields that say whether
+      // the account is switched ON. `active` is how an owner deactivates
+      // a cashier AND how a platform suspension closes a whole workspace
+      // (the Worker stamps `deactivatedByWorkspace` on the accounts it
+      // took, so reactivation can restore exactly those). Leaving those
+      // three fields inside the self-update branch made both of those
+      // advisory: a suspended account could PATCH `active: true` onto its
+      // own document and walk straight back in, and could clear the
+      // suspension stamp so the platform's reactivation no longer knew
+      // what it had taken. Neither has any legitimate client caller —
+      // nothing in the app writes its own `active` — so the branch simply
+      // refuses to carry them.
       allow update: if (isOwner() && ownsUpdate(resource.data, request.resource.data))
                     ||
                     (isSignedIn() && request.auth.uid == userId
                      && request.resource.data.role == resource.data.role
-                     && request.resource.data.businessId == resource.data.businessId);
+                     && request.resource.data.businessId == resource.data.businessId
+                     && !request.resource.data.diff(resource.data).affectedKeys()
+                          .hasAny(['active', 'deactivatedByWorkspace', 'deactivationReason']));
       allow delete: if isOwner() && owns(resource.data) && userId != request.auth.uid;
     }
 
@@ -143,103 +571,288 @@ service cloud.firestore {
     // ── Business operational data ──────────────────────────────────────
     match /products/{id} {
       allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data) && (
-        isOwner() ||
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt'])
-      );
+      // Creating and editing an item is `catalogue.manage`, which is OFF
+      // for a cashier unless the owner grants it. DELETING one is nobody
+      // but the owner's, and is not a permission anyone can be given.
+      //
+      // A product may only be CREATED carrying a photo pointer by a
+      // business licensed for photos. A product with no photo is
+      // unaffected, which is every Starter product.
+      allow create: if owns(request.resource.data) && may('catalogue.manage', false)
+                    && (!claimsProductPhoto(request.resource.data) || hasProFeatures());
+      // A cashier may move INVENTORY QUANTITY and nothing else — not a
+      // price, not a name, not a supplier. `variantStock` is added to the
+      // same allowance for exactly the same reason `stock` is there: a
+      // sale of a size-M shirt has to decrement that size, and a cashier
+      // must be able to complete a sale. It is the identical class of
+      // field (a quantity), written by the identical code path (one
+      // writeBatch alongside the sale document), and it widens nothing
+      // else. See utils/variants.js for why variant quantities live in a
+      // map rather than inside the `variants` array: Firestore can only
+      // atomically increment a nested map field.
+      //
+      // The photo pointer (`hasImage`, `imageUrl`, `imageUpdatedAt`) is the
+      // product half of the licensed-feature check on `productImages`
+      // below. Without it a Starter business could not store a photo but
+      // could still point its product at one — a URL it already had, or
+      // somebody else's — and the counter would render it.
+      allow update: if ownsUpdate(resource.data, request.resource.data)
+        && photoClaimAllowed(resource.data, request.resource.data)
+        && (
+          may('catalogue.manage', false) ||
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'variantStock', 'updatedAt'])
+        );
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    // Product photos live here, one document per photo, keyed
+    // `{businessId}__{productId}`. They are deliberately NOT a field on
+    // the product: `products` is read through a live onSnapshot over the
+    // whole collection, so a base64 field there would re-ship every
+    // photo to every device on every sale. See utils/productImages.js.
+    //
+    // The size guard is the real teeth of this rule — a Firestore
+    // document is capped at 1 MiB, and a shop that pastes an uncompressed
+    // camera JPEG straight in would both hit that cap and make the
+    // counter unusable on a weak connection. The client optimiser targets
+    // 45KB (~62KB base64); 250,000 characters is a generous ceiling.
+    //
+    // TWO SEPARATE ENTITLEMENTS GUARD A WRITE HERE, and they answer
+    // different questions.
+    //
+    // THE LICENCE. Product photos are a Pro feature, so storing one needs
+    // `hasProFeatures()` — Pro or a perpetual licence. A Starter business
+    // has no photo entitlement, and this is the line that means it: no
+    // amount of devtools, no hand-built SDK call and no offline write
+    // that syncs later gets a photo into this collection without one.
+    //
+    // CLOUD STORAGE. Storing a photo also consumes hosted storage, so a
+    // new or replaced photo needs an active cloud services entitlement on
+    // top. A lapsed service period is not a lost licence and the reverse
+    // is not true either, which is why both are asked.
+    //
+    // READING one never needs either, and DELETING one never does: a
+    // business whose services lapsed — or whose Pro month ran out — keeps
+    // every photo it has and stays able to tidy its own catalogue. No
+    // expiry, no downgrade and no administrative suspension removes a
+    // single stored image.
+    match /productImages/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data) && may('catalogue.manage', false)
+                    && hasProFeatures()
+                    && cloudServicesActive()
+                    && request.resource.data.dataUrl is string
+                    && request.resource.data.dataUrl.size() < 250000;
+      allow update: if ownsUpdate(resource.data, request.resource.data) && may('catalogue.manage', false)
+                    && hasProFeatures()
+                    && cloudServicesActive()
+                    && request.resource.data.dataUrl is string
+                    && request.resource.data.dataUrl.size() < 250000;
       allow delete: if isOwner() && owns(resource.data);
     }
 
     match /suppliers/{id} {
       allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow create: if owns(request.resource.data) && may('stock.suppliers', false);
+      allow update: if ownsUpdate(resource.data, request.resource.data) && may('stock.suppliers', false);
       allow delete: if isOwner() && owns(resource.data);
     }
 
     match /sales/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
+      // Selling is the counter's whole job, so it is ON by default — but
+      // it is still a permission, so an owner can stand a cashier down
+      // without deleting their account.
+      allow create: if owns(request.resource.data) && may('sales.record', true);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    // ── Product batches (pharmacy) ─────────────────────────────────
+    //
+    // One document per delivery of one product: batch number, expiry
+    // date, quantity received and its source — the four things Kenya's
+    // PPB Good Pharmacy Practice guidelines require a retail pharmacy to
+    // record for stock received.
+    //
+    // Creating a batch is receiving stock, so it is owner-only, exactly
+    // like `purchases` and `stockAdjustments`. UPDATING one is not: a
+    // cashier completing a sale has to decrement the batch it came out
+    // of, in the same batch write as the sale. That update is therefore
+    // restricted to the quantity fields alone — a cashier can move a
+    // number, and cannot touch the batch number, the expiry date, the
+    // cost or the source, which are the parts that are a record.
+    match /productBatches/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data) && may('stock.receive', false);
+      allow update: if ownsUpdate(resource.data, request.resource.data) && (
+        isOwner() ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['remainingQuantity', 'updatedAt'])
+      );
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    // ── Open orders (food profiles) ────────────────────────────────
+    //
+    // An order is an UNPAID, REOPENABLE ticket. It holds no inventory —
+    // stock moves only when it is charged, in the same batch that writes
+    // the sale — so these rules protect a working document, not a
+    // financial record. The permissions therefore match `sales`: a
+    // cashier may open, amend and close a ticket (that is the job), and
+    // only an owner may delete one. `businessId` isolation is identical
+    // to every other collection in this file.
+    match /orders/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data) && may('orders.create', true);
+
+      // CHARGING A TICKET IS NOT AMENDING ONE, and until now the rules
+      // could not tell the two apart. `orders.close` declares itself
+      // enforced by a rule (see src/industry/permissions.js), but no rule
+      // named it: closing a ticket writes `saleId` and `closedAt` on this
+      // document plus a `sales` document, and both of those were already
+      // covered by `orders.update` and `sales.record`. An owner who
+      // switched "Charge a ticket" off therefore changed nothing at all.
+      //
+      // `saleId` and `closedAt` are what a CHARGE writes and what nothing
+      // else writes — cancelling stamps `cancelledAt`/`cancelledBy` and
+      // never these — so they are the fields the rule watches, exactly as
+      // `dailySessions` watches `closedAt`/`closedBy` below.
+      allow update: if ownsUpdate(resource.data, request.resource.data)
+                    && may('orders.update', true)
+                    && (
+                      may('orders.close', true)
+                      || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['saleId', 'closedAt'])
+                    );
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    // ── Production runs (bakery) ───────────────────────────────────
+    //
+    // The record of a batch being made: finished goods in, ingredients
+    // out. Owner-created for the same reason `purchases` and
+    // `stockAdjustments` are — it is a stock movement that is not a sale.
+    match /productions/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data) && may('stock.production', false);
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
     match /customers/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data);
+      allow create: if owns(request.resource.data) && may('customers.manage', true);
+      allow update: if ownsUpdate(resource.data, request.resource.data) && may('customers.manage', true);
       allow delete: if isOwner() && owns(resource.data);
     }
 
     match /creditSales/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if ownsUpdate(resource.data, request.resource.data);
+      allow create: if owns(request.resource.data) && may('sales.credit', true);
+      // A repayment reduces what is owed on the credit sale it is paying
+      // off, in the same batch as the repayment document.
+      allow update: if ownsUpdate(resource.data, request.resource.data) && may('debtors.collect', true);
       allow delete: if isOwner() && owns(resource.data);
     }
 
     match /repayments/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
+      allow create: if owns(request.resource.data) && may('debtors.collect', true);
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
     match /debtPaymentReceipts/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
+      allow create: if owns(request.resource.data) && may('debtors.collect', true);
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
+    // CLOUD-HOSTED DOCUMENT PUBLISHING. A shared document is served to the
+    // public internet by the Worker at /r/<token>, which is a hosted
+    // service, so PUBLISHING a new one needs an active cloud services
+    // entitlement. Links already issued keep working, and the merchant
+    // keeps reading and deleting their own. Printing and downloading a
+    // receipt happen entirely in the browser and are not affected at all.
     match /sharedDocuments/{token} {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data)
+                    && cloudServicesActive()
                     && request.resource.data.documentType in ['receipt', 'invoice', 'debtPaymentReceipt'];
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
+    // A refund takes money back OUT of the till, which is why it is the
+    // one counter action that is off by default. Until now any staff
+    // member could write one; the button was owner-only but the rule was
+    // not, so the boundary existed in the UI alone.
     match /refunds/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
+      allow create: if owns(request.resource.data) && may('sales.return', false);
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
     match /expenses/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
+      allow create: if owns(request.resource.data) && mayRecordExpenses();
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
     match /purchases/{id} {
       allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
+      allow create: if owns(request.resource.data) && may('stock.receive', false);
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
     match /supplierPayments/{id} {
       allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
+      allow create: if owns(request.resource.data) && may('stock.receive', false);
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
     match /stockAdjustments/{id} {
       allow read: if owns(resource.data);
-      allow create: if isOwner() && owns(request.resource.data);
+      allow create: if owns(request.resource.data) && may('stock.count', false);
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
+    // ── Payments: READ-ONLY, and only your own ──────────────────────────
+    //
+    // The customer's billing history. Every document here is written by
+    // the Cloudflare Worker alone — /api/paystack/initialize records the
+    // pending payment and the webhook confirms it — and NOTHING a browser
+    // can do reaches this collection with a write. That is what keeps it
+    // an honest record: a merchant who could write here could mint
+    // themselves a KES 3,000 renewal.
+    //
+    // The read is new. Until now the collection had no rule at all, so it
+    // was denied outright and a merchant could not see what they had paid
+    // for without asking support. An OWNER may now read their own
+    // business's payments and nothing else — a cashier may not, because a
+    // shop's billing is not a cashier's business.
+    match /payments/{reference} {
+      allow read: if isOwner() && resource.data.businessId == myBusinessId();
+      allow write: if false;
+    }
+
+    // Opening the counter is part of starting a shift; CLOSING the day is
+    // counting the till and locking the takings, which is a separate
+    // permission and is off by default. `closedAt` and `closedBy` are the
+    // fields that do it, in both directions — writing them closes the day
+    // and clearing them reopens it — so they are what the rule watches.
     match /dailySessions/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update: if isStaff() && ownsUpdate(resource.data, request.resource.data);
+      allow create: if owns(request.resource.data) && may('day.open', true);
+      allow update: if ownsUpdate(resource.data, request.resource.data) && (
+        may('day.close', false) ||
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['closedAt', 'closedBy'])
+      );
       allow delete: if isOwner() && owns(resource.data);
     }
   }

@@ -25,7 +25,7 @@ export default function AddCustomerModal({ open, onClose, onSave, existingCustom
 
     if (!trimmedName) { toast.error('Enter a customer name.'); return; }
     if (trimmedPhone && !isValidWhatsAppPhone(trimmedPhone)) {
-      toast.error("That phone number doesn't look right — check it and try again.");
+      toast.error("That phone number doesn't look right. Check it and try again.");
       return;
     }
 
@@ -77,7 +77,7 @@ export default function AddCustomerModal({ open, onClose, onSave, existingCustom
             placeholder="07xx xxx xxx"
             disabled={busy}
           />
-          <p className="mt-1 text-xs text-ink-400">Needed later to send WhatsApp reminders and receipts.</p>
+          <p className="mt-1 text-secondary text-ink-500">Needed later to send WhatsApp reminders and receipts.</p>
         </div>
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="btn-secondary" onClick={handleClose} disabled={busy}>Cancel</button>

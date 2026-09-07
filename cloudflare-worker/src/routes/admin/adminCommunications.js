@@ -1,6 +1,8 @@
 // cloudflare-worker/src/routes/admin/adminCommunications.js
 import { json, errorResponse } from '../../lib/response.js';
-import { verifyAdminAuth, logAdminAction } from '../../lib/adminAuth.js';
+import { verifyAdminAuth, requirePermission, logAdminAction, requestContext } from '../../lib/adminAuth.js';
+import { assertBusinessId } from '../../lib/validate.js';
+import { recordOpsEvent, EVENT_TYPES, maskEmail } from '../../lib/opsEvents.js';
 import { sendEmail } from '../../lib/resend.js';
 
 function supportEmailShell(bodyHtml, {
@@ -11,13 +13,13 @@ function supportEmailShell(bodyHtml, {
   showWhatsappButton = true,
   whatsappButtonLabel = 'WhatsApp Us',
 } = {}) {
-  const BRAND_GREEN = '#1a623c';
-  const BRAND_SAND = '#faf6ef';
+  const BRAND_BLUE = '#1D70F5';
+  const CANVAS = '#F4F6F9';
   const WHATSAPP_GREEN = '#25D366';
-  const INK_900 = '#15171d';
-  const INK_700 = '#363b48';
-  const INK_400 = '#767f8f';
-  const INK_100 = '#e8eaed';
+  const INK_900 = '#0F1522';
+  const INK_700 = '#4A5468';
+  const INK_400 = '#7A8598';
+  const INK_100 = '#E2E6EC';
 
   const waUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappText)}`;
 
@@ -36,18 +38,18 @@ function supportEmailShell(bodyHtml, {
     }
   </style>
 </head>
-<body style="margin:0;padding:0;background:${BRAND_SAND};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-text-size-adjust:100%;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="outer-table" style="background:${BRAND_SAND};padding:24px 8px;">
+<body style="margin:0;padding:0;background:${CANVAS};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-text-size-adjust:100%;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="outer-table" style="background:${CANVAS};padding:24px 8px;">
     <tr><td align="center">
       <table role="presentation" width="100%" class="main-card" style="max-width:620px;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.05);border:1px solid ${INK_100};">
         
         <!-- Header Banner -->
-        <tr><td class="header-cell" style="background:${BRAND_GREEN};padding:20px 26px;">
+        <tr><td class="header-cell" style="background:${BRAND_BLUE};padding:20px 26px;">
           <table width="100%" cellpadding="0" cellspacing="0">
             <tr>
               <td align="left" style="vertical-align:middle;">
                 <span style="color:#ffffff;font-size:19px;font-weight:800;letter-spacing:0.02em;">FlowBiz</span>
-                ${badge ? `<span style="color:#c3eed3;font-size:11px;font-weight:600;margin-left:10px;text-transform:uppercase;letter-spacing:0.06em;">${badge}</span>` : ''}
+                ${badge ? `<span style="color:#D9E7FD;font-size:11px;font-weight:600;margin-left:10px;text-transform:uppercase;letter-spacing:0.06em;">${badge}</span>` : ''}
               </td>
             </tr>
           </table>
@@ -79,7 +81,7 @@ function supportEmailShell(bodyHtml, {
           </p>
           <p style="margin:0 0 10px;font-size:12px;color:${INK_400};line-height:1.4;">
             Reply to this email or chat with our team on WhatsApp: 
-            <a href="${waUrl}" style="color:${BRAND_GREEN};font-weight:700;text-decoration:none;">+254 741 104 469</a>.
+            <a href="${waUrl}" style="color:${BRAND_BLUE};font-weight:700;text-decoration:none;">+254 741 104 469</a>.
           </p>
           <p style="margin:0;font-size:11px;color:#9aa2b1;">
             FlowBiz Business Manager · Nairobi, Kenya · support@flowbiz.co.ke
@@ -101,8 +103,10 @@ export async function handleAdminSendEmail(request, env) {
     return errorResponse(err.message, err.status || 401);
   }
 
-  if (admin.role !== 'SUPER_ADMIN' && admin.role !== 'ADMIN') {
-    return errorResponse('Only Super Admins or Admins can send platform communications.', 403);
+  try {
+    requirePermission(admin, 'comms.send');
+  } catch (err) {
+    return errorResponse(err.message, err.status || 403);
   }
 
   let body;
@@ -129,6 +133,17 @@ export async function handleAdminSendEmail(request, env) {
   if (!to || !subject || !htmlContent) {
     return errorResponse('Recipient (to), subject, and htmlContent are required.', 400);
   }
+  if (typeof to !== 'string' || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to.trim())) {
+    return errorResponse('A single valid recipient email address is required.', 400);
+  }
+  let scopedBusinessId = null;
+  if (businessId) {
+    try {
+      scopedBusinessId = assertBusinessId(businessId);
+    } catch (err) {
+      return errorResponse(err.message, 400);
+    }
+  }
 
   const wrappedHtml = supportEmailShell(htmlContent, {
     title: title || subject,
@@ -147,12 +162,26 @@ export async function handleAdminSendEmail(request, env) {
       text: plainText || htmlContent.replace(/<[^>]+>/g, ''),
     });
   } catch (err) {
+    await recordOpsEvent(env, {
+      type: EVENT_TYPES.EMAIL_SEND_FAILED,
+      severity: 'error',
+      source: 'admin',
+      message: 'An administrative communication could not be delivered.',
+      businessId: scopedBusinessId,
+      context: { recipient: maskEmail(to) || 'unknown', reason: err.message },
+    });
     return errorResponse(`Failed to send communication: ${err.message}`, 502);
   }
 
+  const ctx = requestContext(request);
+  // The audit entry records that a message went out and to whom, in
+  // masked form. The audit trail is not a copy of every email FlowBiz
+  // has ever sent to a merchant.
   await logAdminAction(env, admin, 'SEND_COMMUNICATION', {
-    targetBusinessId: businessId,
-    details: { to, subject, title: title || subject },
+    targetBusinessId: scopedBusinessId,
+    details: { recipient: maskEmail(to), subject: String(subject).slice(0, 200) },
+    ip: ctx.ip,
+    userAgent: ctx.userAgent,
   });
 
   return json({ success: true });

@@ -1,6 +1,21 @@
+// cloudflare-worker/src/routes/admin/adminBusinessData.js
+//
+// GET /api/admin/businesses/:id/data?collection=…
+//
+// The ORIGINAL business-data endpoint, kept working because things still
+// call it. New work should use /inspect (routes/admin/adminInspector.js),
+// which is cursor-paginated, field-projected and date-filterable; this one
+// is offset-paginated, and Firestore bills an offset as if the skipped
+// documents were read.
+//
+// What changed here: the businessId is validated before it can reach a
+// Firestore path, the business must exist, the caller must hold
+// `business.inspect`, and the returned rows are re-checked against the
+// requested businessId on the way out.
 import { json, errorResponse } from '../../lib/response.js';
-import { verifyAdminAuth, logAdminAction } from '../../lib/adminAuth.js';
-import { queryCollection } from '../../lib/firestore.js';
+import { verifyAdminAuth, requirePermission, logAdminAction, requestContext } from '../../lib/adminAuth.js';
+import { queryCollection, getDocument } from '../../lib/firestore.js';
+import { assertBusinessId, intParam, searchParam } from '../../lib/validate.js';
 
 const ALLOWED_COLLECTIONS = [
   'products',
@@ -20,10 +35,13 @@ const ALLOWED_COLLECTIONS = [
   'sharedDocuments',
 ];
 
-export async function handleAdminBusinessData(request, env, businessId, url) {
+export async function handleAdminBusinessData(request, env, rawBusinessId, url) {
   let admin;
+  let businessId;
   try {
     admin = await verifyAdminAuth(request, env);
+    requirePermission(admin, 'business.inspect');
+    businessId = assertBusinessId(rawBusinessId);
   } catch (err) {
     return errorResponse(err.message, err.status || 401);
   }
@@ -33,9 +51,13 @@ export async function handleAdminBusinessData(request, env, businessId, url) {
     return errorResponse(`Invalid or unsupported collection: ${collectionName}`, 400);
   }
 
-  const limit = Math.min(200, Math.max(10, parseInt(url.searchParams.get('limit') || '50', 10)));
-  const offset = parseInt(url.searchParams.get('offset') || '0', 10) || null;
-  const search = (url.searchParams.get('search') || '').toLowerCase().trim();
+  const business = await getDocument(env, 'businesses', businessId);
+  if (!business) return errorResponse('Business not found.', 404);
+
+  const limit = intParam(url, 'limit', { fallback: 50, min: 10, max: 200 });
+  const rawOffset = intParam(url, 'offset', { fallback: 0, min: 0, max: 2000 });
+  const offset = rawOffset || null;
+  const search = searchParam(url, 'search');
 
   const ORDER_FIELD = {
     sales: 'soldAt',
@@ -70,10 +92,20 @@ export async function handleAdminBusinessData(request, env, businessId, url) {
     });
   }
 
+  // Defence in depth: the query scoped to businessId server-side, and
+  // this asserts it again before anything is serialised.
+  const foreign = filtered.filter((d) => d.businessId && d.businessId !== businessId);
+  if (foreign.length) {
+    console.error(`[BusinessData] SCOPE VIOLATION in ${collectionName} for ${businessId}`);
+    return errorResponse('Request aborted: scope check failed.', 500);
+  }
+
+  const ctx = requestContext(request);
   await logAdminAction(env, admin, 'VIEW_BUSINESS_DATA', {
     targetBusinessId: businessId,
     targetResource: collectionName,
-    details: { count: filtered.length, search: search || undefined },
+    details: { searched: Boolean(search) },
+    ip: ctx.ip,
   });
 
   return json({

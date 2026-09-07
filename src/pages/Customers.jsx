@@ -5,10 +5,15 @@ import { UserPlus, MessageCircle, Pencil } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { tenantQuery } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import { useSettings } from '../hooks/useSettings';
+import { useSettings } from '../contexts/SettingsContext';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
 import AddCustomerModal from '../components/customers/AddCustomerModal';
+import PageHeader from '../components/ui/PageHeader';
+import Toolbar from '../components/ui/Toolbar';
+import DataTable from '../components/ui/DataTable';
+import StatusPill from '../components/ui/StatusPill';
+import Money from '../components/ui/Money';
 import { createCustomer, updateCustomer } from '../utils/customers';
 import { formatKES } from '../utils/currency';
 import { formatDate } from '../utils/dateRanges';
@@ -60,10 +65,10 @@ export default function Customers() {
     try {
       if (editingCustomer) {
         const { queuedOffline } = await updateCustomer(editingCustomer.customerId, { name, phone }, businessId);
-        toast.success(queuedOffline ? "Updated offline — it'll sync later." : 'Customer updated successfully.');
+        toast.success(queuedOffline ? 'Saved offline. It will sync when you reconnect.' : 'Customer updated successfully.');
       } else {
         const { queuedOffline } = await createCustomer({ name, phone }, businessId);
-        toast.success(queuedOffline ? "Saved offline — it'll sync later." : 'Customer saved successfully.');
+        toast.success(queuedOffline ? 'Saved offline. It will sync when you reconnect.' : 'Customer saved successfully.');
       }
       setModalOpen(false);
       setEditingCustomer(null);
@@ -93,68 +98,118 @@ export default function Customers() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-bold text-ink-900">Customers</h1>
-          <p className="text-sm text-ink-400">Total outstanding debt: <span className="font-semibold text-rust-600">{formatKES(totalOut)}</span></p>
-        </div>
-        <button
-          type="button"
-          onClick={() => { setEditingCustomer(null); setModalOpen(true); }}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-600 shadow-sm hover:bg-ink-50 active:bg-ink-100"
-          title="Add customer"
-        >
-          <UserPlus className="h-5 w-5" strokeWidth={1.75} />
-        </button>
-      </div>
-      <input className="input" placeholder="Search customer…" value={search} onChange={e => setSearch(e.target.value)} />
-      {loading ? <LoadingSpinner /> : customerList.length === 0 ? (
-        <EmptyState title="No customers found" description="Add a customer, or they'll appear here after a credit sale." />
+    <div className="mx-auto max-w-5xl space-y-6">
+      <PageHeader
+        title="Customers"
+        description={<>Total outstanding <Money value={totalOut} tone={totalOut > 0 ? 'negative' : undefined} /></>}
+        actions={
+          <button
+            type="button"
+            onClick={() => { setEditingCustomer(null); setModalOpen(true); }}
+            className="btn-primary"
+          >
+            <UserPlus className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+            Add customer
+          </button>
+        }
+      />
+
+      <Toolbar>
+        <input
+          className="input sm:max-w-sm"
+          placeholder="Search customers…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          aria-label="Search customers"
+        />
+      </Toolbar>
+
+      {loading ? (
+        <LoadingSpinner />
       ) : (
-        <div className="space-y-2">
-          {customerList.map(d => (
-            <div key={d.customerId} className="card flex flex-col p-4 hover:shadow-md gap-2">
-              <div className="flex items-start justify-between gap-2">
-                <Link to={`/customers/${d.customerId}`} className="min-w-0 flex-1">
-                  <p className="font-semibold text-ink-800 truncate">{d.name}</p>
-                  <p className="text-xs text-ink-400">{d.phone || 'No phone'} · {d.purchaseCount} purchase{d.purchaseCount !== 1 ? 's' : ''} {d.lastPurchase ? `· last ${formatDate(d.lastPurchase)}` : ''}</p>
+        <DataTable
+          caption="Customers and outstanding balances"
+          rows={customerList}
+          rowKey={(d) => d.customerId}
+          mobileLayout="row"
+          columns={[
+            {
+              key: 'name',
+              header: 'Customer',
+              primary: true,
+              render: (d) => (
+                <Link to={`/customers/${d.customerId}`} className="font-medium text-ink-900 hover:text-primary-700 hover:underline">
+                  {d.name}
                 </Link>
-                <div className="flex items-center gap-3 shrink-0">
-                  <Link to={`/customers/${d.customerId}`} className={`font-display text-base font-bold ${d.totalOwed > 0 ? 'text-rust-600' : 'text-moss-700'}`}>
-                    {d.totalOwed > 0 ? formatKES(d.totalOwed) : (d.purchaseCount > 0 ? 'Paid' : 'No history')}
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setEditingCustomer(d);
-                      setModalOpen(true);
-                    }}
-                    className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100"
-                    title="Edit customer details"
-                  >
-                    <Pencil className="h-4 w-4" strokeWidth={1.75} />
-                  </button>
-                </div>
-              </div>
+              ),
+            },
+            { key: 'phone', header: 'Phone', render: (d) => <span className="num text-ink-600">{d.phone || 'No phone'}</span> },
+            {
+              key: 'purchaseCount',
+              header: 'Purchases',
+              numeric: true,
+              render: (d) => <span className="text-ink-600">{d.purchaseCount}</span>,
+            },
+            {
+              key: 'lastPurchase',
+              header: 'Last purchase',
+              render: (d) => <span className="text-ink-600">{d.lastPurchase ? formatDate(d.lastPurchase) : '-'}</span>,
+            },
+            {
+              key: 'status',
+              header: 'Status',
+              mobileTrailing: true,
+              render: (d) =>
+                d.totalOwed > 0
+                  ? <StatusPill tone="caution">Owing</StatusPill>
+                  : d.purchaseCount > 0
+                    ? <StatusPill tone="positive">Settled</StatusPill>
+                    : <StatusPill tone="neutral">No history</StatusPill>,
+            },
+            {
+              key: 'totalOwed',
+              header: 'Outstanding',
+              numeric: true,
+              mobileTrailing: true,
+              render: (d) => (
+                <span className="font-semibold">
+                  <Money value={d.totalOwed} tone={d.totalOwed > 0 ? 'negative' : 'muted'} />
+                </span>
+              ),
+            },
+          ]}
+          rowActions={(d) => (
+            <>
               {d.totalOwed > 0 && (
-                 <div className="flex justify-end border-t border-ink-100 pt-2 mt-1">
-                    <button
-                      type="button"
-                      onClick={() => handleSendReminder(d)}
-                      className="flex items-center gap-1.5 rounded-lg border border-ink-200 px-3 py-1.5 text-xs font-semibold text-ink-600 hover:bg-ink-50"
-                      title={isPro ? 'Send reminder via WhatsApp' : 'FlowBiz Pro feature'}
-                    >
-                      <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
-                      Send reminder{!isPro && <span className="text-amber-600"> · PRO</span>}
-                    </button>
-                 </div>
+                <button
+                  type="button"
+                  onClick={() => handleSendReminder(d)}
+                  className="btn-ghost !px-2 text-ink-600"
+                  title={isPro ? 'Send a reminder on WhatsApp' : 'Reminders are a FlowBiz Pro feature'}
+                  aria-label={`Send a payment reminder to ${d.name}`}
+                >
+                  <MessageCircle className="h-4 w-4" strokeWidth={1.75} />
+                </button>
               )}
-            </div>
-          ))}
-        </div>
+              <button
+                type="button"
+                onClick={() => { setEditingCustomer(d); setModalOpen(true); }}
+                className="btn-ghost !px-2 text-ink-500 hover:text-ink-900"
+                aria-label={`Edit ${d.name}`}
+              >
+                <Pencil className="h-4 w-4" strokeWidth={1.75} />
+              </button>
+            </>
+          )}
+          empty={
+            <EmptyState
+              title={search ? 'No customers match that search' : 'No customers yet'}
+              description={search ? 'Try another name or phone number.' : "Add a customer, or they'll appear here after a credit sale."}
+            />
+          }
+        />
       )}
+
       <AddCustomerModal
         open={modalOpen}
         onClose={() => { setModalOpen(false); setEditingCustomer(null); }}

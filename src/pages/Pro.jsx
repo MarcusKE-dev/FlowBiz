@@ -1,170 +1,408 @@
 // src/pages/Pro.jsx
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { auth } from '../firebase';
-import toast from 'react-hot-toast';
-import { friendlyErrorMessage } from '../utils/errorMessages';
-import { isDemoMode } from '../demo/demoMode';
-import { Check, X, BarChart3, Boxes, FileText, MessageCircle, Users, Sparkles, ArrowLeft } from 'lucide-react';
 
-const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
+import { Link } from 'react-router-dom';
+import PageHeader from '../components/ui/PageHeader';
+import Section from '../components/ui/Section';
+import StatusPill from '../components/ui/StatusPill';
+import LicensingPanel from '../components/licensing/LicensingPanel';
+import BillingHistory from '../components/licensing/BillingHistory';
+import { useAuth } from '../contexts/AuthContext';
+import { usePricing } from '../hooks/usePricing';
+import { useLicensingCheckout } from '../hooks/useLicensingCheckout';
+import { isDemoMode } from '../demo/demoMode';
+import {
+  formatPrice,
+  LIFETIME_PLAN_ID,
+  PRO_PLAN_ID,
+} from '../licensing';
+import { SERVICE_PRICE_PER_YEAR } from '../components/licensing/licensingCopy';
+import LifetimeDisclosure from '../components/licensing/LifetimeDisclosure';
+import {
+  SUPPORT_EMAIL, SUPPORT_EMAIL_HREF, SUPPORT_WHATSAPP_LABEL, whatsappHref,
+} from '../lib/support';
+import {
+  Check,
+  X,
+  BarChart3,
+  Boxes,
+  Image,
+  MessageCircle,
+  ArrowLeft,
+} from 'lucide-react';
 
 const FEATURE_CATEGORIES = [
-  { icon: BarChart3, title: 'Advanced Analytics', description: 'Revenue & profit trends, payment mix, day-of-week patterns, expense breakdown, top debtors, and staff performance all in one dashboard.' },
-  { icon: Boxes, title: 'Inventory Intelligence', description: 'Capital Health scoring, ABC value analysis, reorder suggestions, slow-moving stock alerts, and capital-by-supplier breakdowns.' },
-  { icon: FileText, title: 'Professional Documents', description: 'Branded PDF receipts and invoices with your logo, ready to print or download.' },
-  { icon: MessageCircle, title: 'WhatsApp Sharing', description: "Send receipts, invoices, and debt reminders straight to a customer's phone." },
+  {
+    icon: BarChart3,
+    title: 'Advanced Analytics',
+    description:
+      'Understand revenue, profit, expenses, payment mix and staff performance.',
+  },
+  {
+    icon: Boxes,
+    title: 'Inventory Intelligence',
+    description:
+      'See stock health, ABC analysis, reorder suggestions and slow-moving stock.',
+  },
+  {
+    icon: Image,
+    title: 'Product Photos',
+    description:
+      'Add product images to your catalogue and display them across the POS.',
+  },
+  {
+    icon: MessageCircle,
+    title: 'WhatsApp Sharing',
+    description:
+      'Send receipts, invoices and debt reminders directly to customers.',
+  },
 ];
 
 const COMPARISON_ROWS = [
   { label: 'Products tracked', free: 'Up to 100', pro: 'Unlimited' },
   { label: 'Staff members', free: '1 owner + 1 staff', pro: 'Unlimited' },
-  { label: 'Sales, credit & expense tracking', free: true, pro: true },
-  { label: 'PDF receipts & invoices', free: true, pro: true },
-  { label: 'Advanced Analytics (trends, staff, day-of-week)', free: false, pro: true },
-  { label: 'Inventory Intelligence & Capital Health', free: false, pro: true },
-  { label: 'Reorder suggestions & ABC value analysis', free: false, pro: true },
-  { label: 'WhatsApp receipt & invoice sharing', free: false, pro: true },
+  {
+    label: 'Sales, credit & expense tracking',
+    free: true,
+    pro: true,
+  },
+  {
+    label: 'PDF receipts & invoices',
+    free: true,
+    pro: true,
+  },
+  {
+    label: 'Product photos',
+    free: false,
+    pro: true,
+  },
+  {
+    label: 'Advanced Analytics',
+    free: false,
+    pro: true,
+  },
+  {
+    label: 'Inventory Intelligence & Capital Health',
+    free: false,
+    pro: true,
+  },
+  {
+    label: 'Reorder suggestions & ABC value analysis',
+    free: false,
+    pro: true,
+  },
+  {
+    label: 'WhatsApp receipt & invoice sharing',
+    free: false,
+    pro: true,
+  },
 ];
 
+function FeatureCheck({ included }) {
+  return included ? (
+    <Check
+      className="mx-auto h-4 w-4 text-ink-900"
+      strokeWidth={1.75}
+      aria-label="Included"
+    />
+  ) : (
+    <X
+      className="mx-auto h-4 w-4 text-ink-400"
+      strokeWidth={1.75}
+      aria-label="Not included"
+    />
+  );
+}
+
+function LifetimeCard({
+  lifetimePrice,
+  servicePrice,
+  loadingPlan,
+  startCheckout,
+}) {
+  return (
+    <div className="relative flex flex-col rounded-panel border border-deep-600 bg-surface p-6">
+      <span className="absolute -top-2.5 right-6 rounded-pill bg-deep-600 px-2.5 py-0.5 text-label font-semibold text-white">
+        One-time licence
+      </span>
+
+      <div className="flex-1">
+        <p className="text-label uppercase text-ink-500">
+          Lifetime Licence
+        </p>
+
+        <p className="mt-2 flex items-baseline gap-1.5">
+          <span className="num text-money font-semibold text-ink-900 sm:text-[1.75rem] sm:leading-[2.25rem]">
+            {lifetimePrice != null ? formatPrice(lifetimePrice) : '…'}
+          </span>
+
+          <span className="text-secondary text-ink-500">
+            one time
+          </span>
+        </p>
+
+        <p className="mt-2 text-body font-semibold text-ink-900">
+          Own the FlowBiz software licence permanently.
+        </p>
+
+        <div className="mt-4 border-t border-line pt-4">
+          <p className="text-body font-semibold text-ink-900">
+            {servicePrice != null
+              ? formatPrice(servicePrice)
+              : SERVICE_PRICE_PER_YEAR}
+            /year from year two
+          </p>
+
+          <p className="mt-0.5 text-secondary text-ink-500">
+            Cloud services, maintenance, updates &amp; support
+          </p>
+        </div>
+      </div>
+
+      {/* ABOVE THE BUTTON, DELIBERATELY. A customer has to be able to
+          read what happens in year two before they can commit to year
+          one — see LifetimeDisclosure.jsx and legalLinks.test.js. */}
+      <div className="mt-6">
+        <LifetimeDisclosure />
+      </div>
+
+      <button
+        onClick={() => startCheckout(LIFETIME_PLAN_ID)}
+        disabled={Boolean(loadingPlan)}
+        className="mt-4 w-full rounded-panel bg-deep-600 py-3 text-body font-bold text-white transition-colors hover:bg-deep-700 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {loadingPlan === LIFETIME_PLAN_ID
+          ? 'Loading…'
+          : `Buy the Lifetime Licence${
+              lifetimePrice != null
+                ? ` for ${formatPrice(lifetimePrice)}`
+                : ''
+            }`}
+      </button>
+    </div>
+  );
+}
+
 export default function Pro() {
-  const { isPro, subscription } = useAuth();
-  const [loading, setLoading] = useState(false);
-  const [proPrice, setProPrice] = useState(null);
+  const { isPro, isLifetime, subscription } = useAuth();
+  const { pricing } = usePricing();
+  const { startCheckout, loadingPlan } = useLicensingCheckout();
   const demo = isDemoMode();
 
-  useEffect(() => {
-    if (demo) return; // demo's business record is already seeded as Pro — no real price to show
-    fetch(`${FLOWBIZ_API_URL}/api/pro/price`)
-      .then((r) => r.json())
-      .then((data) => setProPrice(data.amountKes))
-      .catch(() => {});
-  }, [demo]);
-
-  const handleSubscribe = async () => {
-    if (loading) return;
-    setLoading(true);
-    try {
-
-      const idToken = await auth.currentUser.getIdToken();
-      const response = await fetch(`${FLOWBIZ_API_URL}/api/paystack/initialize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-      });
-      const data = await response.json();
-      if (data?.access_code && window.PaystackPop) {
-        const popup = new window.PaystackPop();
-        popup.resumeTransaction(data.access_code, {
-          onSuccess: () => toast.success('Payment received activating your subscription…'),
-          onCancel: () => toast('Payment cancelled.'),
-        });
-      } else if (data?.authorization_url) {
-        window.location.href = data.authorization_url;
-      } else {
-        toast.error(data?.error || "Couldn't initialize payment. Please try again.");
-      }
-    } catch (err) {
-      toast.error(friendlyErrorMessage(err, { fallback: 'Unable to load the payment page. Please check your connection and try again.' }));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const lifetimePrice = pricing.lifetime?.amountKes;
+  const servicePrice = pricing.annualServices?.amountKes;
+  const proPrice = pricing.pro?.amountKes;
 
   const expiresLabel = subscription?.expiresAt
-    ? new Date(subscription.expiresAt.toMillis ? subscription.expiresAt.toMillis() : subscription.expiresAt).toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' })
+    ? new Date(
+        subscription.expiresAt.toMillis
+          ? subscription.expiresAt.toMillis()
+          : subscription.expiresAt
+      ).toLocaleDateString('en-KE', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      })
     : null;
 
   return (
     <div className="mx-auto max-w-5xl space-y-8 pb-12">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-moss-700">FlowBiz Pro</p>
-          <h1 className="font-display text-2xl font-bold text-ink-900 mt-0.5">Run your shop with sharper insight</h1>
+      <PageHeader
+        title={isLifetime ? 'Licence and services' : 'FlowBiz Pro'}
+        description={
+          isLifetime
+            ? 'Manage your FlowBiz licence and annual services.'
+            : 'More insight into your margins, stock and staff, plus WhatsApp receipts.'
+        }
+        actions={
+          <Link to="/" className="btn-secondary">
+            <ArrowLeft
+              className="h-4 w-4"
+              strokeWidth={1.75}
+              aria-hidden="true"
+            />
+            Dashboard
+          </Link>
+        }
+      />
+
+      {demo ? (
+        <div className="rounded-panel border border-line bg-surface p-6 text-center">
+          <div className="flex flex-col items-center gap-3">
+            <StatusPill tone="positive">
+              Pro is active in this demo
+            </StatusPill>
+
+            <p className="max-w-sm text-body text-ink-600">
+              Every Pro feature is unlocked for this demo account. Explore
+              analytics, inventory intelligence, product photos and WhatsApp
+              sharing freely.
+            </p>
+          </div>
         </div>
-        <Link to="/" className="btn-outline text-xs shrink-0">
-          <ArrowLeft className="h-4 w-4" strokeWidth={1.75} /> Dashboard
-        </Link>
-      </div>
+      ) : isLifetime ? (
+        <>
+          <LicensingPanel />
+          <BillingHistory />
+        </>
+      ) : (
+        <div className="space-y-6">
+          {/* Pricing options */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            {/* Monthly Pro */}
+            <div className="flex flex-col rounded-panel border border-line bg-surface p-6">
+              <div className="flex-1">
+                <p className="text-label uppercase text-ink-500">
+                  FlowBiz Pro
+                </p>
 
-      <div className="card overflow-hidden border-moss-200">
-        <div className="bg-gradient-to-br from-moss-700 to-moss-900 px-6 py-10 text-center sm:px-10">
+                <p className="mt-2 flex items-baseline gap-1.5">
+                  <span className="num text-money font-semibold text-ink-900 sm:text-[1.75rem] sm:leading-[2.25rem]">
+                    {proPrice != null
+                      ? formatPrice(proPrice)
+                      : '…'}
+                  </span>
 
-          {/* FIX: the demo business is always seeded as Pro (see
-              src/demo/seedData.js) so every Pro feature can be explored
-              freely — there's genuinely nothing to buy here, so instead
-              of showing a Subscribe/Extend button that would try to
-              charge a payment method the demo login doesn't have, this
-              just confirms Pro is already active. Real accounts are
-              completely unaffected — `demo` is only ever true inside the
-              separately-built demo app. */}
-          {demo ? (
-            <div className="mt-4 flex flex-col items-center gap-3">
-              <span className="badge bg-white text-moss-800 px-4 py-1.5 text-sm font-bold">FlowBiz Pro — active in this demo</span>
-              <p className="max-w-sm text-sm text-moss-100">Every Pro feature is unlocked for this demo account. There's nothing to pay here — explore Advanced Analytics, Inventory Intelligence, and WhatsApp sharing freely.</p>
-            </div>
-          ) : (
-            <>
-              <h2 className="mt-4 font-display text-4xl font-extrabold text-white">
-                {proPrice != null ? `KSh ${proPrice.toLocaleString('en-KE')}` : '…'}
-                <span className="text-base font-medium text-moss-200"> / 30 days</span>
-              </h2>
-              <p className="mt-3 max-w-md mx-auto text-sm text-moss-100">Manual renewal, no auto-billing, no surprise charges. You're always in control.</p>
+                  <span className="text-secondary text-ink-500">
+                    / 30 days
+                  </span>
+                </p>
+
+                <p className="mt-3 text-body text-ink-600">
+                  Get Pro features with a simple prepaid subscription.<br/>
+                  Manual renewal, no automatic billing.
+
+                </p>
+              </div>
+
               {isPro ? (
-                <div className="mt-7 flex flex-col items-center gap-3">
-                  <span className="badge bg-white text-moss-800 px-4 py-1.5 text-sm font-bold">FlowBiz Pro Active</span>
-                  {expiresLabel && <p className="text-xs text-moss-200">Renews / expires on {expiresLabel}</p>}
-                  <button onClick={handleSubscribe} disabled={loading} className="btn-outline !border-white/40 !text-white hover:!bg-white/10">
-                    {loading ? 'Loading…' : 'Extend subscription'}
+                <div className="mt-6 flex flex-col items-start gap-3">
+                  <StatusPill tone="positive">
+                    Pro is active
+                  </StatusPill>
+
+                  {expiresLabel && (
+                    <p className="text-secondary text-ink-500">
+                      Expires on {expiresLabel}
+                    </p>
+                  )}
+
+                  <button
+                    onClick={() => startCheckout(PRO_PLAN_ID)}
+                    disabled={Boolean(loadingPlan)}
+                    className="btn-secondary"
+                  >
+                    {loadingPlan === PRO_PLAN_ID
+                      ? 'Loading…'
+                      : 'Extend subscription'}
                   </button>
                 </div>
               ) : (
-                <button onClick={handleSubscribe} disabled={loading} className="mt-7 btn-primary !bg-white !text-moss-800 hover:!bg-moss-50 px-8 py-3 text-base">
-                  {loading ? (
-                    <span className="flex items-center gap-2">
-                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-moss-300 border-t-moss-800" />
-                      Loading payment page…
-                    </span>
-                  ) : `Upgrade to Pro KSh ${proPrice != null ? proPrice.toLocaleString('en-KE') : '…'}`}
+                <button
+                  onClick={() => startCheckout(PRO_PLAN_ID)}
+                  disabled={Boolean(loadingPlan)}
+                  className="btn-primary mt-6 w-full"
+                >
+                  {loadingPlan === PRO_PLAN_ID
+                    ? 'Loading…'
+                    : 'Upgrade to Pro'}
                 </button>
               )}
-            </>
+            </div>
+
+            {/* Lifetime Licence */}
+            <LifetimeCard
+              lifetimePrice={lifetimePrice}
+              servicePrice={servicePrice}
+              loadingPlan={loadingPlan}
+              startCheckout={startCheckout}
+            />
+          </div>
+
+          <BillingHistory />
+        </div>
+      )}
+
+      {/* Pro feature overview */}
+      <Section title="What's included with Pro">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {FEATURE_CATEGORIES.map(
+            ({ icon: Icon, title, description }) => (
+              <div
+                key={title}
+                className="space-y-2 rounded-panel border border-line bg-surface p-5"
+              >
+                <div className="text-ink-500">
+                  <Icon
+                    className="h-5 w-5"
+                    strokeWidth={1.75}
+                    aria-hidden="true"
+                  />
+                </div>
+
+                <h4 className="font-display text-body font-bold text-ink-900">
+                  {title}
+                </h4>
+
+                <p className="text-secondary leading-relaxed text-ink-500">
+                  {description}
+                </p>
+              </div>
+            )
           )}
         </div>
-      </div>
+      </Section>
 
-      <div>
-        <h3 className="font-display text-sm font-bold uppercase tracking-wide text-ink-500 mb-3">What's included</h3>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {FEATURE_CATEGORIES.map(({ icon: Icon, title, description }) => (
-            <div key={title} className="card p-5 space-y-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl2 bg-moss-50 text-moss-700">
-                <Icon className="h-5 w-5" strokeWidth={1.75} />
-              </div>
-              <h4 className="font-display text-sm font-bold text-ink-900">{title}</h4>
-              <p className="text-xs leading-relaxed text-ink-500">{description}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <h3 className="font-display text-sm font-bold uppercase tracking-wide text-ink-500 mb-3">Free vs Pro</h3>
-        <div className="card overflow-hidden">
+      {/* Comparison */}
+      <Section title="Free compared with Pro">
+        <div className="overflow-hidden rounded-panel border border-line bg-surface">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                <tr><th className="px-4 py-3">Feature</th><th className="px-4 py-3 text-center">Free</th><th className="px-4 py-3 text-center text-moss-700">Pro</th></tr>
+            <table className="w-full border-collapse text-cell">
+              <thead className="border-b border-line text-left text-label uppercase text-ink-500">
+                <tr>
+                  <th
+                    scope="col"
+                    className="px-3 py-2"
+                  >
+                    Feature
+                  </th>
+
+                  <th
+                    scope="col"
+                    className="px-3 py-2 text-center"
+                  >
+                    Free
+                  </th>
+
+                  <th
+                    scope="col"
+                    className="px-3 py-2 text-center"
+                  >
+                    Pro &amp; Lifetime
+                  </th>
+                </tr>
               </thead>
-              <tbody className="divide-y divide-ink-100">
+
+              <tbody className="divide-y divide-divider">
                 {COMPARISON_ROWS.map((row) => (
                   <tr key={row.label}>
-                    <td className="px-4 py-3 font-medium text-ink-700">{row.label}</td>
-                    <td className="px-4 py-3 text-center text-ink-500">
-                      {typeof row.free === 'boolean' ? (row.free ? <Check className="mx-auto h-4 w-4 text-moss-600" strokeWidth={2} /> : <X className="mx-auto h-4 w-4 text-ink-300" strokeWidth={2} />) : row.free}
+                    <td className="px-3 py-2 font-medium text-ink-900">
+                      {row.label}
                     </td>
-                    <td className="px-4 py-3 text-center font-semibold text-moss-700">
-                      {typeof row.pro === 'boolean' ? (row.pro ? <Check className="mx-auto h-4 w-4 text-moss-600" strokeWidth={2} /> : <X className="mx-auto h-4 w-4 text-ink-300" strokeWidth={2} />) : row.pro}
+
+                    <td className="px-3 py-2 text-center text-ink-600">
+                      {typeof row.free === 'boolean' ? (
+                        <FeatureCheck included={row.free} />
+                      ) : (
+                        row.free
+                      )}
+                    </td>
+
+                    <td className="px-3 py-2 text-center font-semibold text-ink-900">
+                      {typeof row.pro === 'boolean' ? (
+                        <FeatureCheck included={row.pro} />
+                      ) : (
+                        row.pro
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -172,11 +410,39 @@ export default function Pro() {
             </table>
           </div>
         </div>
-      </div>
+      </Section>
 
-      <div className="flex items-center gap-2 text-xs text-ink-400">
-        
-        Built for Kenyan shops pay in KES via M-Pesa or card, powered by Paystack.
+      <div className="space-y-2 text-secondary text-ink-400">
+        <p>
+          Built for Kenyan shops. Pay in KES via M-Pesa or card, powered by
+          Paystack.
+        </p>
+
+        {/* ON THE PAGE, not only inside the Lifetime card. A customer who
+            already has Pro never sees that card, and this is the screen
+            where they are charged. */}
+        <p>
+          Read our{' '}
+          <Link to="/terms" className="font-semibold text-ink-600 underline underline-offset-2">
+            Terms of Service
+          </Link>{' '}
+          and{' '}
+          <Link to="/privacy" className="font-semibold text-ink-600 underline underline-offset-2">
+            Privacy Policy
+          </Link>. Need a hand?{' '}
+          <a href={SUPPORT_EMAIL_HREF} className="font-semibold text-ink-600 underline underline-offset-2">
+            {SUPPORT_EMAIL}
+          </a>{' '}
+          or{' '}
+          <a
+            href={whatsappHref('Hello FlowBiz, I have a question about billing.')}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-semibold text-ink-600 underline underline-offset-2"
+          >
+            {SUPPORT_WHATSAPP_LABEL}
+          </a>.
+        </p>
       </div>
     </div>
   );
