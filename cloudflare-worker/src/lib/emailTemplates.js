@@ -59,12 +59,7 @@ function button(url, label) {
  * `word-break` matters: without it a long-ish URL forces the whole email
  * body wider than the phone screen it is being read on.
  */
-function action(url, label) {
-  return `${button(url, label)}
-    <p style="margin:12px 0 0;font-size:12px;color:${INK_400};line-height:1.6;">Or copy this link into your browser:<br />
-      <a href="${url}" style="color:${BRAND_BLUE};text-decoration:none;word-break:break-all;">${url}</a>
-    </p>`;
-}
+
 
 export function verificationEmail(link) {
   const html = shell(`
