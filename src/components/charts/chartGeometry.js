@@ -15,9 +15,83 @@ export const GRIDLINE_COUNT = 4;
 // plus a few pixels of series is not a chart.
 export const MIN_PLOT_WIDTH = 40;
 
-// A categorical band this wide comfortably holds a short label ("Wed",
-// "Mon"). Narrower than this and the band axis thins like a time axis.
-export const MIN_BAND_LABEL_WIDTH = 34;
+// How wide a label actually renders, near enough. Measured off the label
+// type scale (11px, 600, 0.04em): a six-character date comes out at about
+// 44px, so a shade over 7px per character. It only has to be right enough
+// to decide how many labels fit, and erring high costs a label, while
+// erring low costs a collision.
+export const LABEL_CHAR_WIDTH = 7.2;
+
+// Clear air either side of a label before it reads as touching its
+// neighbour.
+export const LABEL_GAP = 10;
+
+// The widest label in the set. Every label on one axis is the same type,
+// and dates in one range are the same length, so the longest is the one
+// that has to fit.
+export function estimateLabelWidth(labels) {
+  const longest = (labels || []).reduce(
+    (max, l) => Math.max(max, String(l ?? '').length), 0
+  );
+  return longest * LABEL_CHAR_WIDTH;
+}
+
+// How many labels an axis of this width can hold.
+//
+// This used to be the constant 6 at every size and for every label, which
+// is where the x axis on a phone fell apart. Six labels over a seven-day
+// period means labelling six of the seven points — on a 300px plot that
+// puts their centres 50px apart while "07 Sept" is 50px wide, so
+// consecutive dates collide and the axis reads as a smear. Six is still
+// the ceiling (a 90-day axis labelled fourteen times is unreadable for
+// the opposite reason), but it is a ceiling rather than a target now.
+export function maxLabelsFor(span, labelWidth, ceiling = 6) {
+  // The binding constraint is at the ENDS, not in the middle. The first
+  // and last labels are anchored inward (so they cannot clip the
+  // container), which means each occupies a whole label width from its
+  // own centre rather than half of one. So the first gap has to clear a
+  // full width plus the next label's half — 1.5 widths — and even
+  // spacing then satisfies every gap after it.
+  const step = labelWidth * 1.5 + LABEL_GAP;
+  if (step <= 0) return ceiling;
+  return Math.max(2, Math.min(ceiling, Math.floor(span / step) + 1));
+}
+
+// The guarantee, applied after the even spread above.
+//
+// `labelIndices` spreads its picks across whole buckets, so it ROUNDS —
+// its gaps are only approximately equal, and on a narrow axis two
+// adjacent picks can still land on top of each other even when the
+// average spacing is fine. This walks the picks in order and drops any
+// that would touch the one kept before it, or crowd the last one.
+//
+// The two ends are never dropped: the first and last bucket are the two
+// labels a reader actually needs (where does this axis start, and where
+// does it end), and they are the ones anchored inward so they cannot
+// clip the container either.
+export function spaceOutLabels(indices, xOf, labelWidth, gap = LABEL_GAP) {
+  if (!indices || indices.length <= 2) return indices || [];
+  const half = labelWidth / 2;
+  const first = indices[0];
+  const last = indices[indices.length - 1];
+
+  const kept = [first];
+  // The first label is start-anchored and the last is end-anchored, so
+  // each occupies a full label width inward from its own centre.
+  let lastRight = xOf(first) + labelWidth;
+  const lastLeft = xOf(last) - labelWidth;
+
+  for (const i of indices.slice(1, -1)) {
+    const left = xOf(i) - half;
+    const right = xOf(i) + half;
+    if (left >= lastRight + gap && right + gap <= lastLeft) {
+      kept.push(i);
+      lastRight = right;
+    }
+  }
+  kept.push(last);
+  return kept;
+}
 
 // "KES 12,000.00" does not fit in a 48px gutter. These do.
 export function compactNumber(v) {

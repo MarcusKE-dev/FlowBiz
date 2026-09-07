@@ -334,7 +334,12 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    // No `mx-auto max-w-6xl` here. The rails and tables below run to the
+    // edge of the screen, and they cannot do that from inside a centred
+    // column — the column edge would stop them a few hundred pixels
+    // short on a desktop. The page is the full width of <main>, the
+    // headings sit on its gutter, and the panels bleed through it.
+    <div className="space-y-6">
       <PageHeader
         title={`Hello, ${profile?.displayName}`}
         description={isAdmin ? "Here's how the shop is doing today." : 'Ready to make a sale.'}
@@ -356,9 +361,9 @@ export default function Dashboard() {
       {isAdmin && wants('moneyToday') && (
         <Section title="Money today">
           {financialsLoading ? (
-            <div className="h-[86px] animate-pulse rounded-panel border border-line bg-ink-50" aria-hidden="true" />
+            <div className="-mx-4 h-[86px] animate-pulse border-y border-line bg-ink-50 sm:-mx-6" aria-hidden="true" />
           ) : (
-            <MetricRail columns={4}>
+            <MetricRail columns={4} bleed>
               <Metric label="Cash received"  prefix={privacyMode ? null : 'KES'} value={railValue(dashboardCashReceived)} />
               <Metric label="M-Pesa received" prefix={privacyMode ? null : 'KES'} value={railValue(dashboardMpesaReceived)} />
               <Metric label="Net profit"      prefix={privacyMode ? null : 'KES'} value={railValue(dashboardNetProfit)} />
@@ -375,7 +380,7 @@ export default function Dashboard() {
           title="On the floor"
           action={<Link to="/orders" className="btn-secondary">Open orders</Link>}
         >
-          <MetricRail columns={industry.can('tables') ? 3 : 2}>
+          <MetricRail columns={industry.can('tables') ? 3 : 2} bleed>
             <Metric label="Open orders" value={orderSummary.count} />
             <Metric label="Value on the floor" prefix={privacyMode ? null : 'KES'} value={railValue(orderSummary.total)} />
             {industry.can('tables') && (
@@ -410,7 +415,7 @@ export default function Dashboard() {
           tone={expirySummary.expiredCount > 0 ? 'danger' : undefined}
           action={<Link to="/expiry" className="btn-secondary">View batches</Link>}
         >
-          <MetricRail columns={3}>
+          <MetricRail columns={3} bleed>
             <Metric label="Expired batches" value={expirySummary.expiredCount} />
             <Metric label="Expiring in 90 days" value={expirySummary.expiringCount} />
             <Metric
@@ -428,7 +433,7 @@ export default function Dashboard() {
           title="Made today"
           action={<Link to="/production" className="btn-secondary">Record production</Link>}
         >
-          <MetricRail columns={2}>
+          <MetricRail columns={2} bleed>
             <Metric label="Production runs" value={productionsToday.length} />
             <Metric label="Cost of what was made" prefix={privacyMode ? null : 'KES'} value={railValue(productionCost)} />
           </MetricRail>
@@ -437,7 +442,7 @@ export default function Dashboard() {
 
       {isAdmin && wants('position') && (
         <Section title="Position">
-          <MetricRail columns={3}>
+          <MetricRail columns={3} bleed>
             <Metric
               label="Inventory value at cost"
               prefix={privacyMode ? null : 'KES'}
@@ -463,7 +468,7 @@ export default function Dashboard() {
           today, and who still owes, are. */}
       {isAdmin && wants('servicePosition') && (
         <Section title="Position">
-          <MetricRail columns={3}>
+          <MetricRail columns={3} bleed>
             <Metric label="Services done today" value={servicesSoldToday} />
             <Metric
               label="Outstanding debt"
@@ -489,6 +494,7 @@ export default function Dashboard() {
           action={<Link to="/purchases" className="btn-secondary">Record a purchase</Link>}
         >
           <DataTable
+            bleed
             caption="Items at or below their low-stock level"
             rows={lowStock.slice(0, 8)}
             rowKey={(p) => p.id}
@@ -511,6 +517,7 @@ export default function Dashboard() {
 
       <Section title="Activity today">
         <DataTable
+          bleed
           caption="Sales, credit sales and debt repayments recorded today"
           rows={recentActivity}
           rowKey={(r) => r.id}

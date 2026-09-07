@@ -124,7 +124,10 @@ export default function Users() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    // Full width. The tables and strips below run to the edge of the
+    // content area, which a centred column would stop short of; the
+    // 1800px ceiling lives in AppShell so every page shares one.
+    <div className="space-y-6">
       <PageHeader
         title="Team"
         description="Who has access to this business."
@@ -147,6 +150,7 @@ export default function Users() {
       {invites.length > 0 && (
         <Section title="Pending invites" hint="Anyone with one of these links can join the business.">
           <DataTable
+            bleed
             caption="Invites that have not been accepted yet"
             rows={invites}
             rowKey={(inv) => inv.id}
@@ -202,6 +206,7 @@ export default function Users() {
           <LoadingSpinner />
         ) : (
           <DataTable
+            bleed
             caption="People with access to this business"
             rows={users}
             rowKey={(u) => u.id}

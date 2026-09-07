@@ -13,6 +13,13 @@
 // The internal hairlines are drawn by the container's background showing
 // through a 1px grid gap, rather than by per-cell borders — that way a
 // wrapped row never doubles up a border or leaves a stub at the end.
+//
+// `bleed` runs the strip to the edge of the screen instead of sitting in
+// it as a card: it cancels the page gutter (<main> is px-4, sm:px-6) with
+// a matching negative margin and drops the two things that read as a card
+// edge — the rounded corners and the left/right border. The top and
+// bottom hairlines stay, so the strip is still a bounded band, and the
+// cells keep their own padding so the numbers never touch the glass.
 
 export function Metric({ label, value, prefix, delta, deltaTone = 'neutral', hint }) {
   // The delta rides beside the number as semantic text. It used to be a
@@ -40,7 +47,7 @@ export function Metric({ label, value, prefix, delta, deltaTone = 'neutral', hin
   );
 }
 
-export default function MetricRail({ children, columns = 4, className = '' }) {
+export default function MetricRail({ children, columns = 4, bleed = false, className = '' }) {
   const cols =
     columns === 3 ? 'sm:grid-cols-3'
     : columns === 2 ? 'sm:grid-cols-2'
@@ -57,8 +64,8 @@ export default function MetricRail({ children, columns = 4, className = '' }) {
 
   return (
     <div
-      className={`grid grid-cols-2 ${cols} gap-px overflow-hidden rounded-panel
-                  border border-line bg-line
+      className={`grid grid-cols-2 ${cols} gap-px overflow-hidden bg-line
+                  ${bleed ? '-mx-4 border-y border-line sm:-mx-6' : 'rounded-panel border border-line'}
                   ${odd ? '[&>*:last-child]:col-span-2 sm:[&>*:last-child]:col-span-1' : ''}
                   ${className}`}
     >

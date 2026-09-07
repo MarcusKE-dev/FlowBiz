@@ -214,7 +214,9 @@ export default function Kitchen() {
   const readOnly = !permissions.can('kitchen.update');
 
   return (
-    <div className="mx-auto max-w-6xl space-y-5">
+    // Full width: the ticket grid below simply fits more tickets per row
+    // the wider it gets. The 1800px ceiling lives in AppShell.
+    <div className="space-y-5">
       <PageHeader
         title="Kitchen"
         description={

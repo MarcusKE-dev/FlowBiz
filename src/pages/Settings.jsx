@@ -417,7 +417,11 @@ export default function Settings() {
           because "Logged-in devices" is conditional — with an index the
           parity would have to be recomputed for demo mode, and with
           nth-child the browser just does it. */}
-      <div className="mt-6 overflow-hidden rounded-panel border border-line
+      {/* Edge to edge on a phone, where a card would spend 16px of a 390px
+          screen on its own margin; a contained column everywhere else,
+          because a settings page is prose-and-controls and wants a
+          measure. The banding inside is unchanged. */}
+      <div className="panel-measure mt-6 overflow-hidden
                       [&>*:nth-child(even)]:bg-canvas">
         <Section title="Account and security">
           <Row label="Email verification" value={demo ? 'Not applicable in demo mode' : emailVerified ? 'Verified' : 'Not verified'} tone={!demo && !emailVerified ? 'text-danger-700' : ''} />

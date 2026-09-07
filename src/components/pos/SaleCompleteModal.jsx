@@ -155,8 +155,10 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
           )}
         </div>
 
+        {/* "Close", not "Cancel" — see the matching panel in Counter.jsx.
+            Nothing here can be cancelled; the sale is already written. */}
         <div className="border-t border-line pt-2">
-          <button className="btn-secondary w-full" onClick={onClose}>Cancel</button>
+          <button className="btn-secondary w-full" onClick={onClose}>Close</button>
         </div>
       </div>
     </Modal>

@@ -282,7 +282,10 @@ export default function InventoryIntelligence() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    // Full width. The KPI strips below run to the edge of the content
+    // area, which a centred column would stop short of; the 1800px
+    // ceiling lives in AppShell so every page shares one.
+    <div className="space-y-6">
       <PageHeader
         title="Inventory intelligence"
         description="Capital deployment and supply chain health."
@@ -294,7 +297,7 @@ export default function InventoryIntelligence() {
       />
 
       <UiSection title="Capital and stock">
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-line bg-line lg:grid-cols-4">
+        <div className="-mx-4 grid grid-cols-2 gap-px overflow-hidden border-y border-line bg-line sm:-mx-6 lg:grid-cols-4">
           <KpiCard label="Capital deployed" value={formatKES(metrics.totalCost)} />
           <KpiCard label="Projected gross profit" value={formatKES(potentialProfit)} />
           <KpiCard label="Units in stock" value={metrics.unitsInStock.toLocaleString()} />
@@ -303,7 +306,15 @@ export default function InventoryIntelligence() {
       </UiSection>
 
       <UiSection title="Risk and velocity">
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-line bg-line sm:grid-cols-3 lg:grid-cols-5">
+        {/* Five tiles into a 2-up phone grid leaves a hole, and because the
+            hairlines here are the container's background showing through a
+            1px gap, that hole reads as a grey block — which it now does
+            edge to edge. Same fix MetricRail uses: the last tile spans the
+            row on mobile, and stops doing so once the real column count
+            divides evenly. */}
+        <div className="-mx-4 grid grid-cols-2 gap-px overflow-hidden border-y border-line bg-line
+                        [&>*:last-child]:col-span-2 sm:-mx-6 sm:grid-cols-3
+                        sm:[&>*:last-child]:col-span-1 lg:grid-cols-5">
           <KpiCard label="Low stock" value={metrics.lowStock.length} tone={metrics.lowStock.length > 0 ? 'text-danger-700' : 'text-ink-900'} />
           <KpiCard label="Out of stock" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-danger-700' : 'text-ink-900'} />
           <KpiCard label="Overstocked products" value={metrics.overstocked.length} tone={metrics.overstocked.length > 0 ? 'text-warning-700' : 'text-ink-900'} />
@@ -312,7 +323,7 @@ export default function InventoryIntelligence() {
         </div>
       </UiSection>
 
-      <div className="rounded-panel border border-line bg-surface p-5 sm:p-6">
+      <div className="panel-bleed p-5 sm:p-6">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h2 className="section-title">Capital health</h2>

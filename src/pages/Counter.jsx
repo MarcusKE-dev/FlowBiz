@@ -1102,7 +1102,10 @@ export default function Counter() {
       : null;
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    // Full width. The counter is a workspace, not a document: the product
+    // grid fits another column and the checkout terminal gets wider. The
+    // 1800px ceiling lives in AppShell.
+    <div className="space-y-6">
       <PageHeader
         title="Counter"
         description="Scan a barcode, search, or select a product to add it to the sale."
@@ -1111,7 +1114,7 @@ export default function Counter() {
       {/* Desktop gets a fixed-width checkout column so it never gets
           squeezed by the product grid; mobile is untouched (single
           column, cart pinned to the top). */}
-      <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_336px] xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_420px] lg:items-start lg:gap-6">
+      <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_480px] lg:items-start lg:gap-6">
 
         {/* LEFT: product catalog + sales log */}
         <div className="min-w-0 space-y-4">
@@ -1209,6 +1212,7 @@ export default function Counter() {
                 <LoadingSpinner />
               ) : (
                 <DataTable
+                  bleed="until-lg"
                   caption="Sales and credit sales recorded on this counter"
                   maxHeight="24rem"
                   rows={mergedSales}
@@ -1318,7 +1322,27 @@ export default function Counter() {
             breakpoint, so mobile always renders the single-column view
             above with the cart bar and the mobile checkout modal
             further down this file. */}
-        <div className="hidden lg:sticky lg:top-4 lg:flex lg:flex-col lg:gap-4">
+        {/* The terminal is its own scrolling region, not part of the page's.
+            Sticky already kept it in place while the product grid scrolled
+            past; what it could not do was let you REACH the bottom of a
+            long one — a full cart plus the payment fields plus a completed
+            sale's receipt actions is taller than a laptop screen, and the
+            part below the fold was simply unreachable, because scrolling
+            to it scrolled the page instead and the sticky column came
+            with you. Capping its height and giving it its own overflow
+            means the products scroll under a terminal that never moves,
+            and the terminal scrolls within itself when it needs to.
+
+            The 10rem budget is measured from the terminal's UNSTUCK
+            position, not its stuck one — the header, the page title and
+            the gap above it. Budgeting from the stuck position is the
+            tempting mistake: it buys ~3rem more terminal, and it means
+            that on a counter with only a few products, where the page has
+            nothing to scroll, the bottom of a completed sale sits below
+            the fold with no way to reach it. A till may not have an
+            unreachable button. */}
+        <div className="hidden lg:sticky lg:top-4 lg:flex lg:max-h-[calc(100vh-10rem)]
+                        lg:flex-col lg:gap-4 lg:overflow-y-auto lg:pr-1">
 
           <div className="overflow-hidden rounded-panel border border-line bg-surface">
             <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
@@ -1338,7 +1362,7 @@ export default function Counter() {
             {/* The cart is a ledger: one line per product, quantity and
                 unit price editable in place, line total right-aligned on
                 tabular figures. */}
-            <div className="max-h-64 divide-y divide-divider overflow-y-auto">
+            <div className="max-h-64 divide-y divide-divider overflow-y-auto xl:max-h-80 2xl:max-h-[26rem]">
               {cart.length === 0 ? (
                 <div className="flex flex-col items-center gap-1.5 px-4 py-10 text-center">
                   <ShoppingCart className="h-5 w-5 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
@@ -1638,6 +1662,27 @@ export default function Counter() {
                 {!canShareLink && (
                   <p className="text-label leading-relaxed text-ink-500">{shareBlockedMessage}</p>
                 )}
+              </div>
+
+              {/* A full-width way out, at the end of the actions where you
+                  finish reading. The only other one was a 14px × in the
+                  corner, which is a hard target to find with your hands on
+                  a till and a queue in front of you. The × stays for
+                  anyone who does reach for it.
+
+                  "Close", not "Cancel": this panel is confirming a sale
+                  that has already been written, and a button offering to
+                  cancel something, on the screen that just told you the
+                  money went through, is a sentence nobody at a till should
+                  have to parse twice. */}
+              <div className="border-t border-divider pt-3">
+                <button
+                  type="button"
+                  onClick={() => setDesktopLastSale(null)}
+                  className="btn-secondary w-full"
+                >
+                  Close
+                </button>
               </div>
             </div>
           )}

@@ -76,13 +76,19 @@ const handle = async e => {
   const rows = expenses.map(e=>({ date:formatDateTime(e.recordedAt), description:e.description, category:e.category, amount:e.amount, paymentMethod:e.paymentMethod, mpesaCode:e.mpesaCode||'', recordedBy:e.recordedByName }));
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    // Full width. The tables and strips below run to the edge of the
+    // content area, which a centred column would stop short of; the
+    // 1800px ceiling lives in AppShell so every page shares one.
+    <div className="space-y-6">
       <PageHeader
         title="Expenses"
         description="Record what the shop spends, so profit and the till both stay honest."
       />
 
-      <form onSubmit={handle} className="space-y-4 rounded-panel border border-line bg-surface p-4">
+      {/* An entry form wants a measure, not width — a 1,800px text input
+          is not an improvement. Edge to edge on a phone, a contained
+          card once there is room for one. */}
+      <form onSubmit={handle} className="panel-measure space-y-4 p-4 sm:max-w-2xl">
         <h2 className="section-title">Record an expense</h2>
 
         <div>
@@ -174,6 +180,7 @@ const handle = async e => {
           <LoadingSpinner />
         ) : (
           <DataTable
+            bleed
             caption="Expenses recorded recently"
             rows={expenses}
             rowKey={(e) => e.id}

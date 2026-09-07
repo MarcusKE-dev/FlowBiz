@@ -307,7 +307,10 @@ export default function CustomerDetail() {
   if (!customer && creditSales.length === 0) return <EmptyState title="Customer not found" />;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    // Full width. The tables and strips below run to the edge of the
+    // content area, which a centred column would stop short of; the
+    // 1800px ceiling lives in AppShell so every page shares one.
+    <div className="space-y-6">
       <Link
         to="/customers"
         className="inline-flex items-center gap-1 text-secondary font-medium text-ink-600 hover:text-primary-700"
@@ -327,7 +330,7 @@ export default function CustomerDetail() {
         }
       />
 
-      <MetricRail columns={3}>
+      <MetricRail columns={3} bleed>
         <Metric
           label="Outstanding"
           prefix="KES"
@@ -340,6 +343,7 @@ export default function CustomerDetail() {
       {sorted.length > 0 && (
         <Section title="Credit purchases">
           <DataTable
+            bleed
             caption="Credit purchases made by this customer"
             rows={sorted}
             rowKey={(cs) => cs.id}
@@ -417,6 +421,7 @@ export default function CustomerDetail() {
       {repayments.length > 0 && (
         <Section title="Repayment history">
           <DataTable
+            bleed
             caption="Repayments received from this customer"
             rows={repayments}
             rowKey={(r) => r.id}

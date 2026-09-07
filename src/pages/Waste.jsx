@@ -176,13 +176,16 @@ export default function Waste() {
   if (loading) return <LoadingSpinner label="Loading…" />;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    // Full width. The tables and strips below run to the edge of the
+    // content area, which a centred column would stop short of; the
+    // 1800px ceiling lives in AppShell so every page shares one.
+    <div className="space-y-6">
       <PageHeader
         title="Waste"
         description="Stock that was spoiled, broken or thrown away. It comes off the shelf and off the profit."
       />
 
-      <MetricRail columns={3}>
+      <MetricRail columns={3} bleed>
         <Metric label="Wasted, 30 days" prefix="KES" value={amountOnly(summary.totalCost)} />
         <Metric label="Spoiled or out of date" prefix="KES" value={amountOnly(summary.byReason.spoilage + summary.byReason.expiry)} />
         <Metric label="Entries" value={summary.count} />
@@ -191,7 +194,7 @@ export default function Waste() {
       {wastable.length === 0 ? (
         <EmptyState icon={Trash2} title="Nothing to record waste against" description="Add a product with stock first." />
       ) : (
-        <form onSubmit={handleRecord} className="space-y-4 rounded-panel border border-line bg-surface p-4">
+        <form onSubmit={handleRecord} className="panel-measure space-y-4 p-4 sm:max-w-2xl">
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className="label">What was thrown away?</label>
@@ -302,6 +305,7 @@ export default function Waste() {
 
       <Section title="Recorded waste" hint="The last 30 days.">
         <DataTable
+          bleed
           caption="Waste records"
           rows={records}
           rowKey={(r) => r.id}

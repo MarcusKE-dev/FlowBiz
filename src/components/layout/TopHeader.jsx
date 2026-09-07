@@ -15,7 +15,7 @@ export default function TopHeader() {
   if (demo) {
     return (
       <header className="safe-top sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-line bg-canvas px-4 sm:px-6">
-        <StatusPill tone="caution" solid>Demo</StatusPill>
+        <StatusPill tone="caution">Demo</StatusPill>
         <div className="flex items-center gap-2">
           <a href="/" className="btn-secondary">Exit demo</a>
           <a href="/setup" className="btn-primary">Sign up</a>

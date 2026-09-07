@@ -175,13 +175,16 @@ export default function Orders() {
   if (loading) return <LoadingSpinner label="Loading open orders…" />;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    // Full width. The tables and strips below run to the edge of the
+    // content area, which a centred column would stop short of; the
+    // 1800px ceiling lives in AppShell so every page shares one.
+    <div className="space-y-6">
       <PageHeader
         title={industry.terms.orders}
         description="Every ticket that is still open, and where it is in the kitchen."
       />
 
-      <MetricRail columns={showTables ? 3 : 2}>
+      <MetricRail columns={showTables ? 3 : 2} bleed>
         <Metric label={industry.terms.openOrders} value={summary.count} />
         <Metric label="Value on the floor" prefix="KES" value={amountOnly(summary.total)} />
         {showTables && (

@@ -98,7 +98,10 @@ export default function Customers() {
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    // Full width. The tables and strips below run to the edge of the
+    // content area, which a centred column would stop short of; the
+    // 1800px ceiling lives in AppShell so every page shares one.
+    <div className="space-y-6">
       <PageHeader
         title="Customers"
         description={<>Total outstanding <Money value={totalOut} tone={totalOut > 0 ? 'negative' : undefined} /></>}
@@ -128,6 +131,7 @@ export default function Customers() {
         <LoadingSpinner />
       ) : (
         <DataTable
+          bleed
           caption="Customers and outstanding balances"
           rows={customerList}
           rowKey={(d) => d.customerId}

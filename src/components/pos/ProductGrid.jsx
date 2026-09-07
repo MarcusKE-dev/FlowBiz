@@ -35,7 +35,7 @@ export default function ProductGrid({ products, onSelect, isAdmin = false, onEdi
   const photosEntitled = entitlements?.can(ENTITLEMENTS.PRODUCT_PHOTOS) === true;
 
   return (
-    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
       {products.map((p) => {
         // A service never runs out; a product sold by the metre still
         // shows "out" at zero, exactly as a piece does.

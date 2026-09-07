@@ -215,6 +215,58 @@
     @apply text-secondary text-ink-500;
   }
 
+  /* ── Panels ───────────────────────────────────────────────────────
+     A panel is a real boundary around content that has one: a table, a
+     KPI strip, a statement. Two treatments of the same thing:
+
+       .panel        inset card — 8px corners, a border on all four sides
+       .panel-bleed  the same content run to the edge of the screen
+
+     `.panel-bleed` cancels the page gutter (<main> is px-4, sm:px-6)
+     with a matching negative margin and drops the two things that read
+     as a card edge: the rounded corners and the left/right border. The
+     top and bottom hairlines stay, so it is still a bounded band rather
+     than rows loose on the canvas, and the content keeps its own
+     padding so nothing touches the glass.
+
+     It is a margin trick, not an overflow one: the band is exactly as
+     wide as the content area, so nothing scrolls sideways. */
+  .panel {
+    @apply rounded-panel border border-line bg-surface;
+  }
+  .panel-bleed {
+    @apply -mx-4 border-y border-line bg-surface sm:-mx-6;
+  }
+
+  /* The third case, and the one a 27-inch monitor forces you to name.
+     Not all panelled content wants width. A table with seven columns
+     gets better the wider it is; a profit statement, a close-of-day
+     count and an entry form are two columns of label and value, and at
+     1,800px they put a hand's width of empty paper between a row's name
+     and its number. Width does not help them — it hurts.
+
+     So those keep the edge-to-edge treatment exactly where it is a
+     genuine improvement (a phone, where the alternative is a card
+     wasting 16px of an already narrow screen) and settle back into a
+     contained card the moment there is room for one. Give the call site
+     a max-width too where the content has a natural measure. */
+  /* The counter's case. Its sales log does not sit on the page — it sits
+     in the LEFT column of a two-column workspace, and from `lg` up there
+     is a checkout terminal beside it. A full bleed there would run the
+     table's right edge straight under that terminal, which is exactly the
+     collision you get when a panel bleeds out of a grid cell instead of
+     out of the page. So it bleeds while the counter is one column, and
+     becomes a contained panel at the breakpoint where it stops being one. */
+  .panel-bleed-until-lg {
+    @apply -mx-4 border-y border-line bg-surface sm:-mx-6
+           lg:mx-0 lg:rounded-panel lg:border lg:border-line;
+  }
+
+  .panel-measure {
+    @apply -mx-4 border-y border-line bg-surface
+           sm:mx-0 sm:rounded-panel sm:border sm:border-line;
+  }
+
   /* The only rule this design draws: 1px, --line, full bleed. */
   .hairline {
     @apply border-0 border-t border-line;

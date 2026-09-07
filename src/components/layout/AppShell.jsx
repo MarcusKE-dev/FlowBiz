@@ -138,13 +138,30 @@ export default function AppShell({ children }) {
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopHeader />
         <main className="flex-1 overflow-y-auto px-4 pb-28 pt-6 sm:px-6 lg:pb-8">
-          {/* Inside the scrolling region, above the page, in the normal
-              document flow. It is a notice, not a gate: it never covers
-              the counter and it never has to be dismissed to sell
-              anything. It renders nothing at all unless a renewal is
-              actually approaching. */}
-          <ServiceRenewalNotice />
-          {children}
+          {/* The ceiling on how wide the content area is allowed to get.
+              Panels run to the edge of THIS box, so on a phone, a tablet
+              and any laptop it is the edge of the screen — the cap is
+              inert below about 1920px of viewport.
+
+              It exists for the 27-inch case. A catalogue with seven
+              columns is happy at any width, but a purchase list or a
+              profit statement has two or three, and spreading those
+              across 2,400px puts a hand's width of empty paper between a
+              row's label and its number. Capping the canvas is the one
+              fix that costs nothing on the sizes people actually work at.
+
+              px, not rem, deliberately: index.css scales the root up at
+              1280 and 1680px, so a rem cap would grow exactly as fast as
+              the type it is meant to rein in. */}
+          <div className="mx-auto w-full max-w-[1800px]">
+            {/* Inside the scrolling region, above the page, in the normal
+                document flow. It is a notice, not a gate: it never covers
+                the counter and it never has to be dismissed to sell
+                anything. It renders nothing at all unless a renewal is
+                actually approaching. */}
+            <ServiceRenewalNotice />
+            {children}
+          </div>
         </main>
       </div>
       <BottomNav />

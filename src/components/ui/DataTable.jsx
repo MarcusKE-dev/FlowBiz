@@ -34,6 +34,17 @@
 //
 // `leading` is (row) => node and only applies to mobileLayout="row".
 //
+// `bleed` runs the panel to the edge of the screen instead of sitting in
+// it as a card. Pass `"until-lg"` instead of `true` when the table lives
+// in a grid COLUMN rather than on the page — see .panel-bleed-until-lg. It cancels the page gutter (<main> is px-4, sm:px-6) with
+// a matching negative margin and drops the rounded corners and the
+// left/right border, keeping the top and bottom hairlines. The cells keep
+// their own padding, so rows read edge to edge without the text itself
+// touching the glass. It changes no layout inside the table: the desktop
+// table and the folded mobile list are exactly what they were, just
+// wider — nothing here makes the table scroll sideways that did not
+// already, and the mobile view still never does.
+//
 // A note on stickyHeader: `position: sticky` only sticks against a
 // scrolling ancestor, and this panel clips itself (overflow-hidden) to
 // get its 8px corners. So a sticky header is only meaningful when the
@@ -62,6 +73,7 @@ export default function DataTable({
   maxHeight,
   mobileLayout = 'stack',
   leading,
+  bleed = false,
 }) {
   // Only one record is expanded at a time — a phone screen cannot hold
   // two open records and still show the list around them.
@@ -73,7 +85,11 @@ export default function DataTable({
   const rowLayout = mobileLayout === 'row';
 
   return (
-    <div className={`overflow-hidden rounded-panel border border-line bg-surface ${className}`}>
+    <div
+      className={`overflow-hidden ${className} ${
+        bleed === 'until-lg' ? 'panel-bleed-until-lg' : bleed ? 'panel-bleed' : 'panel'
+      }`}
+    >
       {/* ── Desktop ── */}
       <div
         className={`hidden overflow-x-auto sm:block ${maxHeight ? 'overflow-y-auto' : ''}`}

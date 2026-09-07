@@ -51,6 +51,7 @@ const TONE = {
 function BatchTable({ rows, caption, empty }) {
   return (
     <DataTable
+      bleed
       caption={caption}
       rows={rows}
       rowKey={(b) => b.id}
@@ -128,7 +129,10 @@ export default function Expiry() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    // Full width. The tables and strips below run to the edge of the
+    // content area, which a centred column would stop short of; the
+    // 1800px ceiling lives in AppShell so every page shares one.
+    <div className="space-y-6">
       <PageHeader
         title="Expiry"
         description="Stock is always sold earliest-expiry-first, and anything past its date is never picked."
@@ -142,7 +146,7 @@ export default function Expiry() {
         }
       />
 
-      <MetricRail columns={4}>
+      <MetricRail columns={4} bleed>
         <Metric label="Expired batches" value={summary.expiredCount} />
         <Metric label="Value expired" prefix="KES" value={amountOnly(summary.expiredValue)} />
         <Metric label="Expiring soon" value={summary.expiringCount} />

@@ -342,7 +342,12 @@ export default function Reports() {
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    // Full width. The tables and strips below run to the edge of the
+    // content area, which a centred column would stop short of; the
+    // 1800px ceiling lives in AppShell so every page shares one. The
+    // profit statement is the exception and caps its own measure — see
+    // StatementBlock.
+    <div className="space-y-6">
       <PageHeader
         title="Reports"
         description="Where the money went over the period you choose."
@@ -388,7 +393,7 @@ export default function Reports() {
       ) : (
         <>
           <Section title="Position">
-            <MetricRail columns={4}>
+            <MetricRail columns={4} bleed>
               <Metric label="Cash balance"        prefix="KES" value={amountOnly(expectedCashAtClose)} />
               <Metric label="M-Pesa balance"      prefix="KES" value={amountOnly(expectedMpesaAtClose)} />
               <Metric label="Credit sales"        prefix="KES" value={amountOnly(summary.totalCreditSales)} />
@@ -413,6 +418,7 @@ export default function Reports() {
 
           <Section title="Best sellers" hint="By units sold over this period">
             <DataTable
+              bleed
               caption="Best selling products over the selected period"
               rows={bestSellers}
               rowKey={(r) => r.name}
@@ -449,7 +455,7 @@ export default function Reports() {
           {/* The export is an action on this period's data, not on the
               page, so it sits at the end of the data rather than in the
               header — you decide to export after reading the report. */}
-          <div className="flex flex-col gap-3 rounded-panel border border-line bg-surface p-4
+          <div className="panel-bleed flex flex-col gap-3 p-4
                           sm:flex-row sm:items-center sm:justify-between">
             <p className="text-body text-ink-600">
               A print-ready accounting statement for this period, including full till reconciliation.

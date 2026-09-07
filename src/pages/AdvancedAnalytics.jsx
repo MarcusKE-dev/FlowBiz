@@ -9,7 +9,6 @@ import { startOfDay, endOfDay, buildDateBuckets, toMillisValue } from '../utils/
 import { formatKES } from '../utils/currency';
 import { computeFinancials, isExpenseExcluded } from '../utils/financials';
 import LoadingSpinner from '../components/common/LoadingSpinner';
-import MiniLineChart from '../components/charts/MiniLineChart';
 import PlotFrame from '../components/charts/PlotFrame';
 import ChartEmpty from '../components/charts/ChartEmpty';
 import { isPlottable } from '../components/charts/chartGeometry';
@@ -20,7 +19,20 @@ import UiSection from '../components/ui/Section';
 import Toolbar from '../components/ui/Toolbar';
 import SegmentedControl from '../components/ui/SegmentedControl';
 import PageHeader from '../components/ui/PageHeader';
-import { TrendingUp, TrendingDown, Lock, AlertCircle, CheckCircle2, Info, ArrowLeft } from 'lucide-react';
+import { TrendingUp, TrendingDown, Lock, AlertCircle, CheckCircle2, Info, ArrowLeft, ChartArea, ChartLine, ChartColumn } from 'lucide-react';
+
+// How the revenue/profit trend is drawn. Three ways of showing the same
+// two series, because "which shape is readable" is a property of the
+// reader, not of the data: an area reads as volume, a plain line reads as
+// direction, and columns read as discrete periods you can compare one by
+// one. The choice is remembered per device — it is a preference about
+// eyes, not about the business.
+const TREND_VARIANTS = [
+  { value: 'area', title: 'Area', label: <ChartArea className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> },
+  { value: 'line', title: 'Line', label: <ChartLine className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> },
+  { value: 'bars', title: 'Columns', label: <ChartColumn className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" /> },
+];
+const TREND_VARIANT_KEY = 'flowbiz_trend_chart_variant';
 
 const PERIOD_OPTIONS = [
   { id: '7', label: '7 Days' },
@@ -35,7 +47,7 @@ function weekdayIndexNairobi(millis) {
   return new Date(millis + NAIROBI_OFFSET_MS).getUTCDay();
 }
 
-function KpiCard({ label, value, tone = 'text-ink-900', deltaPct, sparkline, sparklineColor = PRIMARY }) {
+function KpiCard({ label, value, tone = 'text-ink-900', deltaPct, sparkline, sparklineColor = PRIMARY, sparklineCaption }) {
   const isPositive = deltaPct !== null && deltaPct !== undefined && deltaPct >= 0;
   return (
     <div className="flex flex-col justify-between bg-surface p-4">
@@ -47,9 +59,17 @@ function KpiCard({ label, value, tone = 'text-ink-900', deltaPct, sparkline, spa
           <span>{Math.abs(deltaPct).toFixed(1)}% vs prior period</span>
         </div>
       )}
+      {/* Bars rather than a line, and captioned. A 36px line with no
+          axis, no zero and no unit is a decoration — there is nothing in
+          it a reader can name. One bar per period, the latest at full
+          strength, with a caption saying what a bar IS, is a shape
+          somebody can actually read at this size. */}
       {sparkline && sparkline.length > 1 && (
-        <div className="mt-3 -mb-1">
-          <MiniLineChart data={sparkline} height={36} color={sparklineColor} compact />
+        <div className="mt-3">
+          <MiniBarChart data={sparkline} height={34} color={sparklineColor} compact />
+          {sparklineCaption && (
+            <p className="mt-1.5 text-label text-ink-400">{sparklineCaption}</p>
+          )}
         </div>
       )}
     </div>
@@ -59,9 +79,9 @@ function KpiCard({ label, value, tone = 'text-ink-900', deltaPct, sparkline, spa
 // Sections sit on the canvas now: no card, no border, and no tinted
 // icon chip above the heading. The `icon` prop is accepted and ignored
 // so call sites did not all have to change in one go.
-function Section({ title, subtitle, className = '', children }) {
+function Section({ title, subtitle, action, className = '', children }) {
   return (
-    <UiSection title={title} hint={subtitle} className={className}>
+    <UiSection title={title} hint={subtitle} action={action} className={className}>
       {children}
     </UiSection>
   );
@@ -75,11 +95,72 @@ function NoData({ children }) {
 // project — built the same hand-rolled-SVG way MiniLineChart is, extended
 // to plot two series on a shared scale, and sharing MiniLineChart's frame
 // so both charts get the same axes, gridlines and hover readout.
-function DualTrendChart({ data, series, height = 260, ariaLabel }) {
+function DualTrendChart({ data, series, height = 260, ariaLabel, variant = 'area' }) {
   const all = data ? data.flatMap((d) => series.map((sv) => Number(d[sv.key]) || 0)) : [];
   if (!data || !isPlottable(all)) {
     return <ChartEmpty>Not enough data to chart this period yet.</ChartEmpty>;
   }
+
+  const bars = variant === 'bars';
+
+  // Columns sit in a band they own; lines and areas sit on their points.
+  // That is the whole difference between the two branches — the scale,
+  // the axes, the gridlines and the readout are the frame's, and are the
+  // same whichever shape is on top.
+  const groupGeometry = (plot) => {
+    const groupW = plot.band * 0.68;
+    return { groupW, barW: Math.max(groupW / series.length, 1) };
+  };
+  const barRect = (d, i, sv, si, { yAt, plot }, extra) => {
+    const { groupW, barW } = groupGeometry(plot);
+    const zeroY = yAt(0);
+    const y = yAt(d[sv.key]);
+    return (
+      <rect
+        key={sv.key}
+        x={plot.left + plot.band * i + (plot.band - groupW) / 2 + barW * si}
+        y={Math.min(y, zeroY)}
+        width={Math.max(barW - 1, 1)}
+        height={Math.max(Math.abs(zeroY - y), 1)}
+        fill={sv.color}
+        rx="1"
+        {...extra}
+      />
+    );
+  };
+
+  const renderLines = ({ xAt, yAt, plot }) => (
+    <g>
+      {series.map((sv) => {
+        const pts = data.map((d, i) => ({ x: xAt(i), y: yAt(d[sv.key]) }));
+        const line = pts
+          .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
+          .join(' ');
+        const floor = plot.top + plot.height;
+        const area = `${line} L ${pts[pts.length - 1].x.toFixed(1)} ${floor} L ${pts[0].x.toFixed(1)} ${floor} Z`;
+        return (
+          <g key={sv.key}>
+            {/* The fill is what separates "area" from "line": with two
+                series stacked in front of each other it reads as volume,
+                and without it the two paths read as direction. */}
+            {variant === 'area' && <path d={area} fill={sv.color} opacity="0.06" />}
+            <path d={line} fill="none" stroke={sv.color} strokeWidth="2.25" />
+            {data.length <= 31 && pts.map((p, i) => (
+              <circle key={i} cx={p.x} cy={p.y} r="2.5" fill={sv.color} />
+            ))}
+          </g>
+        );
+      })}
+    </g>
+  );
+
+  const renderBars = (scales) => (
+    <g>
+      {data.map((d, i) => (
+        <g key={i}>{series.map((sv, si) => barRect(d, i, sv, si, scales))}</g>
+      ))}
+    </g>
+  );
 
   return (
     <div>
@@ -96,43 +177,37 @@ function DualTrendChart({ data, series, height = 260, ariaLabel }) {
         data={data}
         values={all}
         height={height}
+        xMode={bars ? 'band' : 'point'}
         ariaLabel={ariaLabel || 'Trend chart'}
-        renderSeries={({ xAt, yAt, plot }) => (
-          <g>
-            {series.map((sv) => {
-              const pts = data.map((d, i) => ({ x: xAt(i), y: yAt(d[sv.key]) }));
-              const line = pts
-                .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
-                .join(' ');
-              const floor = plot.top + plot.height;
-              const area = `${line} L ${pts[pts.length - 1].x.toFixed(1)} ${floor} L ${pts[0].x.toFixed(1)} ${floor} Z`;
-              return (
-                <g key={sv.key}>
-                  <path d={area} fill={sv.color} opacity="0.06" />
-                  <path d={line} fill="none" stroke={sv.color} strokeWidth="2.25" />
-                  {data.length <= 31 && pts.map((p, i) => (
-                    <circle key={i} cx={p.x} cy={p.y} r="2.5" fill={sv.color} />
+        renderSeries={bars ? renderBars : renderLines}
+        renderHovered={
+          bars
+            ? (scales) => (
+                <g>
+                  {series.map((sv, si) =>
+                    barRect(data[scales.i], scales.i, sv, si, scales, {
+                      stroke: '#FFFFFF',
+                      strokeWidth: '1.5',
+                    })
+                  )}
+                </g>
+              )
+            : ({ i, xAt, yAt }) => (
+                <g>
+                  {series.map((sv) => (
+                    <circle
+                      key={sv.key}
+                      cx={xAt(i)}
+                      cy={yAt(data[i][sv.key])}
+                      r="4.5"
+                      fill={sv.color}
+                      stroke="#FFFFFF"
+                      strokeWidth="1.5"
+                    />
                   ))}
                 </g>
-              );
-            })}
-          </g>
-        )}
-        renderHovered={({ i, xAt, yAt }) => (
-          <g>
-            {series.map((sv) => (
-              <circle
-                key={sv.key}
-                cx={xAt(i)}
-                cy={yAt(data[i][sv.key])}
-                r="4.5"
-                fill={sv.color}
-                stroke="#FFFFFF"
-                strokeWidth="1.5"
-              />
-            ))}
-          </g>
-        )}
+              )
+        }
         renderTooltip={(i) => (
           <>
             <div className="font-semibold text-ink-900">{data[i].label}</div>
@@ -156,6 +231,19 @@ export default function AdvancedAnalytics() {
   const [period, setPeriod] = useState('30');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
+
+  // Which shape the trend chart is drawn in. Remembered per device, like
+  // the dashboard's privacy toggle — it is a preference about how this
+  // person reads a chart, not a fact about the business.
+  const [trendVariant, setTrendVariant] = useState(() => {
+    try { return localStorage.getItem(TREND_VARIANT_KEY) || 'area'; }
+    catch { return 'area'; }
+  });
+  const chooseTrendVariant = (next) => {
+    setTrendVariant(next);
+    try { localStorage.setItem(TREND_VARIANT_KEY, next); }
+    catch (err) { console.error('Failed to save chart style', err); }
+  };
 
   const { start, end } = useMemo(() => {
     if (period === 'custom' && customStart && customEnd) {
@@ -367,8 +455,14 @@ export default function AdvancedAnalytics() {
   const avgTransactionValue = sales.length > 0 ? summary.revenue / sales.length : 0;
   const hasSalesData = sales.length > 0;
 
+  // A caption for the KPI sparklines, so a bar has a stated meaning
+  // rather than being a shape the reader has to infer.
+  const sparkCaption = `${trend.length} ${granularity === 'week' ? 'weeks' : 'days'}`;
+
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    // Full width, like every other page: the KPI strips below run to the
+    // edge of the content area, which a centred column would stop short of.
+    <div className="space-y-6">
       <PageHeader
         title="Advanced analytics"
         description="A deeper look at profit, cash flow, and performance trends."
@@ -396,17 +490,17 @@ export default function AdvancedAnalytics() {
 
       <div>
         <h2 className="section-title mb-2">Financial performance</h2>
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-line bg-line lg:grid-cols-4">
-          <KpiCard label="Recognised revenue" value={formatKES(summary.revenue)} deltaPct={revenueChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.revenue }))} sparklineColor={PRIMARY} />
-          <KpiCard label="Gross profit" value={formatKES(summary.grossProfit)} tone={summary.grossProfit < 0 ? 'text-danger-700' : 'text-primary-700'} sparkline={trend.map((t) => ({ label: t.label, value: t.grossProfit }))} sparklineColor={PRIMARY} />
-          <KpiCard label="Net profit" value={formatKES(summary.netProfit)} tone={summary.netProfit < 0 ? 'text-danger-700' : 'text-primary-700'} deltaPct={profitChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.netProfit }))} sparklineColor={DEEP} />
-          <KpiCard label="Profit margin" value={`${margin.toFixed(1)}%`} tone={margin > 20 ? 'text-primary-700' : margin < 10 ? 'text-danger-600' : 'text-ink-900'} sparkline={trend.map((t) => ({ label: t.label, value: t.margin }))} sparklineColor={margin >= 0 ? PRIMARY : NEGATIVE} />
+        <div className="-mx-4 grid grid-cols-2 gap-px overflow-hidden border-y border-line bg-line sm:-mx-6 lg:grid-cols-4">
+          <KpiCard sparklineCaption={sparkCaption} label="Recognised revenue" value={formatKES(summary.revenue)} deltaPct={revenueChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.revenue }))} sparklineColor={PRIMARY} />
+          <KpiCard sparklineCaption={sparkCaption} label="Gross profit" value={formatKES(summary.grossProfit)} tone={summary.grossProfit < 0 ? 'text-danger-700' : 'text-primary-700'} sparkline={trend.map((t) => ({ label: t.label, value: t.grossProfit }))} sparklineColor={PRIMARY} />
+          <KpiCard sparklineCaption={sparkCaption} label="Net profit" value={formatKES(summary.netProfit)} tone={summary.netProfit < 0 ? 'text-danger-700' : 'text-primary-700'} deltaPct={profitChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.netProfit }))} sparklineColor={DEEP} />
+          <KpiCard sparklineCaption={sparkCaption} label="Profit margin" value={`${margin.toFixed(1)}%`} tone={margin > 20 ? 'text-primary-700' : margin < 10 ? 'text-danger-600' : 'text-ink-900'} sparkline={trend.map((t) => ({ label: t.label, value: t.margin }))} sparklineColor={margin >= 0 ? PRIMARY : NEGATIVE} />
         </div>
       </div>
 
       <div>
         <h2 className="section-title mb-2">Operational metrics</h2>
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-line bg-line lg:grid-cols-4">
+        <div className="-mx-4 grid grid-cols-2 gap-px overflow-hidden border-y border-line bg-line sm:-mx-6 lg:grid-cols-4">
           <KpiCard label="Total expenses" value={formatKES(summary.totalExpenses)} tone="text-danger-600" />
           <KpiCard label="Average transaction size" value={hasSalesData ? formatKES(avgTransactionValue) : 'KES 0'} />
           <KpiCard label="Credit issued" value={formatKES(summary.totalCreditSales)} tone="text-warning-600" />
@@ -415,10 +509,23 @@ export default function AdvancedAnalytics() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <Section title="Revenue and profit trend" subtitle="Recognised revenue against net profit over the selected period" className="lg:col-span-2">
+        <Section
+          title="Revenue and profit trend"
+          subtitle="Recognised revenue against net profit over the selected period"
+          className="lg:col-span-2"
+          action={hasSalesData ? (
+            <SegmentedControl
+              ariaLabel="Chart style"
+              options={TREND_VARIANTS}
+              value={trendVariant}
+              onChange={chooseTrendVariant}
+            />
+          ) : null}
+        >
           {hasSalesData ? (
             <DualTrendChart
               data={trend}
+              variant={trendVariant}
               series={[
                 { key: 'revenue', label: 'Revenue', color: PRIMARY },
                 { key: 'netProfit', label: 'Net profit', color: DEEP },
@@ -528,7 +635,7 @@ export default function AdvancedAnalytics() {
         {staffPerformance.length === 0 ? (
           <NoData>No staff attribution data found.</NoData>
         ) : (
-          <div className="overflow-x-auto rounded-panel border border-line">
+          <div className="panel-bleed overflow-x-auto">
             <table className="w-full min-w-[22rem] text-body text-left">
               <thead className="bg-ink-50 text-secondary uppercase tracking-wider font-semibold text-ink-500">
                 <tr><th className="px-4 py-3 border-b border-line">Staff member</th><th className="px-4 py-3 border-b border-line text-right">Items sold</th><th className="px-4 py-3 border-b border-line text-right">Revenue</th></tr>

@@ -317,7 +317,10 @@ export default function StockTake() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    // Full width. The count sheet below runs to the edge of the content
+    // area, which a centred column would stop short of; the 1800px
+    // ceiling lives in AppShell so every page shares one.
+    <div className="space-y-6">
       <PageHeader
         title="Stock take"
         description="Enter physical counts, or scan to jump to a product. Leave a count blank to keep it unchanged."
@@ -337,7 +340,7 @@ export default function StockTake() {
       {/* Mobile. This page keeps its own two-branch layout rather than
           using DataTable: it is a data-entry grid, and every row owns a
           focusable input that the scanner jumps to. */}
-      <div className="divide-y divide-line overflow-hidden rounded-panel border border-line bg-surface sm:hidden">
+      <div className="panel-bleed divide-y divide-line overflow-hidden sm:hidden">
         {sheet.map((row) => {
           const diff = diffFor(row);
 
@@ -447,7 +450,7 @@ export default function StockTake() {
       </div>
 
       {/* Desktop */}
-      <div className="hidden overflow-hidden rounded-panel border border-line bg-surface sm:block">
+      <div className="panel-bleed hidden overflow-hidden sm:block">
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-cell">
             <thead className="border-b border-line text-left text-label uppercase text-ink-500">
@@ -555,7 +558,7 @@ export default function StockTake() {
       {/* Recent adjustments */}
       {recentAdjustments.length > 0 && (
         <Section title="Recent stock adjustments">
-          <div className="divide-y divide-divider overflow-hidden rounded-panel border border-line bg-surface">
+          <div className="panel-bleed divide-y divide-divider overflow-hidden">
             {recentAdjustments.map((a) => (
               <div key={a.id} className="px-4 py-2.5 text-body">
                 <div className="flex items-center justify-between">

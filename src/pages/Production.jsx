@@ -175,7 +175,10 @@ export default function Production() {
   if (loading) return <LoadingSpinner label="Loading production…" />;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    // Full width. The tables and strips below run to the edge of the
+    // content area, which a centred column would stop short of; the
+    // 1800px ceiling lives in AppShell so every page shares one.
+    <div className="space-y-6">
       <PageHeader
         title="Production"
         description="Record a batch you have made. Ingredients come out, finished goods go in."
@@ -188,7 +191,7 @@ export default function Production() {
           description="Open a product, list its ingredients, and tick “Made in advance”. It will then appear here."
         />
       ) : (
-        <form onSubmit={handleProduce} className="space-y-4 rounded-panel border border-line bg-surface p-4">
+        <form onSubmit={handleProduce} className="panel-measure space-y-4 p-4 sm:max-w-2xl">
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className="label">What did you make?</label>
@@ -271,6 +274,7 @@ export default function Production() {
 
       <Section title="Recent production" hint="The last 50 runs.">
         <DataTable
+          bleed
           caption="Production runs"
           rows={runs}
           rowKey={(r) => r.id}

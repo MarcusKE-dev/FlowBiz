@@ -16,12 +16,70 @@
 //                 on a chart is data, and filled blue is only ever an
 //                 action on a control.
 //
+//   "compact"     a KPI sparkline, as BARS. Same job as MiniLineChart's
+//                 compact mode and deliberately the alternative to it: at
+//                 36px tall a line is a squiggle with no scale, no zero
+//                 and no unit, and there is nothing in it a reader can
+//                 name. One bar per bucket is a shape a person can
+//                 actually read — how many periods, which were big, which
+//                 fell below zero, and where the latest one sits.
+//
 // Colours are raw hex from theme/tokens.js, never Tailwind classes.
 
-import { CHART_SERIES, PRIMARY, NEGATIVE, DIVIDER } from '../../theme/tokens';
+import { useElementWidth } from '../../hooks/useElementWidth';
+import { CHART_SERIES, PRIMARY, NEGATIVE, DIVIDER, LINE } from '../../theme/tokens';
 import { isPlottable } from './chartGeometry';
 import PlotFrame from './PlotFrame';
 import ChartEmpty from './ChartEmpty';
+
+// The sparkline, as bars. Measured like every other chart here, so it
+// reserves exactly the height it draws into.
+//
+// Two things carry meaning and neither depends on hue: bars below the
+// baseline hang under it, and the most recent bucket is drawn at full
+// strength while the rest are held back. "Where are we now, and is it
+// above or below the line" is answerable at a glance.
+function SparkBars({ data, height, color }) {
+  const [ref, width] = useElementWidth();
+  const values = data.map((d) => Number(d.value) || 0);
+  const max = Math.max(...values, 0);
+  const min = Math.min(...values, 0);
+  const range = max - min || 1;
+  const n = values.length;
+
+  const band = n > 0 ? width / n : width;
+  const barW = Math.max(band * 0.6, 1);
+  const yAt = (v) => height - ((v - min) / range) * height;
+  const zeroY = yAt(0);
+  const crossesZero = min < 0 && max > 0;
+
+  return (
+    <div ref={ref} className="w-full" style={{ height }}>
+      {width > 0 && (
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
+          {crossesZero && (
+            <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke={LINE} strokeWidth="1" />
+          )}
+          {values.map((v, i) => {
+            const y = yAt(v);
+            return (
+              <rect
+                key={i}
+                x={band * i + (band - barW) / 2}
+                y={Math.min(y, zeroY)}
+                width={barW}
+                height={Math.max(Math.abs(zeroY - y), 1)}
+                fill={v < 0 ? NEGATIVE : color}
+                opacity={i === n - 1 ? 1 : 0.45}
+                rx={barW > 3 ? 1 : 0}
+              />
+            );
+          })}
+        </svg>
+      )}
+    </div>
+  );
+}
 
 export default function MiniBarChart({
   data,
@@ -30,10 +88,18 @@ export default function MiniBarChart({
   formatValue = (v) => String(v),
   ariaLabel,
   empty,
+  compact = false,
+  color = PRIMARY,
 }) {
-  if (!data || data.length === 0) return <ChartEmpty>{empty}</ChartEmpty>;
+  if (!data || data.length === 0) return compact ? null : <ChartEmpty>{empty}</ChartEmpty>;
 
   const values = data.map((d) => Number(d.value) || 0);
+
+  // A sparkline in a KPI cell has no room for an empty state, so it just
+  // is not there when there is nothing to show — same rule as the line.
+  if (compact) {
+    return isPlottable(values) ? <SparkBars data={data} height={height} color={color} /> : null;
+  }
 
   // ── Ranked list ────────────────────────────────────────────────────
   // A single ranked row is still a legible ranking, so this branch only

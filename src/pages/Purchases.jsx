@@ -291,12 +291,18 @@ export default function Purchases() {
   const hasProducts = products && products.length > 0;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    // Full width. The tables and strips below run to the edge of the
+    // content area, which a centred column would stop short of; the
+    // 1800px ceiling lives in AppShell so every page shares one.
+    <div className="space-y-6">
       <PageHeader
         title="Purchases"
         description="Record stock received from a supplier."
       />
-      <form onSubmit={handle} className="space-y-4 rounded-panel border border-line bg-surface p-4">
+      {/* An entry form wants a measure, not width — a 1,800px text input
+          is not an improvement. Edge to edge on a phone, a contained
+          card once there is room for one. */}
+      <form onSubmit={handle} className="panel-measure space-y-4 p-4 sm:max-w-2xl">
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label">Supplier</label>
@@ -491,6 +497,7 @@ export default function Purchases() {
           <LoadingSpinner />
         ) : (
           <DataTable
+            bleed
             caption="Recent stock purchases"
             rows={purchases}
             rowKey={(p) => p.id}

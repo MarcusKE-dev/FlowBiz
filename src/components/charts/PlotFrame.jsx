@@ -22,8 +22,9 @@
 // `xMode` is 'point' for line charts (the first and last points sit on the
 // plot edges) or 'band' for bar charts (each bucket owns a slice).
 //
-// X-axis thinning differs between the two, deliberately. A dense time
-// series is always capped at six labels. A band axis is categorical — its
+// X-axis thinning differs between the two, deliberately. A time series
+// takes as many labels as the measured plot width can actually hold, to a
+// ceiling of six — see maxTimeLabels. A band axis is categorical — its
 // labels are the categories — so it labels every bucket while the bands
 // are wide enough to hold one, and only thins when they are not. Capping
 // seven weekdays at six would label Sun-Tue and Thu-Sat and drop
@@ -33,8 +34,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { useElementWidth } from '../../hooks/useElementWidth';
 import { DIVIDER, LINE, INK_3 } from '../../theme/tokens';
 import {
-  PLOT, MIN_PLOT_WIDTH, MIN_BAND_LABEL_WIDTH,
+  PLOT, MIN_PLOT_WIDTH, LABEL_GAP,
   compactNumber, domainOf, gridValues, labelIndices,
+  estimateLabelWidth, maxLabelsFor, spaceOutLabels,
 } from './chartGeometry';
 
 export default function PlotFrame({
@@ -78,8 +80,22 @@ export default function PlotFrame({
   const scales = { xAt, yAt, plot: { ...PLOT, width: plotW, height: plotH, band } };
 
   const grid = ready ? gridValues(domain) : [];
-  const roomForEveryBand = xMode === 'band' && band >= MIN_BAND_LABEL_WIDTH;
-  const xLabels = ready ? labelIndices(n, roomForEveryBand ? n : 6) : [];
+
+  // How many x labels fit is a question about THESE labels, not about a
+  // constant. "Wed" is 22px and every weekday fits; "07 Sept" is 50px and
+  // seven of them do not, which is how the band axis came to overprint
+  // itself the moment the trend chart could be drawn as columns.
+  const labelW = estimateLabelWidth(data.map((d) => d.label));
+  const roomForEveryBand = xMode === 'band' && band >= labelW + LABEL_GAP;
+  // Distance between the first and last label's centres.
+  const labelSpan = xMode === 'band' ? Math.max(plotW - band, 0) : plotW;
+  const xLabels = ready
+    ? spaceOutLabels(
+        labelIndices(n, roomForEveryBand ? n : maxLabelsFor(labelSpan, labelW)),
+        xAt,
+        labelW
+      )
+    : [];
   const showZero = ready && domain.min < 0 && domain.max > 0;
 
   // Keep the tooltip inside the container at both ends.

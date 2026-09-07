@@ -168,7 +168,13 @@ export default function Products() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    // No `mx-auto max-w-6xl` here. The catalogue table below runs to the
+    // edge of the screen, and it cannot do that from inside a centred
+    // column — the column edge would stop it a few hundred pixels short
+    // on a desktop. The page is the full width of <main>, the header,
+    // the search box and the truncation note sit on its gutter, and the
+    // table bleeds through it.
+    <div className="space-y-6">
       <PageHeader
         title={industry.terms.catalogue}
         description={`${products.length} item${products.length === 1 ? '' : 's'} in the catalogue`}
@@ -212,6 +218,7 @@ export default function Products() {
         <LoadingSpinner />
       ) : (
         <DataTable
+          bleed
           caption="Product catalogue"
           rows={filtered}
           rowKey={(p) => p.id}

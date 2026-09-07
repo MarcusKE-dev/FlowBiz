@@ -64,10 +64,17 @@ export function StatementResult({ label, value, prefix, tone = 'neutral' }) {
   );
 }
 
+// A statement is the clearest case of content that does NOT want width.
+// It is two columns — a name and a number — so past about 40rem the extra
+// width goes entirely into the gap between them, and a reader has to
+// track across an inch of blank paper to find the figure a label belongs
+// to. So it runs edge to edge on a phone, where the alternative is a card
+// wasting 16px of a 390px screen, and settles into a contained column at
+// its natural measure everywhere else. See .panel-measure in index.css.
 export default function StatementBlock({ children, className = '' }) {
   return (
-    <div className={`overflow-hidden rounded-panel border border-line bg-surface
-                     divide-y divide-divider ${className}`}>
+    <div className={`panel-measure overflow-hidden divide-y divide-divider
+                     sm:max-w-2xl ${className}`}>
       {children}
     </div>
   );
