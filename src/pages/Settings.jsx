@@ -16,9 +16,13 @@ import PageHeader from '../components/ui/PageHeader';
 import StatusPill from '../components/ui/StatusPill';
 import Modal from '../components/common/Modal'; 
 import { raceWithTimeout } from '../utils/offlineWrite';
+import {
+  SUPPORT_EMAIL, SUPPORT_EMAIL_HREF, SUPPORT_WHATSAPP_LABEL, whatsappHref,
+} from '../lib/support';
 import { buildExportZip } from '../utils/dataExport';
 import { readExportZip, checkExistingData, importBusinessData } from '../utils/dataImport';
 import { printReceipt } from '../utils/documentService';
+import LicensingSummary from '../components/licensing/LicensingSummary';
 
 
 const RESET_CONFIRM_PHRASE = 'RESET';
@@ -43,7 +47,7 @@ const TEST_PRINT_SAMPLE = {
 };
 
 export default function Settings() {
-  const { profile, businessId, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, deleteOwnAccount } = useAuth();
+  const { profile, businessId, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, isLifetime, deleteOwnAccount } = useAuth();
   const industry = useIndustry();
   const demo = isDemoMode();
   const [loading, setLoading]     = useState(true);
@@ -417,7 +421,35 @@ export default function Settings() {
         <Section title="Account and security">
           <Row label="Email verification" value={demo ? 'Not applicable in demo mode' : emailVerified ? 'Verified' : 'Not verified'} tone={!demo && !emailVerified ? 'text-danger-700' : ''} />
           <Row label="Your role" value={profile?.role === 'owner' ? 'Owner' : 'Cashier'} />
-          <Row label="Business ID" value={businessId || '-'} mono />
+        </Section>
+
+        {/* CONTACT SUPPORT. The internal business id used to sit here and
+            meant nothing to the person reading it; what an owner actually
+            wants from this panel is a way to reach a human being.
+
+            The WhatsApp line shows the WORD, never the number — it is a
+            business line, not a published switchboard, and the number
+            lives only in the href. See lib/support.js. */}
+        <Section title="Support" description="Stuck on something? Reach us directly.">
+          <SupportRow label="Email">
+            <a
+              className="font-semibold text-primary-600 underline underline-offset-2 hover:text-primary-700"
+              href={SUPPORT_EMAIL_HREF}
+            >
+              {SUPPORT_EMAIL}
+            </a>
+          </SupportRow>
+
+          <SupportRow label="Chat">
+            <a
+              className="font-semibold text-primary-600 underline underline-offset-2 hover:text-primary-700"
+              href={whatsappHref('Hello FlowBiz support, I need help with my account.')}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {SUPPORT_WHATSAPP_LABEL}
+            </a>
+          </SupportRow>
         </Section>
 
         <Section
@@ -629,12 +661,26 @@ export default function Settings() {
           )}
         </Section>
 
-        <Section
-          title="Subscription"
- action={<Link to="/pro" className="btn-outline text-secondary !px-2">Manage</Link>}
-        >
-          <p className="text-body text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-warning-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
-        </Section>
+        {/* LICENCE AND SERVICES, NEVER ONE STATUS LINE.
+            A business that owns a perpetual licence has two separate
+            things to look at — what it owns and what it renews — so it
+            gets the full summary. Everybody else has one plan and one
+            line, exactly as before. */}
+        {isLifetime ? (
+          <Section
+            title="Licence and services"
+            action={<Link to="/pro" className="btn-outline text-secondary !px-2">Manage</Link>}
+          >
+            <LicensingSummary />
+          </Section>
+        ) : (
+          <Section
+            title="Subscription"
+            action={<Link to="/pro" className="btn-outline text-secondary !px-2">Manage</Link>}
+          >
+            <p className="text-body text-ink-500">Status: <span className={`font-semibold ${isPro ? 'text-warning-600' : 'text-ink-600'}`}>{isPro ? 'FlowBiz Pro' : 'Free'}</span></p>
+          </Section>
+        )}
 
         <Section title="Help and guide">
           <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>Open the help guide</span></Link>
@@ -820,6 +866,16 @@ function Section({ title, description, action, tone, as = 'div', children, ...re
       </div>
       {children}
     </Tag>
+  );
+}
+
+/** Same shape as Row, but the right-hand side is a link rather than text. */
+function SupportRow({ label, children }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 py-1 text-body">
+      <span className="text-ink-600">{label}</span>
+      <span>{children}</span>
+    </div>
   );
 }
 

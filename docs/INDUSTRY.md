@@ -2,6 +2,23 @@
 
 How FlowBiz serves fifteen trades without becoming fifteen products.
 
+> **This document covers CONFIGURATION — which capabilities a trade has.**
+> The food-service *behaviour* those capabilities switch on lives in
+> `src/domain/fnb`, and is documented in
+> **[ARCHITECTURE.md](./ARCHITECTURE.md)**, which is where the reasoning
+> for every decision below is set out at length. The split, in three
+> lines:
+>
+> ```
+> src/utils/       platform core — shared by every industry
+> src/industry/    configuration — what is OFFERED   ← this document
+> src/domain/fnb/  the food-service engine — what it DOES
+> ```
+>
+> `src/domain/architecture.test.js` asserts that the platform core never
+> imports a domain engine, and that nothing anywhere branches on a
+> profile id.
+
 ---
 
 ## 1. Architecture
@@ -25,9 +42,11 @@ useIndustry()  →  industry.can('batches')
 ```
 
 Nothing downstream asks *"is this a pharmacy?"*. It asks *"is `batches`
-on?"*. That single discipline is why Restaurant, Café, Fast Food and Bar
-are four sets of defaults over one food family rather than four codebases,
-and why adding a sixteenth trade means adding an entry to a table.
+on?"*. That single discipline is why Restaurant, Café, Fast Food, Bakery
+and Bar are five sets of defaults over **one** food domain engine rather
+than five codebases, and why adding a sixteenth trade means adding an
+entry to a table. `src/domain/architecture.test.js` fails the build if
+anything anywhere branches on a profile id.
 
 ### The files
 
@@ -40,8 +59,11 @@ and why adding a sixteenth trade means adding an entry to a table.
 | `src/industry/config.js` | **The only resolver.** Precedence, sanitisation, totality |
 | `src/utils/inventory.js` | **The only inventory foundation.** What moves |
 | `src/utils/stockWrites.js` | The Firestore adapter. How it is written |
-| `src/utils/orders.js` | **The only order engine** |
 | `src/utils/financials.js` | **The only money path** |
+| `src/utils/tenders.js` | How a sale was paid for — one payment, or several |
+| `src/utils/orders.js` | Table names, dining modes, and the legacy ticket shape |
+| `src/domain/fnb/` | **The food-service domain engine.** Tickets, lines, stations, checks, waste, costing, production — see [ARCHITECTURE.md](./ARCHITECTURE.md) |
+| `src/domain/fnb/ticketWrites.js` | The Firestore adapter for tickets. The only place a ticket becomes a write |
 | `cloudflare-worker/src/lib/industry.js` | The server's copy of the two lists |
 | `firestore.rules` | The third copy, enforced at the database |
 
@@ -63,7 +85,7 @@ before a feature existed stays valid and reads identically.
 
 ## 2. The capability catalogue
 
-Fifteen capabilities. `ownerConfigurable: false` means the capability
+Twenty capabilities. `ownerConfigurable: false` means the capability
 moves only with the profile, because its data model only makes sense as a
 whole.
 
@@ -77,9 +99,14 @@ whole.
 | `tables` | ✅ | `orders` | Table names on a ticket |
 | `modifiers` | ✅ | — | Options on an item, and their price deltas |
 | `diningModes` | ✅ | `orders` | Dine in / takeaway / delivery |
-| `kitchen` | ✅ | `orders` | The kitchen status flow and its dashboard tile |
+| `kitchen` | ✅ | `orders` | Item-level fulfillment (new → sent → ready → served), firing, and `/kitchen` |
+| `kitchenStations` | ✅ | `kitchen` | Routing each item to the section that makes it |
+| `courses` | ✅ | `orders` | Grouping a ticket's items, and firing one course at a time |
+| `discounts` | ✅ | `orders` | Money off a bill, with the reason recorded |
+| `serviceCharge` | ✅ | `orders` | A percentage added to a bill after any discount |
 | `recipes` | ✅ | — | Component consumption. **The only capability that changes stock arithmetic** |
-| `production` | ✅ | `recipes` | `/production`: ingredients out, finished goods in, cost written back |
+| `production` | ✅ | `recipes` | `/production`: ingredients out, finished goods in, recipe yield, short-yield costing, shelf-life batches |
+| `waste` | ✅ | — | `/waste`: stock that left without being sold, costed, reaching net profit |
 | `packSizes` | ✅ | `units` | Receive in packs, sell singles. A conversion inside the one inventory foundation |
 | `ageRestriction` | ✅ | — | A per-product flag and one confirmation at checkout |
 | `batches` | ❌ **locked** | — | Batch records, FEFO at the till, `/expiry`, per-batch stock take |
@@ -98,16 +125,16 @@ administrator changes them server-side.
 | Profile | Family | Capabilities on by default |
 |---|---|---|
 | `GENERAL_RETAIL` | Retail | *(none — the protected baseline)* |
-| `SUPERMARKET` | Retail | `barcodeLabels`, `units` |
+| `SUPERMARKET` | Retail | `barcodeLabels`, `units`, `waste` |
 | `HARDWARE` | Retail | `units`, `barcodeLabels` |
 | `BOUTIQUE` | Retail | `variants` |
 | `ELECTRONICS` | Retail | `variants`, `barcodeLabels` |
 | `WINES_AND_SPIRITS` | Retail | `barcodeLabels`, `units`, `packSizes`, `ageRestriction` |
-| `RESTAURANT` | Food | `orders`, `tables`, `modifiers`, `diningModes`, `kitchen`, `recipes` |
-| `CAFE` | Food | as Restaurant, `tables` off |
-| `FAST_FOOD` | Food | as Café, `recipes` off |
-| `BAKERY` | Food | `recipes`, `production`, `units` |
-| `BAR` | Food | `orders`, `tables`, `modifiers`, `diningModes`, `recipes`, `units`, `packSizes`, `ageRestriction` — `kitchen` off |
+| `RESTAURANT` | Food | `orders`, `tables`, `courses`, `modifiers`, `diningModes`, `kitchen`, `kitchenStations`, `discounts`, `serviceCharge`, `recipes`, `waste` |
+| `CAFE` | Food | as Restaurant, less `tables`, `courses`, `serviceCharge` — counter service, everything served as it is ready. Keeps `kitchenStations`, because a café's real split is the espresso bar against the food pass |
+| `FAST_FOOD` | Food | as Café, less `recipes` — a QSR buys portioned inputs rather than costing a plate from raw ingredients |
+| `BAKERY` | Food | `recipes`, `production`, `units`, `waste`, `discounts`, `orders` (the cake ordered for Saturday), `batches` + `expiryAlerts` (shelf life, sold oldest first) |
+| `BAR` | Food | `orders`, `tables`, `modifiers`, `diningModes`, `discounts`, `recipes`, `waste`, `units`, `packSizes`, `ageRestriction` — `kitchen` off |
 | `SALON` | Services | `services` |
 | `BARBER` | Services | `services` |
 | `GENERAL_SERVICES` | Services | `services`; hides `/purchases`, `/suppliers`, `/stock-take` |
@@ -315,6 +342,43 @@ physically on the shelf:
   correct answer: a physical count is per lot);
 - **versioned** → one row per version;
 - **everything else** → one row, exactly as before.
+
+### How stock is wasted
+
+`resolveWasteDeltas(records, products)` in `domain/fnb/waste.js` —
+spoilage, breakage, expiry. It is built there rather than routed through
+`resolveStockDeltas()` for ONE reason that matters: waste is recorded
+against a **specific batch** when a business tracks batches — you throw
+away the box that went off, not the earliest one — so it must not go
+through FEFO allocation. Everything else about the shape, and every
+rounding rule, is identical, and it is written by the same single adapter,
+so there is still exactly one answer to how stock is written.
+
+It is also the one movement that reaches **net profit**. Before it
+existed, stock thrown away carried no cost anywhere, so a business that
+binned a crate of milk recorded the loss of the stock and none of the loss
+of the money.
+
+### How stock is produced
+
+`planProduction(product, products, { batches, actualQuantity })` in
+`domain/fnb/production.js`. It replaced `resolveProductionDeltas()`'s
+assumption that finished-in equals recipe-out, which is exactly the
+assumption **short yield** breaks:
+
+```
+components consumed = per-unit recipe × PLANNED quantity
+finished goods in   = ACTUAL quantity
+unit cost           = total component cost ÷ ACTUAL quantity
+```
+
+Consumption follows the plan, because the plan is what went into the bowl.
+Cost follows the actual, because the cost of the batch has to be carried
+by what came out of it — costing at plan would make the value of the two
+loaves that stuck to the tin vanish from the books entirely.
+
+`recipe[].quantity` still means **per finished unit**, exactly as it
+always has, so no existing recipe changed what it consumes.
 
 ### How stock is reversed
 

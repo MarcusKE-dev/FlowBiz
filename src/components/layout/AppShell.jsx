@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Sidebar from './Sidebar';
 import BottomNav from './BottomNav';
 import TopHeader from './TopHeader';
+import ServiceRenewalNotice from '../licensing/ServiceRenewalNotice';
 
 // Whether the rail is pinned open. A device preference, so it lives in
 // localStorage rather than in the business document — the till's laptop
@@ -136,7 +137,15 @@ export default function AppShell({ children }) {
           column and squeezing the rail. */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopHeader />
-        <main className="flex-1 overflow-y-auto px-4 pb-28 pt-6 sm:px-6 lg:pb-8">{children}</main>
+        <main className="flex-1 overflow-y-auto px-4 pb-28 pt-6 sm:px-6 lg:pb-8">
+          {/* Inside the scrolling region, above the page, in the normal
+              document flow. It is a notice, not a gate: it never covers
+              the counter and it never has to be dismissed to sell
+              anything. It renders nothing at all unless a renewal is
+              actually approaching. */}
+          <ServiceRenewalNotice />
+          {children}
+        </main>
       </div>
       <BottomNav />
     </div>

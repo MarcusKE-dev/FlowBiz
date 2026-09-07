@@ -9,6 +9,15 @@
 // falls back to the icon instead of showing a broken-image glyph. The
 // failure is remembered against the URL that failed, so a later, working
 // photo on the same row still renders.
+//
+// `placeholder={false}` renders NOTHING at all when there is no photo,
+// rather than the icon in its box. That is what the POS grid passes for
+// a business with no photo entitlement: a Starter shop's products can
+// never have a photo, so a column of empty grey squares down the counter
+// is not a placeholder for anything — it is wasted space where the name
+// and price should be. A photo the business already owns still shows,
+// and so does the box while one is being fetched, so nothing that has an
+// image ever shifts the layout as it loads.
 
 import { useState } from 'react';
 import { Package } from 'lucide-react';
@@ -20,11 +29,14 @@ export default function ProductThumb({
   rounded = 'rounded-control',
   bordered = true,
   iconSize = 'h-4 w-4',
+  placeholder = true,
 }) {
-  const { src } = useProductImage(product);
+  const { src, loading } = useProductImage(product);
   const [failedSrc, setFailedSrc] = useState(null);
 
   const show = src && failedSrc !== src;
+
+  if (!show && !loading && !placeholder) return null;
 
   return (
     <span

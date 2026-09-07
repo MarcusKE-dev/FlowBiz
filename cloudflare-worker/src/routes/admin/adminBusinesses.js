@@ -29,17 +29,18 @@ import { assertBusinessId, intParam, searchParam, enumParam } from '../../lib/va
 import { computeBusinessUsage } from './adminBusinessUsage.js';
 import { cached, invalidate } from '../../lib/usageCache.js';
 import { recordOpsEvent, EVENT_TYPES, maskEmail } from '../../lib/opsEvents.js';
+import { resolveEntitlements } from '../../lib/licensing.js';
+import { licensingSummary } from './adminLicensing.js';
 
 const DIRECTORY_TTL_MS = 60 * 1000;
 const DETAIL_TTL_MS = 3 * 60 * 1000;
 
+// The plan a business is EFFECTIVELY on, derived through the one resolver
+// the whole product shares. It used to re-implement the same comparison
+// here, which meant the directory could disagree with the merchant's own
+// screen about whether a licence was active. It cannot now.
 function effectivePlanOf(business, now) {
-  const rawPlan = business.subscription?.plan;
-  const subStatus = business.subscription?.status || 'active';
-  const expiresAt = business.subscription?.expiresAt ? Date.parse(business.subscription.expiresAt) : null;
-  const isLifetime = rawPlan === 'lifetime' && subStatus === 'active';
-  const isPro = rawPlan === 'pro' && subStatus === 'active' && (!expiresAt || expiresAt > now);
-  return isLifetime ? 'lifetime' : isPro ? 'pro' : 'free';
+  return resolveEntitlements(business, now).plan;
 }
 
 // ── Directory ────────────────────────────────────────────────────────
@@ -68,17 +69,29 @@ export async function handleAdminBusinesses(request, env, url) {
     const now = Date.now();
     return {
       truncated,
-      rows: documents.map((b) => ({
-        id: b.id,
-        name: b.name || 'Unnamed Shop',
-        plan: effectivePlanOf(b, now),
-        subscriptionStatus: b.subscription?.status || 'active',
-        accountStatus: b.status || 'active',
-        expiresAt: b.subscription?.expiresAt || null,
-        createdAt: b.createdAt || null,
-        createdBy: b.createdBy || null,
-        ownerIds: b.ownerIds || [],
-      })),
+      rows: documents.map((b) => {
+        const e = resolveEntitlements(b, now);
+        return {
+          id: b.id,
+          name: b.name || 'Unnamed Shop',
+          plan: e.plan,
+          // The directory has to be able to answer "which lifetime
+          // customers are about to lapse?" and "whose cloud did we switch
+          // off?" without opening every business one at a time.
+          licenseStatus: e.license.status,
+          serviceStatus: e.service.status,
+          serviceExpiryDate: e.service.expiryDate ? new Date(e.service.expiryDate).toISOString() : null,
+          serviceDaysRemaining: e.service.daysRemaining,
+          cloudStatus: e.cloud.status,
+          cloudSuspendedByAdmin: e.cloud.suspendedByAdmin,
+          subscriptionStatus: b.subscription?.status || 'active',
+          accountStatus: b.status || 'active',
+          expiresAt: b.subscription?.expiresAt || null,
+          createdAt: b.createdAt || null,
+          createdBy: b.createdBy || null,
+          ownerIds: b.ownerIds || [],
+        };
+      }),
     };
   });
 
@@ -230,6 +243,9 @@ export async function handleAdminBusinessDetail(request, env, rawBusinessId) {
       ...business,
       effectivePlan: effectivePlanOf(business, Date.now()),
     },
+    // The full licence / annual services / cloud picture, derived from
+    // the same resolver the merchant's own screens use.
+    licensing: licensingSummary(business, Date.now()),
     settings,
     staff,
     invites,
@@ -250,6 +266,9 @@ export async function handleAdminBusinessDetail(request, env, rawBusinessId) {
       canEmailOwner: can(admin, 'business.accountEmail'),
       canSeePayments: showPayments,
       canInspect: can(admin, 'business.inspect'),
+      canSuspendCloud: can(admin, 'licensing.cloud'),
+      canOverrideService: can(admin, 'licensing.service'),
+      canRevokeLicense: can(admin, 'licensing.revoke'),
     },
   });
 }

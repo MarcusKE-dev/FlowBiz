@@ -15,6 +15,29 @@ import {
 import { formatDate } from '../../utils/dateRanges';
 import StatusPill from '../../components/ui/StatusPill';
 
+// A lifetime business's PLAN says nothing about whether FlowBiz is still
+// hosting anything for it, so the directory shows the annual services
+// state beside it. "LIFETIME" on its own used to be the whole story; it
+// is now half of one.
+function serviceNote(b) {
+  if (b.plan !== 'lifetime') return null;
+  if (b.cloudSuspendedByAdmin) return { text: 'cloud suspended', tone: 'text-danger-700' };
+  switch (b.serviceStatus) {
+    case 'grace':
+      return { text: `grace, ${b.serviceDaysRemaining ?? 0}d`, tone: 'text-warning-700' };
+    case 'expired':
+      return { text: 'services expired', tone: 'text-danger-700' };
+    case 'grandfathered':
+      return { text: 'pre-model licence', tone: 'text-ink-500' };
+    case 'active':
+      return Number.isFinite(b.serviceDaysRemaining) && b.serviceDaysRemaining <= 30
+        ? { text: `renews in ${b.serviceDaysRemaining}d`, tone: 'text-warning-700' }
+        : { text: 'services active', tone: 'text-ink-500' };
+    default:
+      return null;
+  }
+}
+
 // Plan reads as a coloured word, not a filled chip. The directory is a
 // list of rows, and a lozenge on every one of them buried the names.
 const PLAN_BADGE_CLASS = {
@@ -132,10 +155,13 @@ export default function AdminBusinesses() {
                     </Link>
                     <span className="font-mono text-label text-ink-400">{b.id}</span>
                   </div>
-                  <div className="flex gap-1 shrink-0">
+                  <div className="flex flex-col items-end gap-1 shrink-0">
                     <span className={`text-label leading-4 ${PLAN_BADGE_CLASS[b.plan] || PLAN_BADGE_CLASS.free}`}>
                       {b.plan.toUpperCase()}
                     </span>
+                    {serviceNote(b) && (
+                      <span className={`text-label leading-4 ${serviceNote(b).tone}`}>{serviceNote(b).text}</span>
+                    )}
                     <StatusPill tone={b.status === 'active' ? 'positive' : 'negative'}>
                       {b.status}
                     </StatusPill>
@@ -196,6 +222,9 @@ export default function AdminBusinesses() {
                         <span className={`text-label leading-4 ${PLAN_BADGE_CLASS[b.plan] || PLAN_BADGE_CLASS.free}`}>
                           {b.plan.toUpperCase()}
                         </span>
+                        {serviceNote(b) && (
+                          <span className={`block text-label leading-4 ${serviceNote(b).tone}`}>{serviceNote(b).text}</span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <StatusPill tone={b.status === 'active' ? 'positive' : 'negative'}>

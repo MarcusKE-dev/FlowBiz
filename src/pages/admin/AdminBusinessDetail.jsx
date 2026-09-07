@@ -54,6 +54,7 @@ import EmptyState from '../../components/ui/EmptyState';
 import { SkeletonRows } from '../../components/ui/Skeleton';
 import Money from '../../components/ui/Money';
 import UsagePanel, { formatBytes } from '../../components/admin/inspector/UsagePanel';
+import AdminLicensingSection from '../../components/admin/AdminLicensingSection';
 import {
   ProductsSection, SalesSection, CustomersSection, CreditsSection,
   RepaymentsSection, SuppliersSection, ExpensesSection, PurchasesSection,
@@ -565,7 +566,7 @@ export default function AdminBusinessDetail() {
                 <StatementRow
                   label="Renews / expires"
                   value={business.subscription?.expiresAt ? formatDate(business.subscription.expiresAt) : 'Never'}
-                  hint={business.subscription?.plan === 'lifetime' ? 'lifetime licence' : undefined}
+                  hint={data.licensing?.license?.owned ? 'perpetual licence, see below' : undefined}
                 />
                 <StatementRow label="Account status" value={business.status || 'active'} tone={isSuspended ? 'negative' : 'default'} />
                 {business.statusReason && <StatementRow label="Status reason" value={business.statusReason} tone="muted" />}
@@ -591,6 +592,17 @@ export default function AdminBusinessDetail() {
               </StatementBlock>
             </Section>
           </div>
+
+          {/* LICENCE AND SERVICES, ABOVE EVERYTHING ELSE THAT CAN BE
+              CHANGED. An operator who is about to act on this business
+              should see what it owns, what it renews and what is running
+              before they see any button that alters one of them. */}
+          <AdminLicensingSection
+            businessId={businessId}
+            licensing={data.licensing}
+            permissions={permissions}
+            onChanged={loadOverview}
+          />
 
           <Section
             title="Business type"

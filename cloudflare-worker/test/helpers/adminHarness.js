@@ -112,6 +112,34 @@ export function installStub() {
     const m = u.match(/\/documents\/(.+?)(\?|$)/);
     if (m) {
       const path = decodeURIComponent(m[1]);
+
+      // COLLECTION LISTING. A path with no slash is a collection, not a
+      // document, and a GET on it is Firestore's `listDocuments`. The stub
+      // used to fall through to the document branch, find nothing at the
+      // key `businesses`, and answer 404 — which made every handler that
+      // walks a whole collection (the admin directory, the renewal
+      // reminder job) silently see an empty platform in tests.
+      if (!path.includes('/') && (!init.method || init.method === 'GET')) {
+        const params = new URL(u).searchParams;
+        const pageSize = Number(params.get('pageSize')) || 100;
+        const startAfter = params.get('pageToken');
+
+        const keys = Object.keys(state.store)
+          .filter((k) => k.startsWith(`${path}/`) && k.split('/').length === 2)
+          .sort();
+        const from = startAfter ? keys.indexOf(startAfter) + 1 : 0;
+        const page = keys.slice(from, from + pageSize);
+        const more = from + pageSize < keys.length;
+
+        return new Response(JSON.stringify({
+          documents: page.map((k) => ({
+            name: `projects/${PROJECT}/databases/(default)/documents/${k}`,
+            fields: toFields(state.store[k]),
+          })),
+          ...(more ? { nextPageToken: page[page.length - 1] } : {}),
+        }), { status: 200 });
+      }
+
       if (init.method === 'DELETE') {
         if (!(path in state.store)) return new Response('', { status: 404 });
         delete state.store[path];

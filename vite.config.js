@@ -7,11 +7,31 @@ import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// `--mode emulator` runs the real Firebase SDK against the local emulator
+// suite, but the browser under test is pinned to a single origin, so the
+// emulators are reached same-origin through these path prefixes rather than
+// on :8080/:9099 directly. Dev-server only — never part of a build.
+const FIRESTORE_EMULATOR = 'http://127.0.0.1:8080';
+const AUTH_EMULATOR = 'http://127.0.0.1:9099';
+
+const emulatorProxy = {
+  '/v1': { target: FIRESTORE_EMULATOR, changeOrigin: true },
+  '/google.firestore.v1.Firestore': {
+    target: FIRESTORE_EMULATOR,
+    changeOrigin: true,
+    ws: true,
+  },
+  '/identitytoolkit.googleapis.com': { target: AUTH_EMULATOR, changeOrigin: true },
+  '/securetoken.googleapis.com': { target: AUTH_EMULATOR, changeOrigin: true },
+  '/www.googleapis.com': { target: AUTH_EMULATOR, changeOrigin: true },
+  '/emulator': { target: AUTH_EMULATOR, changeOrigin: true },
+};
+
 export default defineConfig(({ mode }) => ({
   base: mode === 'demo' ? '/demo/' : '/',
 
   build: {
-    outDir: mode === 'demo' ? 'dist/demo' : 'dist',
+    outDir: mode === 'demo' ? 'dist/demo' : mode === 'emulator' ? 'dist/emulator' : 'dist',
   },
 
   server: {
@@ -19,6 +39,15 @@ export default defineConfig(({ mode }) => ({
       usePolling: true,
       interval: 100,
     },
+    ...(mode === 'emulator' ? { proxy: emulatorProxy } : {}),
+  },
+
+  // `vite preview` serves the BUILT app with its service worker, which is
+  // the only way to exercise the offline behaviour honestly — the dev
+  // server fetches route chunks on demand, so going offline there fails the
+  // dynamic import rather than testing the product.
+  preview: {
+    ...(mode === 'emulator' ? { proxy: emulatorProxy } : {}),
   },
 
   resolve: mode === 'demo' ? {

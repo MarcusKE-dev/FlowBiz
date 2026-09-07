@@ -61,6 +61,7 @@ export const CAPABILITIES = {
   // ── Food ──────────────────────────────────────────────────────────
   orders: {
     key: 'orders',
+    family: 'FOOD',
     label: 'Open orders',
     description: 'Save an order, keep it open, add to it and charge it later.',
     ownerConfigurable: false,
@@ -68,6 +69,7 @@ export const CAPABILITIES = {
   },
   tables: {
     key: 'tables',
+    family: 'FOOD',
     label: 'Tables',
     description: 'Give open orders table names such as Table 1, Table 2.',
     ownerConfigurable: true,
@@ -75,6 +77,7 @@ export const CAPABILITIES = {
   },
   modifiers: {
     key: 'modifiers',
+    family: 'FOOD',
     label: 'Modifiers',
     description: 'Options on an item: extra cheese, no onions, large.',
     ownerConfigurable: true,
@@ -82,6 +85,7 @@ export const CAPABILITIES = {
   },
   diningModes: {
     key: 'diningModes',
+    family: 'FOOD',
     label: 'Dining mode',
     description: 'Mark an order as dine in, takeaway or delivery.',
     ownerConfigurable: true,
@@ -89,6 +93,7 @@ export const CAPABILITIES = {
   },
   kitchen: {
     key: 'kitchen',
+    family: 'FOOD',
     label: 'Kitchen status',
     description: 'Track an order through new, preparing, ready and completed.',
     ownerConfigurable: true,
@@ -98,6 +103,7 @@ export const CAPABILITIES = {
   // ── Recipes and production ────────────────────────────────────────
   recipes: {
     key: 'recipes',
+    family: 'FOOD',
     label: 'Recipes',
     description: 'Build an item from components, so selling it uses up its ingredients.',
     ownerConfigurable: true,
@@ -105,6 +111,7 @@ export const CAPABILITIES = {
   },
   production: {
     key: 'production',
+    family: 'FOOD',
     label: 'Production',
     description: 'Bake or make a batch in advance: ingredients out, finished goods in.',
     ownerConfigurable: true,
@@ -169,6 +176,35 @@ export const CAPABILITIES = {
     requires: ['batches'],
   },
 };
+
+// WHICH TRADES ARE OFFERED A SWITCH.
+//
+// `family` scopes a capability to the profile family it was designed for.
+// It is PRESENTATION SCOPING AND NOTHING ELSE: like every other field in
+// this file it decides what FlowBiz offers, never who may read or write
+// anything. A capability with no `family` is offered to every trade,
+// which is the default and stays the default.
+//
+// The reason it exists: a hardware shop was being offered "Modifiers"
+// (extra cheese, no onions) and "Recipes" (build an item from
+// ingredients) in its own settings. Both are food-service ideas with
+// nothing to configure in a shop selling timber by the metre, and a
+// settings page full of switches that mean nothing for the business
+// reading it is worse than one with fewer switches.
+//
+// Nothing is deleted and nothing is forced off — see
+// ownerConfigurableCapabilities() in config.js for how an out-of-family
+// capability that is somehow already ON stays visible so it can be turned
+// off, rather than becoming a setting nobody can reach.
+export function capabilityFamily(key) {
+  return isKnownCapability(key) ? (CAPABILITIES[key].family || null) : null;
+}
+
+/** Is this capability offered to a business in `family`? */
+export function isCapabilityInFamily(key, family) {
+  const scope = capabilityFamily(key);
+  return scope === null || scope === family;
+}
 
 export const CAPABILITY_KEYS = Object.keys(CAPABILITIES);
 

@@ -3,6 +3,8 @@ import { amountOnly, CURRENCY } from '../ui/format';
 import ProductThumb from '../products/ProductThumb';
 import { DEFAULT_UNIT, getUnit } from '../../industry/units';
 import { hasVariants, totalVariantStock } from '../../utils/variants';
+import { useAuth } from '../../contexts/AuthContext';
+import { ENTITLEMENTS } from '../../licensing';
 
 // `cartQuantities` is an optional map of productId -> quantity currently
 // in the Counter page's cart. When a product is in the cart, its tile
@@ -19,7 +21,19 @@ import { hasVariants, totalVariantStock } from '../../utils/variants';
 // sources (a plain URL on the product, a lazily-fetched Firestore
 // sidecar, or nothing) and shows a neutral placeholder until one
 // arrives — see utils/productImages.js.
+//
+// EXCEPT FOR A BUSINESS WITH NO PHOTO ENTITLEMENT. Product photos are a
+// licensed feature (src/licensing/entitlements.js), so a Starter shop
+// cannot have one — which makes the placeholder a picture of something
+// that will never arrive, repeated across every tile on the counter.
+// Those tiles drop the image row entirely and give the space to the name
+// and price. A photo the business already owns — bought on Pro, or kept
+// from before — still renders, because the entitlement decides whether a
+// MISSING photo reserves space, not whether a REAL one is shown.
 export default function ProductGrid({ products, onSelect, isAdmin = false, onEdit, cartQuantities = {} }) {
+  const { entitlements } = useAuth();
+  const photosEntitled = entitlements?.can(ENTITLEMENTS.PRODUCT_PHOTOS) === true;
+
   return (
     <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
       {products.map((p) => {
@@ -60,6 +74,7 @@ export default function ProductGrid({ products, onSelect, isAdmin = false, onEdi
                 rounded="rounded-none"
                 bordered={false}
                 iconSize="h-5 w-5"
+                placeholder={photosEntitled}
               />
               <span className="flex flex-1 flex-col justify-between gap-1 px-2 py-1.5">
                 {/* Two lines reserved either way, so the price below it

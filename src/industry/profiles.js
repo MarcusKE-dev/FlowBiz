@@ -465,12 +465,58 @@ export function baseTerms() {
   return { ...BASE_TERMS };
 }
 
-/** Profiles grouped by family, for the profile picker. */
+/** Profiles grouped by family, for the ADMIN profile picker. */
 export function profilesByFamily() {
   return Object.values(FAMILIES)
     .map((family) => ({
       ...family,
       profiles: PROFILE_IDS.map((id) => PROFILES[id]).filter((p) => p.family === family.id),
+    }))
+    .filter((group) => group.profiles.length > 0);
+}
+
+// ── What sign-up may offer ────────────────────────────────────────────
+//
+// The food family is DE-SURFACED FROM SIGN-UP, not deleted. Those
+// profiles, their capabilities, their engines and their tests all remain
+// exactly as they are — a business already on one keeps working, and a
+// platform administrator can still set one from the admin console. What
+// changes is only what a NEW business may pick for itself.
+//
+// This is a product decision, not a security boundary: nothing here
+// protects data, and nothing downstream may treat it as though it does.
+// Its job is that the two halves — the picker and the write — can never
+// disagree, which is exactly what an ad-hoc `.filter()` in a form could
+// not promise. The picker offers what `signupProfilesByFamily()` returns,
+// and the write stores what `resolveSignupProfile()` returns; both read
+// the one list below.
+
+export const SIGNUP_DEFERRED_FAMILIES = ['FOOD'];
+
+/** Is this profile something a NEW business may choose for itself? */
+export function isSignupSelectable(id) {
+  return isKnownProfile(id) && !SIGNUP_DEFERRED_FAMILIES.includes(PROFILES[id].family);
+}
+
+/**
+ * The profile id a sign-up may actually STORE.
+ *
+ * Never throws and never rejects: a deferred profile, an unknown one, or
+ * outright garbage all collapse to General Retail — the same safe default
+ * every business with no stored profile already resolves to. A form that
+ * cannot offer food is therefore backed by a write that cannot record it,
+ * whatever arrives.
+ */
+export function resolveSignupProfile(id) {
+  return isSignupSelectable(id) ? id : DEFAULT_PROFILE_ID;
+}
+
+/** Profiles grouped by family, for the SIGN-UP picker. */
+export function signupProfilesByFamily() {
+  return profilesByFamily()
+    .map((family) => ({
+      ...family,
+      profiles: family.profiles.filter((p) => isSignupSelectable(p.id)),
     }))
     .filter((group) => group.profiles.length > 0);
 }

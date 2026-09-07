@@ -139,6 +139,65 @@ export async function updateBusinessSubscription(businessId, { plan, status, dur
   return data;
 }
 
+// ── Licensing and annual cloud services ───────────────────────────────
+//
+// SEPARATE FROM updateBusinessSubscription ON PURPOSE. That endpoint
+// writes the monthly plan record and nothing else; these write the
+// perpetual licence, its annual services period, and the administrative
+// cloud suspension. Collapsing them into one "change plan" call is what
+// would let somebody revoke a licence by picking an option from a
+// dropdown, which is the failure mode the split exists to prevent.
+//
+// As everywhere else in this file, nothing here is a security control.
+// The Worker re-derives the administrator's role and the capability each
+// action needs on every request — `licensing.cloud` to suspend or
+// restore, `licensing.service` to move a service period or migrate a
+// legacy licence, `licensing.revoke` (SUPER_ADMIN only) to revoke.
+
+export async function fetchBusinessLicensing(businessId) {
+  const headers = await getAdminAuthHeaders();
+  const res = await fetch(`${FLOWBIZ_API_URL}/api/admin/businesses/${businessId}/licensing`, { headers });
+  assertEndpointExists(res, 'The licence and cloud services panel');
+  const data = await readJson(res);
+  if (!res.ok) throw new Error(data.error || 'Failed to load licensing details.');
+  return data;
+}
+
+/**
+ * @param {string} businessId
+ * @param {{action: 'suspend-cloud'|'restore-cloud'|'set-service'|'migrate'|'revoke-license'|'reinstate-license',
+ *          reason: string, serviceExpiryDate?: string, graceDays?: number, months?: number}} payload
+ */
+export async function performLicensingAction(businessId, payload) {
+  const headers = await getAdminAuthHeaders();
+  const res = await fetch(`${FLOWBIZ_API_URL}/api/admin/businesses/${businessId}/licensing`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+  assertEndpointExists(res, 'Licensing actions');
+  const data = await readJson(res);
+  if (!res.ok) throw new Error(data.error || 'The licensing action could not be completed.');
+  return data;
+}
+
+/**
+ * Runs, or previews, the annual services renewal reminder job. A dry run
+ * sends nothing and records nothing; it reports what would go out.
+ */
+export async function runRenewalReminders({ dryRun = true } = {}) {
+  const headers = await getAdminAuthHeaders();
+  const res = await fetch(`${FLOWBIZ_API_URL}/api/admin/licensing/reminders`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ dryRun }),
+  });
+  assertEndpointExists(res, 'Renewal reminders');
+  const data = await readJson(res);
+  if (!res.ok) throw new Error(data.error || 'The reminder job could not be run.');
+  return data;
+}
+
 // Industry profile and capability overrides. Presentation and behaviour
 // only — the endpoint behind this cannot reach a plan, an entitlement or
 // any operational record, and it refuses any profile or capability that

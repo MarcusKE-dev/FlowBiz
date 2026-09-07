@@ -296,7 +296,7 @@ export default function Dashboard() {
     const write = addDoc(tenantCollection('suppliers'), withBusiness({ ...supplierData, createdAt: serverTimestamp() }, businessId));
     const { queuedOffline, value: ref, error } = await raceWithTimeout(write, 4000);
     if (error) { toast.error(friendlyErrorMessage(error)); throw error; }
-    if (!queuedOffline) {
+    if (ref?.id) {
       setNewSupplierId(ref.id);
       await refetchSuppliers();
     }

@@ -96,6 +96,134 @@ service cloud.firestore {
       return isStaff() && (isOwner() || cashierMay('expenses.record', legacyExpensesDefault()));
     }
 
+    // ── Cloud service entitlement ───────────────────────────────────────
+    //
+    // THE ENFORCEMENT HALF of src/licensing/. The resolver in that
+    // directory is the readable, testable model of the whole commercial
+    // arrangement; what lives HERE is the only thing that actually stops
+    // a write when a business's hosted services are not entitled.
+    //
+    // Rules cannot run that resolver, so the Worker reduces the entire
+    // question to ONE stored timestamp when it writes a service period:
+    // `licensing.cloudEntitledUntil` is the instant the grace window
+    // closes. A business with no `licensing` map at all — every free
+    // account, every monthly Pro account, every business created before
+    // this existed — has no such field and is entitled, which is exactly
+    // today's behaviour.
+    //
+    // WHAT THIS GATES, AND WHAT IT DELIBERATELY DOES NOT. It gates the
+    // two surfaces that consume real hosted resources and can be withheld
+    // without destroying anything: cloud STORAGE (productImages) and
+    // cloud-hosted DOCUMENT PUBLISHING (sharedDocuments). It does NOT
+    // gate sales, stock, customers, expenses or any other business
+    // record, and that is a decision, not an omission — FlowBiz records a
+    // sale into a local cache that syncs later, so denying that write
+    // would mean a rejected mutation, a reverted local write, and a
+    // shop's takings gone. Withholding a hosted convenience is a
+    // legitimate way to collect a service fee; destroying a customer's
+    // records is not. See docs/LICENSING.md.
+    //
+    // READS ARE NEVER GATED. A business whose services have lapsed can
+    // still see every product photo and every document it already owns.
+    // Nothing here deletes anything, ever.
+
+    // A MISSING BUSINESS DOCUMENT IS NOT A SUSPENSION. Every business
+    // created through Setup.jsx has one, but a rule that errors when it
+    // is absent would fail closed and stop a shop saving a product photo
+    // over a data problem that has nothing to do with billing. The
+    // absence of a licensing record means "no service period applies",
+    // which is the entitled answer.
+    function myBusiness() {
+      let bizPath = /databases/$(database)/documents/businesses/$(myBusinessId());
+      return exists(bizPath) ? get(bizPath).data : {};
+    }
+
+    function myLicensing() {
+      return myBusiness().get('licensing', {});
+    }
+
+    function mySubscription() {
+      return myBusiness().get('subscription', {});
+    }
+
+    function cloudServicesActive() {
+      let lic = myLicensing();
+      return lic.get('cloudSuspended', false) != true
+             && (lic.get('cloudEntitledUntil', null) == null
+                 || request.time < lic.get('cloudEntitledUntil', null));
+    }
+
+    // ── The LICENSED feature set ────────────────────────────────────────
+    //
+    // `features.pro` in src/licensing/entitlements.js, restated in the one
+    // language that can actually refuse a write. This is a DIFFERENT
+    // question from cloudServicesActive() above and the two must not be
+    // conflated: a lifetime customer whose annual services lapsed keeps
+    // every licensed feature and loses only the hosted ones.
+    //
+    // Both records the resolver reads are here, and neither is
+    // client-writable (see the businesses rules below) — a browser cannot
+    // grant itself a plan, so reading them is safe.
+    //
+    //   licensing.licenseType == 'lifetime'      the modern record
+    //   subscription.plan     == 'lifetime'      every licence sold before
+    //                                            that record existed
+    //   subscription.plan     == 'pro'           the monthly plan
+    //
+    // A revoked licence is not a licence. An `expiresAt` that is not a
+    // timestamp cannot be compared, and is treated as no expiry — the same
+    // direction the client resolver fails in, which is "the customer keeps
+    // working" rather than "the customer is locked out over a bad write".
+    function ownsPerpetualLicense() {
+      let lic = myLicensing();
+      let sub = mySubscription();
+      return (lic.get('licenseType', '') == 'lifetime'
+              || (sub.get('plan', '') == 'lifetime' && sub.get('status', '') != 'cancelled'))
+             && lic.get('licenseStatus', '') != 'revoked';
+    }
+
+    function proSubscriptionActive() {
+      let sub = mySubscription();
+      return sub.get('plan', '') == 'pro'
+             && sub.get('status', '') == 'active'
+             && (!(sub.get('expiresAt', null) is timestamp)
+                 || request.time < sub.get('expiresAt', null));
+    }
+
+    /** `can('features.pro')`, and with it `can('features.productPhotos')`. */
+    function hasProFeatures() {
+      return ownsPerpetualLicense() || proSubscriptionActive();
+    }
+
+    // ── Product photos as a licensed feature ────────────────────────────
+    //
+    // Whether a product document CLAIMS to have a photo — either the
+    // sidecar pointer the form writes, or a plain URL. Both are checked,
+    // because pointing `imageUrl` at somebody else's picture would be a
+    // photo obtained without the licence just as much as uploading one.
+    function claimsProductPhoto(data) {
+      return data.get('hasImage', false) == true
+             || (data.get('imageUrl', null) is string && data.get('imageUrl', '').size() > 0);
+    }
+
+    function touchesPhotoPointer(existing, incoming) {
+      return incoming.diff(existing).affectedKeys().hasAny(['hasImage', 'imageUrl', 'imageUpdatedAt']);
+    }
+
+    /**
+     * ADDING a photo pointer needs the licence. CLEARING one never does,
+     * and neither does an edit that leaves the pointer exactly as it was —
+     * so a business that had photos and no longer has the entitlement can
+     * still rename, reprice and restock every product it owns, and can
+     * still remove a photo it no longer wants. Nothing here deletes a
+     * stored image, and nothing here rewrites one.
+     */
+    function photoClaimAllowed(existing, incoming) {
+      return !touchesPhotoPointer(existing, incoming)
+             || !claimsProductPhoto(incoming)
+             || hasProFeatures();
+    }
+
     function isValidInviteClaim(inviteId, businessId, role) {
       let invite = get(/databases/$(database)/documents/staffInvites/$(inviteId)).data;
       return invite.claimed == false && invite.businessId == businessId && invite.role == role;
@@ -137,10 +265,22 @@ service cloud.firestore {
     // ── Businesses ──────────────────────────────────────────────────────
     match /businesses/{businessId} {
       allow get: if isStaff() && myBusinessId() == businessId;
+      // `createdBy` MUST NAME THE CALLER. It is the proof the owner-profile
+      // rule below leans on, so if a caller could pick it freely that rule
+      // would be built on sand: forge a business in a victim's name, then
+      // create an owner profile against it.
       allow create: if isSignedIn()
+                    && request.resource.data.createdBy == request.auth.uid
                     && request.resource.data.subscription.plan == 'free';
+      // NEITHER BILLING RECORD IS CLIENT-WRITABLE. `subscription` is the
+      // monthly plan; `licensing` is the perpetual licence, the annual
+      // services period, the grace window and the administrative cloud
+      // suspension. Both are written only by the Cloudflare Worker
+      // through the service account, which bypasses these rules — so a
+      // browser cannot grant itself a licence, push its own expiry date
+      // out, or lift a suspension an administrator applied.
       allow update: if isOwner() && myBusinessId() == businessId
-                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription']);
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription', 'licensing']);
       allow delete: if false;
     }
 
@@ -329,12 +469,35 @@ service cloud.firestore {
       allow get: if isSignedIn() && request.auth.uid == userId;
       allow list: if isOwner() && resource.data.businessId == myBusinessId();
 
+      // CROSS-TENANT TAKEOVER, and what stops it.
+      //
+      // This rule validated the INVITE path properly and let the OWNER
+      // path through on any `businessId` string at all. A businessId is
+      // not secret — `staffInvites` is deliberately `allow get: if true`
+      // so a join link works before sign-in — so any account that could
+      // sign up could write itself an owner profile carrying a victim's
+      // businessId and inherit that entire workspace: every product,
+      // customer, sale and setting, with read, write and delete.
+      //
+      // An owner profile may now only be created for a business whose
+      // `createdBy` is the caller.
+      //
+      // getAfter(), NOT get(), and this is the crux. Sign-up writes the
+      // business, the profile and the settings in ONE writeBatch, so when
+      // this rule runs the business does not exist yet and a plain get()
+      // sees nothing — the check would refuse every genuine sign-up.
+      // getAfter() evaluates against the state the commit PROPOSES, which
+      // is what makes an atomic batch and an ownership check compatible.
+      // The businesses rule above is what makes `createdBy` trustworthy.
       allow create: if isSignedIn() && request.auth.uid == userId
                     && request.resource.data.role in ['owner', 'cashier']
                     && request.resource.data.businessId is string
                     && request.resource.data.businessId.size() > 0
                     && (
-                      request.resource.data.role == 'owner'
+                      (
+                        request.resource.data.role == 'owner'
+                        && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.createdBy == request.auth.uid
+                      )
                       ||
                       (
                         request.resource.data.claimedFromInviteId is string
@@ -411,7 +574,12 @@ service cloud.firestore {
       // Creating and editing an item is `catalogue.manage`, which is OFF
       // for a cashier unless the owner grants it. DELETING one is nobody
       // but the owner's, and is not a permission anyone can be given.
-      allow create: if owns(request.resource.data) && may('catalogue.manage', false);
+      //
+      // A product may only be CREATED carrying a photo pointer by a
+      // business licensed for photos. A product with no photo is
+      // unaffected, which is every Starter product.
+      allow create: if owns(request.resource.data) && may('catalogue.manage', false)
+                    && (!claimsProductPhoto(request.resource.data) || hasProFeatures());
       // A cashier may move INVENTORY QUANTITY and nothing else — not a
       // price, not a name, not a supplier. `variantStock` is added to the
       // same allowance for exactly the same reason `stock` is there: a
@@ -422,10 +590,18 @@ service cloud.firestore {
       // else. See utils/variants.js for why variant quantities live in a
       // map rather than inside the `variants` array: Firestore can only
       // atomically increment a nested map field.
-      allow update: if ownsUpdate(resource.data, request.resource.data) && (
-        may('catalogue.manage', false) ||
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'variantStock', 'updatedAt'])
-      );
+      //
+      // The photo pointer (`hasImage`, `imageUrl`, `imageUpdatedAt`) is the
+      // product half of the licensed-feature check on `productImages`
+      // below. Without it a Starter business could not store a photo but
+      // could still point its product at one — a URL it already had, or
+      // somebody else's — and the counter would render it.
+      allow update: if ownsUpdate(resource.data, request.resource.data)
+        && photoClaimAllowed(resource.data, request.resource.data)
+        && (
+          may('catalogue.manage', false) ||
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'variantStock', 'updatedAt'])
+        );
       allow delete: if isOwner() && owns(resource.data);
     }
 
@@ -440,12 +616,36 @@ service cloud.firestore {
     // camera JPEG straight in would both hit that cap and make the
     // counter unusable on a weak connection. The client optimiser targets
     // 45KB (~62KB base64); 250,000 characters is a generous ceiling.
+    //
+    // TWO SEPARATE ENTITLEMENTS GUARD A WRITE HERE, and they answer
+    // different questions.
+    //
+    // THE LICENCE. Product photos are a Pro feature, so storing one needs
+    // `hasProFeatures()` — Pro or a perpetual licence. A Starter business
+    // has no photo entitlement, and this is the line that means it: no
+    // amount of devtools, no hand-built SDK call and no offline write
+    // that syncs later gets a photo into this collection without one.
+    //
+    // CLOUD STORAGE. Storing a photo also consumes hosted storage, so a
+    // new or replaced photo needs an active cloud services entitlement on
+    // top. A lapsed service period is not a lost licence and the reverse
+    // is not true either, which is why both are asked.
+    //
+    // READING one never needs either, and DELETING one never does: a
+    // business whose services lapsed — or whose Pro month ran out — keeps
+    // every photo it has and stays able to tidy its own catalogue. No
+    // expiry, no downgrade and no administrative suspension removes a
+    // single stored image.
     match /productImages/{id} {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data) && may('catalogue.manage', false)
+                    && hasProFeatures()
+                    && cloudServicesActive()
                     && request.resource.data.dataUrl is string
                     && request.resource.data.dataUrl.size() < 250000;
       allow update: if ownsUpdate(resource.data, request.resource.data) && may('catalogue.manage', false)
+                    && hasProFeatures()
+                    && cloudServicesActive()
                     && request.resource.data.dataUrl is string
                     && request.resource.data.dataUrl.size() < 250000;
       allow delete: if isOwner() && owns(resource.data);
@@ -568,9 +768,16 @@ service cloud.firestore {
       allow delete: if isOwner() && owns(resource.data);
     }
 
+    // CLOUD-HOSTED DOCUMENT PUBLISHING. A shared document is served to the
+    // public internet by the Worker at /r/<token>, which is a hosted
+    // service, so PUBLISHING a new one needs an active cloud services
+    // entitlement. Links already issued keep working, and the merchant
+    // keeps reading and deleting their own. Printing and downloading a
+    // receipt happen entirely in the browser and are not affected at all.
     match /sharedDocuments/{token} {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data)
+                    && cloudServicesActive()
                     && request.resource.data.documentType in ['receipt', 'invoice', 'debtPaymentReceipt'];
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
@@ -613,6 +820,25 @@ service cloud.firestore {
       allow create: if owns(request.resource.data) && may('stock.count', false);
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
+    }
+
+    // ── Payments: READ-ONLY, and only your own ──────────────────────────
+    //
+    // The customer's billing history. Every document here is written by
+    // the Cloudflare Worker alone — /api/paystack/initialize records the
+    // pending payment and the webhook confirms it — and NOTHING a browser
+    // can do reaches this collection with a write. That is what keeps it
+    // an honest record: a merchant who could write here could mint
+    // themselves a KES 3,000 renewal.
+    //
+    // The read is new. Until now the collection had no rule at all, so it
+    // was denied outright and a merchant could not see what they had paid
+    // for without asking support. An OWNER may now read their own
+    // business's payments and nothing else — a cashier may not, because a
+    // shop's billing is not a cashier's business.
+    match /payments/{reference} {
+      allow read: if isOwner() && resource.data.businessId == myBusinessId();
+      allow write: if false;
     }
 
     // Opening the counter is part of starting a shift; CLOSING the day is

@@ -3,6 +3,7 @@ import { verifyAdminAuth, requirePermission, logAdminAction, requestContext } fr
 import { assertBusinessId } from '../../lib/validate.js';
 import { invalidate } from '../../lib/usageCache.js';
 import { getDocument, patchDocument } from '../../lib/firestore.js';
+import { resolveEntitlements } from '../../lib/licensing.js';
 
 export async function handleAdminSubscriptionUpdate(request, env, rawBusinessId) {
   let admin;
@@ -32,6 +33,28 @@ export async function handleAdminSubscriptionUpdate(request, env, rawBusinessId)
 
   const business = await getDocument(env, 'businesses', businessId);
   if (!business) return errorResponse('Business not found.', 404);
+
+  // THIS ENDPOINT PREDATES THE LICENSING LAYER and only ever writes
+  // `subscription`, which is the monthly plan's record. A business that
+  // owns a perpetual licence has that licence recorded in `licensing`,
+  // and nothing here can reach it — so granting such a business "free"
+  // would leave two records disagreeing in the console while the customer
+  // still, correctly, owned their software.
+  //
+  // Rather than let an administrator create that contradiction by
+  // accident, the plan control steps aside for licensed businesses and
+  // points at the tools that actually govern them. Revoking a licence is
+  // a deliberate, SUPER_ADMIN action on the licensing endpoint; it is not
+  // something anybody should be able to do by picking "free" from a
+  // dropdown built for monthly subscriptions.
+  const entitlements = resolveEntitlements(business, Date.now());
+  if (entitlements.license.owned && plan !== 'lifetime') {
+    return errorResponse(
+      'This business owns a FlowBiz Lifetime Licence. Use the licensing controls to suspend cloud services, '
+      + 'adjust the annual services period, or revoke the licence. The monthly plan control cannot change it.',
+      409,
+    );
+  }
 
   const now = new Date();
   let expiresAt = null;

@@ -40,6 +40,7 @@ import {
 import { createProduct } from '../utils/products';
 import { printReceipt, generateReceiptPDF, printInvoice, generateInvoicePDF, sendWhatsAppDocument } from '../utils/documentService';
 import { getOrCreateShareLink } from '../utils/documentSharing';
+import { useCloudDocuments } from '../hooks/useCloudDocuments';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
 import ConfirmDialog from '../components/common/ConfirmDialog';
@@ -103,6 +104,7 @@ function shouldUseScannerDock() {
 
 export default function Counter() {
   const { profile, isAdmin, isPro, businessId } = useAuth();
+  const { canPublish: canShareLink, blockedMessage: shareBlockedMessage } = useCloudDocuments();
   // What this person may do at the counter, from the one catalogue in
   // src/industry/permissions.js. `isAdmin` still answers the questions
   // that are the owner's alone; everything an owner can DELEGATE is asked
@@ -852,6 +854,12 @@ export default function Counter() {
       return;
     }
     if (!desktopLastSale) return;
+    // Publishing the public document link is a cloud service. Print and
+    // Download beside this button are not, and stay available either way.
+    if (!canShareLink) {
+      toast.error(shareBlockedMessage);
+      return;
+    }
     setDesktopSendingWhatsApp(true);
     try {
       const documentUrl = await getOrCreateShareLink({
@@ -997,7 +1005,7 @@ export default function Counter() {
       toast.error(friendlyErrorMessage(error));
       throw error;
     }
-    if (!queuedOffline) {
+    if (ref?.id) {
       setNewSupplierId(ref.id);
       await refetchSuppliers();
     }
@@ -1615,7 +1623,7 @@ export default function Counter() {
                     <button
                       type="button"
                       onClick={handleDesktopWhatsApp}
-                      disabled={desktopSendingWhatsApp}
+                      disabled={desktopSendingWhatsApp || !canShareLink}
  className="btn-primary flex shrink-0 items-center gap-1 !px-3 text-secondary"
                     >
                       <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -1627,6 +1635,9 @@ export default function Counter() {
                     </Link>
                   )}
                 </div>
+                {!canShareLink && (
+                  <p className="text-label leading-relaxed text-ink-500">{shareBlockedMessage}</p>
+                )}
               </div>
             </div>
           )}

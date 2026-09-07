@@ -486,6 +486,56 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "orderLines",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "businessId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "orderId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "seq",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "waste",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "businessId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "recordedAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "orderLines",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "businessId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "open",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "seq",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

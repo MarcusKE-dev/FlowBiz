@@ -6,3 +6,8 @@ dist-ssr
 .env.local
 .DS_Store
 dev-dist
+.playwright-mcp
+
+# Emulator output — regenerated on every local run, never meaningful in a diff.
+firebase-debug.log
+firestore-debug.log

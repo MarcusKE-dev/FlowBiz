@@ -8,6 +8,19 @@
 //      amount cross-checked against what /initialize recorded (proves the
 //      payment was for what we actually charged, not whatever the payload
 //      claims)
+//
+// ── What a confirmed payment does ─────────────────────────────────────
+//
+//   pro             → extends the monthly subscription by 30 days.
+//                     Untouched by the licensing work.
+//   lifetime        → creates the PERPETUAL LICENCE and starts the first
+//                     12-month annual services period, in one write.
+//   annual_services → extends the annual services period by 12 months,
+//                     FROM THE EXISTING EXPIRY when one is still running.
+//                     The licence itself is not involved.
+//
+// Nothing here can ever expire, revoke or shorten a licence. The only
+// licence field this file writes is the one that creates it.
 
 import { errorResponse } from '../lib/response.js';
 import { getDocument, patchDocument } from '../lib/firestore.js';
@@ -17,6 +30,12 @@ import { getDocument, patchDocument } from '../lib/firestore.js';
 // protections above — HMAC, idempotency, server-side re-verification —
 // and the subscription arithmetic are untouched.
 import { recordOpsEvent, EVENT_TYPES } from '../lib/opsEvents.js';
+import {
+  lifetimeActivationPayload,
+  serviceRenewalPayload,
+  resolveEntitlements,
+  toDate,
+} from '../lib/licensing.js';
 
 function bytesToHex(bytes) {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -82,6 +101,12 @@ export async function handlePaystackWebhook(request, env) {
   }
 
   // IDEMPOTENCY — Paystack can and does redeliver webhooks.
+  //
+  // THIS IS THE ONLY THING STANDING BETWEEN A REDELIVERED EVENT AND A
+  // DOUBLE RENEWAL. A payment reference is minted once per checkout and
+  // its document flips to `success` exactly once, so the twelve months
+  // added below can only ever be added once per reference no matter how
+  // many times Paystack sends the same event.
   if (paymentRecord.status === 'success') {
     return new Response('ok', { status: 200 });
   }
@@ -98,7 +123,7 @@ export async function handlePaystackWebhook(request, env) {
       type: EVENT_TYPES.WEBHOOK_VERIFY_FAILED,
       severity: 'error',
       source: 'webhook',
-      message: 'Paystack re-verification did not confirm this transaction as successful; no subscription was granted.',
+      message: 'Paystack re-verification did not confirm this transaction as successful; no entitlement was granted.',
       businessId: paymentRecord.businessId || null,
       reference,
       context: { paystackStatus: tx?.status || 'none', httpOk: verifyRes.ok },
@@ -111,7 +136,7 @@ export async function handlePaystackWebhook(request, env) {
       type: EVENT_TYPES.WEBHOOK_AMOUNT_MISMATCH,
       severity: 'error',
       source: 'webhook',
-      message: 'A verified Paystack transaction did not match the amount FlowBiz recorded at initialisation; the subscription was NOT activated.',
+      message: 'A verified Paystack transaction did not match the amount FlowBiz recorded at initialisation; nothing was activated.',
       businessId: paymentRecord.businessId || null,
       reference,
       context: { expectedKobo: expectedAmountKobo, receivedKobo: tx.amount, currency: tx.currency },
@@ -134,6 +159,8 @@ export async function handlePaystackWebhook(request, env) {
   }
 
   const now = new Date();
+  const entitlements = resolveEntitlements(business, now);
+  const holdsLifetime = entitlements.license.owned;
 
   // A CONFIRMED PRO PAYMENT MUST NEVER DEMOTE A LIFETIME LICENCE.
   //
@@ -146,9 +173,7 @@ export async function handlePaystackWebhook(request, env) {
   // below. The payment itself is real and stays recorded as successful;
   // what it must not do is take away something the business already
   // bought outright.
-  const holdsLifetime =
-    business.subscription?.plan === 'lifetime' && business.subscription?.status === 'active';
-  if (holdsLifetime && paymentRecord.plan !== 'lifetime') {
+  if (holdsLifetime && paymentRecord.plan === 'pro') {
     await recordOpsEvent(env, {
       type: EVENT_TYPES.WEBHOOK_VERIFY_FAILED,
       severity: 'warning',
@@ -166,29 +191,120 @@ export async function handlePaystackWebhook(request, env) {
     return new Response('ok', { status: 200 });
   }
 
-  let newSubscription;
+  // ── Apply the payment ────────────────────────────────────────────────
+  const updates = {};
+  const events = [];
+
   if (paymentRecord.plan === 'lifetime') {
-    // One-time, perpetual — no expiry, no extension math. Idempotency
-    // above already guarantees this branch only ever runs once per
-    // payment reference, so a redelivered webhook can't "grant" it twice.
-    newSubscription = { plan: 'lifetime', status: 'active', expiresAt: null, purchasedAt: now };
+    if (holdsLifetime) {
+      // Two lifetime checkouts, both paid. /initialize refuses the second,
+      // so this is a stale tab completed after the first one landed. The
+      // customer-favourable, non-destructive answer is to treat the money
+      // as service time rather than reset the licence — resetting would
+      // recompute the service period from today and could SHORTEN a
+      // period they had already extended.
+      updates.licensing = serviceRenewalPayload(business, {
+        now, reference, amountKes: paymentRecord.amountKes,
+      });
+      events.push({
+        type: EVENT_TYPES.SERVICE_RENEWED,
+        severity: 'warning',
+        message: 'A second Lifetime payment arrived for a business that already owns a licence. It was applied as a 12-month service extension rather than re-creating the licence.',
+      });
+    } else {
+      // One-time, perpetual — no expiry, no extension math on the licence
+      // itself. Idempotency above already guarantees this branch only ever
+      // runs once per payment reference.
+      updates.licensing = lifetimeActivationPayload(business, {
+        now, reference, amountKes: paymentRecord.amountKes,
+      });
+      // `subscription` is kept in step so every existing reader — the
+      // admin directory, an older browser build, the purge tooling — keeps
+      // seeing the plan it already understands. It is a MIRROR of the
+      // licence, never the authority for it.
+      updates.subscription = { plan: 'lifetime', status: 'active', expiresAt: null, purchasedAt: now };
+      events.push({
+        type: EVENT_TYPES.LICENSE_ACTIVATED,
+        severity: 'info',
+        message: 'A FlowBiz Lifetime Licence was activated, including the first 12 months of cloud services, maintenance, updates and support.',
+      });
+      events.push({
+        type: EVENT_TYPES.SERVICE_PERIOD_STARTED,
+        severity: 'info',
+        message: 'The first annual cloud services period started with a Lifetime Licence purchase.',
+      });
+    }
+  } else if (paymentRecord.plan === 'annual_services') {
+    if (!holdsLifetime) {
+      // A renewal for a business with no licence to renew. The money is
+      // real and is recorded as such, but nothing is granted and a human
+      // has to look at it — silently extending a service period for a
+      // business that owns nothing would invent an entitlement.
+      await recordOpsEvent(env, {
+        type: EVENT_TYPES.SERVICE_RENEWAL_UNAPPLIED,
+        severity: 'error',
+        source: 'webhook',
+        message: 'An annual services payment was confirmed for a business that does not own a Lifetime Licence. The payment is recorded and needs manual review.',
+        businessId,
+        reference,
+        dedupe: false,
+      });
+      await patchDocument(env, 'payments', reference, {
+        status: 'success',
+        confirmedAt: now,
+        paystackTransactionId: String(tx.id || ''),
+        applied: false,
+        unappliedReason: 'no_lifetime_license',
+      });
+      return new Response('ok', { status: 200 });
+    }
+
+    updates.licensing = serviceRenewalPayload(business, {
+      now, reference, amountKes: paymentRecord.amountKes,
+    });
+    events.push({
+      type: EVENT_TYPES.SERVICE_RENEWED,
+      severity: 'info',
+      message: 'Annual cloud services, maintenance, updates and support were renewed for 12 months.',
+    });
   } else {
     const currentExpiry = business.subscription?.expiresAt ? new Date(business.subscription.expiresAt) : null;
     // Extend from the current expiry if still active; otherwise start fresh from now.
     const base = currentExpiry && currentExpiry > now ? currentExpiry : now;
-    const newExpiry = addDays(base, 30);
-    newSubscription = { plan: 'pro', status: 'active', expiresAt: newExpiry };
+    updates.subscription = { plan: 'pro', status: 'active', expiresAt: addDays(base, 30) };
   }
 
-  await patchDocument(env, 'businesses', businessId, {
-    subscription: newSubscription,
-  });
+  await patchDocument(env, 'businesses', businessId, updates);
 
   await patchDocument(env, 'payments', reference, {
     status: 'success',
     confirmedAt: now,
     paystackTransactionId: String(tx.id || ''),
+    applied: true,
+    // Recorded on the payment so a billing history line can say what the
+    // money actually bought without re-deriving it from the licence.
+    serviceExpiryAfter: toDate(updates.licensing?.serviceExpiryDate) || null,
   });
+
+  for (const item of events) {
+    await recordOpsEvent(env, {
+      type: item.type,
+      severity: item.severity,
+      source: 'webhook',
+      message: item.message,
+      businessId,
+      reference,
+      // Every one of these is a distinct financial event. See opsEvents.js.
+      dedupe: false,
+      context: {
+        plan: paymentRecord.plan,
+        amountKes: paymentRecord.amountKes || 0,
+        serviceExpiry: updates.licensing?.serviceExpiryDate
+          ? new Date(updates.licensing.serviceExpiryDate).toISOString()
+          : 'none',
+      },
+    });
+  }
 
   return new Response('ok', { status: 200 });
 }

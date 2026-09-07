@@ -1,10 +1,35 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ANNUAL_SERVICE_PRICE_KES, LIFETIME_LICENSE_PRICE_KES, GRACE_PERIOD_DAYS, formatPrice } from '../../licensing';
+
+const LIFETIME_PRICE = formatPrice(LIFETIME_LICENSE_PRICE_KES);
+const SERVICE_PRICE = formatPrice(ANNUAL_SERVICE_PRICE_KES);
 
 export function FaqSection() {
   const [openIndex, setOpenIndex] = useState(0);
 
   const faqs = [
+    // THE THREE QUESTIONS A LIFETIME BUYER ACTUALLY ASKS, answered before
+    // they buy rather than in a support ticket afterwards. They lead the
+    // list on purpose: the commercial model is the thing most likely to
+    // be misunderstood, and a landing page that buries it is a landing
+    // page that mis-sells.
+    {
+      question: `What exactly do I get for the ${LIFETIME_PRICE} Lifetime Licence?`,
+      answer: `A permanent licence to use the licensed FlowBiz application. It is a one-time purchase and the licence itself never expires. The first 12 months of cloud services, maintenance, updates and support are included with it. From the second year those services cost ${SERVICE_PRICE} per year.`,
+    },
+    {
+      question: `Why is there a ${SERVICE_PRICE} annual fee if the licence is for life?`,
+      answer: `The licence and the services are two different things. The licence is software you own outright, permanently. The annual fee pays for what FlowBiz keeps running for you month after month: cloud services, cloud synchronisation between your devices, cloud storage for things like product photos, backups where applicable, ongoing software maintenance, updates and new versions, security fixes, and technical support. It is not a second software licence and it is not a subscription to the application.`,
+    },
+    {
+      question: 'What happens if I do not renew the annual service fee?',
+      answer: `You keep your Lifetime Licence, and you keep your business data. Nothing is deleted. After the service period ends there is a ${GRACE_PERIOD_DAYS}-day grace period during which everything keeps working normally and FlowBiz reminds you to renew. After that, cloud services, maintenance, updates and support pause until you renew, while FlowBiz continues to run on your devices with the records already on them. Renewing switches the hosted services back on.`,
+    },
+    {
+      question: 'If I renew early, do I lose the days I already paid for?',
+      answer: 'No. An early renewal extends your existing expiry date by 12 months rather than restarting the period from the payment date. Paying two weeks before your services lapse gives you 12 months and two weeks, not 12 months.',
+    },
     {
       question: 'Does FlowBiz work when there is no internet connection?',
       answer: 'Yes. FlowBiz uses an offline-first architecture with persistent local caching. Sales, credit purchases, and expenses are saved immediately in your browser or phone storage and sync automatically with the cloud database the moment connectivity is restored.',

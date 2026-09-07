@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
+import { TERMS_VERSION, TERMS_EFFECTIVE_DATE, TERMS_CHANGE_SUMMARY } from '../legal/documentVersions';
 
 export default function Terms() {
   return (
@@ -15,7 +16,7 @@ export default function Terms() {
 
         <PageHeader
           title="Terms of service"
-          description="Effective 22 August 2026"
+          description={`Version ${TERMS_VERSION} · Effective ${TERMS_EFFECTIVE_DATE}`}
         />
         <hr className="hairline mt-5" />
 
@@ -75,9 +76,31 @@ export default function Terms() {
             </ul>
 
             <p>
-              Features may vary by subscription plan and may be changed,
-              introduced, restricted, or discontinued as FlowBiz evolves.
+              Features may vary by plan and may be changed, introduced,
+              restricted, or discontinued as FlowBiz evolves.
             </p>
+
+            <p>
+              FlowBiz is offered in two commercially distinct forms, and the
+              difference between them matters throughout these Terms:
+            </p>
+
+            <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+              <li>
+                <strong>Licensed software.</strong> The right to use the FlowBiz
+                application itself. This is what a FlowBiz Lifetime Licence
+                grants, permanently.
+              </li>
+
+              <li>
+                <strong>Hosted services.</strong> Things FlowBiz operates for you
+                on an ongoing basis: cloud services, cloud synchronization,
+                cloud-hosted business data services, cloud storage, backups
+                where applicable, software maintenance, software updates, new
+                versions, security fixes, and technical support. These are
+                provided for a defined service period and are renewable.
+              </li>
+            </ul>
           </section>
 
           <section className="space-y-3">
@@ -271,47 +294,218 @@ export default function Terms() {
 
           <section className="space-y-3">
             <h2 className="section-title">
-              9. Subscriptions and Payments
+              9. Plans, Licences and Payments
             </h2>
 
             <p>
-              FlowBiz may offer free and paid subscription plans. The features,
-              limits, pricing, and duration applicable to each plan will be
-              presented at the time of purchase or upgrade.
+              FlowBiz offers a free plan, a monthly subscription plan, and a
+              one-time perpetual software licence. The features, limits,
+              pricing, and duration applicable to each are presented before
+              purchase.
+            </p>
+
+            <h3 className="text-section-title pt-2 text-ink-900">9.1 FlowBiz Starter</h3>
+
+            <p>
+              A free plan with defined limits on catalogue size and staff
+              accounts. No payment is required and no service period applies.
+            </p>
+
+            <h3 className="text-section-title pt-2 text-ink-900">9.2 FlowBiz Pro (monthly)</h3>
+
+            <p>
+              A prepaid subscription purchased for a defined period. It unlocks
+              additional functionality such as WhatsApp document sharing,
+              advanced analytics, inventory intelligence, and uncapped
+              catalogue and staff limits for the duration of the period
+              purchased.
+            </p>
+
+            <p>
+              FlowBiz Pro does not renew automatically. When a prepaid period
+              ends, the account returns to the free plan limits until a new
+              period is purchased. A FlowBiz Pro subscription is a subscription
+              to the software and is not a perpetual licence.
+            </p>
+
+            <h3 className="text-section-title pt-2 text-ink-900">9.3 The FlowBiz Lifetime Licence</h3>
+
+            <p>
+              The FlowBiz Lifetime Licence is a <strong>one-time purchase of a
+              perpetual licence</strong> to use the licensed FlowBiz
+              application, at the price stated at the time of purchase.
             </p>
 
             <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
               <li>
-                <strong>FlowBiz Pro:</strong> Paid plans may unlock additional
-                functionality such as WhatsApp document sharing, PDF
-                generation, additional staff functionality, advanced
-                analytics, and other Pro features.
+                The Lifetime Licence <strong>does not expire</strong> and has no
+                renewal date.
               </li>
 
               <li>
-                <strong>Prepaid Billing:</strong> Where applicable, paid
-                subscriptions are purchased for a defined prepaid period.
+                It is granted to the business it was purchased for, and it is
+                non-exclusive and non-transferable except as agreed in writing
+                by FlowBiz.
               </li>
 
               <li>
-                <strong>No Automatic Renewal:</strong> Unless explicitly
-                stated otherwise at the time of purchase, FlowBiz does not
-                automatically charge your payment method when a subscription
-                period expires.
+                The <strong>first 12 months of Cloud Services, Maintenance,
+                Updates and Support</strong> are included with the Lifetime
+                Licence purchase, starting on the date of purchase.
               </li>
 
               <li>
-                <strong>Payment Processing:</strong> Payments may be processed
-                through third-party payment providers such as Paystack. Your
-                use of such payment services may also be subject to the
-                provider's terms and policies.
+                The Lifetime Licence is a licence to use software. It is not a
+                purchase of unlimited cloud hosting, unlimited storage,
+                perpetual updates, or perpetual support.
+              </li>
+            </ul>
+
+            <h3 className="text-section-title pt-2 text-ink-900">
+              9.4 Annual Cloud Services, Maintenance, Updates and Support
+            </h3>
+
+            <p>
+              From the second year of a Lifetime Licence, the following are
+              provided under a separate, renewable annual service entitlement
+              at the annual price stated in the application:
+            </p>
+
+            <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+              <li>FlowBiz cloud services.</li>
+              <li>Cloud synchronization between your devices.</li>
+              <li>Cloud-hosted business data services.</li>
+              <li>Cloud storage required by supported features, including product photos.</li>
+              <li>Cloud backups where applicable.</li>
+              <li>Software maintenance.</li>
+              <li>Software updates, new versions, and eligible new features.</li>
+              <li>Security and bug-fix updates.</li>
+              <li>Technical and customer support.</li>
+              <li>Other hosted services expressly included in the active service entitlement.</li>
+            </ul>
+
+            <p>
+              The annual service fee is <strong>not a second software
+              licence</strong> and does not grant, extend, or renew the Lifetime
+              Licence. It pays for the ongoing services listed above.
+            </p>
+
+            <h3 className="text-section-title pt-2 text-ink-900">9.5 Renewal and early renewal</h3>
+
+            <p>
+              The annual service entitlement does not renew automatically. You
+              may renew it at any time during the current service period or
+              afterwards.
+            </p>
+
+            <p>
+              If you renew <strong>before</strong> the current service period
+              ends, the new period is added to your existing expiry date rather
+              than starting from the date of payment. Renewing early therefore
+              does not shorten or waste the period you have already paid for.
+            </p>
+
+            <p>
+              If you renew <strong>after</strong> the current period and its
+              grace period have ended, the new period runs from the date the
+              payment is confirmed.
+            </p>
+
+            <h3 className="text-section-title pt-2 text-ink-900">9.6 Grace period</h3>
+
+            <p>
+              When an annual service period ends without renewal, a grace
+              period applies. The length of the grace period is stated in the
+              application and is 30 days unless stated otherwise for your
+              account.
+            </p>
+
+            <p>
+              During the grace period, cloud services continue to operate
+              normally and FlowBiz will notify you that renewal is required.
+            </p>
+
+            <h3 className="text-section-title pt-2 text-ink-900">
+              9.7 What happens when the annual service entitlement ends
+            </h3>
+
+            <p>
+              After the service period and the grace period have both ended,
+              and until the entitlement is renewed:
+            </p>
+
+            <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+              <li>
+                <strong>Your Lifetime Licence remains active.</strong> It is not
+                cancelled, suspended, revoked, or shortened because an annual
+                service fee was not paid.
+              </li>
+
+              <li>
+                <strong>Your business data is not deleted.</strong> Products,
+                sales, stock records, customer records, credit records,
+                expenses, product photos and other business information are
+                retained. See section 15 and section 19.
+              </li>
+
+              <li>
+                FlowBiz continues to be usable on devices where it is
+                installed, to the extent the application's offline capabilities
+                support it, using the records already held on those devices.
+              </li>
+
+              <li>
+                Cloud services, cloud synchronization, cloud storage for new
+                content, backups, software maintenance, software updates, new
+                versions and technical support may become unavailable until the
+                entitlement is renewed.
               </li>
             </ul>
 
             <p>
-              FlowBiz may change subscription pricing or introduce new plans
-              in the future. Changes will not retroactively alter a prepaid
-              subscription period that has already been purchased.
+              FlowBiz does not guarantee that every feature of the application
+              will function without active cloud services. Features that depend
+              on hosted infrastructure by their nature require an active
+              service entitlement.
+            </p>
+
+            <h3 className="text-section-title pt-2 text-ink-900">9.8 Payment processing</h3>
+
+            <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+              <li>
+                Payments are processed through third-party payment providers
+                such as Paystack. Your use of those services may also be
+                subject to the provider's own terms and policies.
+              </li>
+
+              <li>
+                Every payment is verified by FlowBiz on its servers against the
+                payment provider before any licence or service entitlement is
+                granted. A payment confirmation shown in a browser is not by
+                itself an activation.
+              </li>
+
+              <li>
+                FlowBiz records the payment reference, amount, currency, date
+                and status of each transaction so that payments can be
+                reconciled and support enquiries answered.
+              </li>
+
+              <li>
+                Duplicate notifications of the same transaction do not create
+                duplicate licences or duplicate service periods.
+              </li>
+            </ul>
+
+            <h3 className="text-section-title pt-2 text-ink-900">9.9 Changes to pricing</h3>
+
+            <p>
+              FlowBiz may change its prices, including the annual service fee,
+              or introduce new plans. A price change does not retroactively
+              alter a period that has already been purchased, and it does not
+              alter the perpetual nature of a Lifetime Licence already granted.
+              The price applicable to a renewal is the price presented at the
+              time that renewal is purchased.
             </p>
           </section>
 
@@ -322,13 +516,21 @@ export default function Terms() {
 
             <p>
               Unless otherwise required by applicable law or expressly stated
-              at the time of purchase, FlowBiz subscriptions are generally
-              non-refundable after activation.
+              at the time of purchase, FlowBiz payments are generally
+              non-refundable after activation. This applies to monthly
+              subscription periods, to annual service periods, and to the
+              one-time Lifetime Licence.
             </p>
 
             <p>
               We generally do not provide prorated refunds for partially
-              unused subscription periods.
+              unused subscription or service periods.
+            </p>
+
+            <p>
+              Cancelling or declining to renew an annual service entitlement
+              does not entitle you to a refund of the Lifetime Licence fee,
+              because the licence itself is not withdrawn.
             </p>
 
             <p>
@@ -470,6 +672,14 @@ export default function Terms() {
               Service when reasonably necessary for security, technical,
               business, or legal reasons.
             </p>
+
+            <p>
+              Where a change would materially reduce hosted services already
+              paid for within a current service period, FlowBiz will seek to
+              provide reasonable notice. Nothing in this section permits
+              FlowBiz to withdraw a Lifetime Licence that has been granted; a
+              licence may only be revoked as described in section 18.
+            </p>
           </section>
 
           <section className="space-y-3">
@@ -496,6 +706,15 @@ export default function Terms() {
               circumstance, including circumstances involving unauthorized
               access, device failure, corruption, synchronization conflicts,
               accidental deletion, or events beyond our reasonable control.
+            </p>
+
+            <p>
+              Cloud synchronization and cloud backups, where applicable, are
+              hosted services provided under an active service entitlement.
+              They may become unavailable when that entitlement lapses. Export
+              functionality inside the application does not depend on a
+              connection to FlowBiz's servers, and remains the recommended way
+              to keep an independent copy of your records at any time.
             </p>
           </section>
 
@@ -563,7 +782,7 @@ export default function Terms() {
 
           <section className="space-y-3">
             <h2 className="section-title">
-              18. Suspension and Termination
+              18. Suspension, Revocation and Termination
             </h2>
 
             <p>
@@ -572,23 +791,65 @@ export default function Terms() {
             </p>
 
             <p>
-              FlowBiz may temporarily suspend or terminate access where
-              reasonably necessary because of:
+              These are three different actions with three different effects,
+              and FlowBiz treats them separately.
+            </p>
+
+            <h3 className="text-section-title pt-2 text-ink-900">18.1 Suspension of cloud services</h3>
+
+            <p>
+              FlowBiz may suspend the hosted services described in section 9.4
+              for a business where reasonably necessary because of:
             </p>
 
             <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
-              <li>Violation of these Terms.</li>
-              <li>Fraudulent, abusive, or unlawful activity.</li>
+              <li>Expiry of the annual service entitlement and its grace period.</li>
+              <li>Non-payment of applicable fees, including a reversed or disputed payment.</li>
               <li>Security risks or suspected unauthorized access.</li>
-              <li>Non-payment of applicable fees.</li>
+              <li>Fraudulent, abusive, or unlawful activity.</li>
+              <li>Usage that materially threatens the Service or other users.</li>
               <li>Legal or regulatory requirements.</li>
-              <li>Conduct that materially threatens the Service or other users.</li>
             </ul>
 
             <p>
-              Where reasonably practicable, FlowBiz may provide notice before
-              taking termination action. Immediate suspension may be necessary
-              where delay would create a security, legal, or operational risk.
+              Suspension of cloud services <strong>does not revoke a Lifetime
+              Licence</strong>, does not close the account, and does not delete
+              business data. It is reversible, and cloud services resume when
+              the reason for suspension is resolved.
+            </p>
+
+            <h3 className="text-section-title pt-2 text-ink-900">18.2 Suspension of account access</h3>
+
+            <p>
+              FlowBiz may separately suspend access to an account, which
+              prevents sign-in, where reasonably necessary because of a
+              violation of these Terms, fraudulent or unlawful activity, a
+              security risk, or a legal or regulatory requirement. This is also
+              reversible and also deletes nothing.
+            </p>
+
+            <h3 className="text-section-title pt-2 text-ink-900">18.3 Revocation of a Lifetime Licence</h3>
+
+            <p>
+              A Lifetime Licence may be revoked only in clearly defined
+              circumstances: a material breach of these Terms, fraud, an
+              unlawful act, a reversed or fraudulent payment for the licence
+              itself, or where required by law or by a court.
+            </p>
+
+            <p>
+              <strong>A Lifetime Licence is never revoked for non-payment of an
+              annual service fee</strong>, and FlowBiz operates no automatic
+              process that revokes a licence when a service period expires.
+              Revocation is a deliberate administrative act, is recorded, and
+              where reasonably practicable is preceded by notice.
+            </p>
+
+            <p>
+              Where reasonably practicable, FlowBiz will provide notice before
+              taking termination or revocation action. Immediate suspension may
+              be necessary where delay would create a security, legal, or
+              operational risk.
             </p>
           </section>
 
@@ -604,9 +865,50 @@ export default function Terms() {
               prevention, dispute resolution, or other legitimate purposes.
             </p>
 
+            <h3 className="text-section-title pt-2 text-ink-900">19.1 Data retention</h3>
+
+            <p>
+              FlowBiz distinguishes between the end of a service entitlement
+              and the end of an account, because they have different
+              consequences for your data:
+            </p>
+
+            <ul className="list-disc pl-5 space-y-1.5 text-ink-600">
+              <li>
+                <strong>An annual service entitlement expiring, or cloud
+                services being suspended, does not delete any business
+                data.</strong> Products, sales, credit records, customers,
+                stock records, expenses, product photos and other business
+                information are retained. There is no automatic process that
+                deletes business data because a service fee was not paid.
+              </li>
+
+              <li>
+                Business data is deleted when you ask for it to be deleted:
+                by resetting your business data, by deleting your account, or
+                by requesting deletion from FlowBiz support.
+              </li>
+
+              <li>
+                FlowBiz may delete data belonging to an account that has been
+                terminated for a material breach, or where retention is
+                unlawful, or where required by a competent authority. Where
+                reasonably practicable, notice and an opportunity to export
+                will be provided first.
+              </li>
+
+              <li>
+                Records FlowBiz is required to keep, such as payment references
+                for accounting, tax, fraud-prevention and dispute purposes, are
+                retained for as long as the applicable requirement lasts, and
+                are described in the Privacy Policy.
+              </li>
+            </ul>
+
             <p>
               Where available, users should export important business records
-              before terminating their account.
+              before terminating their account, and should keep independent
+              copies of records they are required to retain.
             </p>
 
             <p>

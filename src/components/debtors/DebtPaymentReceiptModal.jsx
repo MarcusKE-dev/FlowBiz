@@ -9,6 +9,7 @@ import { formatKES } from '../../utils/currency';
 import { openWhatsApp, buildDebtPaymentReceiptMessage, isValidWhatsAppPhone } from '../../utils/whatsapp';
 import { printDebtPaymentReceipt, generateDebtPaymentReceiptPDF } from '../../utils/documentService';
 import { getOrCreateShareLink } from '../../utils/documentSharing';
+import { useCloudDocuments } from '../../hooks/useCloudDocuments';
 import StatementBlock, { StatementRow } from '../ui/StatementBlock';
 import StatusPill from '../ui/StatusPill';
 import Money from '../ui/Money';
@@ -23,6 +24,7 @@ import Money from '../ui/Money';
 // sharing stays Pro-gated below.
 export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
   const { isPro, businessId, profile } = useAuth();
+  const { canPublish: canShareLink, blockedMessage } = useCloudDocuments();
   const { settings } = useSettings();
   const [phone, setPhone] = useState('');
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
@@ -37,6 +39,12 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
   const handleWhatsApp = async () => {
     if (!phone.trim() || !isValidWhatsAppPhone(phone)) {
       toast.error('Add a valid phone number for this customer before sending a WhatsApp reminder.');
+      return;
+    }
+    // Publishing the public receipt link is a cloud service; Print and
+    // Download above are not and stay available either way.
+    if (!canShareLink) {
+      toast.error(blockedMessage);
       return;
     }
     setSendingWhatsApp(true);
@@ -109,7 +117,7 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
           <div className="flex gap-2">
             <input className="input flex-1" placeholder="Customer phone" value={phone} onChange={(e) => setPhone(e.target.value)} disabled={sendingWhatsApp} />
             {isPro ? (
-              <button className="btn-primary flex items-center justify-center gap-2 shrink-0" onClick={handleWhatsApp} disabled={sendingWhatsApp}>
+              <button className="btn-primary flex items-center justify-center gap-2 shrink-0" onClick={handleWhatsApp} disabled={sendingWhatsApp || !canShareLink}>
                 <MessageCircle className="h-4 w-4" /> {sendingWhatsApp ? 'Preparing…' : 'Send'}
               </button>
             ) : (
@@ -118,6 +126,9 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
               </Link>
             )}
           </div>
+          {!canShareLink && (
+            <p className="text-secondary leading-relaxed text-ink-500">{blockedMessage}</p>
+          )}
         </div>
 
         <button className="btn-secondary w-full" onClick={onClose}>Close</button>

@@ -40,6 +40,27 @@ export const EVENT_TYPES = {
   EMAIL_SEND_FAILED: 'email.send_failed',
   ADMIN_ACCESS_DENIED: 'admin.access_denied',
   ADMIN_ROUTE_ERROR: 'admin.route_error',
+
+  // ── Licensing and annual services ───────────────────────────────────
+  //
+  // These are the only INFORMATIONAL events this log carries, and they
+  // earn the exception: a perpetual licence being created, a service
+  // period being extended and a business's hosted services being
+  // switched off are the events a support conversation about money
+  // starts from, and they must be reconstructable months later. Volume
+  // is bounded by how often anybody actually buys something.
+  LICENSE_ACTIVATED: 'licensing.license_activated',
+  LICENSE_REVOKED: 'licensing.license_revoked',
+  LICENSE_REINSTATED: 'licensing.license_reinstated',
+  SERVICE_PERIOD_STARTED: 'licensing.service_started',
+  SERVICE_RENEWED: 'licensing.service_renewed',
+  SERVICE_OVERRIDDEN: 'licensing.service_overridden',
+  SERVICE_MIGRATED: 'licensing.service_migrated',
+  SERVICE_RENEWAL_UNAPPLIED: 'licensing.service_renewal_unapplied',
+  CLOUD_SUSPENDED: 'licensing.cloud_suspended',
+  CLOUD_RESTORED: 'licensing.cloud_restored',
+  RENEWAL_REMINDER_SENT: 'licensing.reminder_sent',
+  RENEWAL_REMINDER_FAILED: 'licensing.reminder_failed',
 };
 
 // type|businessId -> last write time, per isolate.
@@ -91,13 +112,19 @@ export async function recordOpsEvent(env, {
   businessId = null,
   reference = null,
   context = {},
+  // Suppression exists so a misconfigured integration retrying in a loop
+  // writes a handful of documents rather than thousands. A LICENSING
+  // event is the opposite case: two renewals two minutes apart are two
+  // real, separate financial events, and swallowing the second would put
+  // a hole in the money trail. Those callers pass `dedupe: false`.
+  dedupe = true,
 } = {}) {
   try {
     if (!type) return false;
     const key = `${type}|${businessId || '-'}`;
     const now = Date.now();
     const last = recent.get(key);
-    if (last && now - last < SUPPRESS_WINDOW_MS) return false;
+    if (dedupe && last && now - last < SUPPRESS_WINDOW_MS) return false;
 
     if (recent.size > 200) {
       for (const [k, t] of recent) if (now - t >= SUPPRESS_WINDOW_MS) recent.delete(k);

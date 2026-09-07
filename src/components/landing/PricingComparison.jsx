@@ -1,191 +1,230 @@
 import { Link } from 'react-router-dom';
 import { Check } from 'lucide-react';
+import {
+  LIFETIME_LICENSE_PRICE_KES,
+  ANNUAL_SERVICE_PRICE_KES,
+  PRO_PLAN_PRICE_KES,
+  formatPrice,
+} from '../../licensing';
+
+// Prices are read from the central licensing configuration so the landing
+// page always matches the prices used by the billing system.
+const LIFETIME_PRICE = formatPrice(LIFETIME_LICENSE_PRICE_KES);
+const SERVICE_PRICE = formatPrice(ANNUAL_SERVICE_PRICE_KES);
+const PRO_PRICE = formatPrice(PRO_PLAN_PRICE_KES);
+
+const CheckItem = ({ children, tone = 'primary' }) => (
+  <li className="flex items-start gap-2.5">
+    <Check
+      className={`mt-0.5 h-4 w-4 shrink-0 ${
+        tone === 'deep' ? 'text-deep-700' : 'text-primary-600'
+      }`}
+      strokeWidth={2}
+      aria-hidden="true"
+    />
+    <span>{children}</span>
+  </li>
+);
 
 export function PricingComparison() {
   return (
-    <section id="pricing" className="py-16 md:py-24 bg-canvas border-t border-line">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
-        <div className="text-center max-w-3xl mx-auto space-y-3">
-          
-          <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-ink-900 tracking-tight">
+    <section
+      id="pricing"
+      className="border-t border-line bg-canvas py-16 md:py-24"
+    >
+      <div className="mx-auto max-w-7xl space-y-12 px-4 sm:px-6 lg:px-8">
+        {/* Heading */}
+        <div className="mx-auto max-w-3xl space-y-3 text-center">
+          <h2 className="text-2xl font-extrabold tracking-tight text-ink-900 sm:text-3xl md:text-4xl">
             Simple, upfront pricing
           </h2>
-          <p className="text-body sm:text-base text-ink-600">
-Start free with the essentials. Upgrade to FlowBiz Pro when your business needs more.          </p>
+
+          <p className="text-body text-ink-600 sm:text-base">
+            Start free with the essentials. Upgrade when your business needs
+            more.
+          </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl mx-auto">
-          {/* Starter Plan */}
-          <div className="bg-white rounded-panel border border-ink-300 p-6 sm:p-8 flex flex-col justify-between space-y-6">
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-bold text-ink-900">FlowBiz Starter</h3>
-                  <p className="text-secondary text-ink-500 mt-0.5">
-                    Essential store operations for solo shops and small dukas.
-                  </p>
-                </div>
-                
+        {/* Plans */}
+        <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 md:grid-cols-3">
+          {/* Starter */}
+          <div className="flex flex-col rounded-panel border border-ink-300 bg-white p-6 sm:p-7">
+            <div className="flex-1 space-y-5">
+              <div>
+                <h3 className="text-xl font-bold text-ink-900">
+                  FlowBiz Starter
+                </h3>
+
+                <p className="mt-1 text-secondary text-ink-500">
+                  The essentials for running a small business.
+                </p>
               </div>
 
-              <div className="pt-2">
-                <span className="text-3xl font-extrabold text-ink-900">KES 0</span>
-                
+              <div>
+                <span className="text-3xl font-extrabold text-ink-900">
+                  KES 0
+                </span>
               </div>
 
-              <ul className="space-y-2.5 pt-4 border-t border-line text-secondary text-ink-700 font-medium">
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <span>Up to 100 active products in catalog</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <span>1 Business Owner + 1 Staff Cashier</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <span>Multi-product POS Counter &amp; active cart</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <span>Full Customer Credit (Deni) &amp; repayment ledger</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <span>End-of-day Till Float &amp; Shift Reconciliation</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <span>Standard 58mm &amp; 80mm PDF thermal receipts</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <span>100% offline-first cached execution</span>
-                </li>
+              <ul className="space-y-3 border-t border-line pt-5 text-secondary font-medium text-ink-700">
+                <CheckItem>Up to 100 active products</CheckItem>
+                <CheckItem>1 owner + 1 staff cashier</CheckItem>
+                <CheckItem>Multi-product POS counter</CheckItem>
+                <CheckItem>Customer credit and repayment ledger</CheckItem>
+                <CheckItem>Till and shift reconciliation</CheckItem>
+                <CheckItem>58mm and 80mm thermal receipts</CheckItem>
+                <CheckItem>Offline-first operation</CheckItem>
               </ul>
             </div>
 
             <Link
               to="/setup"
-              className="w-full py-3 text-center font-bold text-body border border-ink-300 rounded-panel hover:bg-canvas transition-colors block text-ink-900"
+              className="mt-7 block w-full rounded-panel border border-ink-300 py-3 text-center text-body font-bold text-ink-900 transition-colors hover:bg-canvas"
             >
               Get Started Free
             </Link>
           </div>
 
-          {/* Pro Plan */}
-          <div className="bg-white rounded-panel border-2 border-primary-600 p-6 sm:p-8 flex flex-col justify-between space-y-6 relative">
-            <div className="absolute -top-3 right-6 bg-primary-600 text-white px-3 py-1 rounded-pill text-label font-bold uppercase tracking-wide">
+          {/* Pro */}
+          <div className="relative flex flex-col rounded-panel border-2 border-primary-600 bg-white p-6 sm:p-7">
+            <div className="absolute -top-3 right-5 rounded-pill bg-primary-600 px-3 py-1 text-label font-bold uppercase tracking-wide text-white">
               Most Popular
             </div>
 
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-bold text-ink-900">FlowBiz Pro</h3>
-                  <p className="text-secondary text-ink-500 mt-0.5">
-                    Uncapped capacity, deep analytics, and WhatsApp customer communication.
-                  </p>
-                </div>
-              
-              </div>
+            <div className="flex-1 space-y-5">
+              <div>
+                <h3 className="text-xl font-bold text-ink-900">
+                  FlowBiz Pro
+                </h3>
 
-              <div className="pt-2">
-                <span className="text-3xl font-extrabold text-primary-600">KES 599</span>
-                <span className="text-secondary text-ink-500 font-medium"> / 30 days prepaid</span>
-                <p className="text-label text-primary-600 font-semibold mt-0.5">
-                  Manual M-Pesa / Card renewal · No auto-billing surprises
+                <p className="mt-1 text-secondary text-ink-500">
+                  More capacity, insight and customer communication.
                 </p>
               </div>
 
-              <ul className="space-y-2.5 pt-4 border-t border-line text-secondary text-ink-700 font-medium">
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <strong className="text-ink-900">Unlimited products &amp; catalog items</strong>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <strong className="text-ink-900">Unlimited staff cashier accounts</strong>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <span>WhatsApp digital receipts &amp; debt reminder dispatch</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <span>Advanced Analytics (profit margin trends, day-of-week volume)</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <span>Inventory Intelligence &amp; ABC Pareto stock prioritization</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <span>14-day stockout prediction &amp; restock quantity engine</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-primary-600 shrink-0" />
-                  <span>Staff performance ranking &amp; revenue attribution</span>
-                </li>
+              <div>
+                <span className="text-3xl font-extrabold text-primary-600">
+                  {PRO_PRICE}
+                </span>
+
+                <span className="text-secondary font-medium text-ink-500">
+                  {' '}
+                  / 30 days
+                </span>
+
+                <p className="mt-1 text-label font-semibold text-primary-600">
+                  Prepaid. Manual renewal.
+                </p>
+              </div>
+
+              <ul className="space-y-3 border-t border-line pt-5 text-secondary font-medium text-ink-700">
+                <CheckItem>
+                  <strong className="text-ink-900">
+                    Unlimited products
+                  </strong>
+                </CheckItem>
+
+                <CheckItem>
+                  <strong className="text-ink-900">
+                    Unlimited staff
+                  </strong>
+                </CheckItem>
+
+                <CheckItem>Product photos</CheckItem>
+                <CheckItem>WhatsApp receipts and reminders</CheckItem>
+                <CheckItem>Advanced analytics</CheckItem>
+                <CheckItem>Inventory intelligence</CheckItem>
+                <CheckItem>Stockout prediction and restock tools</CheckItem>
+                <CheckItem>Staff performance insights</CheckItem>
               </ul>
             </div>
 
             <Link
               to="/setup"
-              className="w-full py-3 text-center font-bold text-body bg-primary-600 text-white rounded-panel hover:bg-primary-700 transition-colors block"
+              className="mt-7 block w-full rounded-panel bg-primary-600 py-3 text-center text-body font-bold text-white transition-colors hover:bg-primary-700"
             >
               Start Free &amp; Upgrade Later
             </Link>
           </div>
 
-          {/* Lifetime Plan */}
-          <div className="bg-white rounded-panel border border-deep-600 p-6 sm:p-8 flex flex-col justify-between space-y-6 relative">
-            <div className="absolute -top-3 right-6 bg-deep-600 text-white px-3 py-1 rounded-pill text-label font-bold uppercase tracking-wide">
-              Pay once
+          {/* Lifetime */}
+          <div className="relative flex flex-col rounded-panel border border-deep-600 bg-white p-6 sm:p-7">
+            <div className="absolute -top-3 right-5 rounded-pill bg-deep-600 px-3 py-1 text-label font-bold uppercase tracking-wide text-white">
+              One-time licence
             </div>
 
-            <div className="space-y-4">
+            <div className="flex-1 space-y-5">
               <div>
-                <h3 className="text-xl font-bold text-ink-900">FlowBiz Lifetime</h3>
-                <p className="text-secondary text-ink-500 mt-0.5">
-                  Everything in Pro, paid for once. No recurring subscription.
+                <h3 className="text-xl font-bold text-ink-900">
+                  FlowBiz Lifetime
+                </h3>
+
+                <p className="mt-1 text-secondary text-ink-500">
+                  Own the FlowBiz software licence permanently.
                 </p>
               </div>
 
-              <div className="pt-2">
-                <span className="text-3xl font-extrabold text-deep-700">KES 15,550</span>
-                <span className="text-secondary text-ink-500 font-medium"> one-time</span>
-                <p className="text-label text-deep-700 font-semibold mt-0.5">
-                  Pay once · No auto-billing · No renewals, ever
+              <div>
+                <span className="text-3xl font-extrabold text-deep-700">
+                  {LIFETIME_PRICE}
+                </span>
+
+                <span className="text-secondary font-medium text-ink-500">
+                  {' '}
+                  one time
+                </span>
+
+                <p className="mt-1.5 text-body font-semibold text-ink-900">
+                  {SERVICE_PRICE}/year from year two
+                </p>
+
+                <p className="mt-0.5 text-label text-ink-500">
+                  Cloud services, maintenance, updates &amp; support
+                </p>
+
+                {/* THE SENTENCE THAT MAKES THE MODEL HONEST. The card
+                    shows a one-time price and an annual fee side by
+                    side, and without this line the obvious reading is
+                    that the software stops when the fee is not paid.
+                    It does not. Pinned by legal/legalLinks.test.js. */}
+                <p className="mt-1.5 text-label text-ink-600">
+                  Your licence is permanent. It{' '}
+                  does not expire if you choose not to renew{' '}
+                  &mdash; renewal covers cloud services, updates and support only.
                 </p>
               </div>
 
-              <ul className="space-y-2.5 pt-4 border-t border-line text-secondary text-ink-700 font-medium">
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-deep-700 shrink-0" />
-                  <strong className="text-ink-900">Every FlowBiz Pro feature, permanently unlocked</strong>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-deep-700 shrink-0" />
-                  <span>One perpetual license tied to your business, on all your devices</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-deep-700 shrink-0" />
-                  <span>Cloud-synced &amp; offline-first, same as every FlowBiz plan</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-deep-700 shrink-0" />
-                  <span>WhatsApp receipts, invoices &amp; debt reminders</span>
-                </li>
+              <ul className="space-y-3 border-t border-line pt-5 text-secondary font-medium text-ink-700">
+                <CheckItem tone="deep">
+                  Permanent FlowBiz software licence
+                </CheckItem>
+
+                <CheckItem tone="deep">
+                  All Pro features, including product photos
+                </CheckItem>
+
+                <CheckItem tone="deep">
+                  First year of cloud services included
+                </CheckItem>
+
+                <CheckItem tone="deep">
+                  Offline-first operation
+                </CheckItem>
               </ul>
             </div>
 
             <Link
               to="/setup"
-              className="w-full py-3 text-center font-bold text-body bg-deep-600 text-white rounded-panel hover:bg-deep-700 transition-colors block"
+              className="mt-7 block w-full rounded-panel bg-deep-600 py-3 text-center text-body font-bold text-white transition-colors hover:bg-deep-700"
             >
-              Get FlowBiz Lifetime
+              Get the Lifetime Licence
             </Link>
+
+            <p className="mt-3 text-center text-label text-ink-500">
+              <Link to="/terms" className="underline underline-offset-2 hover:text-ink-700">
+                Terms of Service
+              </Link>
+            </p>
           </div>
         </div>
       </div>

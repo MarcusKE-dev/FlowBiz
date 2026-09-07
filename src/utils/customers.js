@@ -29,7 +29,7 @@ export async function createCustomer(data, businessId) {
   }, businessId);
 
   const write = setDoc(customerRef, customerPayload);
-  const { queuedOffline, error } = await raceWithTimeout(write, 1500);
+  const { queuedOffline, error } = await raceWithTimeout(write, 4000);
   if (error) throw error;
 
   return {
@@ -57,7 +57,7 @@ export async function updateCustomer(customerId, data, businessId) {
   updates.updatedAt = new Date();
 
   const write = updateDoc(customerRef, updates);
-  const { queuedOffline, error } = await raceWithTimeout(write, 1500);
+  const { queuedOffline, error } = await raceWithTimeout(write, 4000);
   if (error) throw error;
 
   return { queuedOffline };

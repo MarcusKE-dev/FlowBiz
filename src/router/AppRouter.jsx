@@ -122,9 +122,26 @@ function AdminPage({ children }) {
   );
 }
 
+// WHAT A FIRST-TIME VISITOR SEES WHILE AUTH IS STILL RESOLVING: nothing.
+//
+// This used to be a spinner captioned "Starting FlowBiz…", which is the
+// wrong promise to make to somebody who has just typed flowbiz.co.ke and
+// has no account. It reads as an app booting — so on a slow connection
+// the first impression of the product was a stalled launch screen for a
+// thing they had not launched.
+//
+// A blank canvas is the honest state: nothing has been decided yet, so
+// nothing is claimed. The moment auth resolves, the landing page (or the
+// dashboard) paints. This is deliberately NOT a spinner — a spinner on a
+// public marketing page is a load-bearing apology for latency, and the
+// page underneath it is what the person actually came for.
+function AuthResolving() {
+  return <div className="min-h-screen bg-canvas" aria-hidden="true" />;
+}
+
 function PublicOnly({ children }) {
   const { firebaseUser, loading } = useAuth();
-  if (loading) return <LoadingSpinner label="Starting FlowBiz…" />;
+  if (loading) return <AuthResolving />;
   if (firebaseUser) return <Navigate to="/dashboard" replace />;
   return children;
 }
@@ -151,13 +168,7 @@ function RootRoute() {
     return <Navigate to="/admin" replace />;
   }
 
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-canvas">
-        <LoadingSpinner label="Starting FlowBiz…" />
-      </div>
-    );
-  }
+  if (loading) return <AuthResolving />;
 
   if (firebaseUser) {
     return <Navigate to={isAdmin ? '/dashboard' : '/counter'} replace />;

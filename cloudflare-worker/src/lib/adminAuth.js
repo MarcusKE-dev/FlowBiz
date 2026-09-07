@@ -40,6 +40,26 @@ export const PERMISSIONS = {
   // Anything that changes a merchant's account or reaches their inbox.
   'business.status':        ADMIN_UP,
   'business.subscription':  ADMIN_UP,
+  // ── Licensing ──────────────────────────────────────────────────────
+  //
+  // Split into three because they are three different amounts of damage.
+  //
+  //   cloud       — switching a business's HOSTED SERVICES off and back
+  //                 on. Reversible, destroys nothing, and leaves the
+  //                 customer's perpetual licence and their local
+  //                 application untouched. Sits with the other
+  //                 account-affecting actions.
+  //   service     — moving a service expiry date or a grace window, and
+  //                 migrating a pre-model lifetime licence. It grants
+  //                 paid time for free, so it is a finance action.
+  //   revoke      — taking away a licence somebody bought outright. It is
+  //                 the single most serious thing an administrator can do
+  //                 to a paying customer, it is never automatic, and it
+  //                 is SUPER_ADMIN only.
+  'licensing.read':         ALL,
+  'licensing.cloud':        ADMIN_UP,
+  'licensing.service':      ['FINANCE', 'ADMIN', 'SUPER_ADMIN'],
+  'licensing.revoke':       SUPER_ONLY,
   // Changing which industry profile and capabilities a business runs on.
   // Presentation and behaviour only — it can reach neither the plan nor
   // any operational record — but it changes what a merchant sees, so it

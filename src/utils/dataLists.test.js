@@ -49,6 +49,21 @@ const NOT_A_TENANT_COLLECTION = new Set([
   'systemAdmins', 'adminAuditLogs', 'opsEvents', 'loginEvents',
   // Keyed BY business id, or owned by the platform rather than the shop.
   'businesses', 'businessSettings', 'users', 'productCodeCounters',
+  // `payments` carries a businessId and appears in the rules so an owner
+  // can read their own billing history, but it is NOT the shop's data and
+  // must not be treated as such. It is written only by the Cloudflare
+  // Worker, is read-only to every browser, and is FlowBiz's financial
+  // record of what the business paid.
+  //
+  // It must not be exported: a backup a merchant can edit and re-import
+  // would let them restore a licence they never bought. It must not be
+  // cleared by "reset my business data" either — a reset wipes a shop's
+  // trading records, and erasing the evidence of a KES 15,550 purchase
+  // along with them would cost the merchant their own licence. A full
+  // business DELETION does remove it, through the Worker's
+  // PURGE_COLLECTIONS, which is a different operation with a different
+  // confirmation.
+  'payments',
 ]);
 
 function tenantCollectionsInRules() {

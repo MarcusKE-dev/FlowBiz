@@ -61,12 +61,30 @@ export async function getOrCreateShareLink({ businessId, documentType, documentI
   }
 
   const token = generateToken();
-  await setDoc(doc(db, 'sharedDocuments', token), withBusiness({
-    documentType,
-    documentId,
-    createdAt: serverTimestamp(),
-    createdBy: createdBy || null,
-  }, businessId));
+  try {
+    await setDoc(doc(db, 'sharedDocuments', token), withBusiness({
+      documentType,
+      documentId,
+      createdAt: serverTimestamp(),
+      createdBy: createdBy || null,
+    }, businessId));
+  } catch (err) {
+    // PUBLISHING a link is a hosted service and firestore.rules gates it
+    // on the business's cloud services entitlement (see
+    // cloudServicesActive() there). The UI checks the same thing before
+    // offering the button — see hooks/useCloudDocuments — so reaching
+    // here means a stale tab or a suspension applied mid-session. Either
+    // way the person deserves a sentence rather than
+    // "FirebaseError: Missing or insufficient permissions".
+    if (err?.code === 'permission-denied') {
+      throw new Error(
+        'This link could not be created because cloud services are not active for this business. '
+        + 'You can still print or download the document. Renew cloud services to share links again.',
+        { cause: err },
+      );
+    }
+    throw err;
+  }
 
   return buildPublicUrl(token);
 }

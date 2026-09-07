@@ -18,6 +18,8 @@ import { generateVariants, hasVariants, totalVariantStock } from '../../utils/va
 import { raceWithTimeout } from '../../utils/offlineWrite';
 import { friendlyErrorMessage } from '../../utils/errorMessages';
 import { optimizeImage, formatBytes, blobToDataUrl } from '../../utils/imageOptimizer';
+import ProUpgradePrompt from '../common/ProUpgradePrompt';
+import { ENTITLEMENTS } from '../../licensing';
 import {
   saveProductImage, deleteProductImage, loadProductImage,
   staticImageUrl, needsSidecarFetch, CLEARED_IMAGE_FIELDS,
@@ -67,7 +69,25 @@ export default function ProductFormModal({
   simplifiedForPurchase = false,
   productCount = 0,
 }) {
-  const { businessId, isPro, isOwner } = useAuth();
+  const { businessId, isPro, isOwner, entitlements } = useAuth();
+  // CLOUD STORAGE IS A SERVICE, NOT A LICENCE. Storing a new photo
+  // consumes hosted storage, so it needs an active annual services
+  // entitlement — and firestore.rules refuses the write when there is
+  // none. The UI has to know that BEFORE the save, or the merchant fills
+  // in a form, picks a photo, saves, and gets a permission error from
+  // Firestore. Existing photos are untouched and still display: nothing
+  // here reads or deletes them.
+  const canUseCloudStorage = entitlements?.can(ENTITLEMENTS.CLOUD_STORAGE) !== false;
+  // PRODUCT PHOTOS ARE A LICENCE, NOT A SERVICE. Starter has no photo
+  // entitlement at all; Pro and Lifetime do, and a Lifetime licence keeps
+  // it when the annual services lapse. Asked of the one entitlement
+  // resolver so this component owns no plan logic of its own.
+  //
+  // The picker below stays VISIBLE for Starter on purpose — a feature
+  // nobody can see is a feature nobody buys — and offers the upgrade
+  // prompt instead of a file dialog. firestore.rules refuses the write
+  // regardless of what the browser does; this is the courteous half.
+  const canUseProductPhotos = entitlements?.can(ENTITLEMENTS.PRODUCT_PHOTOS) === true;
   const industry = useIndustry();
   // The business's own list if it has saved one, its trade's starting
   // list if it has not — resolved once, in the industry layer.
@@ -146,6 +166,10 @@ export default function ProductFormModal({
   const [imageError, setImageError] = useState(null);
   const [optimising, setOptimising] = useState(false);
   const [removeImage, setRemoveImage] = useState(false);
+  // Whether the Starter merchant has asked for the photo picker and is
+  // being shown what it takes. Off until they tap, so the form does not
+  // open with a sales pitch already on it.
+  const [showPhotoUpgrade, setShowPhotoUpgrade] = useState(false);
 
   // A barcode is what the till scans to decide WHICH product is being
   // sold, so two products carrying the same one make that decision
@@ -202,6 +226,7 @@ export default function ProductFormModal({
     setImageError(null);
     setOptimising(false);
     setRemoveImage(false);
+    setShowPhotoUpgrade(false);
     setConfirmedConversion(false);
     setImageUrl(open ? staticImageUrl(initialProduct) : null);
     setVariantOptions(open && Array.isArray(initialProduct?.variantOptions) ? initialProduct.variantOptions : []);
@@ -272,6 +297,10 @@ export default function ProductFormModal({
     // Let the same file be chosen again after a remove.
     e.target.value = '';
     if (!file) return;
+    // Unreachable through the UI — an unentitled business is given a
+    // button, not a file input — but a stale tab or a devtools-enabled
+    // input must not get as far as holding a pending photo.
+    if (!canUseProductPhotos) return;
     setImageError(null);
     setImageWarning(null);
     setOptimising(true);
@@ -502,7 +531,17 @@ export default function ProductFormModal({
       // gets a 2-field pointer merged onto it — deliberately not the
       // base64 itself, which would ride the products onSnapshot and
       // re-ship every photo to every device on every sale.
-      if (pendingImage) {
+      if (pendingImage && !canUseProductPhotos) {
+        // Belt and braces with the picker guard above. Firestore would
+        // refuse this write anyway; a sentence is a better way to learn
+        // that than a permission error.
+        toast.error('Product photos are a FlowBiz Pro feature. The product was saved without one.');
+      } else if (pendingImage && !canUseCloudStorage) {
+        // Should be unreachable — the picker is disabled — but a stale
+        // tab could still get here, and a rejected Firestore write is a
+        // worse way to find out than a sentence.
+        toast.error('The product was saved. Photos need active cloud services; renew to add one.');
+      } else if (pendingImage) {
         if (!productId) {
           toast.error('The product was saved, but its photo could not be attached. Edit the product to add it.');
         } else {
@@ -859,17 +898,34 @@ export default function ProductFormModal({
 
             <div className="min-w-0 flex-1 space-y-2">
               <div className="flex flex-wrap gap-2">
-                <label className="btn-secondary cursor-pointer">
-                  <ImagePlus className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
-                  {shownImage ? 'Replace photo' : 'Add photo'}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="sr-only"
-                    onChange={handlePickImage}
-                    disabled={busy || optimising}
-                  />
-                </label>
+                {/* Starter gets a button, not a file input. The control
+                    is deliberately live rather than greyed out: tapping
+                    it is how the merchant discovers what Pro includes. */}
+                {canUseProductPhotos ? (
+                  <label className={canUseCloudStorage
+                    ? 'btn-secondary cursor-pointer'
+                    : 'btn-secondary pointer-events-none opacity-50'}>
+                    <ImagePlus className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+                    {shownImage ? 'Replace photo' : 'Add photo'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="sr-only"
+                      onChange={handlePickImage}
+                      disabled={busy || optimising || !canUseCloudStorage}
+                    />
+                  </label>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setShowPhotoUpgrade(true)}
+                    disabled={busy}
+                  >
+                    <ImagePlus className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+                    {shownImage ? 'Replace photo' : 'Add photo'}
+                  </button>
+                )}
                 {shownImage && (
                   <button
                     type="button"
@@ -881,6 +937,18 @@ export default function ProductFormModal({
                   </button>
                 )}
               </div>
+
+              {!canUseProductPhotos && showPhotoUpgrade && (
+                <ProUpgradePrompt message="Product photos are a FlowBiz Pro feature. Upgrade to Pro to add photos to your products." />
+              )}
+
+              {canUseProductPhotos && !canUseCloudStorage && (
+                <p className="text-secondary leading-relaxed text-ink-500">
+                  Adding or replacing a photo needs active cloud services. Your existing photos are
+                  unchanged and still show here. Renew Cloud Services, Maintenance, Updates and
+                  Support to add new ones.
+                </p>
+              )}
 
               {optimising && <p className="text-secondary text-ink-500">Compressing…</p>}
 

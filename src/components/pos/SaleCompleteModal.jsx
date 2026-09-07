@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import Modal from '../common/Modal';
 import { generateReceiptPDF, printReceipt, generateInvoicePDF, printInvoice, sendWhatsAppDocument } from '../../utils/documentService';
 import { getOrCreateShareLink } from '../../utils/documentSharing';
+import { useCloudDocuments } from '../../hooks/useCloudDocuments';
 import { useSettings } from '../../contexts/SettingsContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { Printer, Download, MessageCircle } from 'lucide-react';
@@ -15,6 +16,7 @@ import { saleQuantityLabel, lineItemDetail } from '../../utils/lineItems';
 export default function SaleCompleteModal({ open, sale, onClose }) {
   const { settings } = useSettings();
   const { isPro, businessId, profile } = useAuth();
+  const { canPublish: canShareLink, blockedMessage } = useCloudDocuments();
   const [phone, setPhone] = useState(sale?.customerPhone || '');
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
 
@@ -57,6 +59,12 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
   const handleWhatsApp = async () => {
     if (!phone.trim()) {
       toast.error('Please enter a valid customer phone number.');
+      return;
+    }
+    // Publishing a public link is a cloud service. Print and Download
+    // above are not, and stay available either way.
+    if (!canShareLink) {
+      toast.error(blockedMessage);
       return;
     }
     setSendingWhatsApp(true);
@@ -133,7 +141,7 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
               disabled={sendingWhatsApp}
             />
             {isPro ? (
-              <button className="btn-primary flex items-center justify-center gap-2 shrink-0" onClick={handleWhatsApp} disabled={sendingWhatsApp}>
+              <button className="btn-primary flex items-center justify-center gap-2 shrink-0" onClick={handleWhatsApp} disabled={sendingWhatsApp || !canShareLink}>
                 <MessageCircle className="h-4 w-4" /> {sendingWhatsApp ? 'Preparing…' : 'Send'}
               </button>
             ) : (
@@ -142,6 +150,9 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
               </Link>
             )}
           </div>
+          {!canShareLink && (
+            <p className="text-secondary leading-relaxed text-ink-500">{blockedMessage}</p>
+          )}
         </div>
 
         <div className="border-t border-line pt-2">

@@ -34,6 +34,8 @@ import {
   handleAdminOpsEvents,
 } from './routes/admin/adminOperations.js';
 import { handleAdminSubscriptionUpdate, handleAdminSupportToken } from './routes/admin/adminSubscription.js';
+import { handleAdminLicensingRead, handleAdminLicensingAction } from './routes/admin/adminLicensing.js';
+import { handleAdminRunReminders, runRenewalReminders } from './routes/licensingReminders.js';
 import { handleAdminIndustryUpdate } from './routes/admin/adminIndustry.js';
 import { handleAdminAuditLogs } from './routes/admin/adminAuditLogs.js';
 import { handleAdminListAdmins, handleAdminAddAdmin, handleAdminRemoveAdmin } from './routes/admin/adminSystemAdmins.js';
@@ -49,6 +51,22 @@ function getAllowedOrigins(env) {
 }
 
 export default {
+  // ── Cron: annual services renewal reminders ─────────────────────────
+  //
+  // Configured with a [triggers] crons entry in wrangler.toml. Running it
+  // more than once a day is harmless: a business is emailed at most once
+  // per reminder stage per service period, and the record of what was
+  // sent lives on the business document itself (see
+  // routes/licensingReminders.js). If no cron is configured, the same job
+  // is reachable by an administrator at POST /api/admin/licensing/reminders.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(
+      runRenewalReminders(env).catch((err) => {
+        console.error('[cron] renewal reminders failed:', err?.message);
+      })
+    );
+  },
+
   async fetch(request, env) {
     const url = new URL(request.url);
 
@@ -154,6 +172,10 @@ export default {
           response = await handleAdminBusinessUsage(request, env, businessId);
         } else if (action === 'subscription' && method === 'POST') {
           response = await handleAdminSubscriptionUpdate(request, env, businessId);
+        } else if (action === 'licensing' && method === 'GET') {
+          response = await handleAdminLicensingRead(request, env, businessId);
+        } else if (action === 'licensing' && method === 'POST') {
+          response = await handleAdminLicensingAction(request, env, businessId);
         } else if (action === 'industry' && method === 'POST') {
           response = await handleAdminIndustryUpdate(request, env, businessId);
         } else if (action === 'support-token' && method === 'POST') {
@@ -177,6 +199,8 @@ export default {
         response = await handleAdminSecurityEvents(request, env, url);
       } else if (url.pathname === '/api/admin/security/actions' && request.method === 'POST') {
         response = await handleAdminSecurityAction(request, env);
+      } else if (url.pathname === '/api/admin/licensing/reminders' && request.method === 'POST') {
+        response = await handleAdminRunReminders(request, env);
       } else if (url.pathname === '/api/admin/audit-logs' && request.method === 'GET') {
         response = await handleAdminAuditLogs(request, env, url);
       } else if (url.pathname === '/api/admin/admins' && request.method === 'GET') {

@@ -29,7 +29,7 @@
 
 import {
   CAPABILITIES, CAPABILITY_KEYS, GLOBAL_CAPABILITY_DEFAULTS,
-  isKnownCapability, isOwnerConfigurable,
+  isKnownCapability, isOwnerConfigurable, isCapabilityInFamily,
 } from './capabilities.js';
 import { DEFAULT_PROFILE_ID, getProfile, isKnownProfile, baseTerms, CATEGORY_FILTER_COUNT } from './profiles.js';
 import { DEFAULT_UNIT, UNITS } from './units.js';
@@ -388,6 +388,18 @@ export function ownerConfigurableCapabilities(config) {
     // A capability whose prerequisite is off in this profile is not a
     // choice, it is a dead switch. Do not show it.
     .filter((key) => (CAPABILITIES[key].requires || []).every((dep) => config.capabilities[dep]))
+    // A capability designed for another family is not a choice either.
+    // A hardware shop has nothing to say about modifiers or recipes, and
+    // offering it the switch only invites it to turn on a feature with
+    // no meaning in its trade.
+    //
+    // THE EXCEPTION, and the reason this is not a plain filter: if such a
+    // capability is somehow already ON for this business — an override
+    // stored before this scoping existed, or set by an administrator —
+    // hiding it would strand the setting where nobody could reach it.
+    // So an out-of-family capability stays visible exactly as long as it
+    // is on, which is exactly as long as there is something to undo.
+    .filter((key) => isCapabilityInFamily(key, config.family) || config.capabilities[key] === true)
     .map((key) => ({
       ...CAPABILITIES[key],
       enabled: config.capabilities[key],

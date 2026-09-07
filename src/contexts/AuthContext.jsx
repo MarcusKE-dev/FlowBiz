@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   onAuthStateChanged, signInWithEmailAndPassword, signOut as fbSignOut, sendEmailVerification, reload,
   deleteUser, EmailAuthProvider, reauthenticateWithCredential,
@@ -20,6 +20,7 @@ import {
 import { auth, db } from '../firebase';
 import { isDemoMode } from '../demo/demoMode';
 import { raceWithTimeout } from '../utils/offlineWrite';
+import { resolveEntitlements } from '../licensing';
 
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 const AuthContext = createContext(null);
@@ -61,6 +62,17 @@ export function AuthProvider({ children }) {
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [subscription, setSubscription] = useState({ plan: 'free', status: 'active' });
+  // The billing half of the business document, as two separate records:
+  // `subscription` is the monthly plan, `licensing` is the perpetual
+  // licence and its renewable annual services entitlement. Both are
+  // server-written and read-only here — see firestore.rules, which
+  // refuses a client update that touches either.
+  const [licensing, setLicensing] = useState(null);
+  // Re-derived on a timer as well as on a snapshot, because a service
+  // period expires when a DATE passes and nothing writes a document at
+  // that moment. Without this a shop that leaves the counter open all
+  // week would never notice its own renewal falling due.
+  const [entitlementClock, setEntitlementClock] = useState(() => Date.now());
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState(null);
   const [accountRemoved, setAccountRemoved] = useState(false);
@@ -175,6 +187,7 @@ export function AuthProvider({ children }) {
     if (!user) {
       setProfile(null);
       setSubscription({ plan: 'free', status: 'active' });
+      setLicensing(null);
       setEmailVerified(false);
       setLoading(false);
       return;
@@ -225,7 +238,9 @@ export function AuthProvider({ children }) {
             businessSubscribedToRef.current = data.businessId;
             businessUnsubRef.current = onSnapshot(doc(db, 'businesses', data.businessId), (bizSnap) => {
               if (bizSnap.exists()) {
-                setSubscription(bizSnap.data().subscription || { plan: 'free', status: 'active' });
+                const biz = bizSnap.data();
+                setSubscription(biz.subscription || { plan: 'free', status: 'active' });
+                setLicensing(biz.licensing || null);
               }
             });
           }
@@ -520,26 +535,52 @@ export function AuthProvider({ children }) {
 
   const isOwner = profile?.role === 'owner';
 
-  const expiresMs = subscription?.expiresAt?.toMillis
-    ? subscription.expiresAt.toMillis()
-    : (subscription?.expiresAt ? new Date(subscription.expiresAt).getTime() : 0);
+  // ── Entitlements ──────────────────────────────────────────────────────
+  //
+  // Every licensing question the app asks is answered by ONE pure
+  // resolver (src/licensing/entitlements.js) reading the two billing
+  // records. Nothing else in the client re-implements a date comparison,
+  // which is what stops the counter and the billing page disagreeing
+  // about whether a service period is still running.
+  const entitlements = useMemo(
+    () => resolveEntitlements({ subscription, licensing }, entitlementClock),
+    [subscription, licensing, entitlementClock],
+  );
 
-  const isProSubscriber = subscription?.plan === 'pro' &&
-                subscription?.status === 'active' &&
-                (!subscription.expiresAt || expiresMs > Date.now());
+  // A service period ends on a date, and no document is written when that
+  // date arrives. Re-deriving hourly, and whenever the tab is brought back
+  // to the front, is enough to move a business into its grace period, or
+  // out of it, on a device that never reloads — and it is free, because
+  // the resolver is pure and reads nothing.
+  useEffect(() => {
+    const interval = setInterval(() => setEntitlementClock(Date.now()), 60 * 60 * 1000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') setEntitlementClock(Date.now());
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(interval); document.removeEventListener('visibilitychange', onVisible); };
+  }, []);
 
-  const isLifetime = subscription?.plan === 'lifetime' && subscription?.status === 'active';
+  const isProSubscriber = entitlements.isProSubscriber;
+  const isLifetime = entitlements.isLifetime;
 
   // A perpetual license unlocks every Pro capability, so `isPro` stays the
   // single flag the rest of the app already gates features on — it just
   // now also covers lifetime businesses. Use `isLifetime` where the UI
   // specifically needs to tell the two apart (billing copy, admin views).
-  const isPro = isProSubscriber || isLifetime;
+  //
+  // IT IS DELIBERATELY NOT TIED TO THE ANNUAL SERVICE PERIOD. Advanced
+  // analytics, inventory intelligence and the document tools were bought
+  // with the licence, and a lapsed maintenance entitlement does not take
+  // back software somebody already owns. What lapses is the hosted
+  // services around it. See docs/LICENSING.md.
+  const isPro = entitlements.can('features.pro');
 
   return (
     <AuthContext.Provider
       value={{
-        firebaseUser, profile, subscription, isPro, isLifetime, loading, authError, accountRemoved,
+        firebaseUser, profile, subscription, licensing, entitlements,
+        isPro, isLifetime, isProSubscriber, loading, authError, accountRemoved,
         sessionRevoked, sessionRevokedReason,
         businessId: profile?.businessId ?? null, role: profile?.role ?? null, isAdmin: isOwner, isOwner,
         isActive: profile?.active !== false,
