@@ -47,25 +47,20 @@ function button(url, label) {
   return `<a href="${url}" style="display:inline-block;background:${BRAND_BLUE};color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:12px 24px;border-radius:8px;margin:20px 0;">${label}</a>`;
 }
 
-/**
- * The button, plus the link written out underneath it.
- *
- * A button alone is not enough: plenty of mail clients strip or fail to
- * render styled anchors, and a person who cannot see the button has no
- * way forward at all. Showing the URL is only acceptable because the URL
- * is now short and on our own domain — see flowbizActionLink() in
- * lib/identityToolkit.js, which is what made this safe to print.
- *
- * `word-break` matters: without it a long-ish URL forces the whole email
- * body wider than the phone screen it is being read on.
- */
-
+// The HTML body shows the button ONLY — the raw URL used to be printed
+// underneath it and was removed deliberately (commit "Remove the url
+// link"), because a visible action URL reads like phishing to a customer.
+//
+// The plain-text part of every auth email below still carries the bare
+// link, and that is what covers a mail client which strips styled
+// anchors. Keep it that way: if the text part ever loses the link, a
+// text-only client leaves the person with nothing to click at all.
 
 export function verificationEmail(link) {
   const html = shell(`
     <h1 style="margin:0 0 12px;font-size:20px;color:${INK_900};">Welcome to FlowBiz</h1>
     <p style="margin:0 0 8px;font-size:14px;color:${INK_700};line-height:1.6;">Please verify your email address to activate your FlowBiz account.</p>
-    ${action(link, 'Verify my email')}
+    ${button(link, 'Verify my email')}
     <p style="margin:16px 0 0;font-size:12px;color:${INK_400};line-height:1.6;">This link can only be used once. If you didn't create a FlowBiz account, you can safely ignore this email.</p>
   `);
 
@@ -88,7 +83,7 @@ export function passwordResetEmail(link) {
   const html = shell(`
     <h1 style="margin:0 0 12px;font-size:20px;color:${INK_900};">Reset your FlowBiz password</h1>
     <p style="margin:0 0 8px;font-size:14px;color:${INK_700};line-height:1.6;">We received a request to reset the password for your FlowBiz account.</p>
-    ${action(link, 'Reset password')}
+    ${button(link, 'Reset password')}
     <p style="margin:16px 0 0;font-size:12px;color:${INK_400};line-height:1.6;">This link can only be used once. If you didn't request this, you can safely ignore this email &mdash; your password will not be changed.</p>
   `);
 

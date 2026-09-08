@@ -96,12 +96,25 @@ for (const [name, build] of [
       'a client that renders text-only left the person with nothing to click');
   });
 
-  test(`the ${name} email offers the link in the HTML too, not only a button`, () => {
+  // REVERSED DELIBERATELY. This used to require the URL written out under
+  // the button as a visible fallback. "Remove the url link" took that out:
+  // a printed action URL reads like phishing to a customer. The link now
+  // appears in the HTML exactly once, as the button's href, and the
+  // plain-text part above is what covers a client that strips anchors.
+  test(`the ${name} email puts the link in the button and does not print it`, () => {
     const { html } = build(LINK);
-    // Once in the button href, once written out as a fallback.
     const occurrences = html.split(LINK).length - 1;
-    assert.ok(occurrences >= 2, `expected a visible fallback link, found ${occurrences} occurrence(s)`);
-    assert.match(html, /word-break:break-all/, 'a long URL must not force the email wider than a phone');
+    assert.equal(occurrences, 1, `the link belongs in the button href alone, found ${occurrences}`);
+    assert.match(html, new RegExp(`href="${LINK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`),
+      'the one occurrence must be the button href, not stray text');
+  });
+
+  // THE REGRESSION THIS FILE EXISTS TO CATCH from here on: a call to a
+  // helper that no longer exists threw ReferenceError at render time, so
+  // every verification and reset email died before it reached Resend.
+  test(`the ${name} email renders without throwing`, () => {
+    assert.doesNotThrow(() => build(LINK),
+      'a template that throws takes down signup verification and password reset at once');
   });
 
   test(`the ${name} email is branded FlowBiz blue and carries a support address`, () => {

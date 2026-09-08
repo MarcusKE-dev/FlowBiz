@@ -1119,20 +1119,22 @@ export default function Counter() {
         {/* LEFT: product catalog + sales log */}
         <div className="min-w-0 space-y-4">
 
-          {/* Mobile-only cart bar, pinned to the top of the screen */}
-          <div className="sticky top-2 z-20 lg:hidden">
-            <CartList
-              cart={cart}
-              onUpdateQuantity={updateCartQuantity}
-              onUpdatePrice={updateCartPrice}
-              onRemove={removeCartItem}
-              onClear={clearCart}
-              onCheckout={() => withAgeCheck(() => setCheckoutOpen(true))}
-              onSaveOrder={ordersOn ? handleSaveOrder : null}
-              saveOrderLabel={activeOrderId ? industry.terms.updateOrder : industry.terms.saveOrder}
-              savingOrder={savingOrder}
-            />
-          </div>
+          {/* Mobile-only cart bar, pinned to the top header level */}
+          {cart && cart.length > 0 && (
+            <div className="sticky top-0 z-20 -mt-2 pt-1 pb-1 bg-canvas/95 backdrop-blur-sm lg:hidden">
+              <CartList
+                cart={cart}
+                onUpdateQuantity={updateCartQuantity}
+                onUpdatePrice={updateCartPrice}
+                onRemove={removeCartItem}
+                onClear={clearCart}
+                onCheckout={() => withAgeCheck(() => setCheckoutOpen(true))}
+                onSaveOrder={ordersOn ? handleSaveOrder : null}
+                saveOrderLabel={activeOrderId ? industry.terms.updateOrder : industry.terms.saveOrder}
+                savingOrder={savingOrder}
+              />
+            </div>
+          )}
 
           {ordersOn && (
             <OrderBar
