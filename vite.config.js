@@ -4,6 +4,8 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
+import { staticRoutePaths, shellFilesFor } from './src/router/staticRoutes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,6 +28,77 @@ const emulatorProxy = {
   '/www.googleapis.com': { target: AUTH_EMULATOR, changeOrigin: true },
   '/emulator': { target: AUTH_EMULATOR, changeOrigin: true },
 };
+
+/**
+ * THE DEMO IS A SPA IN A SUBDIRECTORY, AND THAT IS THE WHOLE PROBLEM.
+ *
+ * A static host answers /demo/floor by looking for a file. There isn't
+ * one — the router was going to handle that path — so the host falls
+ * back, and Cloudflare Pages' fallback is the ROOT index.html. The
+ * product's app then boots with no basename, matches nothing, and shows
+ * the landing page. Every demo deep link, on every reload, new tab and
+ * bookmark. public/_redirects has carried a /demo/* rewrite for this
+ * since August and it demonstrably does not fire on the deployment.
+ *
+ * So the demo build stops relying on a rule being interpreted the way we
+ * hoped and writes the file instead: index.html, copied to every path
+ * the router declares. A static asset is served before any redirect
+ * logic is consulted, by every host, which makes this the one version of
+ * the fix that cannot be undone by a hosting setting.
+ *
+ * Both `<route>.html` and `<route>/index.html` are written. Pages
+ * documents the first and it is the better one — the directory form
+ * costs a 308 to /demo/floor/ first — but which file a host reaches for
+ * is exactly the assumption that produced this bug, and this is a fix
+ * that can only be proven by deploying it.
+ *
+ * It also drops a copy at the deployment root as demo-shell.html, which
+ * is what _redirects now points /demo/* at. The old rule named
+ * /demo/index.html — a destination that matches its own source pattern,
+ * which is the most likely reason it was dropped. Belt and braces: if
+ * the rule works, it catches demo URLs no route declares; if it does
+ * not, the files above have already answered.
+ */
+function demoRouteShells({ outDir, rootOutDir, routerFile }) {
+  return {
+    name: 'flowbiz-demo-route-shells',
+    apply: 'build',
+    // The shells are written after the bundle and excluded from the
+    // service worker's precache by name (see workbox.globIgnores below).
+    // Listing ninety byte-identical copies of index.html in a manifest
+    // for a service worker the demo never registers — main.jsx calls
+    // registerSW only outside demo mode — would be pure weight.
+    closeBundle() {
+      const dir = path.resolve(__dirname, outDir);
+      const shell = path.join(dir, 'index.html');
+      if (!fs.existsSync(shell)) return;
+
+      const html = fs.readFileSync(shell);
+      const routes = staticRoutePaths(fs.readFileSync(path.resolve(__dirname, routerFile), 'utf8'));
+
+      let written = 0;
+      for (const route of routes) {
+        for (const name of shellFilesFor(route)) {
+          const file = path.join(dir, name);
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          fs.writeFileSync(file, html);
+          written += 1;
+        }
+      }
+
+      const root = path.resolve(__dirname, rootOutDir);
+      if (fs.existsSync(root)) fs.writeFileSync(path.join(root, 'demo-shell.html'), html);
+
+      this.info(`demo route shells: ${written} files for ${routes.length} routes in ${outDir}`);
+    },
+  };
+}
+
+// Computed once, and used twice: the plugin writes these files and
+// workbox is told to leave them out of the precache manifest.
+const DEMO_SHELL_FILES = staticRoutePaths(
+  fs.readFileSync(path.resolve(__dirname, 'src/router/AppRouter.jsx'), 'utf8'),
+).flatMap(shellFilesFor);
 
 export default defineConfig(({ mode }) => ({
   base: mode === 'demo' ? '/demo/' : '/',
@@ -102,6 +175,7 @@ export default defineConfig(({ mode }) => ({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
+        ...(mode === 'demo' ? { globIgnores: DEMO_SHELL_FILES } : {}),
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/demo($|\/)/, /^\/r\//, /^\/api\//],
         runtimeCaching: [
@@ -126,5 +200,13 @@ export default defineConfig(({ mode }) => ({
         ],
       },
     }),
+
+    ...(mode === 'demo'
+      ? [demoRouteShells({
+          outDir: 'dist/demo',
+          rootOutDir: 'dist',
+          routerFile: 'src/router/AppRouter.jsx',
+        })]
+      : []),
   ],
 }));

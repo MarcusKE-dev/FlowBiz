@@ -1,3 +1,21 @@
-/demo    /demo/index.html  200
-/demo/*  /demo/index.html  200
-/*       /index.html        200
+# THE DEMO IS A SECOND SPA, MOUNTED AT /demo/, and it needs its own
+# fallback: the root one below would hand it the product's index.html,
+# which boots with no basename and lands on the landing page.
+#
+# The destination is /demo-shell.html and NOT /demo/index.html, which is
+# what it used to be. That old destination matches its own source
+# pattern, and a self-referencing rewrite is the most likely reason the
+# rule was silently dropped on Cloudflare Pages — /demo/ worked (a real
+# file) while every deep link under it fell through to the rule below.
+#
+# This rule is now the SECOND line of defence. The demo build writes a
+# real .html file for every route the router declares (see
+# demoRouteShells in vite.config.js), and a static asset is served before
+# any of this is consulted. What is left for this rule is a /demo/ URL
+# that matches no declared route.
+/demo/*  /demo-shell.html  200
+
+# The product, at the root, where the host's own fallback would do the
+# same job. Stated anyway so the behaviour is in the repository rather
+# than in a dashboard setting.
+/*       /index.html       200
