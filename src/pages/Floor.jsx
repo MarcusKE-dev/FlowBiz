@@ -34,6 +34,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { useIndustry } from '../hooks/useIndustry';
 import { usePermissions } from '../hooks/usePermissions';
 import { useTickets } from '../hooks/useTickets';
+import { appPath } from '../lib/appUrl';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import PageHeader from '../components/ui/PageHeader';
 import EmptyState from '../components/ui/EmptyState';
@@ -170,7 +171,7 @@ export default function Floor() {
           The customer display still works without tables. It shows the menu and the order
           queue.{' '}
           <a
-            href="/customer-display"
+            href={appPath('/customer-display')}
             target="_blank"
             rel="noopener noreferrer"
             className="font-semibold text-primary-700 underline underline-offset-2"
@@ -204,7 +205,7 @@ export default function Floor() {
            working on would be the wrong thing in both places. */
         actions={
           <a
-            href="/customer-display"
+            href={appPath('/customer-display')}
             target="_blank"
             rel="noopener noreferrer"
             className="btn-secondary"

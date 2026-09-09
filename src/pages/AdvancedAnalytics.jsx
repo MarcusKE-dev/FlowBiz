@@ -245,13 +245,22 @@ export default function AdvancedAnalytics() {
     catch (err) { console.error('Failed to save chart style', err); }
   };
 
+  // WHEN "THE LAST 30 DAYS" IS MEASURED FROM, fixed at the moment this
+  // screen opened. It was read straight out of Date.now() inside the memo
+  // below, which made the window drift with whatever else happened to
+  // invalidate that memo — so two figures on the same page could be
+  // measured from two different instants, and neither was the one the
+  // person had asked for. A report is a statement about a moment; the
+  // moment belongs in state.
+  const [openedAt] = useState(() => Date.now());
+
   const { start, end } = useMemo(() => {
     if (period === 'custom' && customStart && customEnd) {
       return { start: startOfDay(new Date(customStart)), end: endOfDay(new Date(customEnd)) };
     }
     const days = Number(period) || 30;
-    return { start: startOfDay(new Date(Date.now() - (days - 1) * 86400000)), end: endOfDay() };
-  }, [period, customStart, customEnd]);
+    return { start: startOfDay(new Date(openedAt - (days - 1) * 86400000)), end: endOfDay() };
+  }, [period, customStart, customEnd, openedAt]);
 
   const prevRange = useMemo(() => {
     if (period === 'custom' && customStart && customEnd) {

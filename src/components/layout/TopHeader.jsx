@@ -7,7 +7,7 @@ import { isDemoMode } from '../../demo/demoMode';
 
 
 export default function TopHeader() {
-  const { profile, logout, isAdmin, isPro } = useAuth();
+  const { logout, isAdmin, isPro } = useAuth();
   const { settings } = useSettings();
   const demo = isDemoMode();
 

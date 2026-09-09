@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { orderBy, where } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -66,7 +66,12 @@ export default function InventoryIntelligence() {
   // Same query shape (businessId + soldAt range + orderBy soldAt) already
   // used by useFinancials.js elsewhere in the app, so it reuses the same
   // Firestore composite index — no new index required.
-  const thirtyDaysAgo = useMemo(() => new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000), []);
+  // The start of the lookback window, fixed when the screen opened. A
+  // useMemo with an empty dependency list is not a promise that its body
+  // runs once — React may discard and recompute it — so reading the clock
+  // in there could quietly move the window under a query that was already
+  // listening on the old one. A lazy state initialiser IS that promise.
+  const [thirtyDaysAgo] = useState(() => new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000));
   const recentSalesQ = useMemo(
     () => (businessId ? tenantQuery('sales', businessId, where('soldAt', '>=', thirtyDaysAgo), orderBy('soldAt', 'desc')) : null),
     [businessId, thirtyDaysAgo]
@@ -180,13 +185,18 @@ export default function InventoryIntelligence() {
   const abcClassification = useMemo(() => {
     const moving = [...productInsights].filter((p) => p.valueMoved > 0).sort((a, b) => b.valueMoved - a.valueMoved);
     const totalValue = moving.reduce((sum, p) => sum + p.valueMoved, 0);
+    // A RUNNING TOTAL WANTS A LOOP, not a callback closing over a counter
+    // it reassigns. The map version read the same but handed a mutable
+    // binding to a function React is free to call whenever it likes; the
+    // loop keeps the accumulation where it can be seen, in one scope,
+    // running exactly once per product.
+    const tiered = [];
     let cumulative = 0;
-    const tiered = moving.map((p) => {
+    for (const p of moving) {
       cumulative += p.valueMoved;
       const cumulativePct = totalValue > 0 ? (cumulative / totalValue) * 100 : 0;
-      const tier = cumulativePct <= 80 ? 'A' : cumulativePct <= 95 ? 'B' : 'C';
-      return { ...p, tier };
-    });
+      tiered.push({ ...p, tier: cumulativePct <= 80 ? 'A' : cumulativePct <= 95 ? 'B' : 'C' });
+    }
     const counts = tiered.reduce((acc, p) => { acc[p.tier] = (acc[p.tier] || 0) + 1; return acc; }, { A: 0, B: 0, C: 0 });
     return { tiered, counts };
   }, [productInsights]);

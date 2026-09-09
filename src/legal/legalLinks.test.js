@@ -97,6 +97,23 @@ test('the documents carry a version and an effective date', () => {
   assert.match(read('src/pages/Privacy.jsx'), /PRIVACY_VERSION/, 'the Privacy page must show its version');
 });
 
+// A version number nobody is told about is a version number that does no
+// work. Both summaries were written, exported, imported by the page that
+// should carry them — and rendered by neither, so the Lifetime Licence
+// terms and the phone number added to the privacy policy both landed
+// silently. The import alone is not the test; being USED is the test.
+test('and each says what changed in it, on the page, not just in the module', () => {
+  for (const [page, name] of [
+    ['src/pages/Terms.jsx', 'TERMS_CHANGE_SUMMARY'],
+    ['src/pages/Privacy.jsx', 'PRIVACY_CHANGE_SUMMARY'],
+  ]) {
+    const source = read(page);
+    assert.match(source, new RegExp(`import[^;]*\\b${name}\\b[^;]*;`), `${page} must import ${name}`);
+    assert.match(source, new RegExp(`\\{\\s*${name}\\s*\\}`),
+      `${page} imports ${name} and must actually RENDER it — importing it and dropping it is how the last change went unannounced`);
+  }
+});
+
 // ── The wording itself ────────────────────────────────────────────────
 //
 // These are the phrases the commercial model forbids. They are cheap to

@@ -26,6 +26,21 @@ export default function Privacy() {
           title="Privacy policy"
           description={`Version ${PRIVACY_VERSION} · Effective ${PRIVACY_EFFECTIVE_DATE} · Prepared with reference to the Kenya Data Protection Act, 2019`}
         />
+        {/* WHAT CHANGED, at the top, where somebody looking for it
+            will find it. The summary has existed in
+            src/legal/documentVersions.js since the version it describes
+            — documented there as "the one-line summary shown at the top
+            of a document that just changed" — and was imported by this
+            page and rendered by neither it nor its sibling. So the 3.0
+            change (the account phone number collected at signup) was announced to
+            nobody, which is the one thing a version number is for. */}
+        <div className="mt-5 max-w-prose rounded-panel border border-line bg-surface p-4">
+          <p className="text-secondary font-semibold uppercase tracking-wide text-ink-500">
+            What changed in version {PRIVACY_VERSION}
+          </p>
+          <p className="mt-1.5 text-body leading-relaxed text-ink-700">{PRIVACY_CHANGE_SUMMARY}</p>
+        </div>
+
   
 
         <div className="mt-8 max-w-prose space-y-8 text-body leading-relaxed text-ink-700">

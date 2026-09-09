@@ -5,6 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useSettings } from '../../contexts/SettingsContext';
 import { isDemoMode } from '../../demo/demoMode';
+import { appPath } from '../../lib/appUrl';
 import LoadingSpinner from './LoadingSpinner';
 import { Ban, AlertCircle, RefreshCw, Store } from 'lucide-react';
 
@@ -94,7 +95,7 @@ export default function ProtectedRoute({ children, adminOnly = false, requires =
               ? 'FlowBiz has paused access to this business. Nothing has been deleted. Contact FlowBiz support to have it lifted, then sign in again.'
               : 'An owner revoked access for this device from Settings, under Device management.'}
           </p>
-          <button className="btn-primary w-full" onClick={() => (window.location.href = '/login')}>Go to sign in</button>
+          <button className="btn-primary w-full" onClick={() => (window.location.href = appPath('/login'))}>Go to sign in</button>
         </div>
       </div>
     );
@@ -114,7 +115,7 @@ export default function ProtectedRoute({ children, adminOnly = false, requires =
             </p>
             <div className="flex flex-col gap-2">
               <Link to="/setup" className="btn-primary w-full">Set Up Business Now</Link>
-              <button className="btn-outline w-full" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out</button>
+              <button className="btn-outline w-full" onClick={async () => { await logout(); window.location.href = appPath('/login'); }}>Sign out</button>
             </div>
           </div>
         </div>
@@ -134,7 +135,7 @@ export default function ProtectedRoute({ children, adminOnly = false, requires =
               <RefreshCw className="h-4 w-4" /> Reload Profile
             </button>
             <Link to="/setup" className="btn-outline w-full">Set Up / Reconfigure Business</Link>
-            <button className="text-secondary text-ink-400 hover:underline pt-1" onClick={async () => { await logout(); window.location.href = '/login'; }}>Sign out</button>
+            <button className="text-secondary text-ink-400 hover:underline pt-1" onClick={async () => { await logout(); window.location.href = appPath('/login'); }}>Sign out</button>
           </div>
         </div>
       </div>

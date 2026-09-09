@@ -2,14 +2,21 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import { isDemoMode } from '../demo/demoMode';
+import { DEMO_EMAIL, DEMO_PASSWORD } from '../demo/localAuth';
 import AuthShell from '../components/common/AuthShell';
 import ErrorBanner from '../components/common/ErrorBanner';
 export default function Login() {
   const { login, firebaseUser } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [email, setEmail]     = useState('');
-  const [password, setPassword] = useState('');
+  // SIGNING OUT OF THE DEMO MUST NOT BE A TRAPDOOR. There is no account
+  // behind the demo, so any credentials get you back in — but a visitor
+  // has no way of knowing that, and an empty form is a dead end. The
+  // boxes are filled in and the reason is stated above them.
+  const demo = isDemoMode();
+  const [email, setEmail]     = useState(demo ? DEMO_EMAIL : '');
+  const [password, setPassword] = useState(demo ? DEMO_PASSWORD : '');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError]     = useState(null);
 const LOCKOUT_SCHEDULE = [60, 300, 900, 1800, 3600]; // 1m → 5m → 15m → 30m → 1h, then stays at 1h
@@ -82,6 +89,12 @@ finally {
     >
         <form onSubmit={handle} className="space-y-4">
           <ErrorBanner message={error} />
+          {demo && (
+            <p className="rounded-panel border border-line bg-canvas p-3 text-secondary text-ink-600">
+              This is the FlowBiz demo. The sign-in below is already filled in — press
+              Sign in to go back to the demo business.
+            </p>
+          )}
           <div><label className="label">Email</label><input type="email" required className="input" placeholder="owner@yourbusiness.co.ke" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username" /></div>
           <div>
             <div className="flex items-center justify-between">

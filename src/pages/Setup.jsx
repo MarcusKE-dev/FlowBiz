@@ -1,5 +1,5 @@
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   createUserWithEmailAndPassword,
@@ -32,7 +32,19 @@ const FLOWBIZ_API_URL =
 export default function Setup() {
   const { firebaseUser, profile, loading: authLoading } = useAuth();
   const navigate = useNavigate();
-  const creatingRef = useRef(false);
+  // "THIS TAB IS IN THE MIDDLE OF CREATING THE BUSINESS", and it decides
+  // what gets RENDERED — so it is state, not a ref.
+  //
+  // Signing the owner up flips them to signed-in several steps before
+  // their business documents exist, and both guards below exist to stop
+  // that half-finished moment from being acted on: the effect must not
+  // bounce them to a dashboard that is still being written, and the
+  // render must not replace the form with the auth spinner underneath
+  // somebody who is looking at it. A ref cannot be read during render —
+  // React makes no promise that a render which reads one will be
+  // re-run when it changes — so the second guard was reading a value it
+  // had no right to and would not have been told about.
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     if (authLoading) return;
@@ -40,14 +52,14 @@ export default function Setup() {
     if (
       firebaseUser &&
       profile?.businessId &&
-      !creatingRef.current
+      !creating
     ) {
       navigate(
         profile.role === 'owner' ? '/dashboard' : '/counter',
         { replace: true }
       );
     }
-  }, [firebaseUser, profile, authLoading, navigate]);
+  }, [firebaseUser, profile, authLoading, navigate, creating]);
 
   const [businessName, setBusinessName] = useState('');
   const [industryProfile, setIndustryProfile] =
@@ -113,7 +125,7 @@ export default function Setup() {
     }
 
     setSubmitting(true);
-    creatingRef.current = true;
+    setCreating(true);
 
     let targetUser;
 
@@ -146,7 +158,7 @@ export default function Setup() {
               'An account with this email already exists. Please sign in instead.'
             );
 
-            creatingRef.current = false;
+            setCreating(false);
             setSubmitting(false);
             return;
           }
@@ -157,7 +169,7 @@ export default function Setup() {
             'An account with this email already exists. Please sign in or use another email.'
           );
 
-          creatingRef.current = false;
+          setCreating(false);
           setSubmitting(false);
           return;
         }
@@ -170,7 +182,7 @@ export default function Setup() {
               : 'Could not create your account. Please try again.';
 
         setError(message);
-        creatingRef.current = false;
+        setCreating(false);
         setSubmitting(false);
         return;
       }
@@ -178,7 +190,7 @@ export default function Setup() {
 
     if (!targetUser) {
       setError('Failed to authenticate. Please try again.');
-      creatingRef.current = false;
+      setCreating(false);
       setSubmitting(false);
       return;
     }
@@ -236,7 +248,7 @@ export default function Setup() {
         'Something went wrong setting up your business records. Please try again.'
       );
 
-      creatingRef.current = false;
+      setCreating(false);
       setSubmitting(false);
       return;
     }
@@ -285,7 +297,7 @@ export default function Setup() {
     navigate('/', { replace: true });
   };
 
-  if (authLoading && !creatingRef.current) {
+  if (authLoading && !creating) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-deep-900">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />

@@ -20,6 +20,7 @@ import {
   Search, AlertTriangle, CheckCircle2,
 } from 'lucide-react';
 import { fetchAdminOverview } from '../../utils/adminService';
+import { appPath } from '../../lib/appUrl';
 import PageHeader from '../../components/ui/PageHeader';
 import Section from '../../components/ui/Section';
 import MetricRail, { Metric } from '../../components/ui/MetricRail';
@@ -106,7 +107,7 @@ export default function AdminOverview() {
               onSubmit={(e) => {
                 e.preventDefault();
                 if (quickSearch.trim()) {
-                  window.location.href = `/admin/businesses?search=${encodeURIComponent(quickSearch.trim())}`;
+                  window.location.href = appPath(`/admin/businesses?search=${encodeURIComponent(quickSearch.trim())}`);
                 }
               }}
               className="flex items-center gap-2"

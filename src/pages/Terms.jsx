@@ -18,6 +18,21 @@ export default function Terms() {
           title="Terms of service"
           description={`Version ${TERMS_VERSION} · Effective ${TERMS_EFFECTIVE_DATE}`}
         />
+        {/* WHAT CHANGED, at the top, where somebody looking for it
+            will find it. The summary has existed in
+            src/legal/documentVersions.js since the version it describes
+            — documented there as "the one-line summary shown at the top
+            of a document that just changed" — and was imported by this
+            page and rendered by neither it nor its sibling. So the 2.0
+            change (the Lifetime Licence and the separate annual cloud fee) was announced to
+            nobody, which is the one thing a version number is for. */}
+        <div className="mt-5 max-w-prose rounded-panel border border-line bg-surface p-4">
+          <p className="text-secondary font-semibold uppercase tracking-wide text-ink-500">
+            What changed in version {TERMS_VERSION}
+          </p>
+          <p className="mt-1.5 text-body leading-relaxed text-ink-700">{TERMS_CHANGE_SUMMARY}</p>
+        </div>
+
         <hr className="hairline mt-5" />
 
         <div className="mt-8 max-w-prose space-y-8 text-body leading-relaxed text-ink-700">

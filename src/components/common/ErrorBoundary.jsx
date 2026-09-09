@@ -1,5 +1,6 @@
 import { Component } from 'react';
 import { AlertTriangle } from 'lucide-react';
+import { appPath } from '../../lib/appUrl';
 
 export default class ErrorBoundary extends Component {
   state = { hasError: false, error: null };
@@ -21,7 +22,7 @@ export default class ErrorBoundary extends Component {
           </p>
           <button
             className="btn-primary w-full"
-            onClick={() => { this.setState({ hasError: false, error: null }); window.location.href = '/'; }}
+            onClick={() => { this.setState({ hasError: false, error: null }); window.location.href = appPath('/'); }}
           >
             Return to dashboard
           </button>

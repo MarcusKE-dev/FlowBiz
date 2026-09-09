@@ -363,7 +363,7 @@ function MenuFeed({ reel }) {
 
 export default function CustomerDisplay() {
   const navigate = useNavigate();
-  const { businessId } = useAuth();
+  const { businessId, loading: authLoading } = useAuth();
   const { settings } = useSettings();
   const industry = useIndustry();
   const { tickets, loading, enabled } = useTickets();
@@ -478,6 +478,50 @@ export default function CustomerDisplay() {
     setScale(next);
     writeStoredScale(next);
   };
+
+  // WHO THIS SCREEN BELONGS TO IS ANSWERED FIRST, and it has to be,
+  // because /customer-display is a PUBLIC route — a board bolted to a
+  // wall must survive a reload without somebody signing it in again.
+  //
+  // Signed out, there is no business, so the industry resolver answers
+  // from the defaults: General Retail, nothing switched on, no orders.
+  // The screen then said "this business does not keep open orders",
+  // which is a true sentence about the wrong subject and sent people off
+  // to check a setting that was never the problem. A visitor who reached
+  // this URL from outside the demo saw exactly that.
+  //
+  // So: not signed in is its own answer, and it is the FIRST one.
+  if (authLoading) {
+    return (
+      <Shell scale={scale}>
+        <div className="flex flex-1 items-center justify-center">
+          <LoadingSpinner label="Opening the board" />
+        </div>
+      </Shell>
+    );
+  }
+
+  if (!businessId) {
+    return (
+      <Shell scale={scale}>
+        <div className="flex flex-1 flex-col items-center justify-center gap-[0.6em] px-[2em] text-center">
+          <UtensilsCrossed className="h-[3em] w-[3em] text-ink-600" strokeWidth={1.25} aria-hidden="true" />
+          <h1 className="text-[1.8em] font-semibold text-white">This screen is not signed in</h1>
+          <p className="max-w-[24em] text-[1em] text-ink-400">
+            The customer display shows one business&rsquo;s room and order queue, so it has to
+            know whose. Sign in on this device once and it stays signed in.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate('/login')}
+            className="mt-[0.4em] border border-ink-700 bg-ink-900 px-[1.2em] py-[0.5em] text-[1em] text-white hover:bg-ink-800"
+          >
+            Sign in
+          </button>
+        </div>
+      </Shell>
+    );
+  }
 
   if (!enabled) {
     return (

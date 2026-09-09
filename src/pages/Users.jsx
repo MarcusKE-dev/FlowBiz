@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { Trash2, Copy, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { appUrl } from '../lib/appUrl';
 import { tenantQuery } from '../lib/tenant';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import PageHeader from '../components/ui/PageHeader';
@@ -40,7 +41,7 @@ export default function Users() {
   const [pendDelete, setPendDelete]           = useState(null);
   const [pendCancelInvite, setPendCancelInvite] = useState(null);
 
-  const inviteLink = (inviteId) => `${window.location.origin}/join/${inviteId}`;
+  const inviteLink = (inviteId) => appUrl(`/join/${inviteId}`);
 
   const copyLink = async (inviteId) => {
     try {

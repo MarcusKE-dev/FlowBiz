@@ -9,6 +9,7 @@ import { useIndustry } from '../hooks/useIndustry';
 import { resetBusinessData } from '../utils/businessReset';
 import { restoreProduct, permanentlyDeleteProduct } from '../utils/products';
 import { isDemoMode } from '../demo/demoMode';
+import { appPath, appUrl } from '../lib/appUrl';
 import { resetDemoData, demoProfileId } from '../demo/seedData';
 import { DEMO_DATASETS, DEMO_PROFILE_IDS } from '../demo/datasets';
 import { formatDateTime } from '../utils/dateRanges';
@@ -62,9 +63,7 @@ export default function Settings() {
   const [currentTrade] = useState(() => (isDemoMode() ? demoProfileId() : null));
   // Read once: it cannot change without a reload, and reading `window`
   // during render is impure.
-  const [displayUrl] = useState(
-    () => (typeof window === 'undefined' ? '/customer-display' : `${window.location.origin}/customer-display`)
-  );
+  const [displayUrl] = useState(() => appUrl('/customer-display'));
   const [loading, setLoading]     = useState(true);
   
   const [shopName, setShopName]   = useState('');
@@ -91,6 +90,13 @@ export default function Settings() {
 
   const [sessions, setSessions] = useState([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
+  // WHEN THE DEVICE LIST WAS READ, which is the only instant the
+  // "Active" badge below can honestly be measured against. It used to
+  // call Date.now() inside the render of every row, so the badge was
+  // recomputed against a moving clock on every unrelated re-render of
+  // this page — a device could flip to Inactive because somebody typed
+  // in the shop-name field. The list is a snapshot; so is its clock.
+  const [sessionsReadAt, setSessionsReadAt] = useState(0);
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
   const [deleteAccountPassword, setDeleteAccountPassword] = useState('');
   const [deleteAccountConfirmText, setDeleteAccountConfirmText] = useState('');
@@ -251,7 +257,9 @@ export default function Settings() {
       setSessionsLoading(false);
       return;
     }
-    listBusinessSessions().then(setSessions).finally(() => setSessionsLoading(false));
+    listBusinessSessions()
+      .then((rows) => { setSessions(rows); setSessionsReadAt(Date.now()); })
+      .finally(() => setSessionsLoading(false));
   }, [businessId, listBusinessSessions]);
 
   const loadArchived = async () => {
@@ -354,7 +362,7 @@ export default function Settings() {
         await resetBusinessData(businessId, profile?.uid);
         toast.success('Business data reset. Reloading…');
       }
-      window.location.href = '/';
+      window.location.href = appPath('/');
     } catch (err) {
       toast.error(`Reset failed: ${err.message}`);
       setResetting(false);
@@ -382,7 +390,7 @@ export default function Settings() {
     try {
       resetDemoData(demoTrade);
       toast.success(`Switched to the ${DEMO_DATASETS[demoTrade].label.toLowerCase()} demo. Reloading.`);
-      window.location.href = '/';
+      window.location.href = appPath('/');
     } catch (err) {
       toast.error(`Could not switch: ${err.message}`);
       setSwitchingTrade(false);
@@ -668,7 +676,7 @@ export default function Settings() {
               <div className="divide-y divide-divider rounded-panel border border-line bg-surface px-3">
                 {deviceGroups.map((group) => {
                   const isCurrent = group.ids.includes(currentSessionId);
-                  const isActiveNow = isCurrent || (Date.now() - group.lastActiveMs < 20 * 60 * 1000);
+                  const isActiveNow = isCurrent || (sessionsReadAt - group.lastActiveMs < 20 * 60 * 1000);
                   const isRevoked = !group.anyActive;
                   return (
                     <div key={group.key} className="flex items-center justify-between py-3 text-body">
@@ -811,7 +819,7 @@ export default function Settings() {
                   mono
                 />
                 <a
-                  href="/customer-display"
+                  href={appPath('/customer-display')}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="btn-secondary w-full justify-center"
