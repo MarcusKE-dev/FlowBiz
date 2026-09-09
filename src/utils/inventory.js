@@ -283,7 +283,42 @@ export function resolveStockDeltas(rows, products, {
         );
         consume(componentProduct, needed, {}, level + 1);
       }
+      if (level === 0 && Array.isArray(row?.modifiers)) {
+        for (const mod of row.modifiers) {
+          for (const line of Array.isArray(mod?.recipe) ? mod.recipe : []) {
+            const compProduct = byId.get(line?.componentId);
+            if (!compProduct) continue;
+            const perUnit = Number(line?.quantity) || 0;
+            if (perUnit === 0) continue;
+            const deltaQty = roundQuantity(quantity * perUnit, compProduct.unit || DEFAULT_UNIT);
+            if (deltaQty > 0) {
+              consume(compProduct, deltaQty, {}, level + 1);
+            } else if (deltaQty < 0) {
+              const entry = ensure(deltas, compProduct.id);
+              entry.total = roundQuantity(entry.total + Math.abs(deltaQty), compProduct.unit || DEFAULT_UNIT);
+            }
+          }
+        }
+      }
       return;
+    }
+
+    if (recipes && level === 0 && Array.isArray(row?.modifiers)) {
+      for (const mod of row.modifiers) {
+        for (const line of Array.isArray(mod?.recipe) ? mod.recipe : []) {
+          const compProduct = byId.get(line?.componentId);
+          if (!compProduct) continue;
+          const perUnit = Number(line?.quantity) || 0;
+          if (perUnit === 0) continue;
+          const deltaQty = roundQuantity(quantity * perUnit, compProduct.unit || DEFAULT_UNIT);
+          if (deltaQty > 0) {
+            consume(compProduct, deltaQty, {}, level + 1);
+          } else if (deltaQty < 0) {
+            const entry = ensure(deltas, compProduct.id);
+            entry.total = roundQuantity(entry.total + Math.abs(deltaQty), compProduct.unit || DEFAULT_UNIT);
+          }
+        }
+      }
     }
 
     if (!tracksOwnStock(product)) return;

@@ -2,6 +2,30 @@
 import { seedDoc, seedCommit, clearAllDemoData, makeTimestamp } from './localFirestore';
 import { DEMO_UID } from './localAuth';
 import { todayKey } from '../utils/dateRanges';
+import {
+  demoDataset, demoHistoryCost, DEFAULT_DEMO_PROFILE, DEMO_PROFILE_IDS,
+} from './datasets';
+
+// WHICH SAMPLE BUSINESS THIS BROWSER IS TRYING.
+//
+// Stored on its own rather than read back out of the seeded settings,
+// because the reseed has to know which dataset to build BEFORE it clears
+// the old one. Absent means the shop, which is what the demo has always
+// been.
+const PROFILE_KEY = 'flowbiz_demo_profile';
+
+export function demoProfileId() {
+  try {
+    const stored = localStorage.getItem(PROFILE_KEY);
+    return DEMO_PROFILE_IDS.includes(stored) ? stored : DEFAULT_DEMO_PROFILE;
+  } catch {
+    return DEFAULT_DEMO_PROFILE;
+  }
+}
+
+function rememberProfile(profileId) {
+  try { localStorage.setItem(PROFILE_KEY, profileId); } catch { /* not fatal */ }
+}
 
 // MULTI-TENANT CHANGE: every collection in the real app is now scoped by
 // `businessId`, and `tenantQuery()` throws if it's ever called without
@@ -14,95 +38,28 @@ import { todayKey } from '../utils/dateRanges';
 // what a real signed-up owner's profile looks like.
 export const DEMO_BUSINESS_ID = 'demo-business';
 
-const SUPPLIERS = [
-  {
-    id: 'sup_nairobi_electronics',
-    name: 'Nairobi Electronics Wholesale Ltd',
-    contactPerson: 'Peter Mwangi',
-    phone: '0722 445 108',
-    email: 'sales@nairobielectronics.co.ke',
-    address: 'River Road, Nairobi',
-    notes: 'Main supplier for accessories and cables.',
-  },
-  {
-    id: 'sup_techhub',
-    name: 'TechHub Distributors Kenya',
-    contactPerson: 'Grace Wanjiru',
-    phone: '0733 219 764',
-    email: 'orders@techhubke.com',
-    address: 'Kimathi Street, Nairobi',
-    notes: 'Supplies laptops, monitors, and peripherals.',
-  },
-];
-
-// FIX: added one 17th product, deliberately at zero stock, so Inventory
-// Intelligence's "Critical Stockout" / "REVENUE LOSS" insight has
-// something real to show — every other product already had at least 2
-// units.
-// DEMO PRODUCT PHOTOS — the one case where a product's photo is a plain
+// DEMO PRODUCT PHOTOS: the one case where a product's photo is a plain
 // file rather than a Firestore document.
 //
-// Real products store their photo in `productImages/{businessId}__{id}`
-// (see utils/productImages.js). The demo store is localStorage, which
-// has a ~5MB quota for the ENTIRE dataset — 17 base64 photos would eat
-// most of it and start throwing QuotaExceededError mid-seed. So demo
-// products point `imageUrl` at a static file in the public folder
-// instead, which the app already renders directly, costs the demo store
-// nothing but a short string, and is served straight from the CDN.
+// A real product stores its photo in `productImages/{businessId}__{id}`
+// (see utils/productImages.js). The demo store is localStorage, which has
+// a ~5MB quota for the ENTIRE dataset, so base64 photos would eat most of
+// it and start throwing QuotaExceededError mid-seed. Demo products point
+// `imageUrl` at a static file in the public folder instead, which the app
+// already renders directly and which costs the demo store nothing but a
+// short string.
 //
-// Drop `<slug>.webp` into public/product-photos/ for each `image` slug
-// below — see the README in that folder for the list and target size.
-// Any file that isn't there yet just falls back to the package icon;
-// nothing breaks.
-// BASE_URL, not a bare '/', because the demo build is served from
-// /demo/ (see vite.config.js) and a root-absolute path would 404 there.
+// Drop `<slug>.webp` into public/product-photos/ for each `image` slug in
+// datasets.js. A file that is not there yet falls back to the neutral
+// package icon; nothing breaks.
+//
+// BASE_URL, not a bare '/', because the demo build is served from /demo/
+// (see vite.config.js) and a root-absolute path would 404 there.
 const demoPhotoUrl = (slug) =>
   (slug ? `${import.meta.env.BASE_URL || '/'}product-photos/${slug}.webp`.replace(/\/{2,}/g, '/') : null);
 
-const PRODUCTS = [
-  { name: 'Wireless Mouse',            category: 'Electronics', costPrice: 650,   sellingPrice: 950,   stock: 40, lowStockThreshold: 8,  barcode: '6009880123451', supplierId: 'sup_nairobi_electronics', image: 'wireless-mouse' },
-  { name: 'Mechanical Keyboard',       category: 'Electronics', costPrice: 2800,  sellingPrice: 3999,  stock: 15, lowStockThreshold: 5,  barcode: '6009880123452', supplierId: 'sup_techhub', image: 'mechanical-keyboard' },
-  { name: 'USB Flash Disk 32GB',       category: 'Electronics', costPrice: 350,   sellingPrice: 599,   stock: 60, lowStockThreshold: 10, barcode: '6009880123453', supplierId: 'sup_nairobi_electronics', image: 'usb-flash-disk-32gb' },
-  { name: 'External Hard Drive 1TB',   category: 'Electronics', costPrice: 4200,  sellingPrice: 5499,  stock: 12, lowStockThreshold: 4,  barcode: '6009880123454', supplierId: 'sup_techhub', image: 'external-hard-drive-1tb' },
-  { name: 'Power Bank 10000mAh',       category: 'Electronics', costPrice: 1100,  sellingPrice: 1699,  stock: 25, lowStockThreshold: 6,  barcode: '6009880123455', supplierId: 'sup_nairobi_electronics', image: 'power-bank-10000mah' },
-  { name: 'USB-C Charger 20W',         category: 'Electronics', costPrice: 550,   sellingPrice: 899,   stock: 4,  lowStockThreshold: 8,  barcode: '6009880123456', supplierId: 'sup_nairobi_electronics', image: 'usb-c-charger-20w' },
-  { name: 'Phone Charger (Micro-USB)', category: 'Electronics', costPrice: 300,   sellingPrice: 549,   stock: 3,  lowStockThreshold: 8,  barcode: '6009880123457', supplierId: 'sup_nairobi_electronics', image: 'phone-charger-micro-usb' },
-  { name: 'HDMI Cable 1.5m',           category: 'Electronics', costPrice: 250,   sellingPrice: 449,   stock: 30, lowStockThreshold: 6,  barcode: '6009880123458', supplierId: 'sup_nairobi_electronics', image: 'hdmi-cable-1-5m' },
-  { name: 'Monitor 24" LED',           category: 'Electronics', costPrice: 12500, sellingPrice: 15999, stock: 6,  lowStockThreshold: 3,  barcode: '6009880123459', supplierId: 'sup_techhub', image: 'monitor-24-led' },
-  { name: 'Laptop Stand',              category: 'Electronics', costPrice: 900,   sellingPrice: 1450,  stock: 18, lowStockThreshold: 5,  barcode: '6009880123460', supplierId: 'sup_techhub', image: 'laptop-stand' },
-  { name: 'Bluetooth Speaker',         category: 'Electronics', costPrice: 1800,  sellingPrice: 2699,  stock: 2,  lowStockThreshold: 5,  barcode: '6009880123461', supplierId: 'sup_techhub', image: 'bluetooth-speaker' },
-  { name: 'Earbuds (Wireless)',        category: 'Electronics', costPrice: 1200,  sellingPrice: 1899,  stock: 22, lowStockThreshold: 6,  barcode: '6009880123462', supplierId: 'sup_nairobi_electronics', image: 'earbuds-wireless' },
-  { name: 'Headphones (Over-ear)',     category: 'Electronics', costPrice: 2200,  sellingPrice: 3299,  stock: 10, lowStockThreshold: 4,  barcode: '6009880123463', supplierId: 'sup_techhub', image: 'headphones-over-ear' },
-  { name: 'Extension Cable (4-way)',   category: 'Electronics', costPrice: 700,   sellingPrice: 1099,  stock: 20, lowStockThreshold: 5,  barcode: '6009880123464', supplierId: 'sup_nairobi_electronics', image: 'extension-cable-4-way' },
-  { name: 'Router (Wireless N)',       category: 'Electronics', costPrice: 2600,  sellingPrice: 3599,  stock: 9,  lowStockThreshold: 4,  barcode: '6009880123465', supplierId: 'sup_techhub', image: 'router-wireless-n' },
-  { name: 'Smart Watch',               category: 'Electronics', costPrice: 3500,  sellingPrice: 4999,  stock: 7,  lowStockThreshold: 3,  barcode: '6009880123466', supplierId: 'sup_techhub', image: 'smart-watch' },
-  { name: 'Wireless Charging Pad',     category: 'Electronics', costPrice: 950,   sellingPrice: 1499,  stock: 0,  lowStockThreshold: 5,  barcode: '6009880123467', supplierId: 'sup_techhub', image: 'wireless-charging-pad' },
-];
-
-const DEMO_CUSTOMERS = [
-  { id: 'demo_cust_1', name: 'John Kamau', phone: '0722334455' },
-  { id: 'demo_cust_2', name: 'Grace Wanjiru', phone: '0711223344' },
-  { id: 'demo_cust_3', name: 'Peter Otieno', phone: '0733445566' },
-  { id: 'demo_cust_4', name: 'Mary Njeri', phone: '0700112233' },
-  { id: 'demo_cust_5', name: 'Samuel Kiprop', phone: '0745667788' },
-];
-
 const STAFF_NAMES = ['Demo Owner', 'Sarah M.', 'Brian K.'];
 const PAYMENT_WEIGHTED = ['Cash', 'Cash', 'M-Pesa', 'M-Pesa', 'M-Pesa'];
-const EXPENSE_ENTRIES = [
-  ['Rent', 15000], ['Electricity', 2500], ['Transport', 800], ['Wages', 8000],
-  ['Airtime Float', 1000], ['Shop Supplies', 1200], ['Security', 1500], ['Other', 600],
-];
-
-// Deliberately given ZERO sales anywhere in the seeded history, so
-// Inventory Intelligence's "Slow-Moving Stock" section has real,
-// consistent examples (in stock, but nothing sold in 30 days).
-const SLOW_PRODUCT_NAMES = ['Router (Wireless N)', 'Smart Watch', 'Monitor 24" LED'];
-// Deliberately given EXTRA sales weight — combined with their already-low
-// starting stock above, this gives Inventory Intelligence's "Reorder
-// Priority" section real fast-movers that are genuinely running low,
-// not just low stock with no signal either way.
-const HOT_PRODUCT_NAMES = ['USB-C Charger 20W', 'Phone Charger (Micro-USB)', 'Wireless Mouse', 'USB Flash Disk 32GB'];
 
 // Small, seeded (not Math.random) pseudo-random generator — mulberry32.
 // Using a fixed seed means resetting the demo (Settings → Demo Reset)
@@ -133,18 +90,23 @@ function dateAt(daysAgoCount, hour, minute) {
 // section (ABC classification, slow-moving, reorder priority,
 // overstock, stockout) to have a genuine example rather than an empty
 // state.
-function seedHistory(touched, businessId) {
+function seedHistory(touched, businessId, data) {
   const rng = createRng(20260830);
   const randInt = (min, max) => Math.floor(rng() * (max - min + 1)) + min;
   const pick = (arr) => arr[Math.floor(rng() * arr.length)];
 
   const productWithId = (product) => {
-    const index = PRODUCTS.indexOf(product);
+    const index = data.products.indexOf(product);
     return { productId: `demo_product_${index + 1}`, product };
   };
 
-  const salesPool = PRODUCTS.filter((p) => !SLOW_PRODUCT_NAMES.includes(p.name) && p.stock > 0);
-  const hotPool = PRODUCTS.filter((p) => HOT_PRODUCT_NAMES.includes(p.name));
+  // A dish assembled to order has stock 0 by design, so "in stock" is
+  // the wrong filter for a menu. Anything with a recipe is always
+  // sellable; everything else needs stock on the shelf.
+  const sellable = (p) => Array.isArray(p.recipe) ? p.recipe.length > 0 : p.stock > 0;
+  const onTheMenu = data.products.filter((p) => p.catalogRole !== 'ingredient');
+  const salesPool = onTheMenu.filter((p) => !data.slow.includes(p.name) && sellable(p));
+  const hotPool = onTheMenu.filter((p) => data.hot.includes(p.name));
 
   const HISTORY_DAYS = 69; // ~10 weeks
   let saleCounter = 0;
@@ -157,7 +119,12 @@ function seedHistory(touched, businessId) {
       const { productId, product } = productWithId(useHot ? pick(hotPool) : pick(salesPool));
       const quantity = randInt(1, 3);
       const totalAmount = quantity * product.sellingPrice;
-      const profit = quantity * (product.sellingPrice - product.costPrice);
+      // A made-to-order dish stores `costPrice: 0` and is costed from its
+      // recipe when the counter rings it. The seeded history has no
+      // counter to run, so it resolves the recipe here. Without this
+      // every demo sale of a dish would report a 100% margin.
+      const unitCost = demoHistoryCost(product, data);
+      const profit = quantity * (product.sellingPrice - unitCost);
       const method = pick(PAYMENT_WEIGHTED);
       const isVoided = !voidedPlaced && dayOffset === 12 && i === 0;
       if (isVoided) voidedPlaced = true;
@@ -165,7 +132,7 @@ function seedHistory(touched, businessId) {
       seedDoc('sales', `demo_sale_${dayOffset}_${i}`, {
         businessId,
         productId, productName: product.name,
-        quantity, costPricePerUnit: product.costPrice, soldPricePerUnit: product.sellingPrice,
+        quantity, costPricePerUnit: unitCost, soldPricePerUnit: product.sellingPrice,
         totalAmount, profit,
         paymentMethod: method, mpesaCode: method === 'M-Pesa' ? `QW${randInt(100000, 999999)}KE` : null,
         soldBy: DEMO_UID, soldByName: pick(STAFF_NAMES),
@@ -183,10 +150,11 @@ function seedHistory(touched, businessId) {
   // credit slice.
   let creditIndex = 0;
   for (let dayOffset = 65; dayOffset >= 3; dayOffset -= randInt(3, 6)) {
-    const customer = pick(DEMO_CUSTOMERS);
+    const customer = pick(data.customers);
     const { productId, product } = productWithId(pick(salesPool));
     const quantity = randInt(1, 2);
     const totalAmount = quantity * product.sellingPrice;
+    const unitCost = demoHistoryCost(product, data);
     const creditId = `demo_credit_${creditIndex}`;
     const outcome = rng();
     let status, amountPaid, remainingBalance;
@@ -204,7 +172,7 @@ function seedHistory(touched, businessId) {
       businessId,
       customerId: customer.id, customerName: customer.name, customerPhone: customer.phone,
       productId, productName: product.name, quantity,
-      costPricePerUnit: product.costPrice, soldPricePerUnit: product.sellingPrice, totalAmount,
+      costPricePerUnit: unitCost, soldPricePerUnit: product.sellingPrice, totalAmount,
       soldBy: DEMO_UID, soldByName: pick(STAFF_NAMES),
       soldAt: makeTimestamp(dateAt(dayOffset, randInt(9, 17), randInt(0, 59)).getTime()),
       status, amountPaid, remainingBalance, paymentHistory: [],
@@ -242,7 +210,7 @@ function seedHistory(touched, businessId) {
   // category so the Expense Breakdown donut has more than one slice.
   let expenseIndex = 0;
   for (let dayOffset = 68; dayOffset >= 0; dayOffset -= randInt(2, 4)) {
-    const [category, base] = pick(EXPENSE_ENTRIES);
+    const [category, base] = pick(data.expenses);
     const amount = Math.round(base * (0.8 + rng() * 0.4));
     const method = pick(PAYMENT_WEIGHTED);
     seedDoc('expenses', `demo_expense_${expenseIndex}`, {
@@ -260,38 +228,190 @@ function seedHistory(touched, businessId) {
   return { saleCount: saleCounter, creditCount: creditIndex, expenseCount: expenseIndex };
 }
 
-function buildAndSeed() {
+/**
+ * TICKETS THAT ARE ALREADY OPEN when the demo loads.
+ *
+ * Without these the floor, the kitchen screen and the customer display
+ * all open empty, and an empty screen shows nothing about what a screen
+ * does. A restaurant demo with no service running is a picture of a
+ * restaurant that has not opened yet.
+ *
+ * Both storage shapes are seeded on purpose:
+ *
+ *   'array'  one document with an `items` list and a single
+ *            `kitchenStatus`, which is what Counter.jsx writes today.
+ *   'lines'  one document per line in `orderLines`, which is what the
+ *            F&B engine was built for and what per-item firing needs.
+ *
+ * Seeding both is the honest demo, because both are what a real business
+ * will have during the migration, and it exercises the whole-ticket
+ * fallback on the kitchen screen as well as the per-item path.
+ */
+function seedOpenTickets(touched, data, productIdByName) {
+  const tickets = data.openTickets || [];
+  if (tickets.length === 0) return;
+
+  const byName = new Map(data.products.map((p) => [p.name, p]));
+  const minsAgo = (m) => makeTimestamp(Date.now() - m * 60000);
+
+  tickets.forEach((ticket) => {
+    const opened = minsAgo(ticket.minutesAgo);
+    const rows = ticket.model === 'lines' ? ticket.lines : ticket.items;
+
+    const priced = rows.map((row) => {
+      const product = byName.get(row.product);
+      const unitPrice = Number(product?.sellingPrice) || 0;
+      return {
+        row,
+        product,
+        productId: productIdByName.get(row.product) || null,
+        unitPrice,
+        unitCost: demoHistoryCost(product, data),
+        lineTotal: unitPrice * row.quantity,
+      };
+    });
+
+    const totalAmount = priced.reduce((sum, p) => sum + p.lineTotal, 0);
+    const costOfGoodsSold = priced.reduce((sum, p) => sum + p.unitCost * p.row.quantity, 0);
+    const round = (n) => Math.round(n * 100) / 100;
+
+    const header = {
+      businessId: DEMO_BUSINESS_ID,
+      status: 'open',
+      name: ticket.table,
+      tableName: ticket.table,
+      diningMode: ticket.diningMode,
+      totalAmount: round(totalAmount),
+      costOfGoodsSold: round(costOfGoodsSold),
+      profit: round(totalAmount - costOfGoodsSold),
+      openedAt: opened,
+      updatedAt: opened,
+      openedBy: DEMO_UID,
+      openedByName: 'Demo Owner',
+      note: '',
+    };
+
+    if (ticket.model === 'lines') {
+      // `lineModel` is what readTicket() reads to decide which shape this
+      // ticket stores. Absent means the legacy array, so it is written
+      // only for the new shape.
+      header.lineModel = 'lines';
+      header.productName = priced[0]?.row.product || 'Order';
+      header.quantity = priced.reduce((sum, p) => sum + p.row.quantity, 0);
+      seedDoc('orders', ticket.id, header);
+
+      priced.forEach((p, index) => {
+        const line = p.row;
+        seedDoc('orderLines', `${ticket.id}_l${index + 1}`, {
+          businessId: DEMO_BUSINESS_ID,
+          orderId: ticket.id,
+          seq: index + 1,
+          open: true,
+          voided: false,
+          productId: p.productId,
+          productName: line.product,
+          ...(p.product?.kitchenName ? { kitchenName: p.product.kitchenName } : {}),
+          quantity: line.quantity,
+          unit: p.product?.unit || 'piece',
+          unitPrice: p.unitPrice,
+          lineTotal: round(p.lineTotal),
+          unitCost: p.unitCost,
+          lineCost: round(p.unitCost * line.quantity),
+          fulfillment: line.fulfillment || 'new',
+          ...(line.course ? { course: line.course } : {}),
+          ...(p.product?.station ? { station: p.product.station } : {}),
+          // Absent means routed. Only the false case is stored, exactly
+          // as the real write path does it.
+          ...(line.routed === false ? { routed: false } : {}),
+          ...(line.firedMinutesAgo ? { firedAt: minsAgo(line.firedMinutesAgo) } : {}),
+          ...(line.readyMinutesAgo ? { readyAt: minsAgo(line.readyMinutesAgo) } : {}),
+          createdAt: opened,
+          updatedAt: opened,
+        });
+      });
+      touched.add('orderLines');
+    } else {
+      header.kitchenStatus = ticket.kitchenStatus || 'new';
+      header.productName = priced.length === 1
+        ? priced[0].row.product
+        : `${priced[0]?.row.product || 'Order'} +${priced.length - 1} more`;
+      header.quantity = priced.reduce((sum, p) => sum + p.row.quantity, 0);
+      header.items = priced.map((p) => ({
+        productId: p.productId,
+        productName: p.row.product,
+        quantity: p.row.quantity,
+        unitPrice: p.unitPrice,
+        basePrice: p.unitPrice,
+        costPrice: p.unitCost,
+        unit: p.product?.unit || 'piece',
+        lineTotal: round(p.lineTotal),
+      }));
+      seedDoc('orders', ticket.id, header);
+    }
+
+    touched.add('orders');
+  });
+}
+
+function buildAndSeed(profileId) {
+  const data = demoDataset(profileId);
   const now = makeTimestamp(Date.now());
   const touched = new Set();
 
-  SUPPLIERS.forEach((s) => {
-    const { id, ...data } = s;
-    seedDoc('suppliers', id, { ...data, businessId: DEMO_BUSINESS_ID, createdAt: now });
+  data.suppliers.forEach((s) => {
+    const { id, ...fields } = s;
+    seedDoc('suppliers', id, { ...fields, businessId: DEMO_BUSINESS_ID, createdAt: now });
     touched.add('suppliers');
   });
 
-  PRODUCTS.forEach((p, i) => {
+  // A recipe names its components by NAME in the dataset, because a
+  // dataset a human edits should not have to carry generated ids. The
+  // seed resolves them to the ids it is minting right here, which is the
+  // shape a real recipe stores.
+  const productIdByName = new Map(
+    data.products.map((p, i) => [p.name, `demo_product_${i + 1}`])
+  );
+
+  data.products.forEach((p, i) => {
     const id = `demo_product_${i + 1}`;
     const internalCode = `FB-${String(i + 1).padStart(6, '0')}`;
-    // `image` is a seed-file concern only; the product document carries
-    // the resolved URL, exactly the field the real app renders from.
-    const { image, ...fields } = p;
+    // `image`, `recipe` and `course` are seed-file concerns; the product
+    // document carries the resolved forms the real app renders from.
+    const { image, recipe, course, ...fields } = p;
     seedDoc('products', id, {
       ...fields,
       imageUrl: demoPhotoUrl(image),
+      ...(Array.isArray(recipe) && recipe.length > 0
+        ? {
+          recipe: recipe
+            .map((line) => ({
+              componentId: productIdByName.get(line.componentName) || null,
+              componentName: line.componentName,
+              quantity: line.quantity,
+              ...(line.unit ? { unit: line.unit } : {}),
+            }))
+            .filter((line) => line.componentId),
+          producedInAdvance: false,
+        }
+        : {}),
       businessId: DEMO_BUSINESS_ID, internalCode, deleted: false, createdAt: now, updatedAt: now,
     });
-    // Flat, businessId-prefixed doc id — matches utils/products.js exactly,
+    // Flat, businessId-prefixed doc id, matching utils/products.js exactly,
     // so a demo-seeded barcode round-trips through the same lookup code a
-    // real business's products do.
-    seedDoc('barcodeIndex', `${DEMO_BUSINESS_ID}__${p.barcode}`, { businessId: DEMO_BUSINESS_ID, barcode: p.barcode, productId: id });
+    // real business's products do. Not every demo row has one: an
+    // ingredient is never scanned at a till.
+    if (p.barcode) {
+      seedDoc('barcodeIndex', `${DEMO_BUSINESS_ID}__${p.barcode}`, { businessId: DEMO_BUSINESS_ID, barcode: p.barcode, productId: id });
+      touched.add('barcodeIndex');
+    }
     touched.add('products');
-    touched.add('barcodeIndex');
   });
-  seedDoc('productCodeCounters', DEMO_BUSINESS_ID, { businessId: DEMO_BUSINESS_ID, lastNumber: PRODUCTS.length });
+  seedDoc('productCodeCounters', DEMO_BUSINESS_ID, { businessId: DEMO_BUSINESS_ID, lastNumber: data.products.length });
   touched.add('productCodeCounters');
 
-  DEMO_CUSTOMERS.forEach((c) => {
+  seedOpenTickets(touched, data, productIdByName);
+
+  data.customers.forEach((c) => {
     seedDoc('customers', c.id, {
       businessId: DEMO_BUSINESS_ID, name: c.name, phone: c.phone,
       customerCode: `CUS-${c.id.slice(-6).toUpperCase()}`,
@@ -304,7 +424,7 @@ function buildAndSeed() {
   // creates for a real signed-up owner, so nothing downstream needs to
   // special-case Demo Mode.
   seedDoc('businesses', DEMO_BUSINESS_ID, {
-    name: 'FlowBiz Demo Store',
+    name: data.shopName,
     ownerIds: [DEMO_UID],
     createdAt: now,
     createdBy: DEMO_UID,
@@ -330,8 +450,13 @@ function buildAndSeed() {
   // useSettings.js and ProductFormModal.jsx, both of which now read this
   // single per-business document.
   seedDoc('businessSettings', DEMO_BUSINESS_ID, {
-    shopName: 'FlowBiz Demo Store',
+    shopName: data.shopName,
     cashierCanRecordExpenses: true,
+    // Whatever the trade needs: the industry profile, and for a
+    // restaurant its tables, floor plan, kitchen sections, courses and
+    // service charge. A shop contributes an empty object here and its
+    // settings document is byte for byte what it always was.
+    ...data.settings,
     // No category list is seeded. The demo business runs on a real
     // industry profile, and its categories are that profile's — seeding a
     // mixed list here is precisely the fossil that made the Customize
@@ -355,24 +480,32 @@ function buildAndSeed() {
   });
   touched.add('dailySessions');
 
-  seedHistory(touched, DEMO_BUSINESS_ID);
+  seedHistory(touched, DEMO_BUSINESS_ID, data);
 
   seedCommit([...touched]);
 }
 
-// FIX: bumped v3 -> v4 (history/customers/session are new). This flag
-// just means "has this browser already seeded its local demo data?" —
-// bumping the name forces everyone who tried the demo before this
-// change to get a fresh reseed with the full history, instead of
-// silently keeping their old, mostly-empty demo data forever.
+// The seeded flag means "has this browser already built its local demo
+// data?". Bumping the version forces everyone who tried the demo before
+// a change to get a fresh reseed rather than silently keeping their old
+// dataset forever. v5 adds the trade switch and the restaurant.
+const SEEDED_KEY = 'flowbiz_demo_seeded_v5';
+
 export function seedDemoDataIfNeeded() {
-  if (localStorage.getItem('flowbiz_demo_seeded_v4') === 'true') return;
-  buildAndSeed();
-  localStorage.setItem('flowbiz_demo_seeded_v4', 'true');
+  if (localStorage.getItem(SEEDED_KEY) === 'true') return;
+  buildAndSeed(demoProfileId());
+  localStorage.setItem(SEEDED_KEY, 'true');
 }
 
-export function resetDemoData() {
+/**
+ * Wipe and rebuild. With no argument it rebuilds the trade this browser
+ * is already on, which is what the "Reset demo data" button has always
+ * meant. With one, it switches trade and rebuilds as that.
+ */
+export function resetDemoData(profileId) {
+  const next = profileId || demoProfileId();
+  rememberProfile(next);
   clearAllDemoData();
-  buildAndSeed();
-  localStorage.setItem('flowbiz_demo_seeded_v4', 'true');
+  buildAndSeed(next);
+  localStorage.setItem(SEEDED_KEY, 'true');
 }

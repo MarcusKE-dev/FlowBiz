@@ -288,6 +288,10 @@ export async function handleAdminBusinessDetail(request, env, rawBusinessId) {
 // firestore.rules and fail the moment the two drift.
 export const PURGE_COLLECTIONS = [
   'products', 'productImages', 'productBatches', 'productions', 'sales', 'orders',
+  // A ticket's lines are documents of their own, and a food business's
+  // waste log is a costed stock movement. Both carry businessId; both
+  // were tenant data with no rule and therefore no purge entry either.
+  'orderLines', 'waste',
   'creditSales', 'customers', 'debtPaymentReceipts',
   'repayments', 'expenses', 'purchases', 'suppliers', 'supplierPayments',
   'stockAdjustments', 'dailySessions', 'sessions', 'staffInvites',

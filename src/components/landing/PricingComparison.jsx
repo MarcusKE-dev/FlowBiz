@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Check } from 'lucide-react';
+import LifetimeDisclosure from '../licensing/LifetimeDisclosure';
 import {
   LIFETIME_LICENSE_PRICE_KES,
   ANNUAL_SERVICE_PRICE_KES,
@@ -185,7 +186,7 @@ export function PricingComparison() {
 
               <ul className="space-y-3 border-t border-line pt-5 text-secondary font-medium text-ink-700">
                 <CheckItem tone="deep">
-                  Permanent FlowBiz software licence
+                  Permanent FlowBiz software licence (does not expire if you choose not to renew)
                 </CheckItem>
 
                 <CheckItem tone="deep">
@@ -200,6 +201,10 @@ export function PricingComparison() {
                   Offline-first operation
                 </CheckItem>
               </ul>
+
+              <div className="pt-2">
+                <LifetimeDisclosure />
+              </div>
             </div>
 
             <Link

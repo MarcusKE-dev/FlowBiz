@@ -3,6 +3,7 @@ import { Navigate, Link, useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePermissions } from '../../hooks/usePermissions';
+import { useSettings } from '../../contexts/SettingsContext';
 import { isDemoMode } from '../../demo/demoMode';
 import LoadingSpinner from './LoadingSpinner';
 import { Ban, AlertCircle, RefreshCw, Store } from 'lucide-react';
@@ -22,6 +23,18 @@ export default function ProtectedRoute({ children, adminOnly = false, requires =
     refreshEmailVerification,
   } = useAuth();
   const permissions = usePermissions();
+  // THE PERMISSION QUESTION CANNOT BE ANSWERED BEFORE THE SETTINGS THAT
+  // ANSWER IT HAVE ARRIVED. See the guard below for what that cost.
+  //
+  // `loading` alone is not the test, and getting that wrong is what made
+  // the first attempt at this fix do nothing. SettingsProvider reports
+  // `loading: false` when it has NO business id to listen to — which is
+  // every render before the user's profile snapshot lands — and hands
+  // back the defaults. So "not loading" and "answered for this business"
+  // are two different questions, and only the second one is safe to act
+  // on. The settings document stamps the business it belongs to; until
+  // that matches the profile in hand, the answer is not in yet.
+  const { settings, loading: settingsLoading } = useSettings();
   const location = useLocation();
   const demo = isDemoMode();
 
@@ -213,6 +226,29 @@ export default function ProtectedRoute({ children, adminOnly = false, requires =
   // THE COUNTER ITSELF IS THE EXCEPTION, and it has to be: an owner may
   // revoke `sales.record` from a cashier, and redirecting the counter to
   // the counter is a loop. That person gets told, once, plainly.
+  // WAIT FOR THE ANSWER BEFORE ACTING ON IT.
+  //
+  // Every capability-gated permission — `kitchen.update`, `orders.view`,
+  // `stock.waste`, `stock.production`, `stock.expiry` — is resolved
+  // against the industry configuration, which rides on the
+  // businessSettings document. On a COLD LOAD that document has not
+  // arrived yet, so the resolver correctly answers "no" for one frame.
+  //
+  // The navigation survives that: it renders a shorter menu and grows
+  // when the snapshot lands. A ROUTE GUARD CANNOT — a redirect is not a
+  // render, it is a navigation, and once it has fired the person is at
+  // /counter and nothing brings them back.
+  //
+  // The symptom was that every one of those pages worked when reached by
+  // clicking a link and bounced when reached by a bookmark, a refresh or
+  // a typed URL — which is precisely how a tablet bolted to a kitchen
+  // wall reaches /kitchen, every single time it is switched on. The
+  // comment on those routes in AppRouter promises the opposite: "a
+  // bookmark that 404s after a profile change is worse than a page that
+  // says it is empty."
+  const settingsReady = !settingsLoading && settings?.businessId === profile.businessId;
+  if (requires && !settingsReady) return <LoadingSpinner label="Checking your session…" />;
+
   if (requires && !permissions.can(requires)) {
     if (location.pathname !== FALLBACK_PATH) return <Navigate to={FALLBACK_PATH} replace />;
     return (

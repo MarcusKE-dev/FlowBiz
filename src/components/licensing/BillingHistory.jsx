@@ -79,7 +79,7 @@ export default function BillingHistory() {
                 {rows.map((row) => (
                   <tr key={row.id}>
                     <td className="px-3 py-2 text-ink-700">
-                      {formatServiceDate(row.confirmedAt?.toMillis?.() ?? row.createdAt?.toMillis?.() ?? row.createdAt) || '—'}
+                      {formatServiceDate(row.confirmedAt?.toMillis?.() ?? row.createdAt?.toMillis?.() ?? row.createdAt) || 'Not recorded'}
                     </td>
                     <td className="px-3 py-2 text-ink-900">
                       {row.description || PLAN_LABELS[row.plan] || row.plan || 'FlowBiz payment'}

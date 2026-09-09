@@ -38,6 +38,13 @@ import {
   DEFAULT_DINING_MODE, ORDER_STATUS,
 } from '../utils/orders';
 import { createProduct } from '../utils/products';
+// THE FOOD & BEVERAGE ENGINE. A screen may import it; the platform core
+// under src/utils may not, and a test enforces that direction. Both of
+// these are identity functions for a business that has never marked a
+// product as an ingredient or written a recipe, which is every retail
+// business — see the notes at each call site.
+import { sellableProducts, isIngredientOnly } from '../domain/fnb/catalog';
+import { sellingUnitCost } from '../domain/fnb/costing';
 import { printReceipt, generateReceiptPDF, printInvoice, generateInvoicePDF, sendWhatsAppDocument } from '../utils/documentService';
 import { getOrCreateShareLink } from '../utils/documentSharing';
 import { useCloudDocuments } from '../hooks/useCloudDocuments';
@@ -215,14 +222,32 @@ export default function Counter() {
   // a page of tiles. At duka size this is identical to what the counter
   // always did; at supermarket size it is the difference between keeping
   // up with a queue and not. See utils/catalogueSearch.js.
+  // WHAT THE TILL MAY SELL, which is not the whole catalogue.
+  //
+  // A restaurant that models its food properly puts tomatoes, flour and
+  // chicken breast into `products`, because purchasing, receiving, stock
+  // takes, waste, valuation and FEFO are identically correct for a tomato
+  // and for a Coke and all of them are already tested. What is NOT
+  // correct is that every one of those rows then appeared on the counter
+  // grid between "Chicken burger" and "Coke", and the add form demanded a
+  // selling price for them — so an owner invented one, and the invented
+  // number flowed into margin and into every report that ranks what
+  // sells.
+  //
+  // `catalogRole` fixes that with one optional field, and ABSENT MEANS
+  // SELLABLE. So for every business that has never set it — every retail
+  // shop, and every F&B business until somebody marks an ingredient —
+  // this call returns the list it was given, unchanged.
+  const sellable = useMemo(() => sellableProducts(products), [products]);
+
   const { results: filtered, total: matchCount, truncated } = useMemo(
-    () => searchCatalogue(products, { query: search, category }),
-    [products, search, category]
+    () => searchCatalogue(sellable, { query: search, category }),
+    [sellable, search, category]
   );
 
   const categories = useMemo(
-    () => activeCategories(products, industry.categories),
-    [products, industry.categories]
+    () => activeCategories(sellable, industry.categories),
+    [sellable, industry.categories]
   );
   // Progressive disclosure, per trade. For a shop the filter row is a
   // supermarket tool and stays hidden until the catalogue is big enough
@@ -328,7 +353,27 @@ export default function Counter() {
           quantity: nextQty,
           unitPrice: extras?.unitPrice ?? basePrice,
           basePrice,
-          costPrice: variant ? variant.costPrice : product.costPrice,
+          // WHAT THIS LINE COSTS THE BUSINESS, and why it is not simply
+          // `product.costPrice`.
+          //
+          // For a bought-in good — a Coke, a bag of cement — the stored
+          // cost is the cost, and `sellingUnitCost` returns exactly it.
+          // For a bakery item made in advance it returns the stored cost
+          // too, because a production run computed and wrote it and that
+          // is the real cost of the real batch.
+          //
+          // For a dish ASSEMBLED TO ORDER the stored number is
+          // meaningless — nobody buys a chicken burger, they buy a bun,
+          // a patty and a slice of cheese — so it is computed from the
+          // recipe, plus the signed cost of whatever modifiers were
+          // chosen. Oat milk instead of dairy is a real cost difference
+          // and it now reaches the margin.
+          //
+          // The recipe engine has always computed this correctly; until
+          // now the SALE PATH ignored it and booked COGS at whatever sat
+          // in the box, so a restaurant's entire margin reporting was
+          // built on a number nobody maintained.
+          costPrice: sellingUnitCost(product, products, { variant, modifiers }),
           barcode: (variant ? variant.barcode : product.barcode) || null,
           unit,
           ...(variant ? { variantId: variant.id, variantLabel: variant.label } : {}),
@@ -425,6 +470,19 @@ export default function Counter() {
     navigate(location.pathname, { replace: true, state: {} });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state?.openOrderId, openOrders, ordersOn]);
+
+  // SEATING A TABLE FROM THE FLOOR SCREEN. The other half of the same
+  // hand-off: the floor view sends a table that has no open ticket, and
+  // the counter starts a fresh cart already assigned to it. Without this
+  // a waiter taps an empty table and has to pick its name again from a
+  // dropdown, having just pointed at it.
+  useEffect(() => {
+    const table = location.state?.seatTable;
+    if (!table || !tablesOn) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setOrderTable(table);
+    navigate(location.pathname, { replace: true, state: {} });
+  }, [location.state?.seatTable, location.pathname, navigate, tablesOn]);
 
   const handleSaveOrder = async () => {
     if (cart.length === 0 || savingOrder) return;
@@ -1032,6 +1090,13 @@ export default function Counter() {
       setNotFoundCode(code);
       return;
     }
+    // The scan runs against the WHOLE catalogue on purpose, so that
+    // scanning a sack of flour says what it is rather than "not found" —
+    // which would send somebody off to create a duplicate product.
+    if (isIngredientOnly(hit.product)) {
+      toast.error(`${hit.product.name} is an ingredient, not something you sell.`);
+      return;
+    }
     if (hit.variant) {
       addToCart(hit.product, 1, hit.variant);
       toast.success(`${hit.product.name} (${hit.variant.label}) added`, { duration: 1200 });
@@ -1050,6 +1115,13 @@ export default function Counter() {
   // not buried behind the camera.
   const handleDockScan = (code) => {
     const hit = resolveScan(code);
+    if (hit && isIngredientOnly(hit.product)) {
+      // Same refusal as the single scan above, and it closes the dock so
+      // the message is not buried behind the camera.
+      setDockOpen(false);
+      toast.error(`${hit.product.name} is an ingredient, not something you sell.`);
+      return;
+    }
     if (hit) {
       if (hit.variant) {
         addToCart(hit.product, 1, hit.variant);

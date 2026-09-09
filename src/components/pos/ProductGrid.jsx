@@ -3,6 +3,7 @@ import { amountOnly, CURRENCY } from '../ui/format';
 import ProductThumb from '../products/ProductThumb';
 import { DEFAULT_UNIT, getUnit } from '../../industry/units';
 import { hasVariants, totalVariantStock } from '../../utils/variants';
+import { tracksOwnStock } from '../../utils/inventory';
 import { useAuth } from '../../contexts/AuthContext';
 import { ENTITLEMENTS } from '../../licensing';
 
@@ -37,15 +38,30 @@ export default function ProductGrid({ products, onSelect, isAdmin = false, onEdi
   return (
     <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
       {products.map((p) => {
-        // A service never runs out; a product sold by the metre still
-        // shows "out" at zero, exactly as a piece does.
-        const isService = p.kind === 'service';
+        // WHICH TILES CAN GO GREY, and why this is not simply `stock <= 0`.
+        //
+        // A service never runs out. Neither does a dish assembled to
+        // order: its stock is permanently 0 BY DESIGN, because what it
+        // consumes is its ingredients, which have stock of their own and
+        // are counted in their own right. Asking `stock <= 0` therefore
+        // disabled every made-to-order tile on the grid — a restaurant
+        // opened the till and found the entire menu greyed out and
+        // unclickable, which is the difference between a POS and a
+        // picture of one.
+        //
+        // `tracksOwnStock` is the honest question: does a sale of this
+        // move a number on THIS row? It is false for a service and for a
+        // made-to-order dish, and true for a bought-in good and for a
+        // bakery item made in advance — so a croissant with none left
+        // still correctly shows "Out of stock", because a production run
+        // put those on a shelf and the shelf is empty.
+        const stocked = tracksOwnStock(p);
         // A product with versions is out of stock only when EVERY version
         // is — the parent's own `stock` is their sum, which is what makes
         // this the same comparison as for a plain product.
         const variantProduct = hasVariants(p);
         const available = variantProduct ? totalVariantStock(p) : p.stock;
-        const out = !isService && available <= 0;
+        const out = stocked && available <= 0;
         const unit = p.unit && p.unit !== DEFAULT_UNIT ? getUnit(p.unit) : null;
         const inCartQty = cartQuantities[p.id] || 0;
         const inCart = inCartQty > 0;

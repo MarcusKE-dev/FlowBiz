@@ -65,6 +65,9 @@ import { arrangeableWidgets } from '../industry/dashboard';
 import { generateTableNames, normalizeTableNames, MAX_TABLES } from '../utils/orders';
 import { useCustomizeWrites } from '../components/customize/useCustomizeWrites';
 import Toggle from '../components/customize/Toggle';
+import FloorPlanEditor from '../components/customize/FloorPlanEditor';
+import { floorPlanField } from '../domain/fnb/floor';
+import { normalizeStations, normalizeCourses, MAX_STATIONS, MAX_COURSES } from '../domain/fnb/stations';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import PageHeader from '../components/ui/PageHeader';
 import Section from '../components/ui/Section';
@@ -94,6 +97,9 @@ export default function CustomizeBusiness() {
   const [categoryResetOpen, setCategoryResetOpen] = useState(false);
   const [tableCount, setTableCount] = useState(8);
   const [tableText, setTableText] = useState(null);
+  const [planDraft, setPlanDraft] = useState(null);
+  const [stationText, setStationText] = useState(null);
+  const [courseText, setCourseText] = useState(null);
   const [termDraft, setTermDraft] = useState(null);
   const [newCategory, setNewCategory] = useState('');
   const [renaming, setRenaming] = useState(null);
@@ -187,6 +193,36 @@ export default function CustomizeBusiness() {
     const tables = normalizeTableNames(tableValue.split(','));
     const ok = await write({ tables }, tables.length === 0 ? 'Tables cleared' : `${tables.length} tables saved`);
     if (ok) setTableText(null);
+  };
+
+  // ── 5b. The floor plan ────────────────────────────────────────────
+  //
+  // Arrangement only, saved separately from the table names, because they
+  // answer different questions and an owner renaming a table should not
+  // have to re-place the room. `floorPlanField` clears the field entirely
+  // when the plan is empty rather than storing `[]`.
+  const handleSavePlan = async () => {
+    const ok = await write(floorPlanField(planDraft), 'Floor plan saved');
+    if (ok) setPlanDraft(null);
+  };
+
+  // ── 5c. Kitchen sections and courses ──────────────────────────────
+  const handleSaveStations = async () => {
+    const stations = normalizeStations(stationText.split(',').map((name) => ({ name })));
+    const ok = await write(
+      { stations: stations.length > 0 ? stations : null },
+      stations.length === 0 ? 'Kitchen sections cleared' : `${stations.length} sections saved`
+    );
+    if (ok) setStationText(null);
+  };
+
+  const handleSaveCourses = async () => {
+    const courses = normalizeCourses(courseText.split(',').map((name) => ({ name })));
+    const ok = await write(
+      { courses: courses.length > 0 ? courses : null },
+      courses.length === 0 ? 'Courses cleared' : `${courses.length} courses saved`
+    );
+    if (ok) setCourseText(null);
   };
 
   // ── 6. Categories ─────────────────────────────────────────────────
@@ -576,6 +612,115 @@ export default function CustomizeBusiness() {
                 disabled={busy || tableText === null}
               >
                 Save tables
+              </button>
+            </div>
+          </div>
+
+          {/* ── The floor plan ───────────────────────────────────────
+              Optional, and additive: it arranges the names saved above.
+              A business that never touches it keeps a plain list of
+              tables and every screen still works — the floor view and
+              the customer display lay unarranged tables out in reading
+              order. See domain/fnb/floor.js. */}
+          <div className="mt-3 space-y-3 rounded-panel border border-line bg-surface p-3">
+            <div>
+              <p className="text-body font-semibold text-ink-900">Floor plan</p>
+              <p className="text-secondary text-ink-500">
+                Where each table sits, for the floor screen and the customer display. Optional:
+                without it, tables are laid out in the order you named them.
+              </p>
+            </div>
+
+            <FloorPlanEditor
+              tableNames={tableValue.split(',').map((t) => t.trim()).filter(Boolean)}
+              plan={planDraft ?? settings.floorPlan}
+              onChange={setPlanDraft}
+              disabled={busy}
+            />
+
+            <div className="flex justify-end border-t border-divider pt-3">
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleSavePlan}
+                disabled={busy || planDraft === null}
+              >
+                {busy ? 'Saving…' : 'Save floor plan'}
+              </button>
+            </div>
+          </div>
+        </Section>
+      )}
+
+      {/* ── 5b. Kitchen sections ─────────────────────────────────────
+          Where an item is made. One rail per section on the kitchen
+          screen, and a product points at one from its own form. */}
+      {industry.can('kitchenStations') && (
+        <Section
+          title="Kitchen sections"
+          hint="Each section gets its own rail on the kitchen screen. Anything not routed lands on the main one."
+        >
+          <div className="space-y-2 rounded-panel border border-line bg-surface p-3">
+            <FormField
+              label="Section names"
+              hint={`Separated by commas. Up to ${MAX_STATIONS}.`}
+              htmlFor="station-names"
+            >
+              <textarea
+                id="station-names"
+                className="input !min-h-[68px]"
+                rows={2}
+                value={stationText ?? normalizeStations(settings.stations).map((s) => s.name).join(', ')}
+                onChange={(e) => setStationText(e.target.value)}
+                placeholder="Grill, Cold section, Bar, Pastry"
+                disabled={busy}
+              />
+            </FormField>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleSaveStations}
+                disabled={busy || stationText === null}
+              >
+                Save sections
+              </button>
+            </div>
+          </div>
+        </Section>
+      )}
+
+      {/* ── 5c. Courses ──────────────────────────────────────────────
+          WHEN something is served, as opposed to where it is made. */}
+      {industry.can('courses') && (
+        <Section
+          title="Courses"
+          hint="Pace a table: starters go to the kitchen now, mains when the floor says so."
+        >
+          <div className="space-y-2 rounded-panel border border-line bg-surface p-3">
+            <FormField
+              label="Course names"
+              hint={`In the order they are served. Up to ${MAX_COURSES}.`}
+              htmlFor="course-names"
+            >
+              <textarea
+                id="course-names"
+                className="input !min-h-[68px]"
+                rows={2}
+                value={courseText ?? normalizeCourses(settings.courses).map((c) => c.name).join(', ')}
+                onChange={(e) => setCourseText(e.target.value)}
+                placeholder="Starters, Mains, Dessert"
+                disabled={busy}
+              />
+            </FormField>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleSaveCourses}
+                disabled={busy || courseText === null}
+              >
+                Save courses
               </button>
             </div>
           </div>

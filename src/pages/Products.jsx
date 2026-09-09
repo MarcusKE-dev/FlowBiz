@@ -34,6 +34,7 @@ import StatusPill from '../components/ui/StatusPill';
 import Money from '../components/ui/Money';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+import { menuItemMargin } from '../domain/fnb/costing';
 
 export default function Products() {
   const { businessId, isOwner } = useAuth();
@@ -249,7 +250,16 @@ export default function Products() {
             { key: 'category', header: 'Category', hideOnMobile: false, render: (p) => <span className="text-ink-600">{p.category || '-'}</span> },
             // Cost stays reachable in the expansion — owners need it —
             // just not on the collapsed line.
-            { key: 'costPrice', header: 'Cost', numeric: true, hideOnMobile: false, render: (p) => <Money value={p.costPrice} tone="muted" /> },
+            // WHAT THIS ITEM COSTS THE BUSINESS, which for a dish
+            // assembled to order is NOT `costPrice`. That field is
+            // legitimately 0 for a recipe item — nobody buys a
+            // cheeseburger, they buy a bun, a patty and cheese — so a
+            // restaurant's menu showed every made-to-order dish costing
+            // KES 0.00 and margin reporting that was pure fiction.
+            // `menuItemMargin` computes it from the recipe, and returns
+            // the stored cost for everything else, so a shop's products
+            // read exactly as they always did.
+            { key: 'costPrice', header: 'Cost', numeric: true, hideOnMobile: false, render: (p) => <Money value={menuItemMargin(p, products).cost} tone="muted" /> },
             { key: 'sellingPrice', header: 'Price', numeric: true, mobileTrailing: true, render: (p) => <span className="font-semibold"><Money value={p.sellingPrice} /></span> },
             {
               key: 'stock',

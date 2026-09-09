@@ -67,6 +67,7 @@ export function normalizeModifierGroups(rawGroups) {
         id: optionId,
         name: optionName,
         priceDelta: Number.isFinite(delta) ? roundMoney(delta) : 0,
+        ...(Array.isArray(option?.recipe) && option.recipe.length > 0 ? { recipe: option.recipe } : {}),
       });
     }
     if (options.length === 0) continue;
@@ -76,9 +77,6 @@ export function normalizeModifierGroups(rawGroups) {
       id,
       name,
       required: group?.required === true,
-      // A required group is single-choice by definition here: "choose a
-      // size" is one answer. Allowing required-and-multiple would need a
-      // minimum count, and no profile in this project needs one.
       multiple: group?.required === true ? false : group?.multiple === true,
       options,
     });
@@ -114,6 +112,7 @@ export function resolveModifierSelection(product, selection) {
         id: option.id,
         name: option.name,
         priceDelta: option.priceDelta,
+        ...(Array.isArray(option.recipe) && option.recipe.length > 0 ? { recipe: option.recipe } : {}),
       });
     }
   }

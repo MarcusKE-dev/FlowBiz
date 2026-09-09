@@ -186,6 +186,70 @@ export const CASHIER_PERMISSIONS = {
     enforcement: 'rules',
   },
 
+  // VOIDING IS NOT AMENDING. Ring it, serve it, void it, keep the cash
+  // is the oldest trick in hospitality, and it is why this is a separate
+  // permission that is OFF by default rather than something
+  // `orders.update` — which is on by default — quietly includes. An
+  // owner who withholds one permission in this whole catalogue withholds
+  // this one, and until it existed there was nothing to withhold.
+  //
+  // The void itself is a RECORD, not a deletion: the line stays, marked,
+  // with who took it off and why. Only an owner may actually delete one.
+  'orders.void': {
+    key: 'orders.void',
+    group: 'orders',
+    label: (industry) => `Take an item off ${t(industry, 'order', 'an order').toLowerCase() === 'tab' ? 'a tab' : 'a bill'}`,
+    description: 'Records who voided it and why. The line is kept.',
+    default: false,
+    capability: 'orders',
+    requires: ['orders.view'],
+    enforcement: 'rules',
+  },
+
+  // MOVING A LINE BETWEEN TICKETS is splitting a check, merging two
+  // tables, or correcting something rung on the wrong bill. Ordinary
+  // floor work, so it is on by default — but it moves money between two
+  // bills, so it is nameable and an owner can withhold it.
+  'orders.move': {
+    key: 'orders.move',
+    group: 'orders',
+    label: 'Move items between bills',
+    description: 'Splitting a check, merging two tables, or fixing a mis-rung item.',
+    default: true,
+    capability: 'orders',
+    requires: ['orders.view'],
+    enforcement: 'rules',
+  },
+
+  // THE COOK'S PERMISSION, and deliberately the smallest one in this
+  // catalogue. It opens the kitchen screen and permits exactly two
+  // actions on a line — mark it ready, mark it served — which
+  // firestore.rules enforces by naming the five fields those two actions
+  // write and refusing every other key on the document.
+  //
+  // Default ON, unlike most of what is off by default here, because the
+  // people who use it are the people it is for. A kitchen tablet is
+  // signed in as staff, and a business that has to visit the Team page
+  // before its cooks can bump a ticket will conclude the kitchen screen
+  // is broken. The blast radius of getting this wrong is a line marked
+  // ready early; the blast radius of the opposite is a screen nobody can
+  // use.
+  //
+  // It requires `orders.view` for the same reason every other order
+  // permission does: bumping a ticket you cannot see is not a half
+  // grant, it is a screen with nothing on it.
+  'kitchen.update': {
+    key: 'kitchen.update',
+    group: 'orders',
+    label: 'Work the kitchen screen',
+    description: 'Mark items ready and served. Cannot change prices or quantities.',
+    default: true,
+    capability: 'kitchen',
+    requires: ['orders.view'],
+    route: '/kitchen',
+    enforcement: 'rules',
+  },
+
   // ── Stock ─────────────────────────────────────────────────────────
   'stock.receive': {
     key: 'stock.receive',
@@ -202,6 +266,30 @@ export const CASHIER_PERMISSIONS = {
     description: 'Overrides the recorded stock figure.',
     default: false,
     route: '/stock-take',
+    enforcement: 'rules',
+  },
+  // Spoilage, breakage, staff meals and comps. Off by default and ruled
+  // like every other stock movement that is not a sale: a waste line
+  // writes stock away at cost, so somebody who can record it freely can
+  // make a shortfall disappear into "spoiled".
+  // ON BY DEFAULT, unlike the other stock movements, because the person
+  // who drops the tray is the person who has to record it. A waste log
+  // that only a manager can write is a waste log nobody writes, and the
+  // shrinkage then shows up as a stock count that does not reconcile
+  // with no explanation attached to it.
+  //
+  // It is safe to leave open because a waste line CANNOT BE EDITED once
+  // written — only an owner may correct one, which firestore.rules
+  // enforces. Recording something is not the same power as being able to
+  // change what was recorded.
+  'stock.waste': {
+    key: 'stock.waste',
+    group: 'stock',
+    label: 'Record waste',
+    description: 'Writes stock off at cost. Only an owner can change it afterwards.',
+    default: true,
+    capability: 'waste',
+    route: '/waste',
     enforcement: 'rules',
   },
   'stock.suppliers': {

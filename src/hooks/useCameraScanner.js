@@ -109,7 +109,7 @@ export function useCameraScanner({ onDetected, active, continuous = false }) {
 
     const insecure = getInsecureContextReason();
     if (insecure) {
-      devError('Insecure context — navigator.mediaDevices is unavailable.', insecure);
+      devError('Insecure context. navigator.mediaDevices is unavailable.', insecure);
       setStatus('insecure');
       return () => { cancelled = true; stop(); };
     }
@@ -122,7 +122,7 @@ export function useCameraScanner({ onDetected, active, continuous = false }) {
     (async () => {
       const nativeFormats = await getNativeSupportedFormats();
       if (cancelled) return;
-      devLog(nativeFormats ? `Using native BarcodeDetector (${nativeFormats.join(', ')})` : 'Native BarcodeDetector unavailable — using ZXing fallback');
+      devLog(nativeFormats ? `Using native BarcodeDetector (${nativeFormats.join(', ')})` : 'Native BarcodeDetector unavailable, using ZXing fallback');
 
       if (nativeFormats) {
         // ── FAST PATH ──────────────────────────────────────────────
@@ -163,7 +163,7 @@ export function useCameraScanner({ onDetected, active, continuous = false }) {
         const track = stream.getVideoTracks()[0];
         const capabilities = track?.getCapabilities?.();
         setTorchSupported(!!capabilities?.torch);
-        devLog(`[native] camera started using [${usedLabel}] — track:`, track?.label, 'capabilities:', capabilities);
+        devLog(`[native] camera started using [${usedLabel}], track:`, track?.label, 'capabilities:', capabilities);
 
         const detector = new window.BarcodeDetector({ formats: nativeFormats });
         const loop = { cancelled: false, frameHandle: null };
@@ -234,7 +234,7 @@ export function useCameraScanner({ onDetected, active, continuous = false }) {
           const track = streamRef.current?.getVideoTracks?.()[0];
           const capabilities = track?.getCapabilities?.();
           setTorchSupported(!!capabilities?.torch);
-          devLog(`[zxing] camera started using [${attempt.label}] — track:`, track?.label, 'capabilities:', capabilities);
+          devLog(`[zxing] camera started using [${attempt.label}], track:`, track?.label, 'capabilities:', capabilities);
           return;
         } catch (err) {
           lastError = err;

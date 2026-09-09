@@ -39,7 +39,7 @@ test('General Retail sees exactly the pages FlowBiz has always had', () => {
 
 test('no industry page is ever offered to a profile that does not have its capability', () => {
   const industryPages = NAV_ITEMS.filter((i) => i.capability).map((i) => i.to);
-  assert.deepEqual(industryPages.sort(), ['/expiry', '/orders', '/production']);
+  assert.deepEqual(industryPages.sort(), ['/expiry', '/floor', '/kitchen', '/orders', '/production', '/waste']);
   const retail = paths(owner('GENERAL_RETAIL'));
   for (const page of industryPages) {
     assert.equal(retail.includes(page), false, `${page} must not appear for General Retail`);
@@ -125,7 +125,13 @@ test('an owner turning a capability off removes its page immediately', () => {
 
 test('a restaurant cashier sees the counter, the tickets, the menu and nothing sensitive', () => {
   const nav = paths(cashier('RESTAURANT'));
-  assert.deepEqual(nav, ['/counter', '/orders', '/customers', '/expenses', '/products']);
+  // The kitchen screen is on this list ON PURPOSE. It is the one page in
+  // FlowBiz whose users are never the owner — a cook works the pass — and
+  // `kitchen.update` permits exactly two field writes, which
+  // firestore.rules enforces by name. A restaurant whose cooks have to be
+  // granted a permission before the kitchen screen appears will conclude
+  // the kitchen screen does not work.
+  assert.deepEqual(nav, ['/counter', '/orders', '/floor', '/kitchen', '/customers', '/expenses', '/products', '/waste']);
   for (const page of ['/reports', '/settings', '/users', '/close-day', '/purchases', '/stock-take', '/']) {
     assert.equal(nav.includes(page), false, `a cashier must not be offered ${page}`);
   }

@@ -16,6 +16,7 @@ import { Plus, X } from 'lucide-react';
 import Money from '../ui/Money';
 import { getUnit, unitStep, DEFAULT_UNIT } from '../../industry/units';
 import { productionUnitCost } from '../../utils/inventory';
+import { recipeComponentGroups } from '../../domain/fnb/catalog';
 
 export default function RecipeEditor({
   recipe, onChange, products = [], productId = null,
@@ -24,12 +25,19 @@ export default function RecipeEditor({
 }) {
   // A product can never be an ingredient of itself, and a component list
   // should not offer things that are themselves assembled to order.
-  const candidates = useMemo(
-    () => products
-      .filter((p) => p.id !== productId && p.kind !== 'service')
-      .sort((a, b) => (a.name || '').localeCompare(b.name || '')),
+  //
+  // GROUPED, ingredients first. Presenting one flat list of everything is
+  // the exact conflation `catalogRole` exists to end: a cook looking for
+  // "Tomatoes" had to scroll past "Tomato soup". Both are still offered —
+  // a menu item CAN legitimately be a component of another, which is how
+  // a sauce made in advance is reused — but the list now says which is
+  // which. A business that has marked nothing as an ingredient gets one
+  // group called "Menu items" holding exactly what the flat list held.
+  const groups = useMemo(
+    () => recipeComponentGroups(products, { excludeId: productId }),
     [products, productId]
   );
+  const candidates = useMemo(() => groups.flatMap((g) => g.items), [groups]);
 
   const unitCost = useMemo(
     () => productionUnitCost({ recipe }, 1, products),
@@ -81,8 +89,12 @@ export default function RecipeEditor({
               aria-label={`Ingredient ${index + 1}`}
             >
               <option value="" disabled>Choose an ingredient</option>
-              {candidates.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
+              {groups.map((group) => (
+                <optgroup key={group.id} label={group.label}>
+                  {group.items.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </optgroup>
               ))}
             </select>
             <div className="flex items-center gap-1.5">

@@ -42,6 +42,10 @@ const routeLoaders = {
   inventoryIntelligence: () => import('../pages/InventoryIntelligence'),
   privacy: () => import('../pages/Privacy'),
   terms: () => import('../pages/Terms'),
+  kitchen: () => import('../pages/Kitchen'),
+  floor: () => import('../pages/Floor'),
+  waste: () => import('../pages/Waste'),
+  customerDisplay: () => import('../pages/CustomerDisplay'),
 
   // Admin Module Loaders
   adminLogin: () => import('../pages/admin/AdminLogin'),
@@ -85,6 +89,10 @@ const AdvancedAnalytics     = lazy(routeLoaders.advancedAnalytics);
 const InventoryIntelligence = lazy(routeLoaders.inventoryIntelligence);
 const Privacy               = lazy(routeLoaders.privacy);
 const Terms                 = lazy(routeLoaders.terms);
+const Kitchen               = lazy(routeLoaders.kitchen);
+const Floor                 = lazy(routeLoaders.floor);
+const Waste                 = lazy(routeLoaders.waste);
+const CustomerDisplay       = lazy(routeLoaders.customerDisplay);
 
 const AdminLogin            = lazy(routeLoaders.adminLogin);
 const AdminOverview         = lazy(routeLoaders.adminOverview);
@@ -225,7 +233,15 @@ export default function AppRouter() {
             URL resolves, because a bookmark that 404s after a profile
             change is worse than a page that says it is empty. */}
         <Route path="/orders" element={<Page requires="orders.view"><Orders /></Page>} />
+        <Route path="/kitchen" element={<Page requires="kitchen.update"><Kitchen /></Page>} />
+        <Route path="/floor" element={<Page requires="orders.view"><Floor /></Page>} />
+        <Route path="/customer-display" element={<Suspense fallback={<LoadingSpinner />}><CustomerDisplay /></Suspense>} />
+        <Route path="/display" element={<Suspense fallback={<LoadingSpinner />}><CustomerDisplay /></Suspense>} />
         <Route path="/production" element={<Page requires="stock.production"><Production /></Page>} />
+        {/* Waste has existed as a finished page since the F&B engine
+            shipped and was never given a route, so nothing could reach
+            it. See docs/FNB_AUDIT.md §2. */}
+        <Route path="/waste" element={<Page requires="stock.waste"><Waste /></Page>} />
         <Route path="/expiry" element={<Page requires="stock.expiry"><Expiry /></Page>} />
         <Route path="/customers" element={<Page requires="customers.view"><Customers /></Page>} />
         <Route path="/customers/:customerId" element={<Page requires="customers.view"><CustomerDetail /></Page>} />

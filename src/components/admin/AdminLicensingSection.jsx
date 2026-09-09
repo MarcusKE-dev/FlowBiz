@@ -31,10 +31,10 @@ import { performLicensingAction } from '../../utils/adminService';
 import { formatPrice } from '../../licensing';
 
 function day(value) {
-  if (!value) return '—';
+  if (!value) return 'None';
   const d = new Date(value);
   return Number.isNaN(d.getTime())
-    ? '—'
+    ? 'None'
     : d.toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
@@ -207,7 +207,7 @@ export default function AdminLicensingSection({ businessId, licensing, permissio
               </StatusPill>
             </div>
             <StatementBlock>
-              <StatementRow label="Type" value={license.type ? license.type.toUpperCase() : '—'} />
+              <StatementRow label="Type" value={license.type ? license.type.toUpperCase() : 'None'} />
               <StatementRow label="Status" value={license.status} tone={revoked ? 'negative' : 'default'} />
               <StatementRow label="Expires" value="Never" hint="perpetual" />
               <StatementRow label="Purchased" value={day(license.purchasedAt)} />
@@ -218,7 +218,7 @@ export default function AdminLicensingSection({ businessId, licensing, permissio
               {revoked && (
                 <>
                   <StatementRow label="Revoked" value={day(license.revokedAt)} tone="negative" />
-                  <StatementRow label="Revocation reason" value={license.revokedReason || '—'} tone="muted" />
+                  <StatementRow label="Revocation reason" value={license.revokedReason || 'None'} tone="muted" />
                 </>
               )}
             </StatementBlock>
@@ -238,7 +238,7 @@ export default function AdminLicensingSection({ businessId, licensing, permissio
               <StatementRow label="Last covered day" value={day(service.lastCoveredDay)} tone="muted" />
               <StatementRow
                 label="Days remaining"
-                value={Number.isFinite(service.daysRemaining) ? String(service.daysRemaining) : '—'}
+                value={Number.isFinite(service.daysRemaining) ? String(service.daysRemaining) : 'None'}
                 tone={Number.isFinite(service.daysRemaining) && service.daysRemaining <= 30 ? 'negative' : 'default'}
               />
               <StatementRow label="Grace period" value={`${service.graceDays} days`} />

@@ -38,20 +38,37 @@ const SCREENS_THAT_MUST_LINK = [
   ['the landing page pricing section', 'src/components/landing/PricingComparison.jsx'],
 ];
 
+// A screen may satisfy this either by carrying the links itself or by
+// rendering <LifetimeDisclosure />, which carries both and is separately
+// asserted below to do so. Requiring the literal `to="/terms"` in every
+// file was what this test used to do, and it turned the right refactor —
+// pulling one disclosure block out of three screens into one component —
+// into a failure, which is how a screen ends up with no disclosure at all
+// rather than a shared one.
+const linksToLegal = (source) => ({
+  terms: /to="\/terms"/.test(source) || /<LifetimeDisclosure/.test(source),
+  privacy: /to="\/privacy"/.test(source) || /<LifetimeDisclosure/.test(source),
+});
+
 for (const [label, path] of SCREENS_THAT_MUST_LINK) {
   test(`${label} links to the legal documents`, () => {
-    const source = read(path);
-    const hasTerms = /to="\/terms"/.test(source);
-    const hasPrivacy = /to="\/privacy"/.test(source);
+    const { terms, privacy } = linksToLegal(read(path));
     // The landing pricing card links to the Terms specifically, because
     // that is the document describing what the annual fee buys. Every
     // other screen carries both.
-    assert.ok(hasTerms, `${label} must link to /terms`);
+    assert.ok(terms, `${label} must link to /terms`);
     if (path !== 'src/components/landing/PricingComparison.jsx') {
-      assert.ok(hasPrivacy, `${label} must link to /privacy`);
+      assert.ok(privacy, `${label} must link to /privacy`);
     }
   });
 }
+
+/** The shared component the screens above are allowed to delegate to. */
+test('the shared disclosure carries both documents itself', () => {
+  const source = read('src/components/licensing/LifetimeDisclosure.jsx');
+  assert.match(source, /to="\/terms"/, 'the disclosure must link to /terms');
+  assert.match(source, /to="\/privacy"/, 'the disclosure must link to /privacy');
+});
 
 test('the setup form puts the agreement after the submit button, not above the fields', () => {
   const source = read('src/pages/Setup.jsx');
@@ -65,7 +82,7 @@ test('the setup form puts the agreement after the submit button, not above the f
 test('the purchase disclosure appears before the purchase button', () => {
   const source = read('src/pages/Pro.jsx');
   const disclosure = source.indexOf('<LifetimeDisclosure');
-  const buyButton = source.indexOf('Buy the Lifetime Licence');
+  const buyButton = source.indexOf('Buy Lifetime Licence');
   assert.ok(disclosure > -1, 'the pre-purchase disclosure must be rendered');
   assert.ok(buyButton > -1, 'the purchase button must exist');
   assert.ok(disclosure < buyButton,

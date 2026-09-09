@@ -26,6 +26,10 @@ export const INDUSTRY_PROFILE_IDS = [
 export const OWNER_CONFIGURABLE_CAPABILITIES = [
   'units', 'variants', 'barcodeLabels', 'services',
   'tables', 'modifiers', 'diningModes', 'kitchen',
+  // Where an item is made, when it is served, and what was thrown away.
+  // See src/industry/capabilities.js — this list is the third copy and a
+  // test in the client asserts the three never drift.
+  'kitchenStations', 'courses', 'waste',
   'recipes', 'production', 'packSizes', 'ageRestriction', 'expiryAlerts',
 ];
 

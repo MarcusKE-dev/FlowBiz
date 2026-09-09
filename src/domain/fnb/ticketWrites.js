@@ -220,6 +220,51 @@ export function advanceTicketLine(batch, line, target, { at = new Date() } = {})
 }
 
 /**
+ * ADVANCE A WHOLE LEGACY TICKET, because a legacy ticket has no line
+ * documents to advance.
+ *
+ * A ticket written before this domain shipped — and, until the counter is
+ * migrated, EVERY ticket the counter writes — stores its lines as an
+ * array on the order document and carries ONE `kitchenStatus` for the
+ * whole thing. `readTicket()` presents those lines as `readOnlyLine`, and
+ * `advanceTicketLine()` correctly refuses them: there is no document to
+ * update.
+ *
+ * That refusal was silent, and it made the kitchen screen a display with
+ * dead buttons on it — a cook tapped "Ready" and nothing whatsoever
+ * happened, on the only kind of ticket the counter produces. This is the
+ * honest fallback: move the whole ticket, because the whole ticket is the
+ * only granularity the stored document has.
+ *
+ * The mapping is one-for-one and lossless — `sent` is what the old model
+ * spelled `preparing` — and it is forward-only for the same reason line
+ * advancement is: the cooking already happened.
+ *
+ * Returns true when it wrote something, so a caller can tell an ignored
+ * tap from a completed one.
+ */
+const LEGACY_KITCHEN_STATUS = Object.freeze({
+  new: 'new', sent: 'preparing', ready: 'ready', served: 'served',
+});
+const LEGACY_ORDER = ['new', 'preparing', 'ready', 'served'];
+
+export function advanceLegacyTicket(batch, ticket, target, { at = new Date() } = {}) {
+  if (!ticket?.id || ticket.lineModel !== 'array') return false;
+  const next = LEGACY_KITCHEN_STATUS[target];
+  if (!next) return false;
+  const current = LEGACY_KITCHEN_STATUS[
+    Object.keys(LEGACY_KITCHEN_STATUS).find((k) => LEGACY_KITCHEN_STATUS[k] === ticket.order?.kitchenStatus)
+  ] || (LEGACY_ORDER.includes(ticket.order?.kitchenStatus) ? ticket.order.kitchenStatus : 'new');
+  if (LEGACY_ORDER.indexOf(next) <= LEGACY_ORDER.indexOf(current)) return false;
+  batch.update(doc(db, ORDERS, ticket.id), {
+    kitchenStatus: next,
+    kitchenStatusAt: at,
+    updatedAt: serverTimestamp(),
+  });
+  return true;
+}
+
+/**
  * SPLIT, MERGE, TRANSFER — apply a plan from planLineMove().
  *
  * All three are the same operation, which is the point: a line's ticket

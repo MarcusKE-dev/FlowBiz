@@ -9,7 +9,8 @@ import { useIndustry } from '../hooks/useIndustry';
 import { resetBusinessData } from '../utils/businessReset';
 import { restoreProduct, permanentlyDeleteProduct } from '../utils/products';
 import { isDemoMode } from '../demo/demoMode';
-import { resetDemoData } from '../demo/seedData';
+import { resetDemoData, demoProfileId } from '../demo/seedData';
+import { DEMO_DATASETS, DEMO_PROFILE_IDS } from '../demo/datasets';
 import { formatDateTime } from '../utils/dateRanges';
 import { isContinuousScanEnabled, setContinuousScanEnabled } from '../utils/scannerService';
 import ConfirmDialog from '../components/common/ConfirmDialog';
@@ -51,6 +52,19 @@ export default function Settings() {
   const { profile, businessId, emailVerified, listBusinessSessions, revokeSession, currentSessionId, isPro, isLifetime, deleteOwnAccount } = useAuth();
   const industry = useIndustry();
   const demo = isDemoMode();
+  // Which sample business the demo is currently showing, and the one the
+  // visitor has asked to switch to. The switch is a wipe and rebuild, so
+  // it is confirmed before it runs.
+  const [demoTrade, setDemoTrade] = useState(null);
+  const [switchingTrade, setSwitchingTrade] = useState(false);
+  // Read once. It only changes by reloading the page, because switching
+  // trade rebuilds the store and navigates.
+  const [currentTrade] = useState(() => (isDemoMode() ? demoProfileId() : null));
+  // Read once: it cannot change without a reload, and reading `window`
+  // during render is impure.
+  const [displayUrl] = useState(
+    () => (typeof window === 'undefined' ? '/customer-display' : `${window.location.origin}/customer-display`)
+  );
   const [loading, setLoading]     = useState(true);
   
   const [shopName, setShopName]   = useState('');
@@ -345,6 +359,34 @@ export default function Settings() {
       toast.error(`Reset failed: ${err.message}`);
       setResetting(false);
       setResetDialogOpen(false);
+    }
+  };
+
+  /**
+   * SWITCH THE DEMO TO ANOTHER TRADE.
+   *
+   * A wipe and a rebuild, not a settings write, and the difference
+   * matters: a restaurant needs tables, a floor plan, kitchen sections,
+   * recipes and open tickets, and simply stamping `industryProfile` onto
+   * a shop's settings would leave an electronics catalogue filed under
+   * restaurant categories with nothing on any of the food screens.
+   *
+   * DEMO ONLY. A real business's trade is chosen once at Setup and moved
+   * only by a platform administrator, server side, where it is
+   * permissioned and audited. Nothing here is reachable outside demo
+   * mode, and nothing here writes to a real business.
+   */
+  const switchDemoTrade = async () => {
+    if (!demoTrade || switchingTrade) return;
+    setSwitchingTrade(true);
+    try {
+      resetDemoData(demoTrade);
+      toast.success(`Switched to the ${DEMO_DATASETS[demoTrade].label.toLowerCase()} demo. Reloading.`);
+      window.location.href = '/';
+    } catch (err) {
+      toast.error(`Could not switch: ${err.message}`);
+      setSwitchingTrade(false);
+      setDemoTrade(null);
     }
   };
 
@@ -707,6 +749,22 @@ export default function Settings() {
           <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>Open the help guide</span></Link>
         </Section>
 
+        <Section title="Support and contact" description="Reach out if you need assistance with your FlowBiz business.">
+          <div className="space-y-1 rounded-panel border border-line p-3">
+            <CopyRow label="Business ID" value={businessId || '-'} copyValue={businessId} copiedMessage="Business ID copied." mono />
+            <CopyRow label="Email" value={SUPPORT_EMAIL} copyValue={SUPPORT_EMAIL} copiedMessage="Support email copied.">
+              <a href={SUPPORT_EMAIL_HREF} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline underline-offset-2 hover:opacity-80">
+                {SUPPORT_EMAIL}
+              </a>
+            </CopyRow>
+            <SupportRow label="WhatsApp">
+              <a href={whatsappHref('Hello FlowBiz support, I need help with my business settings')} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline underline-offset-2 hover:opacity-80">
+                {SUPPORT_WHATSAPP_LABEL}
+              </a>
+            </SupportRow>
+          </div>
+        </Section>
+
         <Section
           title="Backup and restore"
           description="Download everything as a .zip, or restore a previous FlowBiz export."
@@ -722,6 +780,94 @@ export default function Settings() {
           <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleImportFileSelected} />
         </Section>
 
+
+        {/* ── Screens ────────────────────────────────────────────────
+            Where an owner setting up a second screen looks. The floor
+            page has the same link, but somebody wiring a television to a
+            spare laptop is in Settings, not standing at the pass. */}
+        {industry.can('orders') && (
+          <Section
+            title="Customer display"
+            description="A full screen board for a television or a spare monitor in the dining room."
+          >
+            <div className="space-y-3 rounded-panel border border-line bg-surface p-3">
+              <p className="text-body text-ink-600">
+                It shows your tables down both sides with what each one is waiting for, and your
+                menu running in the middle with its photos and prices. A business without tables
+                gets the order queue on the sides instead.
+              </p>
+              <p className="text-secondary text-ink-500">
+                It never shows money, staff names or what any table ordered. Open it on the
+                second screen, then press the full screen button on it.
+              </p>
+              <div className="space-y-2 border-t border-divider pt-3">
+                {/* The address, copyable, because the screen it belongs on
+                    is usually not the screen you are reading this on. */}
+                <CopyRow
+                  label="Address"
+                  value={displayUrl}
+                  copyValue={displayUrl}
+                  copiedMessage="Display address copied."
+                  mono
+                />
+                <a
+                  href="/customer-display"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-secondary w-full justify-center"
+                >
+                  Open customer display
+                </a>
+              </div>
+            </div>
+          </Section>
+        )}
+
+        {/* ── Try another trade ──────────────────────────────────────
+            Demo only. The whole point of the demo is showing somebody
+            what FlowBiz does for THEIR business, and a shop selling HDMI
+            cables shows nothing at all to a restaurant. */}
+        {demo && (
+          <Section
+            title="Try another business"
+            description="The demo can run as a different trade. Switching rebuilds the sample data for it."
+          >
+            <div className="space-y-2">
+              {DEMO_PROFILE_IDS.map((id) => {
+                const dataset = DEMO_DATASETS[id];
+                const current = currentTrade === id;
+                return (
+                  <div
+                    key={id}
+                    className={`flex items-start justify-between gap-4 rounded-panel border p-3 ${
+                      current ? 'border-primary-600 bg-primary-50' : 'border-line bg-surface'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-2 text-body font-semibold text-ink-900">
+                        {dataset.label}
+                        {current && <StatusPill tone="positive">Showing now</StatusPill>}
+                      </p>
+                      <p className="text-secondary text-ink-500">{dataset.blurb}</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-secondary shrink-0"
+                      onClick={() => setDemoTrade(id)}
+                      disabled={current || switchingTrade}
+                    >
+                      {current ? 'Current' : 'Switch'}
+                    </button>
+                  </div>
+                );
+              })}
+              <p className="text-secondary text-ink-500">
+                Switching clears the sample data in this browser and builds the new trade from
+                scratch. It never touches a real business.
+              </p>
+            </div>
+          </Section>
+        )}
 
         <Section title="Danger zone" tone="danger">
           <div className="space-y-3 rounded-panel border border-danger-200 bg-danger-50 p-4">
@@ -814,6 +960,22 @@ export default function Settings() {
         danger
         onConfirm={demo ? (!resetting ? handleReset : () => {}) : (resetConfirmText === RESET_CONFIRM_PHRASE && !resetting ? handleReset : () => {})}
         onCancel={() => { if (!resetting) setResetDialogOpen(false); }}
+      />
+
+      <ConfirmDialog
+        open={Boolean(demoTrade)}
+        title={demoTrade ? `Switch the demo to ${DEMO_DATASETS[demoTrade].label.toLowerCase()}?` : ''}
+        message={
+          <p>
+            The sample data in this browser is cleared and rebuilt as a
+            {' '}{demoTrade ? DEMO_DATASETS[demoTrade].label.toLowerCase() : ''}. Nothing outside
+            this demo is affected.
+          </p>
+        }
+        confirmLabel={switchingTrade ? 'Switching…' : 'Switch and rebuild'}
+        cancelLabel="Stay here"
+        onConfirm={switchingTrade ? () => {} : switchDemoTrade}
+        onCancel={() => { if (!switchingTrade) setDemoTrade(null); }}
       />
 
       <Modal open={deleteAccountOpen} onClose={() => { if (!deletingAccount) setDeleteAccountOpen(false); }} title="Delete your account">

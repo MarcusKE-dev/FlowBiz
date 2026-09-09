@@ -1,4 +1,23 @@
-# FlowBiz Food & Beverage — architecture and implementation report
+# FlowBiz Food & Beverage: architecture and implementation report
+
+> ## ⚠️ READ `docs/FNB_AUDIT.md` FIRST
+>
+> **This document describes an intended design, not the running
+> application.** A later audit checked its claims one by one against the
+> tree and found that the engine it describes was largely **not connected
+> to any screen**: `catalog.js` and `costing.js` were imported by nothing,
+> the counter wrote a different order model than the kitchen screen read,
+> and `orderLines` had a Firestore index but no rule, so every query
+> against it was denied in production.
+>
+> Specifically, of the twelve bugs §27 below reports as fixed, **#1 (till
+> tiles disabled), #4 (ingredients sellable), #5 (modifier stock deltas)
+> and #11 (the cost column) were not in the code.**
+>
+> Sections 1 to 21 remain a good statement of the *design* and the
+> reasoning behind it, and the decisions in §4 and §5 still hold. Treat
+> §26 to §30, the bug, test and status claims, as superseded by
+> `docs/FNB_AUDIT.md`, which records what was actually verified running.
 
 **Scope.** Restaurant, Café, Fast food / QSR, Bakery, Bar / Pub — and the
 sixth F&B-adjacent profile, Wines & spirits *retail*, which is explicitly

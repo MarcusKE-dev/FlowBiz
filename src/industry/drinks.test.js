@@ -103,8 +103,17 @@ test('the units the drinks trade added are three, and each is a count', () => {
   for (const id of ['bottle', 'crate', 'tot']) {
     assert.ok(UNITS[id], `${id} must exist`);
     assert.equal(UNITS[id].group, 'count');
-    assert.equal(UNITS[id].decimals, 0, 'you cannot stock half a bottle');
   }
+  // A bottle and a crate are things, and half of one is not a thing a bar
+  // can hold or sell — so they truncate, and receiving half a crate of 25
+  // books 12 bottles.
+  assert.equal(UNITS.bottle.decimals, 0, 'you cannot stock half a bottle');
+  assert.equal(UNITS.crate.decimals, 0, 'you cannot stock half a crate');
+  // A tot is a MEASURE, not a thing. Half a tot is 12.5ml of gin, which
+  // is real, is poured nightly, and has to leave the bottle when it is.
+  // See the note in units.js: at zero decimals a 1.5-tot cocktail
+  // deducted one, and the shortfall compounded every round.
+  assert.equal(UNITS.tot.decimals, 3, 'a pour divides; a bottle does not');
 });
 
 // ── General Retail is untouched ──────────────────────────────────────
@@ -181,7 +190,11 @@ test('a partial pack lands on a whole sellable thing, never on half a bottle', (
   // rather than 12.5 of something that does not divide.
   assert.equal(toBaseQuantity(BEER, 0.5, { pack: true, packSizes: true }), 12);
   assert.equal(toBaseQuantity(TABS, 1.5, { pack: true, packSizes: true }), 45, 'a box and a half of 30');
-  assert.equal(toBaseQuantity(GIN, 2.5, { pack: true, packSizes: true }), 62, 'two and a half bottles of 25 tots');
+  // The gin is the exception that proves the rule: its SELLING unit is
+  // the tot, which divides, so two and a half bottles of 25 is 62.5 tots
+  // of gin and the half-tot is really in the bottle. Truncating it here
+  // would lose 12.5ml on every part-bottle ever received.
+  assert.equal(toBaseQuantity(GIN, 2.5, { pack: true, packSizes: true }), 62.5, 'two and a half bottles of 25 tots');
 });
 
 test('a pack conversion into a decimal unit keeps that unit’s precision', () => {

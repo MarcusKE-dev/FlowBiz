@@ -26,6 +26,8 @@ real ones look identical at every size the app renders (36px table rows,
 
 ## Filenames
 
+### General shop
+
 ```
 wireless-mouse.webp
 mechanical-keyboard.webp
@@ -44,6 +46,54 @@ extension-cable-4-way.webp
 router-wireless-n.webp
 smart-watch.webp
 wireless-charging-pad.webp
+```
+
+### Restaurant
+
+The menu items matter most: they are what runs across the middle of the
+customer display, at the size of a television. The ingredients only ever
+appear as a small thumbnail on the stock list, so they are worth doing
+second.
+
+**Menu (do these first)**
+
+```
+cheeseburger.webp
+chicken-burger.webp
+nyama-choma.webp
+grilled-chicken.webp
+pilau.webp
+chips.webp
+ugali.webp
+garden-salad.webp
+kachumbari.webp
+soup-of-the-day.webp
+coca-cola.webp
+fanta.webp
+water.webp
+dawa.webp
+kenyan-tea.webp
+chocolate-cake.webp
+fruit-salad.webp
+```
+
+**Ingredients**
+
+```
+beef-mince.webp
+chicken-breast.webp
+burger-bun.webp
+cheddar-slice.webp
+potatoes.webp
+cooking-oil.webp
+lettuce.webp
+tomatoes.webp
+rice.webp
+ugali-flour.webp
+tea-leaves.webp
+milk.webp
+honey.webp
+lemon.webp
 ```
 
 ## Converting what you have
@@ -67,7 +117,7 @@ ls -lhS public/product-photos/*.webp | head
 
 ## Adding a product to the demo
 
-Add the row in `src/demo/seedData.js` with an `image:` slug, then put
+Add the row in `src/demo/datasets.js` with an `image:` slug, then put
 `<slug>.webp` here. The seed builds the URL from the slug and Vite's
 `BASE_URL`, so it resolves correctly in both the root build and the
 `/demo/` build.

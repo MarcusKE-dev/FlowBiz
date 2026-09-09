@@ -14,7 +14,7 @@ export const EXPORT_COLLECTIONS = [
   // RESET_COLLECTIONS in step: a collection missing from any one of them
   // is data that cannot be backed up, cannot be restored, or survives a
   // reset that promised to clear it.
-  'orders', 'productions', 'productBatches',
+  'orders', 'orderLines', 'productions', 'productBatches', 'waste',
   // Product photos. Base64, so this is the one collection that can make
   // a backup large — roughly 62KB per product that has a photo.
   'productImages',

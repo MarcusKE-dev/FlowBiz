@@ -36,6 +36,7 @@ export * from './catalog.js';
 export * from './lines.js';
 export * from './ticket.js';
 export * from './stations.js';
+export * from './floor.js';
 export * from './check.js';
 export * from './waste.js';
 export * from './costing.js';

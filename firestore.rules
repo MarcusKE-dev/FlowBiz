@@ -340,6 +340,7 @@ service cloud.firestore {
                && data.capabilityOverrides.keys().hasOnly([
                  'units', 'variants', 'barcodeLabels', 'services',
                  'tables', 'modifiers', 'diningModes', 'kitchen',
+                 'kitchenStations', 'courses', 'waste',
                  'recipes', 'production', 'packSizes', 'ageRestriction', 'expiryAlerts'
                ])
                && data.capabilityOverrides.values().hasOnly([true, false])
@@ -347,11 +348,54 @@ service cloud.firestore {
     }
 
     // Table names for the food profiles are a plain list of labels on the
-    // settings document — there is no floor plan and no table collection.
-    // Bounded so it cannot be used to grow a document everyone reads.
+    // settings document — there is no table collection. Bounded so it
+    // cannot be used to grow a document everyone reads.
     function tablesOk(data) {
       return !('tables' in data.keys())
              || (data.tables is list && data.tables.size() <= 100);
+    }
+
+    // THE FLOOR PLAN rides on the same document and is the same kind of
+    // thing: a short list an owner arranges, read by every device. It is
+    // a list of `{ name, zone, seats, x, y }` and is bounded rather than
+    // shape-checked, for the reason given above the override validators —
+    // meaning depends on the profile and the client already drops what a
+    // profile does not offer, so bounds are what a rule can actually
+    // guarantee. It shares the table ceiling because it describes the
+    // same hundred tables.
+    function floorPlanOk(data) {
+      return !('floorPlan' in data.keys())
+             || data.floorPlan == null
+             || (data.floorPlan is list && data.floorPlan.size() <= 100);
+    }
+
+    // Kitchen sections (MAX_STATIONS) and courses (MAX_COURSES) in
+    // src/domain/fnb/stations.js. The ceilings are duplicated here on
+    // purpose: this is the only copy that stops a write.
+    function stationsOk(data) {
+      return !('stations' in data.keys())
+             || data.stations == null
+             || (data.stations is list && data.stations.size() <= 12);
+    }
+
+    function coursesOk(data) {
+      return !('courses' in data.keys())
+             || data.courses == null
+             || (data.courses is list && data.courses.size() <= 8);
+    }
+
+    // THE SERVICE CHARGE MULTIPLIES INTO EVERY BILL, which is why it is
+    // the one number on this document with a range rather than only a
+    // type. A rule that accepted 500 would accept a business adding 500%
+    // to every check it prints, and the client resolver clamping it is
+    // not enforcement — a direct write bypasses the client entirely.
+    // The ceiling matches MAX_SERVICE_CHARGE_PERCENT in domain/fnb/check.js.
+    function serviceChargeOk(data) {
+      return !('serviceChargeRate' in data.keys())
+             || data.serviceChargeRate == null
+             || (data.serviceChargeRate is number
+                 && data.serviceChargeRate >= 0
+                 && data.serviceChargeRate <= 30);
     }
 
     // The three presentation overrides an owner may store from the
@@ -434,8 +478,9 @@ service cloud.firestore {
                && data.cashierPermissions.keys().hasOnly([
                  'sales.record', 'sales.credit', 'sales.return', 'sales.history',
                  'orders.view', 'orders.create', 'orders.update', 'orders.close',
+                 'orders.void', 'orders.move', 'kitchen.update',
                  'catalogue.view', 'catalogue.manage',
-                 'stock.receive', 'stock.count', 'stock.suppliers', 'stock.expiry', 'stock.production',
+                 'stock.receive', 'stock.count', 'stock.waste', 'stock.suppliers', 'stock.expiry', 'stock.production',
                  'customers.view', 'customers.manage', 'debtors.collect',
                  'expenses.record', 'day.open', 'day.close', 'reports.view'
                ])
@@ -450,6 +495,10 @@ service cloud.firestore {
              && categoryModelOk(data)
              && expenseCategoryModelOk(data)
              && tablesOk(data)
+             && floorPlanOk(data)
+             && stationsOk(data)
+             && coursesOk(data)
+             && serviceChargeOk(data)
              && unitOverridesOk(data)
              && dashboardOverridesOk(data)
              && termOverridesOk(data);
@@ -723,6 +772,111 @@ service cloud.firestore {
                       may('orders.close', true)
                       || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['saleId', 'closedAt'])
                     );
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    // ── Ticket lines (food & beverage) ─────────────────────────────
+    //
+    // ONE DOCUMENT PER LINE ON A TICKET. This collection is the whole
+    // reason a restaurant can run FlowBiz on more than one device: the
+    // waiter's tablet appends a line, the kitchen screen advances that
+    // same line, and neither one has to read-modify-write an array that
+    // the other is also holding. The header's `totalAmount` is kept by
+    // commutative increments, which is what makes it correct offline.
+    //
+    // IT HAD NO RULE AT ALL, which in Firestore means denied. Every read
+    // and every write this collection has ever attempted has been
+    // refused in production — the kitchen screen and the customer display
+    // both query it — so the feature was not "partly working", it was
+    // dark. The index for it has shipped since before this rule existed.
+    //
+    // FOUR DIFFERENT THINGS CAN HAPPEN TO A LINE, and each is behind its
+    // own permission. That separation is the entire reason a line is its
+    // own document, and it is defeated the moment one rule waves all four
+    // through — so the update rule below is four branches, not one.
+    //
+    //   AMEND   `orders.update`, on by default. Change a quantity, a
+    //           price, a note. Amending a ticket IS the floor's job.
+    //
+    //   FIRE    `kitchen.update`, on by default, and the smallest
+    //           permission in the catalogue. A tablet bolted to a kitchen
+    //           wall is not a till: it may move a line forward through
+    //           the pass and stamp the times that happened, and that is
+    //           the complete list. The `hasOnly` is what makes that a
+    //           fact rather than an intention.
+    //
+    //   VOID    `orders.void`, OFF by default. Ring it, serve it, void
+    //           it, keep the cash is the oldest trick in hospitality.
+    //           `orders.update` is on by default, so if amending also
+    //           granted voiding then the one permission an owner most
+    //           wants to withhold would be one nobody ever had. The
+    //           amend branch therefore refuses any write that touches
+    //           the void fields at all, and the void branch is `hasOnly`
+    //           so a void cannot smuggle a price change in with it.
+    //
+    //   MOVE    `orders.move`, on by default. Splitting a check, merging
+    //           two tables, fixing a mis-rung item. It moves money
+    //           between two bills, so it is nameable and withholdable,
+    //           and the amend branch refuses to do it silently.
+    function affects(existing, incoming, keys) {
+      return incoming.diff(existing).affectedKeys().hasAny(keys);
+    }
+
+    function onlyAffects(existing, incoming, keys) {
+      return incoming.diff(existing).affectedKeys().hasOnly(keys);
+    }
+
+    match /orderLines/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data) && may('orders.create', true);
+
+      allow update: if ownsUpdate(resource.data, request.resource.data) && (
+        // FIRE
+        (onlyAffects(resource.data, request.resource.data,
+           ['fulfillment', 'firedAt', 'readyAt', 'servedAt', 'updatedAt'])
+         && may('kitchen.update', true))
+        ||
+        // VOID
+        (onlyAffects(resource.data, request.resource.data,
+           ['voided', 'voidedAt', 'voidedBy', 'voidedByName', 'voidReason', 'updatedAt'])
+         && may('orders.void', false))
+        ||
+        // MOVE — and it is still an amendment of the line, so it needs
+        // both. A cashier who may not touch a line at all does not get to
+        // move it to a different bill.
+        (affects(resource.data, request.resource.data, ['orderId'])
+         && may('orders.move', true)
+         && may('orders.update', true)
+         && !affects(resource.data, request.resource.data,
+              ['voided', 'voidedAt', 'voidedBy', 'voidedByName', 'voidReason']))
+        ||
+        // AMEND — everything else, and explicitly NOT a void or a move.
+        (may('orders.update', true)
+         && !affects(resource.data, request.resource.data,
+              ['voided', 'voidedAt', 'voidedBy', 'voidedByName', 'voidReason', 'orderId']))
+      );
+
+      // A line is VOIDED, never deleted — the void is the record of what
+      // was taken off a bill and by whom, and a restaurant that can make
+      // that record vanish has no audit trail over its own comps. Only an
+      // owner may actually remove the document.
+      allow delete: if isOwner() && owns(resource.data);
+    }
+
+    // ── Waste (food & beverage) ────────────────────────────────────
+    //
+    // Spoilage, breakage, staff meals and comps: stock that left without
+    // being sold. It is a stock MOVEMENT with a cost attached, so it is
+    // ruled exactly as `purchases` and `stockAdjustments` are — created
+    // by whoever counts stock, amended by nobody, deleted by the owner
+    // alone. A waste line an employee can edit after the fact is a
+    // shrinkage report that reports whatever the employee prefers.
+    //
+    // This collection had no rule either, and its index has also shipped.
+    match /waste/{id} {
+      allow read: if owns(resource.data);
+      allow create: if owns(request.resource.data) && may('stock.waste', true);
+      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 

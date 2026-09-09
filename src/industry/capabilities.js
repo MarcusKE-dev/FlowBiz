@@ -100,6 +100,55 @@ export const CAPABILITIES = {
     requires: ['orders'],
   },
 
+  // ONE KITCHEN OR SEVERAL. A kitchen screen with no stations shows every
+  // fired item on one rail, which is the right answer for a chip shop and
+  // the wrong one for a restaurant where the grill, the cold section and
+  // the bar are three people who each need to read only their own work.
+  //
+  // It is a separate capability from `kitchen` rather than a setting on
+  // it, because turning it on is a real cost: somebody must name the
+  // stations and then route every product to one. A business that has not
+  // done that work should see the single rail, not twelve empty screens.
+  //
+  // The routing itself is already unconditional in the engine — a line
+  // snapshots its station whether or not this is on — so switching it on
+  // later starts filtering immediately, and switching it off collapses
+  // back to one rail without losing anything.
+  kitchenStations: {
+    key: 'kitchenStations',
+    family: 'FOOD',
+    label: 'Kitchen sections',
+    description: 'Send each item to the section that makes it: grill, cold, bar, pastry.',
+    ownerConfigurable: true,
+    requires: ['kitchen'],
+  },
+
+  // COURSES. When something is served, as opposed to where it is made.
+  // Starters now, mains when the starters come back, dessert after that —
+  // the pacing a table-service restaurant runs on and a counter does not.
+  courses: {
+    key: 'courses',
+    family: 'FOOD',
+    label: 'Courses',
+    description: 'Pace a table: starters, mains, dessert, fired when the floor says so.',
+    ownerConfigurable: true,
+    requires: ['orders', 'tables'],
+  },
+
+  // WASTE. Spoilage, breakage, staff meals and comps — stock that left
+  // without being sold. Every food business has it, including the ones
+  // with no recipes: a chip shop throws away chips. So it is its own
+  // capability rather than riding on `recipes`, which would have hidden
+  // the page from exactly the fast-food business that needs it most.
+  waste: {
+    key: 'waste',
+    family: 'FOOD',
+    label: 'Waste',
+    description: 'Record what was thrown away, broken, comped or eaten by staff, at cost.',
+    ownerConfigurable: true,
+    requires: [],
+  },
+
   // ── Recipes and production ────────────────────────────────────────
   recipes: {
     key: 'recipes',

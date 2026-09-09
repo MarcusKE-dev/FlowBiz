@@ -7,12 +7,17 @@ import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useIndustry } from '../../hooks/useIndustry';
+import { useSettings } from '../../contexts/SettingsContext';
 import { categoryWritePayload } from '../../industry/categories';
 import { UNITS, DEFAULT_UNIT, unitStep, unitOptionGroups, roundQuantity, formatQuantityWithUnit } from '../../industry/units';
 import { MAX_PACK_SIZE } from '../../utils/inventory';
 import VariantEditor from './VariantEditor';
 import ModifierEditor from './ModifierEditor';
 import RecipeEditor from './RecipeEditor';
+import {
+  CATALOG_ROLES, catalogRoleOf, catalogRoleField,
+} from '../../domain/fnb/catalog';
+import { stationOptions, DEFAULT_STATION, MAX_STATION_NAME } from '../../domain/fnb/stations';
 import { normalizeModifierGroups } from '../../utils/modifiers';
 import { generateVariants, hasVariants, totalVariantStock } from '../../utils/variants';
 import { findBarcodeClash } from '../../utils/scannerService';
@@ -90,6 +95,8 @@ export default function ProductFormModal({
   // regardless of what the browser does; this is the courteous half.
   const canUseProductPhotos = entitlements?.can(ENTITLEMENTS.PRODUCT_PHOTOS) === true;
   const industry = useIndustry();
+  // The kitchen sections this business named, for the "Made at" picker.
+  const { settings } = useSettings();
   // The business's own list if it has saved one, its trade's starting
   // list if it has not — resolved once, in the industry layer.
   const categories = industry.categories;
@@ -104,6 +111,8 @@ export default function ProductFormModal({
   const showProduction = industry.can('production');
   const showServices = industry.can('services');
   const showPackSizes = industry.can('packSizes');
+  const showKitchen = industry.can('kitchen');
+  const showStations = industry.can('kitchenStations');
 
   // The units this business is actually offered — the profile's list,
   // narrowed by whatever the owner chose on the Customize page. The form
@@ -150,6 +159,17 @@ export default function ProductFormModal({
   const [modifierGroups, setModifierGroups] = useState([]);
   const [recipe, setRecipe] = useState([]);
   const [producedInAdvance, setProducedInAdvance] = useState(false);
+  // WHAT THIS ROW IS FOR: sold, cooked with, or both. Absent on every
+  // product that predates the field, and `catalogRoleOf` reads absent as
+  // `sellable`, so an existing catalogue in any industry opens exactly as
+  // it always did.
+  const [catalogRole, setCatalogRole] = useState(CATALOG_ROLES.SELLABLE);
+  // The kitchen's own words for the item, and where it is made. Both are
+  // snapshotted onto a ticket line when it is rung, so changing either
+  // later never moves food that is already cooking.
+  const [kitchenName, setKitchenName] = useState('');
+  const [station, setStation] = useState(DEFAULT_STATION.id);
+  const [routable, setRoutable] = useState(true);
   const [form, setForm] = useState(empty);
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -202,6 +222,13 @@ export default function ProductFormModal({
   // Only true if we are editing an existing product that already has a Firestore document ID
   const isEditing = Boolean(initialProduct && initialProduct.id);
   const isService = showServices && form.kind === 'service';
+  // A PURE INGREDIENT IS NEVER PRICED. A tomato has a buying price and no
+  // selling price, and the form used to demand one above zero — so the
+  // owner invented a number, and the invented number went into margin,
+  // into menu performance and into every report that ranks what sells.
+  // Only offered where recipes exist; everywhere else this is always
+  // false and the form is byte-for-byte what it was.
+  const ingredientOnly = showRecipes && !isService && catalogRole === CATALOG_ROLES.INGREDIENT;
 
   // Turning a STOCKED product into a service throws its stock away — a
   // service has nothing to count, so the save writes zero. That is the
@@ -242,6 +269,14 @@ export default function ProductFormModal({
     setModifierGroups(open && Array.isArray(initialProduct?.modifierGroups) ? initialProduct.modifierGroups : []);
     setRecipe(open && Array.isArray(initialProduct?.recipe) ? initialProduct.recipe : []);
     setProducedInAdvance(open ? initialProduct?.producedInAdvance === true : false);
+    setCatalogRole(open ? catalogRoleOf(initialProduct) : CATALOG_ROLES.SELLABLE);
+    setKitchenName(open ? String(initialProduct?.kitchenName || '') : '');
+    setStation(open ? String(initialProduct?.station || DEFAULT_STATION.id) : DEFAULT_STATION.id);
+    // Absent means routed. A NEW item reaches a kitchen screen until
+    // somebody says it does not, which is the safe direction: an item
+    // nobody cooks sitting on a screen is noise, but an item that needs
+    // cooking and reaches no screen is a customer waiting for nothing.
+    setRoutable(open ? initialProduct?.routable !== false : true);
     if (open) {
       if (initialProduct && initialProduct.id) {
         setForm({
@@ -399,7 +434,7 @@ export default function ProductFormModal({
       toast.error('Cost price cannot be negative.');
       return;
     }
-    if (Number(form.sellingPrice) <= 0) {
+    if (!ingredientOnly && Number(form.sellingPrice) <= 0) {
       toast.error('Selling price must be greater than zero.');
       return;
     }
@@ -491,6 +526,41 @@ export default function ProductFormModal({
 
       if (showModifiers && (modifierGroups.length > 0 || Array.isArray(initialProduct?.modifierGroups))) {
         payload.modifierGroups = normalizeModifierGroups(modifierGroups);
+      }
+
+      // WHAT THIS ROW IS FOR. Written only when it is not the default,
+      // and written back explicitly when a row is demoted from ingredient
+      // to sellable — otherwise the old role stays behind because the key
+      // was merely omitted, and an item that was briefly an ingredient
+      // never returns to the till. See catalogRoleField().
+      if (showRecipes && !isService) {
+        Object.assign(payload, catalogRoleField(catalogRole, { existing: initialProduct }));
+        // A pure ingredient is stocked and never rung up, so its selling
+        // price is zero rather than a number somebody invented to get
+        // past a required field.
+        if (catalogRole === CATALOG_ROLES.INGREDIENT) payload.sellingPrice = 0;
+      }
+
+      // THE KITCHEN'S OWN WORDS, and where the item is made. A menu says
+      // "Chef's Special"; the pass needs "8oz sirloin, med-rare". Both
+      // fields are snapshotted onto the ticket line at ring time, so
+      // moving chips from the fryer to the grill tomorrow does not move
+      // the chips that are cooking now.
+      if (showKitchen && !isService) {
+        const trimmed = kitchenName.trim().slice(0, MAX_STATION_NAME);
+        if (trimmed) payload.kitchenName = trimmed;
+        else if (isEditing && initialProduct?.kitchenName) payload.kitchenName = null;
+
+        // `routable: false` is the owner saying "this does not go to a
+        // kitchen" — a bottle of beer out of the fridge, a packet of
+        // crisps. Absent means it does, so only the false case is stored.
+        if (!routable) payload.routable = false;
+        else if (isEditing && initialProduct?.routable === false) payload.routable = true;
+      }
+
+      if (showStations && !isService) {
+        if (station && routable) payload.station = station;
+        else if (isEditing && initialProduct?.station) payload.station = null;
       }
 
       // A recipe means this item is MADE, not bought in. Whether its
@@ -694,6 +764,35 @@ export default function ProductFormModal({
           </div>
         </div>
 
+        {/* ── What this row is FOR ─────────────────────────────────────
+            Only where recipes exist, because it is only where recipes
+            exist that a catalogue holds things nobody sells. Three
+            answers rather than a boolean, because "both" is real and
+            common: a bakery sells loose flour AND bakes with it; a bar
+            sells a bottle whole AND pours it by the tot. */}
+        {showRecipes && !isService && !simplifiedForPurchase && (
+          <div>
+            <label className="label">What is this?</label>
+            <SegmentedControl
+              ariaLabel="What this item is for"
+              value={catalogRole}
+              onChange={setCatalogRole}
+              options={[
+                { value: CATALOG_ROLES.SELLABLE,   label: industry.terms.catalogueItem === 'menu item' ? 'On the menu' : 'Sold' },
+                { value: CATALOG_ROLES.INGREDIENT, label: 'Ingredient' },
+                { value: CATALOG_ROLES.BOTH,       label: 'Both' },
+              ]}
+            />
+            <p className="mt-1 text-secondary text-ink-400">
+              {catalogRole === CATALOG_ROLES.INGREDIENT
+                ? 'Stocked, counted and costed, but never shown on the counter.'
+                : catalogRole === CATALOG_ROLES.BOTH
+                  ? 'Sold as it is, and used in recipes.'
+                  : 'Appears on the counter and can be sold.'}
+            </p>
+          </div>
+        )}
+
         {simplifiedForPurchase ? (
           <div>
             <label className="label">Selling price (KES)</label>
@@ -711,6 +810,19 @@ export default function ProductFormModal({
             <input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required />
             <p className="mt-1 text-secondary text-ink-400">
               A service has no buying price. What you charge is what it earns.
+            </p>
+          </div>
+        ) : ingredientOnly ? (
+          /* AN INGREDIENT IS BOUGHT, NOT SOLD. It has a buying price —
+             which is what every recipe cost in the business is computed
+             from — and no selling price at all. The old form demanded one
+             above zero, so owners typed a plausible number and it flowed
+             straight into margin and menu-performance reporting. */
+          <div>
+            <label className="label">Buying price (KES{form.unit !== DEFAULT_UNIT ? ` per ${UNITS[form.unit].short}` : ''})</label>
+            <input type="number" min="0" step="0.01" className="input" value={form.costPrice} onChange={set('costPrice')} disabled={busy} required />
+            <p className="mt-1 text-secondary text-ink-400">
+              This is what every recipe using it is costed from. An ingredient has no selling price.
             </p>
           </div>
         ) : (
@@ -805,6 +917,75 @@ export default function ProductFormModal({
           </div>
         )}
 
+        {/* ── The kitchen ──────────────────────────────────────────────
+            Two questions the pass needs answered and the menu cannot
+            answer: what do we call this back here, and who makes it.
+            Hidden for a pure ingredient, which is never fired at
+            anything, and for a service. */}
+        {showKitchen && !isService && !ingredientOnly && !simplifiedForPurchase && (
+          <div className="space-y-3 rounded-panel border border-line bg-surface p-3">
+            <p className="text-label font-semibold uppercase tracking-wide text-ink-700">Kitchen</p>
+
+            <label className="flex items-start gap-2.5">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={routable}
+                onChange={(e) => setRoutable(e.target.checked)}
+                disabled={busy}
+              />
+              <span className="min-w-0">
+                <span className="block text-body font-medium text-ink-900">Send this to the kitchen</span>
+                <span className="block text-secondary text-ink-500">
+                  Turn off for anything taken straight off a shelf or out of a fridge: a bottled
+                  drink, a packet of crisps. It is served without anybody having to make it.
+                </span>
+              </span>
+            </label>
+
+            {routable && (
+              <>
+                <div>
+                  <label className="label">
+                    Kitchen name <span className="text-ink-300 font-normal normal-case">(optional)</span>
+                  </label>
+                  <input
+                    className="input"
+                    value={kitchenName}
+                    onChange={(e) => setKitchenName(e.target.value)}
+                    disabled={busy}
+                    maxLength={MAX_STATION_NAME}
+                    placeholder={form.name ? `e.g. ${form.name}` : 'e.g. 8oz sirloin, med-rare'}
+                  />
+                  <p className="mt-1 text-secondary text-ink-400">
+                    What the pass calls it. A menu can say &ldquo;Chef&rsquo;s Special&rdquo;; the
+                    kitchen screen needs to know what to cook.
+                  </p>
+                </div>
+
+                {showStations && (
+                  <div>
+                    <label className="label">Made at</label>
+                    <select
+                      className="input"
+                      value={station}
+                      onChange={(e) => setStation(e.target.value)}
+                      disabled={busy}
+                    >
+                      {stationOptions(settings?.stations).map((option) => (
+                        <option key={option.id || '__default'} value={option.id}>{option.name}</option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-secondary text-ink-400">
+                      Which screen this appears on. Sections are named in Customize.
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         {showAgeRestriction && !simplifiedForPurchase && (
           <label className="flex items-start gap-2.5 rounded-panel border border-line bg-surface px-3 py-3">
             <input
@@ -856,7 +1037,9 @@ export default function ProductFormModal({
           </div>
         )}
 
-        {showModifiers && !simplifiedForPurchase && !isService && (
+        {/* A MODIFIER IS A CHOICE A CUSTOMER MAKES, so an item no customer
+            ever sees has none. Nobody asks for a large tomato. */}
+        {showModifiers && !simplifiedForPurchase && !isService && !ingredientOnly && (
           <div>
             <span className="label">
               Choices <span className="font-normal normal-case text-ink-400">(optional)</span>

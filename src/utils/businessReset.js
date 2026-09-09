@@ -15,7 +15,7 @@ const RESET_COLLECTIONS = [
   'purchases', 'dailySessions', 'repayments', 'supplierPayments',
   'stockAdjustments', 'barcodeIndex', 'refunds', 'productImages',
   'debtPaymentReceipts', 'sharedDocuments', 'staffInvites', 'sessions',
-  'orders', 'productions', 'productBatches',
+  'orders', 'orderLines', 'productions', 'productBatches', 'waste',
 ];
 
 async function deleteTenantCollection(name, businessId, chunkSize = 400) {

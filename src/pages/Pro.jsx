@@ -5,6 +5,7 @@ import PageHeader from '../components/ui/PageHeader';
 import Section from '../components/ui/Section';
 import StatusPill from '../components/ui/StatusPill';
 import LicensingPanel from '../components/licensing/LicensingPanel';
+import LifetimeDisclosure from '../components/licensing/LifetimeDisclosure';
 import BillingHistory from '../components/licensing/BillingHistory';
 import { useAuth } from '../contexts/AuthContext';
 import { usePricing } from '../hooks/usePricing';
@@ -154,10 +155,19 @@ function LifetimeCard({
         </div>
       </div>
 
+      {/* WHAT THE CUSTOMER READS BEFORE THEY CAN COMMIT. This card sells
+          two things under one price — a permanent licence and one year of
+          cloud services — and the second one renews. Stating that after
+          the button is not a disclosure. Asserted by
+          src/legal/legalLinks.test.js. */}
+      <div className="mt-6">
+        <LifetimeDisclosure />
+      </div>
+
       <button
         onClick={() => startCheckout(LIFETIME_PLAN_ID)}
         disabled={Boolean(loadingPlan)}
-        className="mt-6 w-full rounded-panel bg-deep-600 py-3 text-body font-bold text-white transition-colors hover:bg-deep-700 disabled:cursor-not-allowed disabled:opacity-60"
+        className="mt-4 w-full rounded-panel bg-deep-600 py-3 text-body font-bold text-white transition-colors hover:bg-deep-700 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {loadingPlan === LIFETIME_PLAN_ID
           ? 'Loading…'

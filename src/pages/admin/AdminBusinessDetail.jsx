@@ -680,7 +680,7 @@ export default function AdminBusinessDetail() {
 
           <Section
             title={`Team (${staff.length})`}
-            hint="Owner and staff accounts on this business. A phone number opens a WhatsApp chat with a follow-up already typed — it is sent from whichever WhatsApp account you are signed in to, and nothing sends until you press send."
+            hint="Owner and staff accounts on this business. A phone number opens a WhatsApp chat with a follow-up already typed. It is sent from whichever WhatsApp account you are signed in to, and nothing sends until you press send."
           >
             {staff.length === 0 ? (
               <EmptyState icon={Users} title="No staff accounts" />

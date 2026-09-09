@@ -42,9 +42,22 @@ export const UNITS = {
   //     the unit stock is held in when a bar sells by the shot; how many
   //     of them come out of a bottle is the product's pack size, not a
   //     constant here, because 25ml and 30ml houses both exist.
+  //
+  //     THE TOT IS THE ONE COUNT UNIT THAT DIVIDES, and it carries three
+  //     decimals for that reason. Its two siblings do not: half a bottle
+  //     of Tusker and half a crate are not things a bar can hold, so
+  //     receiving half a crate of 25 lands on 12 whole bottles. But a tot
+  //     is a measure of LIQUID, and half of it is 12.5ml sitting in the
+  //     same bottle it was always in. Two cases make this load-bearing:
+  //     a cocktail recipe calling for 1.5 tots of gin, which at zero
+  //     decimals truncated to 1 and under-deducted the bottle on every
+  //     round; and half a bottle received, which is 12.5 tots of gin and
+  //     not 12. Rounding a pour to a whole shot is not conservatism, it
+  //     is a stock count that walks away from the bar a little further
+  //     every night.
   bottle:     { id: 'bottle',     label: 'Bottle',     short: 'btl', group: 'count',  decimals: 0 },
   crate:      { id: 'crate',      label: 'Crate',      short: 'crt', group: 'count',  decimals: 0 },
-  tot:        { id: 'tot',        label: 'Tot / shot', short: 'tot', group: 'count',  decimals: 0 },
+  tot:        { id: 'tot',        label: 'Tot / shot', short: 'tot', group: 'count',  decimals: 3 },
 
   metre:      { id: 'metre',      label: 'Metre',      short: 'm',   group: 'length', decimals: 3 },
   centimetre: { id: 'centimetre', label: 'Centimetre', short: 'cm',  group: 'length', decimals: 1 },

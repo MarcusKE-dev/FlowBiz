@@ -21,7 +21,17 @@ import { PROFILE_IDS, PROFILES } from './profiles.js';
 const offered = (settings) =>
   ownerConfigurableCapabilities(resolveIndustryConfig(settings)).map((c) => c.key);
 
-const FOOD_ONLY = ['orders', 'tables', 'modifiers', 'diningModes', 'kitchen', 'recipes', 'production'];
+const FOOD_ONLY = [
+  'orders', 'tables', 'modifiers', 'diningModes', 'kitchen',
+  // Where an item is made, and when it is served. Both are refinements of
+  // `kitchen` and `tables`, and both are meaningless outside food service
+  // — a hardware shop has no grill and no dessert course.
+  'kitchenStations', 'courses',
+  // Every food business throws food away, including the ones with no
+  // recipes — which is why this is not folded into `recipes`.
+  'waste',
+  'recipes', 'production',
+];
 
 test('the food-service capabilities are the ones scoped to the food family', () => {
   for (const key of FOOD_ONLY) {

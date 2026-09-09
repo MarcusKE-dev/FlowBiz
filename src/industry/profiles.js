@@ -216,7 +216,8 @@ export const PROFILES = {
     tagline: 'Table service with open orders, modifiers and a kitchen queue.',
     capabilities: {
       orders: true, tables: true, modifiers: true, diningModes: true,
-      kitchen: true, recipes: true,
+      kitchen: true, kitchenStations: true, courses: true, recipes: true,
+      waste: true,
     },
     terms: {
       catalogue: 'Menu',
@@ -240,7 +241,7 @@ export const PROFILES = {
     tagline: 'Counter service with modifiers, and tables when you want them.',
     capabilities: {
       orders: true, tables: false, modifiers: true, diningModes: true,
-      kitchen: true, recipes: true,
+      kitchen: true, kitchenStations: true, recipes: true, waste: true,
     },
     terms: {
       catalogue: 'Menu',
@@ -264,7 +265,7 @@ export const PROFILES = {
     tagline: 'Order, modify, fire to the kitchen, charge. No tables.',
     capabilities: {
       orders: true, tables: false, modifiers: true, diningModes: true,
-      kitchen: true, recipes: false,
+      kitchen: true, recipes: false, waste: true,
     },
     terms: {
       catalogue: 'Menu',
@@ -286,7 +287,7 @@ export const PROFILES = {
     label: 'Bakery',
     family: 'FOOD',
     tagline: 'Bake in advance: ingredients out, finished goods in.',
-    capabilities: { recipes: true, production: true, units: true },
+    capabilities: { recipes: true, production: true, units: true, waste: true },
     terms: {
       catalogueDescription: 'Ingredients and finished goods, what they cost and what is left.',
     },
@@ -331,7 +332,7 @@ export const PROFILES = {
     capabilities: {
       orders: true, tables: true, modifiers: true, diningModes: true,
       kitchen: false, recipes: true, units: true, packSizes: true,
-      ageRestriction: true,
+      ageRestriction: true, waste: true,
     },
     terms: {
       catalogue: 'Drinks',

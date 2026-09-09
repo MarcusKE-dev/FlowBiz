@@ -9,7 +9,7 @@ export const IMPORT_COLLECTIONS = [
   // Restored after `products`, which they point at. See the note on
   // EXPORT_COLLECTIONS: these three must stay in step with the export and
   // the reset lists.
-  'orders', 'productions', 'productBatches',
+  'orders', 'orderLines', 'productions', 'productBatches', 'waste',
   // Restored last, so every product exists before its photo lands.
   'productImages',
 ];

@@ -224,7 +224,7 @@ export default function Waste() {
               {selected && (
                 <p className={`mt-1 text-secondary ${tooMuch ? 'text-danger-700' : 'text-ink-500'}`}>
                   {formatQuantityWithUnit(available, unit, { showPiece: true })} on hand
-                  {tooMuch ? ' — you cannot throw away more than there is.' : ''}
+                  {tooMuch ? '. You cannot throw away more than there is.' : ''}
                 </p>
               )}
             </div>
@@ -250,7 +250,7 @@ export default function Waste() {
                 {productBatches.map((b) => (
                   <option key={b.id} value={b.id}>
                     {[b.batchNumber, b.expiryDate].filter(Boolean).join(' · ')}
-                    {` — ${formatQuantityWithUnit(b.remainingQuantity, unit, { showPiece: true })} left`}
+                    {`, ${formatQuantityWithUnit(b.remainingQuantity, unit, { showPiece: true })} left`}
                   </option>
                 ))}
               </select>
