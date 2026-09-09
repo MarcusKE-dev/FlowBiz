@@ -68,18 +68,25 @@ test('THE DEMO BUILD IS STILL WIRED TO WRITE THEM — the files are the entire f
   assert.match(config, /outDir: 'dist\/demo'/, 'and pointed at the demo output directory');
 });
 
-test('THE REDIRECT FALLBACK DOES NOT POINT AT ITSELF — the likeliest reason the old rule was dropped', () => {
-  const redirects = read('public/_redirects');
-  const rule = redirects
+test('NOTHING IN _redirects TOUCHES /demo — every rule tried there made it worse', () => {
+  // Two were tried on the live deployment. `/demo/*  /demo/index.html
+  // 200` was silently dropped (destination matches its own source
+  // pattern), so demo deep links fell through to the root app and showed
+  // the landing page. `/demo/*  /demo-shell.html  200` was honoured — as
+  // a 308 REDIRECT, ahead of the static files, bouncing /demo/ itself
+  // onto a path outside the router's basename, which renders blank.
+  //
+  // The route shells need no rule. A rule here can only take precedence
+  // over them and break them again.
+  const rules = read('public/_redirects')
     .split('\n')
     .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith('#'))
-    .find((l) => l.startsWith('/demo/*'));
+    .filter((l) => l && !l.startsWith('#'));
 
-  assert.ok(rule, 'a /demo/* fallback must exist for demo URLs that match no declared route');
+  const demoRules = rules.filter((l) => l.split(/\s+/)[0].startsWith('/demo'));
+  assert.deepEqual(demoRules, [],
+    'a /demo rule fires ahead of the route shells and has broken the demo every time it has been added');
 
-  const destination = rule.split(/\s+/)[1];
-  assert.ok(!destination.startsWith('/demo/'),
-    `a 200 rewrite from /demo/* to ${destination} has a destination matching its own source pattern; `
-    + 'that rule is silently dropped and every demo deep link falls through to the root app');
+  assert.deepEqual(rules, ['/*  /index.html  200'],
+    'the root SPA fallback is the only rule measured to behave as a rewrite rather than a redirect');
 });

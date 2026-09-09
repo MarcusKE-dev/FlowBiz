@@ -52,14 +52,20 @@ const emulatorProxy = {
  * is exactly the assumption that produced this bug, and this is a fix
  * that can only be proven by deploying it.
  *
- * It also drops a copy at the deployment root as demo-shell.html, which
- * is what _redirects now points /demo/* at. The old rule named
- * /demo/index.html — a destination that matches its own source pattern,
- * which is the most likely reason it was dropped. Belt and braces: if
- * the rule works, it catches demo URLs no route declares; if it does
- * not, the files above have already answered.
+ * THERE IS NO REDIRECT RULE BEHIND THIS, deliberately. Two were tried
+ * on the live deployment and both failed, differently: a rewrite to
+ * /demo/index.html was silently dropped for naming a destination that
+ * matches its own source pattern, and a rewrite to /demo-shell.html was
+ * served as a 308 redirect that fired ahead of the static files and
+ * bounced every demo URL — /demo/ included — onto a path outside the
+ * router's basename, which renders blank. See public/_redirects.
+ *
+ * The cost of having no rule is that a /demo/ URL matching no declared
+ * route lands on the product's landing page instead of the demo's own
+ * not-found. That is a typo'd address, and it is a much smaller price
+ * than the one paid for trying to be cleverer than the host.
  */
-function demoRouteShells({ outDir, rootOutDir, routerFile }) {
+function demoRouteShells({ outDir, routerFile }) {
   return {
     name: 'flowbiz-demo-route-shells',
     apply: 'build',
@@ -85,9 +91,6 @@ function demoRouteShells({ outDir, rootOutDir, routerFile }) {
           written += 1;
         }
       }
-
-      const root = path.resolve(__dirname, rootOutDir);
-      if (fs.existsSync(root)) fs.writeFileSync(path.join(root, 'demo-shell.html'), html);
 
       this.info(`demo route shells: ${written} files for ${routes.length} routes in ${outDir}`);
     },
@@ -204,7 +207,6 @@ export default defineConfig(({ mode }) => ({
     ...(mode === 'demo'
       ? [demoRouteShells({
           outDir: 'dist/demo',
-          rootOutDir: 'dist',
           routerFile: 'src/router/AppRouter.jsx',
         })]
       : []),

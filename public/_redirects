@@ -1,21 +1,29 @@
-# THE DEMO IS A SECOND SPA, MOUNTED AT /demo/, and it needs its own
-# fallback: the root one below would hand it the product's index.html,
-# which boots with no basename and lands on the landing page.
+# ONE RULE. Resist adding a second one for the demo — that is what broke
+# it, twice, and the second time worse than the first.
 #
-# The destination is /demo-shell.html and NOT /demo/index.html, which is
-# what it used to be. That old destination matches its own source
-# pattern, and a self-referencing rewrite is the most likely reason the
-# rule was silently dropped on Cloudflare Pages — /demo/ worked (a real
-# file) while every deep link under it fell through to the rule below.
+# WHAT WAS MEASURED ON THE LIVE DEPLOYMENT, because none of this is
+# guessable from Cloudflare's documentation:
 #
-# This rule is now the SECOND line of defence. The demo build writes a
-# real .html file for every route the router declares (see
-# demoRouteShells in vite.config.js), and a static asset is served before
-# any of this is consulted. What is left for this rule is a /demo/ URL
-# that matches no declared route.
-/demo/*  /demo-shell.html  200
-
-# The product, at the root, where the host's own fallback would do the
-# same job. Stated anyway so the behaviour is in the repository rather
-# than in a dashboard setting.
-/*       /index.html       200
+#   `/*  /index.html  200` behaves as a REWRITE, and only on an asset
+#   miss. A real file always wins over it — which is why /demo/ served
+#   the demo's own index.html the whole time this file also carried a
+#   /demo/* rule.
+#
+#   Any OTHER 200 rule does not rewrite. `/demo/*  /demo-shell.html 200`
+#   was served as a 308 REDIRECT to /demo-shell, and it fired ahead of
+#   the static files. So every demo URL — including /demo/ itself — was
+#   bounced to /demo-shell, where the app booted with basename="/demo"
+#   on a path that is not under /demo, matched no route, and rendered a
+#   blank page.
+#
+#   And `/demo/*  /demo/index.html  200`, the rule that lived here
+#   before that, was silently DROPPED — a destination matching its own
+#   source pattern — which is why demo deep links fell through to the
+#   root app and showed the landing page.
+#
+# Three behaviours, three different failures, none of them documented.
+# The demo therefore does not use a rule at all: the build writes a real
+# .html file for every route the router declares (demoRouteShells in
+# vite.config.js), and a real file is the one thing that has worked at
+# every step of this.
+/*  /index.html  200
