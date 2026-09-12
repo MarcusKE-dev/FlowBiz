@@ -21,7 +21,7 @@ import { searchCatalogue, activeCategories } from '../utils/catalogueSearch';
 import {
   buildLineItem, sumLineTotals, sumLineCosts, summaryQuantity,
   normalizeQuantity, minimumQuantity, productUnit, validateAgainstStock,
-  saleQuantityLabel,
+  saleQuantityLabel, applySalePriceOverride,
 } from '../utils/lineItems';
 import { formatQuantityWithUnit, roundQuantity, unitStep, getUnit } from '../industry/units';
 import { hasVariants, findVariant, findVariantByBarcode } from '../utils/variants';
@@ -755,12 +755,12 @@ export default function Counter() {
     setPendingAgeCheck(() => proceed);
   };
 
-  const handleCartSale = ({ paymentMethod, mpesaCode }) => {
+  const handleCartSale = ({ paymentMethod, mpesaCode, finalTotalAmount }) => {
     validateCartAgainstStock();
     const lineItems = withBatchAllocations(cart.map(toLineItem));
-    const totalAmount = sumLineTotals(lineItems);
+    const originalTotalAmount = sumLineTotals(lineItems);
     const costOfGoodsSold = sumLineCosts(lineItems);
-    const profit = roundMoney(totalAmount - costOfGoodsSold);
+    const { totalAmount, profit } = applySalePriceOverride({ totalAmount: originalTotalAmount, costOfGoodsSold, finalTotalAmount });
     const quantity = summaryQuantity(lineItems);
 
     const saleRef = doc(collection(db, 'sales'));
@@ -794,11 +794,12 @@ export default function Counter() {
     return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
   };
 
-  const handleCartCredit = ({ customerId, customerName, customerPhone }) => {
+  const handleCartCredit = ({ customerId, customerName, customerPhone, finalTotalAmount }) => {
     validateCartAgainstStock();
     const lineItems = withBatchAllocations(cart.map(toLineItem));
-    const totalAmount = sumLineTotals(lineItems);
+    const originalTotalAmount = sumLineTotals(lineItems);
     const costOfGoodsSold = sumLineCosts(lineItems);
+    const { totalAmount } = applySalePriceOverride({ totalAmount: originalTotalAmount, costOfGoodsSold, finalTotalAmount });
     const quantity = summaryQuantity(lineItems);
 
     const creditRef = doc(collection(db, 'creditSales'));

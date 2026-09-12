@@ -48,9 +48,6 @@ export default function CartList({
               <span className="shrink-0 text-button font-semibold text-ink-900">
                 Cart · {cart.length} product{cart.length !== 1 ? 's' : ''}
               </span>
-              <span className="shrink-0 text-body font-bold text-ink-900">
-                <Money value={total} />
-              </span>
             </div>
             {!expanded && (
               <p className="truncate text-caption text-ink-500 max-w-[170px] xs:max-w-[210px] sm:max-w-md">

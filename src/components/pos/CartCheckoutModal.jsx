@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import Modal from '../common/Modal';
 import PaymentMethodSelect from './PaymentMethodSelect';
-import { formatKES } from '../../utils/currency';
+import { formatKES, roundMoney } from '../../utils/currency';
 import { raceWithTimeout } from '../../utils/offlineWrite';
 import { friendlyErrorMessage } from '../../utils/errorMessages';
 
@@ -23,13 +23,15 @@ export default function CartCheckoutModal({ open, cart, total, customers, onClos
   const [newName, setNewName]       = useState('');
   const [newPhone, setNewPhone]     = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [editedTotal, setEditedTotal] = useState(roundMoney(Number(total) || 0));
 
   useEffect(() => {
     if (open) {
       setMethod('Cash'); setMpesaCode(''); setCustomerId('');
       setNewMode(false); setNewName(''); setNewPhone('');
+      setEditedTotal(roundMoney(Number(total) || 0));
     }
-  }, [open]);
+  }, [open, total]);
 
   if (!open || !cart || cart.length === 0) return null;
 
@@ -46,9 +48,10 @@ export default function CartCheckoutModal({ open, cart, total, customers, onClos
         cId = cr.id; cName = cr.name; cPhone = cr.phone;
       }
 
+      const finalTotalAmount = roundMoney(Number(editedTotal) || 0);
       const { record, commit } = method === 'Credit'
-        ? onConfirmCredit({ customerId: cId, customerName: cName, customerPhone: cPhone })
-        : onConfirmSale({ paymentMethod: method, mpesaCode: method === 'M-Pesa' ? mpesaCode.trim() : null });
+        ? onConfirmCredit({ customerId: cId, customerName: cName, customerPhone: cPhone, finalTotalAmount })
+        : onConfirmSale({ paymentMethod: method, mpesaCode: method === 'M-Pesa' ? mpesaCode.trim() : null, finalTotalAmount });
 
       const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
       if (error) throw error;
@@ -71,9 +74,21 @@ export default function CartCheckoutModal({ open, cart, total, customers, onClos
       <div className="space-y-4">
         <div className="rounded-panel bg-ink-50 px-3 py-2.5">
           <p className="text-secondary text-ink-400 mb-1">{cart.length} product{cart.length !== 1 ? 's' : ''} in cart</p>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <span className="text-body font-semibold text-ink-700">Total</span>
-            <span className="num font-display text-money font-bold text-ink-900">{formatKES(total)}</span>
+            <div className="flex items-center gap-2">
+              <input
+                className="input min-w-[140px] text-right"
+                type="number"
+                min="0"
+                step="0.01"
+                value={editedTotal}
+                onChange={(e) => setEditedTotal(roundMoney(Number(e.target.value) || 0))}
+              />
+            </div>
+          </div>
+          <div className="mt-2 flex justify-end">
+            <span className="num font-display text-money font-bold text-ink-900">{formatKES(editedTotal)}</span>
           </div>
         </div>
 

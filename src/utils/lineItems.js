@@ -141,6 +141,31 @@ export function sumLineCosts(lineItems) {
 }
 
 /**
+ * Apply a negotiated final checkout total only at the sale-commit boundary.
+ *
+ * The cart line items and cost-of-goods arithmetic stay untouched. This helper
+ * lets the checkout modal override the stored sale total and the derived profit,
+ * without touching stock, inventory writes, or the product item structure.
+ */
+export function applySalePriceOverride({ totalAmount, costOfGoodsSold, finalTotalAmount }) {
+  const candidate = Number(finalTotalAmount);
+  if (!Number.isFinite(candidate) || candidate < 0 || finalTotalAmount === '' || finalTotalAmount === null || finalTotalAmount === undefined) {
+    return {
+      totalAmount: roundMoney(totalAmount),
+      costOfGoodsSold: roundMoney(costOfGoodsSold),
+      profit: roundMoney(roundMoney(totalAmount) - roundMoney(costOfGoodsSold)),
+    };
+  }
+
+  const normalizedTotal = roundMoney(candidate);
+  return {
+    totalAmount: normalizedTotal,
+    costOfGoodsSold: roundMoney(costOfGoodsSold),
+    profit: roundMoney(normalizedTotal - roundMoney(costOfGoodsSold)),
+  };
+}
+
+/**
  * The legacy `quantity` summary field on a sale document.
  *
  * Adding 2.5 metres to 3 pieces is meaningless, and always was — the
