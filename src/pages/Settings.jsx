@@ -757,22 +757,6 @@ export default function Settings() {
           <Link to="/help" className="btn-outline w-full flex items-center justify-center gap-2"><span>Open the help guide</span></Link>
         </Section>
 
-        <Section title="Support and contact" description="Reach out if you need assistance with your FlowBiz business.">
-          <div className="space-y-1 rounded-panel border border-line p-3">
-            <CopyRow label="Business ID" value={businessId || '-'} copyValue={businessId} copiedMessage="Business ID copied." mono />
-            <CopyRow label="Email" value={SUPPORT_EMAIL} copyValue={SUPPORT_EMAIL} copiedMessage="Support email copied.">
-              <a href={SUPPORT_EMAIL_HREF} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline underline-offset-2 hover:opacity-80">
-                {SUPPORT_EMAIL}
-              </a>
-            </CopyRow>
-            <SupportRow label="WhatsApp">
-              <a href={whatsappHref('Hello FlowBiz support, I need help with my business settings')} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline underline-offset-2 hover:opacity-80">
-                {SUPPORT_WHATSAPP_LABEL}
-              </a>
-            </SupportRow>
-          </div>
-        </Section>
-
         <Section
           title="Backup and restore"
           description="Download everything as a .zip, or restore a previous FlowBiz export."
