@@ -90,7 +90,7 @@ export default function BillingHistory() {
                     </td>
                     <td className="px-3 py-2 text-right">
                       <StatusPill tone={row.status === 'success' ? 'positive' : row.status === 'pending' ? 'caution' : 'neutral'}>
-                        {row.status === 'success' ? 'Paid' : row.status === 'pending' ? 'Pending' : row.status}
+                        {row.status === 'success' ? 'Paid' : row.status === 'pending' ? 'Pending' : row.status === 'failed' ? 'Not completed' : row.status}
                       </StatusPill>
                     </td>
                   </tr>

@@ -19,13 +19,12 @@
 // authoritative to check the eventual callback against.
 
 import { json, errorResponse } from '../lib/response.js';
-import { verifyFirebaseIdToken } from '../lib/firebaseIdToken.js';
+import { authorizeBillingOwner, purchaseRefusal } from '../lib/purchaseGuard.js';
 import { getDocument, createDocument } from '../lib/firestore.js';
 import { recordOpsEvent, EVENT_TYPES } from '../lib/opsEvents.js';
 import {
   PLAN_PRICES,
   isPurchasablePlan,
-  resolveEntitlements,
   LIFETIME_LICENSE_PRICE_KES,
   PRO_PLAN_PRICE_KES,
   ANNUAL_SERVICE_PRICE_KES,
@@ -40,16 +39,9 @@ export const ANNUAL_SERVICE_AMOUNT_KES = ANNUAL_SERVICE_PRICE_KES;
 export { PLAN_PRICES };
 
 export async function handlePaystackInitialize(request, env) {
-  const authHeader = request.headers.get('Authorization') || '';
-  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!idToken) return errorResponse('Missing Authorization header.', 401);
-
-  let caller;
-  try {
-    caller = await verifyFirebaseIdToken(idToken, env.FIREBASE_PROJECT_ID);
-  } catch (err) {
-    return errorResponse(`Invalid session: ${err.message}`, 401);
-  }
+  const auth = await authorizeBillingOwner(request, env);
+  if (auth.response) return auth.response;
+  const { caller, profile: callerProfile } = auth;
 
   let body = {};
   try {
@@ -62,31 +54,11 @@ export async function handlePaystackInitialize(request, env) {
   const plan = isPurchasablePlan(body?.plan) ? body.plan : 'pro';
   const planPrice = PLAN_PRICES[plan];
 
-  const callerProfile = await getDocument(env, 'users', caller.uid);
-  if (!callerProfile) return errorResponse('Profile not found.', 403);
-  if (callerProfile.role !== 'owner') return errorResponse('Only an owner can manage the subscription.', 403);
-  if (callerProfile.active === false) return errorResponse('Your account is deactivated.', 403);
-  if (!callerProfile.businessId) return errorResponse('No business associated with this account.', 400);
-
+  // What each plan may be bought for, checked here rather than in the
+  // browser. The UI hides the buttons; this is what enforces it.
   const business = await getDocument(env, 'businesses', callerProfile.businessId);
-  const entitlements = resolveEntitlements(business, Date.now());
-
-  // ── What each plan may be bought for, checked here rather than in the
-  //    browser. The UI hides the buttons; this is what enforces it.
-  if (plan === 'lifetime' && entitlements.license.owned) {
-    return errorResponse('This business already owns a FlowBiz Lifetime Licence.', 400);
-  }
-  if (plan === 'annual_services') {
-    if (entitlements.license.status === 'revoked') {
-      return errorResponse('This licence has been revoked. Please contact FlowBiz support.', 403);
-    }
-    if (!entitlements.license.owned) {
-      return errorResponse(
-        'Annual Cloud Services renewal is only available to businesses that own a FlowBiz Lifetime Licence.',
-        400,
-      );
-    }
-  }
+  const refusal = purchaseRefusal(plan, business);
+  if (refusal) return refusal;
 
   const email = callerProfile.email || caller.email;
   if (!email) return errorResponse('No email on file for this account.', 400);
@@ -129,9 +101,11 @@ export async function handlePaystackInitialize(request, env) {
       source: 'payment',
       message: 'Paystack refused a checkout initialisation.',
       businessId: callerProfile.businessId,
-      context: { plan, status: paystackRes.status },
+      context: { plan, status: paystackRes.status, message: String(paystackData?.message || '').slice(0, 200) },
     });
-    return errorResponse(paystackData.message || 'Could not start payment with Paystack.', 502);
+    // Paystack's own message is recorded above, not shown: it can name
+    // integration settings a customer has no use for.
+    return errorResponse('Could not start payment with Paystack.', 502);
   }
 
   // Recorded BEFORE handing the reference back to the browser — the
@@ -147,6 +121,8 @@ export async function handlePaystackInitialize(request, env) {
     amountKes: planPrice.amountKes,
     currency: 'KES',
     status: 'pending',
+    // How the payment was started. 'mpesa_stk' rows come from mpesaCharge.js.
+    channel: 'checkout',
     createdAt: new Date(),
     initializedBy: caller.uid,
   });

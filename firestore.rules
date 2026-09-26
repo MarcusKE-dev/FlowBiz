@@ -995,6 +995,21 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // The direct M-Pesa flow's two bookkeeping collections. Written and
+    // read ONLY by the Worker (cloudflare-worker/src/routes/mpesaPayments.js
+    // and lib/paymentSettlement.js). A client that could write a lock could
+    // block its own business from paying, or clear one to ring the phone
+    // twice; one that could write a settlement claim could stop a real,
+    // paid-for payment from ever being applied. Stated explicitly rather
+    // than left to the default deny, so nobody adds a read here later
+    // without reading why.
+    match /paymentLocks/{businessId} {
+      allow read, write: if false;
+    }
+    match /paymentSettlements/{reference} {
+      allow read, write: if false;
+    }
+
     // Opening the counter is part of starting a shift; CLOSING the day is
     // counting the till and locking the takings, which is a separate
     // permission and is off by default. `closedAt` and `closedBy` are the

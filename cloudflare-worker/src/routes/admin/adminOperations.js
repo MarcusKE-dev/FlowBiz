@@ -72,7 +72,7 @@ export async function computePaymentHealth(env) {
       orderBy: 'createdAt',
       orderDirection: 'DESCENDING',
       limit: 50,
-      select: ['businessId', 'plan', 'amountKes', 'status', 'createdAt', 'initializedBy'],
+      select: ['businessId', 'plan', 'amountKes', 'status', 'createdAt', 'initializedBy', 'channel'],
     });
     pendingSample = page.documents;
     const cutoff = Date.now() - STUCK_PAYMENT_AGE_MS;
@@ -90,7 +90,7 @@ export async function computePaymentHealth(env) {
       orderBy: 'createdAt',
       orderDirection: 'DESCENDING',
       limit: 15,
-      select: ['businessId', 'plan', 'amountKes', 'status', 'createdAt', 'confirmedAt', 'paystackTransactionId'],
+      select: ['businessId', 'plan', 'amountKes', 'status', 'createdAt', 'confirmedAt', 'paystackTransactionId', 'channel'],
     });
     recent = page.documents;
   } catch (err) {

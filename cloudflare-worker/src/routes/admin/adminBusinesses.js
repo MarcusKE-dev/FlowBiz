@@ -296,6 +296,9 @@ export const PURGE_COLLECTIONS = [
   'repayments', 'expenses', 'purchases', 'suppliers', 'supplierPayments',
   'stockAdjustments', 'dailySessions', 'sessions', 'staffInvites',
   'sharedDocuments', 'barcodeIndex', 'refunds', 'payments',
+  // The direct M-Pesa flow's bookkeeping (routes/mpesaPayments.js). Both
+  // carry businessId and are Worker-only.
+  'paymentLocks', 'paymentSettlements',
 ];
 
 export async function handleAdminDeleteBusiness(request, env, rawBusinessId) {

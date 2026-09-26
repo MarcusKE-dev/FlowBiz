@@ -152,7 +152,11 @@ export function installStub() {
       }
       if (init.method === 'POST') {
         const documentId = new URL(u).searchParams.get('documentId');
-        state.store[`${path.split('?')[0]}/${documentId}`] = Object.fromEntries(
+        // Firestore's create refuses an id that already exists. Code that
+        // uses a create as a lock depends on that, so the stub does too.
+        const key = `${path.split('?')[0]}/${documentId}`;
+        if (key in state.store) return new Response('{"error":{"status":"ALREADY_EXISTS"}}', { status: 409 });
+        state.store[key] = Object.fromEntries(
           Object.entries(body.fields || {}).map(([k, v]) => [k, fromValue(v)])
         );
         return new Response('{}', { status: 200 });

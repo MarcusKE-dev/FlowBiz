@@ -64,6 +64,11 @@ const NOT_A_TENANT_COLLECTION = new Set([
   // PURGE_COLLECTIONS, which is a different operation with a different
   // confirmation.
   'payments',
+  // The Worker's M-Pesa bookkeeping: which prompt is in flight for a
+  // business, and which payment references have been settled. Same
+  // reasoning as `payments`, and more so — a restored settlement claim
+  // would stop a real payment from ever applying.
+  'paymentLocks', 'paymentSettlements',
 ]);
 
 function tenantCollectionsInRules() {

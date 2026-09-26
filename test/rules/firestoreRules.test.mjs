@@ -985,3 +985,15 @@ test('NOBODY MAY WRITE A PAYMENT RECORD FROM A BROWSER', async () => {
   );
   assert.ok(!await write('cash1', 'payments/pay_forged', { businessId: B, status: 'success' }));
 });
+
+test('the M-Pesa lock and settlement claim are Worker-only, in both directions', async () => {
+  await setupLicensed(ENTITLED);
+  await seed(`paymentLocks/${B}`, { reference: 'fbm-1', plan: 'pro' });
+  await seed('paymentSettlements/fbm-1', { businessId: B, plan: 'pro' });
+  // Writing a settlement claim would block a real payment from applying;
+  // deleting a lock would allow a second STK prompt.
+  assert.ok(!await write('owner1', 'paymentSettlements/fbm-2', { businessId: B, plan: 'pro' }));
+  assert.ok(!await write('owner1', `paymentLocks/${B}`, { reference: 'fbm-x', plan: 'lifetime' }));
+  assert.ok(!await read('owner1', `paymentLocks/${B}`));
+  assert.ok(!await read('owner1', 'paymentSettlements/fbm-1'));
+});

@@ -6,6 +6,7 @@ import { checkAdminRateLimit } from './lib/adminRateLimiter.js';
 import { handleDeleteStaff } from './routes/deleteStaff.js';
 import { handlePaystackInitialize } from './routes/paystackInitialize.js';
 import { handlePaystackWebhook } from './routes/paystackWebhook.js';
+import { handleMpesaCharge, handleMpesaStatus, reconcileStaleMpesaPayments } from './routes/mpesaPayments.js';
 import { handlePublicDocument } from './routes/publicDocument.js';
 import { handleProPrice, handlePricing } from './routes/proPrice.js';
 import { handleSendVerificationEmail } from './routes/sendVerificationEmail.js';
@@ -63,6 +64,14 @@ export default {
     ctx.waitUntil(
       runRenewalReminders(env).catch((err) => {
         console.error('[cron] renewal reminders failed:', err?.message);
+      })
+    );
+    // M-Pesa prompts nobody is watching any more: settles a payment whose
+    // webhook never arrived, expires the ones that were never answered.
+    // It only asks Paystack; it cannot grant what Paystack does not confirm.
+    ctx.waitUntil(
+      reconcileStaleMpesaPayments(env).catch((err) => {
+        console.error('[cron] M-Pesa reconciliation failed:', err?.message);
       })
     );
   },
@@ -222,6 +231,10 @@ export default {
         response = await handleSendPasswordReset(request, env);
       } else if (url.pathname === '/api/paystack/initialize' && request.method === 'POST') {
         response = await handlePaystackInitialize(request, env);
+      } else if (url.pathname === '/api/paystack/mpesa/charge' && request.method === 'POST') {
+        response = await handleMpesaCharge(request, env);
+      } else if (url.pathname === '/api/paystack/mpesa/status' && request.method === 'GET') {
+        response = await handleMpesaStatus(request, env, url);
       } else if (url.pathname === '/api/pro/price' && request.method === 'GET') {
         response = await handleProPrice();
       } else if (url.pathname === '/api/pricing' && request.method === 'GET') {
