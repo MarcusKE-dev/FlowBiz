@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { Store } from 'lucide-react';
+import { currencyCode, tenderLabel } from '../../lib/region';
 
 export default function OpenSessionPrompt({ onOpen }) {
   const [cash, setCash]     = useState('');
@@ -26,8 +27,8 @@ export default function OpenSessionPrompt({ onOpen }) {
           <p className="text-body text-ink-400 mt-1">Enter starting balances for accurate end-of-day reconciliation.</p>
         </div>
         <form onSubmit={handle} className="space-y-3">
-          <div><label className="label">Opening cash float (KES)</label><input type="number" min="0" className="input" value={cash} onChange={e=>setCash(e.target.value)} placeholder="0" autoFocus /></div>
-          <div><label className="label">Opening M-Pesa balance (KES)</label><input type="number" min="0" className="input" value={mpesa} onChange={e=>setMpesa(e.target.value)} placeholder="0" /></div>
+          <div><label className="label">Opening cash float ({currencyCode()})</label><input type="number" min="0" className="input" value={cash} onChange={e=>setCash(e.target.value)} placeholder="0" autoFocus /></div>
+          <div><label className="label">Opening {tenderLabel('M-Pesa')} balance ({currencyCode()})</label><input type="number" min="0" className="input" value={mpesa} onChange={e=>setMpesa(e.target.value)} placeholder="0" /></div>
           <button type="submit" className="btn-primary w-full" disabled={busy}>{busy ? 'Opening…' : 'Open counter'}</button>
         </form>
       </div>

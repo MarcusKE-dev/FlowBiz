@@ -15,7 +15,10 @@ import {
   ANNUAL_SERVICE_INCLUSIONS,
   formatPrice,
 } from '../../licensing';
+import { formatInBusinessZone } from '../../lib/region/time';
 
+// The KENYAN labels, kept for anything that genuinely means the KES price.
+// Screens quote the business's own price book through usePriceLabels().
 export const LICENSE_PRICE_LABEL = formatPrice(LIFETIME_LICENSE_PRICE_KES);
 export const SERVICE_PRICE_LABEL = formatPrice(ANNUAL_SERVICE_PRICE_KES);
 export const SERVICE_PRICE_PER_YEAR = `${SERVICE_PRICE_LABEL} per year`;
@@ -49,7 +52,7 @@ export function formatServiceDate(value) {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' });
+  return formatInBusinessZone(date, { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
 /** "312 days" / "1 day" / "today". */

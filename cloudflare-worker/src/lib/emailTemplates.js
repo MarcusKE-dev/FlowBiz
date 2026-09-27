@@ -144,10 +144,10 @@ const LICENCE_SAFETY_NOTE =
  * ends. `daysRemaining` is whole days to the expiry instant.
  */
 export function serviceRenewalReminderEmail({
-  shopName = '', daysRemaining = 0, lastCoveredDayLabel = '', priceKes = 0, renewUrl = '',
+  shopName = '', daysRemaining = 0, lastCoveredDayLabel = '', priceKes = 0, renewUrl = '', price = null,
 } = {}) {
   const dayWord = daysRemaining === 1 ? 'day' : 'days';
-  const priceLabel = `KES ${Number(priceKes).toLocaleString('en-KE')} per year`;
+  const priceLabel = `${price || `KES ${Number(priceKes).toLocaleString('en-KE')}`} per year`;
   const expiryLabel = `Active until ${lastCoveredDayLabel}, ${daysRemaining} ${dayWord} remaining`;
 
   const html = renewalShell({
@@ -179,9 +179,9 @@ ${LICENCE_SAFETY_NOTE}`;
  * grace period at this point, so the message says what still works.
  */
 export function serviceExpiredEmail({
-  shopName = '', lastCoveredDayLabel = '', graceDays = 0, priceKes = 0, renewUrl = '',
+  shopName = '', lastCoveredDayLabel = '', graceDays = 0, priceKes = 0, renewUrl = '', price = null,
 } = {}) {
-  const priceLabel = `KES ${Number(priceKes).toLocaleString('en-KE')} per year`;
+  const priceLabel = `${price || `KES ${Number(priceKes).toLocaleString('en-KE')}`} per year`;
 
   const html = renewalShell({
     heading: 'Your FlowBiz cloud services have ended',
@@ -213,8 +213,8 @@ ${LICENCE_SAFETY_NOTE}`;
  * Sent once when the grace period closes and hosted services actually
  * stop. The point of this message is its closing paragraph.
  */
-export function cloudServicesSuspendedEmail({ shopName = '', priceKes = 0, renewUrl = '' } = {}) {
-  const priceLabel = `KES ${Number(priceKes).toLocaleString('en-KE')} per year`;
+export function cloudServicesSuspendedEmail({ shopName = '', priceKes = 0, renewUrl = '', price = null } = {}) {
+  const priceLabel = `${price || `KES ${Number(priceKes).toLocaleString('en-KE')}`} per year`;
 
   const html = renewalShell({
     heading: 'Your FlowBiz cloud services are paused',

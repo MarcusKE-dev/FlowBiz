@@ -26,6 +26,8 @@ import { buildExportZip } from '../utils/dataExport';
 import { readExportZip, checkExistingData, importBusinessData } from '../utils/dataImport';
 import { printReceipt } from '../utils/documentService';
 import LicensingSummary from '../components/licensing/LicensingSummary';
+import RegionSettings from '../components/settings/RegionSettings';
+import { saveFile } from '../platform/files';
 
 
 const RESET_CONFIRM_PHRASE = 'RESET';
@@ -155,15 +157,8 @@ export default function Settings() {
       const blob = await buildExportZip(businessId, {
         onProgress: (name, i, total) => setExportProgress(`${name} (${i + 1}/${total})`),
       });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `flowbiz-export-${businessId}-${new Date().toISOString().slice(0, 10)}.zip`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      toast.success('Export downloaded.');
+      const result = await saveFile(blob, `flowbiz-export-${businessId}-${new Date().toISOString().slice(0, 10)}.zip`, { title: 'FlowBiz backup' });
+      if (!result?.cancelled) toast.success(result?.shared ? 'Export ready to save.' : 'Export downloaded.');
     } catch (err) {
       toast.error(`The export could not be completed: ${err.message}`);
     } finally {
@@ -502,14 +497,16 @@ export default function Settings() {
             window it routes the protocol through the browser, which is
             more likely to find a handler than the app window is. */}
         <Section title="Support" description="Stuck on something? Reach us directly.">
- <SupportRow label="Email">
-  <a
-    className="font-semibold text-primary-600 underline underline-offset-2 hover:text-primary-700"
-    href="mailto:support@flowbiz.co.ke"
-  >
-    support@flowbiz.co.ke
-  </a>
-</SupportRow>
+          <CopyRow label="Email" value={SUPPORT_EMAIL} copyValue={SUPPORT_EMAIL} copiedMessage="Support email copied.">
+            <a
+              className="font-semibold text-primary-600 underline underline-offset-2 hover:text-primary-700"
+              href={SUPPORT_EMAIL_HREF}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {SUPPORT_EMAIL}
+            </a>
+          </CopyRow>
 
   <SupportRow label="Chat">
     <a
@@ -549,6 +546,13 @@ export default function Settings() {
 
             <button type="submit" className="btn-primary w-full" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
           </div>
+        </Section>
+
+        <Section
+          title="Country, currency and time"
+          description="Sets how money is shown and when each business day starts and ends."
+        >
+          <RegionSettings businessId={businessId} canEdit={profile?.role === 'owner'} />
         </Section>
 
         {/* Industry customization moved to its own page. Settings answers

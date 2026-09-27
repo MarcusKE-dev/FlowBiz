@@ -26,17 +26,19 @@
 
 import { roundQuantity, DEFAULT_UNIT } from '../industry/units.js';
 import { roundMoney } from './currency.js';
+import { businessDayKey } from '../lib/region/time.js';
 
 export const DEFAULT_EXPIRY_WARNING_DAYS = 90;
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** Today as 'YYYY-MM-DD', in the device's own calendar. */
+/**
+ * Today as 'YYYY-MM-DD', on the BUSINESS's calendar. It used to be the
+ * device's, so a manager's laptop in another timezone could date a batch
+ * a day away from the shop that made it.
+ */
 export function todayISO(now = new Date()) {
-  const date = now instanceof Date ? now : new Date(now);
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${date.getFullYear()}-${month}-${day}`;
+  return businessDayKey(now instanceof Date ? now : new Date(now));
 }
 
 export function isValidExpiryDate(value) {

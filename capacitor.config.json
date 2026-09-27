@@ -1,0 +1,34 @@
+{
+  "appId": "com.abcsystems.flowbiz",
+  "appName": "FlowBiz",
+  "webDir": "dist",
+  "loggingBehavior": "debug",
+  "server": {
+    "androidScheme": "https",
+    "hostname": "localhost"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": false,
+    "webContentsDebuggingEnabled": false,
+    "adjustMarginsForEdgeToEdge": "disable"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0,
+      "launchAutoHide": false,
+      "backgroundColor": "#F4F6F9",
+      "showSpinner": false,
+      "androidScaleType": "CENTER_INSIDE"
+    },
+    "Keyboard": {
+      "resize": "native",
+      "resizeOnFullScreen": true
+    },
+    "StatusBar": {
+      "overlaysWebView": false,
+      "style": "LIGHT",
+      "backgroundColor": "#F4F6F9"
+    }
+  }
+}

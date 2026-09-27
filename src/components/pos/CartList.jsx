@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Minus, Plus, X, ShoppingBag } from 'lucide-reac
 import Money from '../ui/Money';
 import { sumLineTotals, buildLineItem, minimumQuantity } from '../../utils/lineItems';
 import { DEFAULT_UNIT, getUnit, unitStep, roundQuantity } from '../../industry/units';
+import { currencyMarker } from '../../lib/region';
 
 // The mobile cart bar, pinned to the top of the Counter.
 // Defaults to compressed view while adding products to maximize catalog
@@ -149,7 +150,7 @@ export default function CartList({
                     </div>
 
                     <div className="flex items-center gap-1.5">
-                      <span className="text-label uppercase text-ink-400">KES</span>
+                      <span className="text-label uppercase text-ink-400">{currencyMarker()}</span>
                       <input
                         type="number"
                         min="0"

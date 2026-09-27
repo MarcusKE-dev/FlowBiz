@@ -19,12 +19,16 @@
 // authoritative to check the eventual callback against.
 
 import { json, errorResponse } from '../lib/response.js';
-import { authorizeBillingOwner, purchaseRefusal } from '../lib/purchaseGuard.js';
+import {
+  authorizeBillingOwner, purchaseRefusal, chargeForBusiness,
+  paystackAcceptsCurrency, currencyUnavailableRefusal,
+} from '../lib/purchaseGuard.js';
 import { getDocument, createDocument } from '../lib/firestore.js';
 import { recordOpsEvent, EVENT_TYPES } from '../lib/opsEvents.js';
 import {
   PLAN_PRICES,
   isPurchasablePlan,
+  amountInMinorUnits,
   LIFETIME_LICENSE_PRICE_KES,
   PRO_PLAN_PRICE_KES,
   ANNUAL_SERVICE_PRICE_KES,
@@ -52,7 +56,11 @@ export async function handlePaystackInitialize(request, env) {
   // Default to 'pro' so existing frontend builds that call this endpoint
   // with no body keep working exactly as before.
   const plan = isPurchasablePlan(body?.plan) ? body.plan : 'pro';
-  const planPrice = PLAN_PRICES[plan];
+  // Priced from the BUSINESS's stored country, never from the request:
+  // Kenya pays the KES book, everyone else the international one. See
+  // PRICE_BOOKS in src/licensing/config.js.
+  const planPrice = await chargeForBusiness(env, callerProfile.businessId, plan);
+  if (!paystackAcceptsCurrency(env, planPrice.currency)) return currencyUnavailableRefusal(planPrice.currency);
 
   // What each plan may be bought for, checked here rather than in the
   // browser. The UI hides the buttons; this is what enforces it.
@@ -64,7 +72,8 @@ export async function handlePaystackInitialize(request, env) {
   if (!email) return errorResponse('No email on file for this account.', 400);
 
   const reference = `flowbiz_${callerProfile.businessId}_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
-  const amountKobo = planPrice.amountKes * 100;
+  // Minor units (kobo, cents). The one multiplication, in the config.
+  const amountMinor = amountInMinorUnits(planPrice.amount);
 
   let paystackRes;
   let paystackData;
@@ -74,8 +83,8 @@ export async function handlePaystackInitialize(request, env) {
       headers: { Authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email,
-        amount: amountKobo,
-        currency: 'KES',
+        amount: amountMinor,
+        currency: planPrice.currency,
         reference,
         callback_url: env.PAYSTACK_CALLBACK_URL || undefined,
         metadata: { businessId: callerProfile.businessId, plan },
@@ -118,8 +127,14 @@ export async function handlePaystackInitialize(request, env) {
     plan,
     kind: planPrice.kind,
     description: planPrice.label,
+    // `amountKes` only on a KES charge — every older reader of this
+    // record assumes shillings. `amount` + `currency` are always set.
     amountKes: planPrice.amountKes,
-    currency: 'KES',
+    amount: planPrice.amount,
+    currency: planPrice.currency,
+    pricingRegion: planPrice.pricingRegion,
+    provider: 'paystack',
+    billingPlatform: 'web',
     status: 'pending',
     // How the payment was started. 'mpesa_stk' rows come from mpesaCharge.js.
     channel: 'checkout',
@@ -133,5 +148,7 @@ export async function handlePaystackInitialize(request, env) {
     reference,
     plan,
     amountKes: planPrice.amountKes,
+    amount: planPrice.amount,
+    currency: planPrice.currency,
   });
 }

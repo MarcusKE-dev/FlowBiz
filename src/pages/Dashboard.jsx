@@ -31,7 +31,7 @@ import ProductFormModal from '../components/products/ProductFormModal';
 import SupplierFormModal from '../components/suppliers/SupplierFormModal';
 import ScannerModal from '../components/scanner/ScannerModal';
 import ScanFab from '../components/scanner/ScanFab';
-import { startOfDay, endOfDay, formatDateTime } from '../utils/dateRanges';
+import { formatDateTime } from '../utils/dateRanges';
 import { Eye, EyeOff } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
 import Section from '../components/ui/Section';
@@ -39,9 +39,10 @@ import MetricRail, { Metric } from '../components/ui/MetricRail';
 import DataTable from '../components/ui/DataTable';
 import StatusPill from '../components/ui/StatusPill';
 import Money from '../components/ui/Money';
-import { amountOnly } from '../components/ui/format';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+import { currencyMarker, formatAmount, tenderLabel } from '../lib/region';
+import { useBusinessToday } from '../hooks/useRegion';
 
 export default function Dashboard() {
   const { profile, isAdmin, businessId } = useAuth();
@@ -64,7 +65,8 @@ export default function Dashboard() {
     const capability = WIDGET_CAPABILITY[id];
     return !capability || industry.can(capability);
   };
-  const today = useMemo(() => ({ start: startOfDay(), end: endOfDay() }), []);
+  // Rolls over at the business's midnight; see hooks/useRegion.js.
+  const today = useBusinessToday();
   const { loading: financialsLoading, summary, sales, creditSales, repayments } = useFinancialsForRange(today.start, today.end);
 
   const productsQuery = useMemo(() => businessId ? tenantQuery('products', businessId, where('deleted', '!=', true), orderBy('deleted'), orderBy('name')) : null, [businessId]);  
@@ -104,7 +106,7 @@ export default function Dashboard() {
   };
 
   // Digits only — the KES prefix is rendered separately and muted.
-  const railValue = (val) => (privacyMode ? '••••••' : amountOnly(val));
+  const railValue = (val) => (privacyMode ? '••••••' : formatAmount(val));
 
   const dashboardCashReceived = summary.totalCashReceipts;
   const dashboardMpesaReceived = summary.totalMpesaReceipts;
@@ -364,10 +366,10 @@ export default function Dashboard() {
             <div className="-mx-4 h-[86px] animate-pulse border-y border-line bg-ink-50 sm:-mx-6" aria-hidden="true" />
           ) : (
             <MetricRail columns={4} bleed>
-              <Metric label="Cash received"  prefix={privacyMode ? null : 'KES'} value={railValue(dashboardCashReceived)} />
-              <Metric label="M-Pesa received" prefix={privacyMode ? null : 'KES'} value={railValue(dashboardMpesaReceived)} />
-              <Metric label="Net profit"      prefix={privacyMode ? null : 'KES'} value={railValue(dashboardNetProfit)} />
-              <Metric label="Expenses"        prefix={privacyMode ? null : 'KES'} value={railValue(dashboardExpenses)} />
+              <Metric label="Cash received"  prefix={privacyMode ? null : currencyMarker()} value={railValue(dashboardCashReceived)} />
+              <Metric label={`${tenderLabel('M-Pesa')} received`} prefix={privacyMode ? null : currencyMarker()} value={railValue(dashboardMpesaReceived)} />
+              <Metric label="Net profit"      prefix={privacyMode ? null : currencyMarker()} value={railValue(dashboardNetProfit)} />
+              <Metric label="Expenses"        prefix={privacyMode ? null : currencyMarker()} value={railValue(dashboardExpenses)} />
             </MetricRail>
           )}
         </Section>
@@ -382,7 +384,7 @@ export default function Dashboard() {
         >
           <MetricRail columns={industry.can('tables') ? 3 : 2} bleed>
             <Metric label="Open orders" value={orderSummary.count} />
-            <Metric label="Value on the floor" prefix={privacyMode ? null : 'KES'} value={railValue(orderSummary.total)} />
+            <Metric label="Value on the floor" prefix={privacyMode ? null : currencyMarker()} value={railValue(orderSummary.total)} />
             {industry.can('tables') && (
               <Metric label="Tables in use" value={orderSummary.tablesOccupied} />
             )}
@@ -420,7 +422,7 @@ export default function Dashboard() {
             <Metric label="Expiring in 90 days" value={expirySummary.expiringCount} />
             <Metric
               label="Value at risk"
-              prefix={privacyMode ? null : 'KES'}
+              prefix={privacyMode ? null : currencyMarker()}
               value={railValue(expirySummary.expiringValue + expirySummary.expiredValue)}
             />
           </MetricRail>
@@ -435,7 +437,7 @@ export default function Dashboard() {
         >
           <MetricRail columns={2} bleed>
             <Metric label="Production runs" value={productionsToday.length} />
-            <Metric label="Cost of what was made" prefix={privacyMode ? null : 'KES'} value={railValue(productionCost)} />
+            <Metric label="Cost of what was made" prefix={privacyMode ? null : currencyMarker()} value={railValue(productionCost)} />
           </MetricRail>
         </Section>
       )}
@@ -445,12 +447,12 @@ export default function Dashboard() {
           <MetricRail columns={3} bleed>
             <Metric
               label="Inventory value at cost"
-              prefix={privacyMode ? null : 'KES'}
+              prefix={privacyMode ? null : currencyMarker()}
               value={railValue(totalInventoryValue)}
             />
             <Metric
               label="Outstanding debt"
-              prefix={privacyMode ? null : 'KES'}
+              prefix={privacyMode ? null : currencyMarker()}
               value={railValue(totalOutstanding)}
               hint={<Link to="/customers" className="font-medium text-primary-700 hover:underline">View customers</Link>}
             />
@@ -472,7 +474,7 @@ export default function Dashboard() {
             <Metric label="Services done today" value={servicesSoldToday} />
             <Metric
               label="Outstanding debt"
-              prefix={privacyMode ? null : 'KES'}
+              prefix={privacyMode ? null : currencyMarker()}
               value={railValue(totalOutstanding)}
               hint={<Link to="/customers" className="font-medium text-primary-700 hover:underline">View customers</Link>}
             />
@@ -539,7 +541,7 @@ export default function Dashboard() {
                 <StatusPill tone={a.isPositive ? 'positive' : 'caution'}>{a.type}</StatusPill>
               ),
             },
-            { key: 'method', header: 'Method', render: (a) => <span className="text-ink-600">{a.method}</span> },
+            { key: 'method', header: 'Method', render: (a) => <span className="text-ink-600">{tenderLabel(a.method)}</span> },
             {
               key: 'timestamp',
               header: 'Time',

@@ -22,9 +22,11 @@
 // actually charges or from what the Terms actually say.
 
 import { Link } from 'react-router-dom';
-import { SERVICE_PRICE_PER_YEAR } from './licensingCopy';
+import { usePriceLabels } from '../../hooks/usePriceLabels';
 
-export default function LifetimeDisclosure() {
+
+export default function LifetimeDisclosure({ country } = {}) {
+  const { servicePricePerYear } = usePriceLabels({ country });
   return (
     <div className="rounded-panel border border-line bg-canvas p-4 text-secondary leading-relaxed text-ink-600">
       <p className="font-semibold text-ink-900">Before you buy, what this includes</p>
@@ -40,7 +42,7 @@ export default function LifetimeDisclosure() {
         </li>
         <li>
           From year two, those services cost
-          {' '}<strong className="text-ink-900">{SERVICE_PRICE_PER_YEAR}</strong>. Renewal is optional
+          {' '}<strong className="text-ink-900">{servicePricePerYear}</strong>. Renewal is optional
           {' '}and is not automatic.
         </li>
         <li>

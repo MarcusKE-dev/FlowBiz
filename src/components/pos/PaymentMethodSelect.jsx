@@ -12,10 +12,13 @@
 // changed here.
 
 import { Banknote, Smartphone, BookOpen } from 'lucide-react';
+import { tenderLabel } from '../../lib/region';
 
 const PAYMENT_METHODS = [
   { id: 'Cash',   label: 'Cash',   Icon: Banknote   },
-  { id: 'M-Pesa', label: 'M-Pesa', Icon: Smartphone },
+  // The label is the region's (see lib/region tenderLabel); the id is the
+  // stored key and never changes.
+  { id: 'M-Pesa', label: null, Icon: Smartphone },
   { id: 'Credit', label: 'Credit', Icon: BookOpen   },
 ];
 
@@ -39,7 +42,7 @@ export default function PaymentMethodSelect({ value, onChange, idPrefix = 'pay' 
             }`}
           >
             <Icon className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
-            {label}
+            {label ?? tenderLabel(id)}
           </button>
         );
       })}

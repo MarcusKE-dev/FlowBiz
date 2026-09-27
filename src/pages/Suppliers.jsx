@@ -16,10 +16,11 @@ import SupplierFormModal from '../components/suppliers/SupplierFormModal';
 import PageHeader from '../components/ui/PageHeader';
 import DataTable from '../components/ui/DataTable';
 import Money from '../components/ui/Money';
-import { formatKES } from '../utils/currency';
+import { formatMoney } from '../utils/currency';
 import { computeSupplierBalances } from '../utils/financials';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+import { currencyCode, digitalReferenceLabel, digitalReferenceMissingMessage, digitalReferenceRequired, tenderLabel } from '../lib/region';
 
 export default function Suppliers() {
   const { profile, businessId } = useAuth();
@@ -80,7 +81,7 @@ export default function Suppliers() {
     }
     const balance = owedMap[pendDel.id] || 0;
     if (balance > 0.005) {
-      toast.error(`"${pendDel.name}" still has an outstanding balance of ${formatKES(balance)}. Pay it off first.`);
+      toast.error(`"${pendDel.name}" still has an outstanding balance of ${formatMoney(balance)}. Pay it off first.`);
       setPendDel(null);
       return;
     }
@@ -98,8 +99,8 @@ export default function Suppliers() {
     const amount = Number(payAmt);
     const balance = owedMap[selSupp?.id]||0;
     if (amount<=0) { toast.error('Enter an amount greater than zero.'); return; }
-    if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatKES(balance)}.`); return; }
-    if (payMethod==='M-Pesa'&&!payCode.trim()) { toast.error('Enter the M-Pesa transaction code.'); return; }
+    if (amount > balance + 0.005) { toast.error(`Amount exceeds the outstanding balance of ${formatMoney(balance)}.`); return; }
+    if (payMethod==='M-Pesa'&&digitalReferenceRequired()&&!payCode.trim()) { toast.error(digitalReferenceMissingMessage()); return; }
     setPaying(true);
     const batch = writeBatch(db);
     const expRef = doc(collection(db,'expenses'));
@@ -112,7 +113,7 @@ export default function Suppliers() {
     const { queuedOffline, error: commitError } = await raceWithTimeout(commit, 4000);
     setPaying(false);
     if (commitError) { toast.error(friendlyErrorMessage(commitError)); return; }
-    toast.success(queuedOffline ? 'Payment saved offline. It will sync when you reconnect.' : `Payment of ${formatKES(amount)} recorded for ${selSupp.name}.`);
+    toast.success(queuedOffline ? 'Payment saved offline. It will sync when you reconnect.' : `Payment of ${formatMoney(amount)} recorded for ${selSupp.name}.`);
     if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
     setPayModal(false); setPayAmt(''); setPayCode('');
   };
@@ -215,7 +216,7 @@ export default function Suppliers() {
         open={!!pendDel}
         title="Remove supplier?"
         message={(owedMap[pendDel?.id]||0) > 0.005
-          ? `"${pendDel?.name}" has an outstanding balance of ${formatKES(owedMap[pendDel?.id]||0)}. Pay it off first.`
+          ? `"${pendDel?.name}" has an outstanding balance of ${formatMoney(owedMap[pendDel?.id]||0)}. Pay it off first.`
           : `"${pendDel?.name}" will be removed. Purchase records stay intact.`}
         confirmLabel={deleting ? 'Removing…' : 'Remove'}
         confirmDisabled={deleting}
@@ -226,17 +227,17 @@ export default function Suppliers() {
       <Modal open={payModal} onClose={()=>setPayModal(false)} title={`Pay ${selSupp?.name||''}`}>
         <form onSubmit={handlePay} className="space-y-3">
           <div className="rounded-control border border-line bg-ink-50 px-3 py-2 text-body">Outstanding <span className="font-semibold"><Money value={owedMap[selSupp?.id]||0} tone="negative" /></span></div>
-          <div><label className="label">Amount (KES)</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
+          <div><label className="label">Amount ({currencyCode()})</label><input type="number" min="0.01" step="0.01" max={owedMap[selSupp?.id]||undefined} className="input" value={payAmt} onChange={e=>setPayAmt(e.target.value)} required autoFocus /></div>
           <div><label className="label">Method</label>
             <div className="grid grid-cols-2 gap-2">
               {['Cash','M-Pesa'].map(m=>(
                 <button key={m} type="button" onClick={()=>setPayMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-control border text-button transition-colors ${payMethod===m?'border-primary-600 bg-primary-50 text-primary-800':'border-line text-ink-600 hover:bg-ink-50'}`}>
-                  {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
+                  {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{tenderLabel(m)}
                 </button>
               ))}
             </div>
           </div>
-          {payMethod==='M-Pesa'&&<div><label className="label">M-Pesa code</label><input className="input uppercase" value={payCode} onChange={e=>setPayCode(e.target.value.toUpperCase())} /></div>}
+          {payMethod==='M-Pesa'&&<div><label className="label">{digitalReferenceLabel()}</label><input className="input uppercase" value={payCode} onChange={e=>setPayCode(e.target.value.toUpperCase())} /></div>}
           <div className="flex justify-end gap-2 pt-1"><button type="button" className="btn-secondary" onClick={()=>setPayModal(false)}>Cancel</button><button type="submit" className="btn-primary" disabled={paying}>{paying?'Recording…':'Record payment'}</button></div>
         </form>
       </Modal>

@@ -380,3 +380,38 @@ Fixed:
 | `src/pages/Purchases.jsx` | Added `newSupplierId` → `form.supplierId` auto-select `useEffect`; `handleSupplierSave` throws on error. |
 | `src/pages/Products.jsx` | `handleSupplierSave` throws on error (consistency fix). |
 | `src/pages/Dashboard.jsx` | `handleSupplierSave` throws on error (consistency fix). |
+
+---
+
+## Historical: v2.0 audit pass (moved from README.md, September 2026)
+
+
+| ID   | Fix |
+|------|-----|
+| CR-1 | DebtorDetail missing profile + serverTimestamp imports |
+| CR-2 | Repayment history reads from `repayments` collection (not stale embedded array) |
+| CR-3 | SaleModal missing toast import |
+| CR-4 | Reports missing ErrorBanner import |
+| CR-5 | Login navigation moved into useEffect (no render-time side effects) |
+| CR-6 | Till reconciliation correctly includes debt repayments in expected balances |
+| CR-7 | M-Pesa transaction code enforced in sale canSubmit check |
+| CR-8 | All POS writes use writeBatch + increment() — offline-first, no runTransaction |
+| CR-9 | Staff creation writes profile BEFORE signing admin out |
+| HP-1 | limit() added to unbounded queries |
+| HP-2 | useFinancialsForRange debounced with requestAnimationFrame — 1 render per write |
+| HP-3 | StockTake reads fresh stock inside transaction (no stale-read bugs) |
+| HP-4 | Product performance includes credit sales |
+| HP-5 | CSV export sanitised against formula injection (=, +, -, @) |
+| HP-6 | Users page password input masked (type="password") |
+| HP-7 | CloseDay batch deletion chunked at 400 ops; window.location.reload() removed |
+| HP-8 | Dashboard "today" range recalculated at midnight via setTimeout |
+| HP-9 | ErrorBoundary wraps entire app |
+| MP-1 | Modal + ConfirmDialog close on ESC key |
+| MP-4 | ProductFormModal validates negative prices and selling below cost |
+| MP-5 | Suppliers payment blocked if amount exceeds outstanding balance |
+| MP-6 | RepaymentModal blocks over-repayment |
+| MP-7 | Bootstrap profile avoids serverTimestamp() sentinel in React state |
+| MP-8 | StockTake empty physical count treated as unchanged (not zero) |
+| MP-10| All routes lazy-loaded (React.lazy + Suspense) |
+| MP-11| useDailySession uses onSnapshot for cross-device real-time updates |
+

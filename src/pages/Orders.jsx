@@ -33,7 +33,6 @@ import EmptyState from '../components/ui/EmptyState';
 import StatusPill from '../components/ui/StatusPill';
 import Money from '../components/ui/Money';
 import SegmentedControl from '../components/ui/SegmentedControl';
-import { amountOnly } from '../components/ui/format';
 import { formatDateTime } from '../utils/dateRanges';
 import { describeModifiers } from '../utils/modifiers';
 import { formatQuantityWithUnit } from '../industry/units';
@@ -43,6 +42,7 @@ import {
   ORDER_STATUS, KITCHEN_STATUSES, KITCHEN_LABELS, nextKitchenStatus,
   diningModeLabel, tableStates, summarizeOpenOrders,
 } from '../utils/orders';
+import { currencyMarker, formatAmount } from '../lib/region';
 
 const KITCHEN_TONE = { new: 'caution', preparing: 'info', ready: 'positive', served: 'neutral' };
 
@@ -186,7 +186,7 @@ export default function Orders() {
 
       <MetricRail columns={showTables ? 3 : 2} bleed>
         <Metric label={industry.terms.openOrders} value={summary.count} />
-        <Metric label="Value on the floor" prefix="KES" value={amountOnly(summary.total)} />
+        <Metric label="Value on the floor" prefix={currencyMarker()} value={formatAmount(summary.total)} />
         {showTables && (
           <Metric label="Tables in use" value={`${summary.tablesOccupied} of ${tables.length}`} />
         )}

@@ -34,14 +34,18 @@ import {
   reminderStageFor,
   ANNUAL_SERVICE_PRICE_KES,
   SERVICE_STATUS,
+  planCharge,
+  pricingRegionForCountry,
+  formatPrice,
 } from '../lib/licensing.js';
+import { resolveRegion, DEFAULT_REGION, formatInBusinessZone } from '../../../src/lib/region/index.js';
 
 const MAX_BUSINESSES = 3000;
 const MAX_SENDS_PER_RUN = 200;
 
-function formatDay(date) {
+function formatDay(date, region = DEFAULT_REGION) {
   if (!date) return 'unknown';
-  return new Date(date).toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' });
+  return formatInBusinessZone(new Date(date), { day: 'numeric', month: 'long', year: 'numeric' }, { region });
 }
 
 /**
@@ -88,23 +92,29 @@ export function dueReminder(business, now = Date.now()) {
   return { stage: String(stage), periodKey, entitlements: e };
 }
 
-function buildMessage(stage, { shopName, entitlements, renewUrl }) {
+function buildMessage(stage, { shopName, entitlements, renewUrl, settings = null }) {
   const priceKes = ANNUAL_SERVICE_PRICE_KES;
-  const lastCoveredDayLabel = formatDay(entitlements.service.lastCoveredDay);
+  // The renewal price in the BUSINESS's price book (KES in Kenya, USD
+  // elsewhere), and the date on its own calendar.
+  const region = resolveRegion(settings);
+  const charge = planCharge('annual_services', pricingRegionForCountry(settings?.region?.country));
+  const price = charge ? formatPrice(charge.amount, charge.currency) : null;
+  const lastCoveredDayLabel = formatDay(entitlements.service.lastCoveredDay, region);
 
   if (stage === 'expired') {
     return serviceExpiredEmail({
-      shopName, lastCoveredDayLabel, graceDays: entitlements.service.graceDays, priceKes, renewUrl,
+      shopName, lastCoveredDayLabel, graceDays: entitlements.service.graceDays, priceKes, price, renewUrl,
     });
   }
   if (stage === 'suspended') {
-    return cloudServicesSuspendedEmail({ shopName, priceKes, renewUrl });
+    return cloudServicesSuspendedEmail({ shopName, priceKes, price, renewUrl });
   }
   return serviceRenewalReminderEmail({
     shopName,
     daysRemaining: Math.max(0, entitlements.service.daysRemaining ?? 0),
     lastCoveredDayLabel,
     priceKes,
+    price,
     renewUrl,
   });
 }
@@ -136,7 +146,7 @@ export async function runRenewalReminders(env, { dryRun = false, now = Date.now(
     const settings = await getDocument(env, 'businessSettings', business.id).catch(() => null);
     const shopName = settings?.shopName || business.name || '';
 
-    const message = buildMessage(due.stage, { shopName, entitlements: due.entitlements, renewUrl });
+    const message = buildMessage(due.stage, { shopName, entitlements: due.entitlements, renewUrl, settings });
 
     if (dryRun) {
       sent.push({ businessId: business.id, stage: due.stage, recipient: maskEmail(to), dryRun: true });

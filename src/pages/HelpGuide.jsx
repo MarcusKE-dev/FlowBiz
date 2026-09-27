@@ -2,6 +2,8 @@ import { ChevronDown, ChevronLeft } from 'lucide-react';
 import { useState } from 'react';
 import PageHeader from '../components/ui/PageHeader';
 import { Link } from 'react-router-dom';
+import { formatMoney, formatMoneyCompact } from '../lib/region/money';
+import { tenderLabel } from '../lib/region/region';
 
 // The manual, rewritten short.
 //
@@ -41,7 +43,7 @@ const SECTIONS = [
         </Step>
         <Step title="Sell at the counter">
           On <strong className="text-ink-900">Counter</strong>, tap a product or scan it, choose
-          Cash, M-Pesa or credit, and confirm. Stock comes down as you sell.
+          Cash, {tenderLabel('M-Pesa')} or credit, and confirm. Stock comes down as you sell.
         </Step>
         <Step title="Record expenses">
           Log rent, electricity, transport and the rest on{' '}
@@ -68,7 +70,7 @@ const SECTIONS = [
         <div className="grid gap-3 sm:grid-cols-2">
           {[
             ['Cash received', 'Cash sales plus cash debt repayments, today.'],
-            ['M-Pesa received', 'M-Pesa sales plus M-Pesa debt repayments, today.'],
+            [`${tenderLabel('M-Pesa')} received`, `${tenderLabel('M-Pesa')} sales plus ${tenderLabel('M-Pesa')} debt repayments, today.`],
             ['Net profit', "Today's gross profit less today's expenses."],
             ['Expenses', 'What you recorded today, excluding stock bought on credit.'],
             ['Inventory value at cost', 'What the stock on your shelves cost you.'],
@@ -91,7 +93,7 @@ const SECTIONS = [
       <div className="space-y-3 text-body text-ink-600">
         <p>Choose Today, This week, This month or a custom range, then export a PDF if you need one.</p>
         <ul className="mt-2 list-disc space-y-1.5 pl-5">
-          <li><strong>Revenue:</strong> money actually received: cash and M-Pesa sales, plus debt repaid in the period, less refunds.</li>
+          <li><strong>Revenue:</strong> money actually received: cash and {tenderLabel('M-Pesa')} sales, plus debt repaid in the period, less refunds.</li>
           <li><strong>Cost of goods sold:</strong> what the goods sold cost you. On a debt repayment it is recognised in proportion to the amount paid.</li>
           <li><strong>Gross profit:</strong> revenue less cost of goods sold.</li>
           <li><strong>Total expenses:</strong> what you recorded in the period.</li>
@@ -115,19 +117,19 @@ const SECTIONS = [
           profit on your screen is money you can actually spend.
         </p>
         <div className="space-y-2 rounded-panel border border-line bg-surface p-4 font-mono text-secondary">
-          <div>Customer buys on credit, KES 15,000</div>
+          <div>Customer buys on credit, {formatMoneyCompact(15000)}</div>
           <ChevronDown className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
           <div>Stock comes down straight away</div>
           <ChevronDown className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
-          <div>Outstanding debt goes up by KES 15,000</div>
+          <div>Outstanding debt goes up by {formatMoneyCompact(15000)}</div>
           <ChevronDown className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
-          <div className="font-semibold text-danger-600">Revenue and profit stay at KES 0.00</div>
+          <div className="font-semibold text-danger-600">Revenue and profit stay at {formatMoney(0)}</div>
           <ChevronDown className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
-          <div>Customer pays KES 5,000</div>
+          <div>Customer pays {formatMoneyCompact(5000)}</div>
           <ChevronDown className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
-          <div className="font-semibold text-ink-900">KES 5,000 becomes revenue, with its share of cost and profit</div>
+          <div className="font-semibold text-ink-900">{formatMoneyCompact(5000)} becomes revenue, with its share of cost and profit</div>
           <ChevronDown className="mx-auto h-4 w-4 text-ink-400" strokeWidth={1.75} aria-hidden="true" />
-          <div>Outstanding debt falls to KES 10,000</div>
+          <div>Outstanding debt falls to {formatMoneyCompact(10000)}</div>
         </div>
       </div>
     ),
@@ -143,7 +145,7 @@ const SECTIONS = [
         <p>At closing, on <strong>Close day</strong>:</p>
         <ol className="mt-2 list-decimal space-y-1.5 pl-5">
           <li>Count the cash and type it in.</li>
-          <li>Check your M-Pesa balance and type it in.</li>
+          <li>Check your {tenderLabel('M-Pesa')} balance and type it in.</li>
           <li>FlowBiz shows Short by, Over by, or Balanced.</li>
           <li>Confirm and close. An owner can reopen the session from the same page to correct a mistake.</li>
         </ol>

@@ -12,11 +12,11 @@ import ErrorBanner from '../components/common/ErrorBanner';
 import PageHeader from '../components/ui/PageHeader';
 import Section from '../components/ui/Section';
 import StatementBlock, { StatementRow, StatementResult } from '../components/ui/StatementBlock';
-import { amountOnly } from '../components/ui/format';
 import { startOfDay, endOfDay } from '../utils/dateRanges';
 import { computeExpectedTillBalances } from '../utils/financials';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+import { currencyMarker, formatAmount, tenderLabel } from '../lib/region';
 
 export default function CloseDay() {
   const { profile } = useAuth();
@@ -86,24 +86,24 @@ try {
         />
         <Section title="Cash drawer">
           <StatementBlock>
-            <StatementRow label="Expected cash" prefix="KES" value={amountOnly(expectedCashAtClose)} />
-            <StatementRow label="Counted cash"  prefix="KES" value={amountOnly(session.actualCashAtClose || 0)} />
+            <StatementRow label="Expected cash" prefix={currencyMarker()} value={formatAmount(expectedCashAtClose)} />
+            <StatementRow label="Counted cash"  prefix={currencyMarker()} value={formatAmount(session.actualCashAtClose || 0)} />
             <StatementResult
               label={varianceLabel(closedCashVar)}
-              prefix="KES"
-              value={amountOnly(Math.abs(closedCashVar))}
+              prefix={currencyMarker()}
+              value={formatAmount(Math.abs(closedCashVar))}
               tone={varianceTone(closedCashVar)}
             />
           </StatementBlock>
         </Section>
-        <Section title="M-Pesa till">
+        <Section title={`${tenderLabel('M-Pesa')} till`}>
           <StatementBlock>
-            <StatementRow label="Expected balance" prefix="KES" value={amountOnly(expectedMpesaAtClose)} />
-            <StatementRow label="Counted balance"  prefix="KES" value={amountOnly(session.actualMpesaAtClose || 0)} />
+            <StatementRow label="Expected balance" prefix={currencyMarker()} value={formatAmount(expectedMpesaAtClose)} />
+            <StatementRow label="Counted balance"  prefix={currencyMarker()} value={formatAmount(session.actualMpesaAtClose || 0)} />
             <StatementResult
               label={varianceLabel(closedMpesaVar)}
-              prefix="KES"
-              value={amountOnly(Math.abs(closedMpesaVar))}
+              prefix={currencyMarker()}
+              value={formatAmount(Math.abs(closedMpesaVar))}
               tone={varianceTone(closedMpesaVar)}
             />
           </StatementBlock>
@@ -123,21 +123,21 @@ try {
 
       <Section title="Cash drawer">
         <StatementBlock>
-          <StatementRow label="Opening float"               prefix="KES" value={amountOnly(session.openingCashFloat)} />
-          <StatementRow label="Cash sales"                  prefix="KES" value={amountOnly(summary.totalCashSales)} />
-          <StatementRow label="Debt repayments in cash"     prefix="KES" value={amountOnly(summary.totalDebtRepaymentsCash)} />
-          <StatementRow label="Expenses paid in cash"       prefix="KES" value={amountOnly(-summary.totalExpensesCash)} tone={summary.totalExpensesCash ? 'negative' : 'muted'} />
-          <StatementRow label="Refunds paid in cash"        prefix="KES" value={amountOnly(-summary.totalRefundsCash)} tone={summary.totalRefundsCash ? 'negative' : 'muted'} />
-          <StatementRow label="Purchases paid in cash"      prefix="KES" value={amountOnly(-cashPurchases)} tone={cashPurchases ? 'negative' : 'muted'} />
-          <StatementRow label="Supplier payments in cash"   prefix="KES" value={amountOnly(-cashSupplierPay)} tone={cashSupplierPay ? 'negative' : 'muted'} />
-          <StatementRow label="Expected in the drawer"      prefix="KES" value={amountOnly(expectedCashAtClose)} strong />
+          <StatementRow label="Opening float"               prefix={currencyMarker()} value={formatAmount(session.openingCashFloat)} />
+          <StatementRow label="Cash sales"                  prefix={currencyMarker()} value={formatAmount(summary.totalCashSales)} />
+          <StatementRow label="Debt repayments in cash"     prefix={currencyMarker()} value={formatAmount(summary.totalDebtRepaymentsCash)} />
+          <StatementRow label="Expenses paid in cash"       prefix={currencyMarker()} value={formatAmount(-summary.totalExpensesCash)} tone={summary.totalExpensesCash ? 'negative' : 'muted'} />
+          <StatementRow label="Refunds paid in cash"        prefix={currencyMarker()} value={formatAmount(-summary.totalRefundsCash)} tone={summary.totalRefundsCash ? 'negative' : 'muted'} />
+          <StatementRow label="Purchases paid in cash"      prefix={currencyMarker()} value={formatAmount(-cashPurchases)} tone={cashPurchases ? 'negative' : 'muted'} />
+          <StatementRow label="Supplier payments in cash"   prefix={currencyMarker()} value={formatAmount(-cashSupplierPay)} tone={cashSupplierPay ? 'negative' : 'muted'} />
+          <StatementRow label="Expected in the drawer"      prefix={currencyMarker()} value={formatAmount(expectedCashAtClose)} strong />
 
           <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
             <label htmlFor="closeday-cash" className="text-body font-medium text-ink-900">
               Cash you counted
             </label>
             <div className="flex items-center gap-1.5">
-              <span className="text-label uppercase text-ink-400">KES</span>
+              <span className="text-label uppercase text-ink-400">{currencyMarker()}</span>
               <input
                 id="closeday-cash"
                 type="number"
@@ -152,31 +152,31 @@ try {
           {cash !== '' && (
             <StatementResult
               label={varianceLabel(cashVar)}
-              prefix="KES"
-              value={amountOnly(Math.abs(cashVar))}
+              prefix={currencyMarker()}
+              value={formatAmount(Math.abs(cashVar))}
               tone={varianceTone(cashVar)}
             />
           )}
         </StatementBlock>
       </Section>
 
-      <Section title="M-Pesa till">
+      <Section title={`${tenderLabel('M-Pesa')} till`}>
         <StatementBlock>
-          <StatementRow label="Opening balance"              prefix="KES" value={amountOnly(session.openingMpesaFloat)} />
-          <StatementRow label="M-Pesa sales"                 prefix="KES" value={amountOnly(summary.totalMpesaSales)} />
-          <StatementRow label="Debt repayments on M-Pesa"    prefix="KES" value={amountOnly(summary.totalDebtRepaymentsMpesa)} />
-          <StatementRow label="Expenses paid on M-Pesa"      prefix="KES" value={amountOnly(-summary.totalExpensesMpesa)} tone={summary.totalExpensesMpesa ? 'negative' : 'muted'} />
-          <StatementRow label="Refunds paid on M-Pesa"       prefix="KES" value={amountOnly(-summary.totalRefundsMpesa)} tone={summary.totalRefundsMpesa ? 'negative' : 'muted'} />
-          <StatementRow label="Purchases paid on M-Pesa"     prefix="KES" value={amountOnly(-mpesaPurchases)} tone={mpesaPurchases ? 'negative' : 'muted'} />
-          <StatementRow label="Supplier payments on M-Pesa"  prefix="KES" value={amountOnly(-mpesaSupplierPay)} tone={mpesaSupplierPay ? 'negative' : 'muted'} />
-          <StatementRow label="Expected in the till"         prefix="KES" value={amountOnly(expectedMpesaAtClose)} strong />
+          <StatementRow label="Opening balance"              prefix={currencyMarker()} value={formatAmount(session.openingMpesaFloat)} />
+          <StatementRow label={`${tenderLabel('M-Pesa')} sales`}                 prefix={currencyMarker()} value={formatAmount(summary.totalMpesaSales)} />
+          <StatementRow label={`Debt repayments on ${tenderLabel('M-Pesa')}`}    prefix={currencyMarker()} value={formatAmount(summary.totalDebtRepaymentsMpesa)} />
+          <StatementRow label={`Expenses paid on ${tenderLabel('M-Pesa')}`}      prefix={currencyMarker()} value={formatAmount(-summary.totalExpensesMpesa)} tone={summary.totalExpensesMpesa ? 'negative' : 'muted'} />
+          <StatementRow label={`Refunds paid on ${tenderLabel('M-Pesa')}`}       prefix={currencyMarker()} value={formatAmount(-summary.totalRefundsMpesa)} tone={summary.totalRefundsMpesa ? 'negative' : 'muted'} />
+          <StatementRow label={`Purchases paid on ${tenderLabel('M-Pesa')}`}     prefix={currencyMarker()} value={formatAmount(-mpesaPurchases)} tone={mpesaPurchases ? 'negative' : 'muted'} />
+          <StatementRow label={`Supplier payments on ${tenderLabel('M-Pesa')}`}  prefix={currencyMarker()} value={formatAmount(-mpesaSupplierPay)} tone={mpesaSupplierPay ? 'negative' : 'muted'} />
+          <StatementRow label="Expected in the till"         prefix={currencyMarker()} value={formatAmount(expectedMpesaAtClose)} strong />
 
           <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
             <label htmlFor="closeday-mpesa" className="text-body font-medium text-ink-900">
-              M-Pesa balance you counted
+              {tenderLabel('M-Pesa')} balance you counted
             </label>
             <div className="flex items-center gap-1.5">
-              <span className="text-label uppercase text-ink-400">KES</span>
+              <span className="text-label uppercase text-ink-400">{currencyMarker()}</span>
               <input
                 id="closeday-mpesa"
                 type="number"
@@ -191,8 +191,8 @@ try {
           {mpesa !== '' && (
             <StatementResult
               label={varianceLabel(mpesaVar)}
-              prefix="KES"
-              value={amountOnly(Math.abs(mpesaVar))}
+              prefix={currencyMarker()}
+              value={formatAmount(Math.abs(mpesaVar))}
               tone={varianceTone(mpesaVar)}
             />
           )}

@@ -21,13 +21,19 @@
 // sheet does not forget a prompt that is still waiting on the phone:
 // reopening it for the same plan picks up where it left off.
 
-import { createContext, useCallback, useContext, useMemo, useReducer, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState } from 'react';
 import toast from 'react-hot-toast';
 import { auth } from '../firebase';
 import { friendlyErrorMessage } from '../utils/errorMessages';
 import { isDemoMode } from '../demo/demoMode';
 import { initialMpesaState, mpesaReducer } from '../licensing/mpesa';
 import MpesaCheckoutSheet from '../components/licensing/MpesaCheckoutSheet';
+import { useAuth } from './AuthContext';
+import { useRegion } from '../hooks/useRegion';
+import { billingProvidersFor, BILLING_PROVIDERS } from '../billing/catalog';
+import { pricingRegionForCountry } from '../licensing';
+import { billingPlatform } from '../platform/platform';
+import { playBillingAvailable, purchaseWithPlay, restorePlayPurchases, playPrices } from '../platform/playBilling';
 
 const FLOWBIZ_API_URL = import.meta.env.VITE_FLOWBIZ_API_URL || 'https://flowbiz-api.flowbiz.workers.dev';
 
@@ -55,6 +61,17 @@ async function callApi(path, { method = 'GET', body } = {}) {
 }
 
 export function CheckoutProvider({ children }) {
+  const { businessId } = useAuth();
+  const region = useRegion();
+  // WHO TAKES THE MONEY on this platform, for this business — decided in
+  // one pure function (billing/catalog.js), never in a component. Inside
+  // the Android app that is always Google Play.
+  const providers = billingProvidersFor({
+    platform: billingPlatform(),
+    pricingRegion: pricingRegionForCountry(region.country),
+  });
+  const provider = providers?.primary || null;
+  const [storePrices, setStorePrices] = useState(null);
   const [loadingPlan, setLoadingPlan] = useState(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [mpesa, dispatch] = useReducer(mpesaReducer, null, () => initialMpesaState(null));
@@ -90,10 +107,65 @@ export function CheckoutProvider({ children }) {
     }
   }, [loadingPlan]);
 
-  // ── M-Pesa: the default ─────────────────────────────────────────────
+  // ── Google Play: the Android app ────────────────────────────────────
+  useEffect(() => {
+    if (provider !== BILLING_PROVIDERS.GOOGLE_PLAY || !playBillingAvailable()) return undefined;
+    let alive = true;
+    playPrices().then((prices) => { if (alive) setStorePrices(prices); }).catch(() => {});
+    return () => { alive = false; };
+  }, [provider]);
+
+  const startPlayCheckout = useCallback(async (plan) => {
+    if (loadingPlan) return;
+    if (!playBillingAvailable()) {
+      toast.error('Google Play purchases are not available on this device.');
+      return;
+    }
+    setLoadingPlan(plan);
+    try {
+      const result = await purchaseWithPlay(plan, businessId);
+      if (result.status === 'success') toast.success(PENDING_COPY[plan] || PENDING_COPY.pro);
+      else if (result.status === 'pending') toast('Your payment is pending with Google Play. FlowBiz will activate it once Google confirms.');
+      else if (result.status === 'failed') toast.error(result.error);
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, { fallback: 'The purchase could not be completed.' }));
+    } finally {
+      setLoadingPlan(null);
+    }
+  }, [loadingPlan, businessId]);
+
+  const restorePurchases = useCallback(async () => {
+    if (!playBillingAvailable()) return;
+    setLoadingPlan('restore');
+    try {
+      const { applied, pending } = await restorePlayPurchases();
+      if (applied > 0) toast.success(`Restored ${applied} purchase${applied === 1 ? '' : 's'}.`);
+      else if (pending > 0) toast('A purchase is still pending with Google Play.');
+      else toast('No purchases to restore.');
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, { fallback: 'Purchases could not be restored. Check your connection and try again.' }));
+    } finally {
+      setLoadingPlan(null);
+    }
+  }, []);
+
+  // ── M-Pesa: the default on the web in Kenya ─────────────────────────
   const startCheckout = useCallback((plan) => {
     if (isDemoMode()) {
       toast('Payments are switched off in the demo.');
+      return;
+    }
+    if (provider === BILLING_PROVIDERS.GOOGLE_PLAY) {
+      startPlayCheckout(plan);
+      return;
+    }
+    if (provider === BILLING_PROVIDERS.PAYSTACK) {
+      // Outside Kenya there is no M-Pesa: straight to card checkout.
+      startCardCheckout(plan);
+      return;
+    }
+    if (!provider) {
+      toast('Purchases are not available on this device yet.');
       return;
     }
     // Same plan, payment still in progress or just finished: reopen onto
@@ -101,7 +173,7 @@ export function CheckoutProvider({ children }) {
     const resumable = mpesa.plan === plan && mpesa.phase !== 'form' && mpesa.phase !== 'failed';
     if (!resumable) dispatch({ type: 'reset', plan });
     setSheetOpen(true);
-  }, [mpesa.plan, mpesa.phase]);
+  }, [mpesa.plan, mpesa.phase, provider, startPlayCheckout, startCardCheckout]);
 
   const sendPrompt = useCallback(async (phone) => {
     if (mpesa.phase !== 'form' && mpesa.phase !== 'failed') return;
@@ -149,10 +221,15 @@ export function CheckoutProvider({ children }) {
   const value = useMemo(() => ({
     startCheckout,
     startCardCheckout,
+    restorePurchases,
     // Only the hosted popup is "loading" a button; the M-Pesa sheet covers
     // the page while it is open.
     loadingPlan,
-  }), [startCheckout, startCardCheckout, loadingPlan]);
+    provider,
+    // Google Play's own localised price strings, when Play is the provider.
+    // Play policy expects the price a user sees to be the price Play charges.
+    storePrices,
+  }), [startCheckout, startCardCheckout, restorePurchases, loadingPlan, provider, storePrices]);
 
   return (
     <CheckoutContext.Provider value={value}>

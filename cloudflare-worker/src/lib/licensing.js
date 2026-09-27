@@ -34,6 +34,13 @@ export {
   ANNUAL_SERVICE_INCLUSIONS,
   CURRENCY,
   formatPrice,
+  PRICE_BOOKS,
+  PRICING_REGION_KE,
+  PRICING_REGION_INTERNATIONAL,
+  pricingRegionForCountry,
+  priceBook,
+  planPrice,
+  amountInMinorUnits,
 } from '../../../src/licensing/config.js';
 
 export {
@@ -65,6 +72,8 @@ import {
   GRACE_PERIOD_DAYS,
   PRO_PLAN_PRICE_KES,
   PRO_PLAN_PERIOD_DAYS,
+  planPrice,
+  PRICING_REGION_KE,
 } from '../../../src/licensing/config.js';
 
 import {
@@ -108,6 +117,44 @@ export const PLAN_PRICES = {
 };
 
 export const PURCHASABLE_PLAN_IDS = Object.keys(PLAN_PRICES);
+
+/**
+ * WHAT THIS BUSINESS IS CHARGED FOR `plan`: the plan's description from
+ * PLAN_PRICES and the amount and currency from the business's price book.
+ * `amountKes` is kept on Kenyan charges only, because every existing
+ * reader of a payment record (billing history, admin, reconciliation)
+ * reads it, and a USD charge must never be mistaken for a KES one.
+ */
+export function planCharge(plan, pricingRegion = PRICING_REGION_KE) {
+  const base = PLAN_PRICES[plan];
+  const price = planPrice(plan, pricingRegion);
+  if (!base || !price) return null;
+  return {
+    ...base,
+    amount: price.amount,
+    currency: price.currency,
+    pricingRegion: price.pricingRegion,
+    amountKes: price.currency === 'KES' ? price.amount : null,
+  };
+}
+
+/**
+ * The amount fields a licensing record stores for a payment. KES payments
+ * keep the long-standing `…AmountKes` field; every payment also records
+ * the amount and currency it was actually made in.
+ */
+function paymentAmountFields(prefix, { amount, amountKes, currency, unpriced }, fallbackKes) {
+  if (unpriced) {
+    return { [`${prefix}AmountKes`]: null, [`${prefix}Amount`]: null, [`${prefix}Currency`]: null };
+  }
+  const cur = typeof currency === 'string' && currency ? currency : 'KES';
+  const value = Number.isFinite(amount) ? amount : (Number.isFinite(amountKes) ? amountKes : (cur === 'KES' ? fallbackKes : null));
+  return {
+    [`${prefix}AmountKes`]: cur === 'KES' ? value : null,
+    [`${prefix}Amount`]: value,
+    [`${prefix}Currency`]: cur,
+  };
+}
 
 export function isPurchasablePlan(plan) {
   return typeof plan === 'string' && Object.prototype.hasOwnProperty.call(PLAN_PRICES, plan);
@@ -158,7 +205,7 @@ function withDerivedFields(licensing) {
  * period in one write, because they are one purchase. The licence has no
  * expiry field to set — that is the point of it.
  */
-export function lifetimeActivationPayload(business, { now = new Date(), reference = null, amountKes = null } = {}) {
+export function lifetimeActivationPayload(business, { now = new Date(), reference = null, amountKes = null, amount = null, currency = null, unpriced = false } = {}) {
   const existing = currentLicensing(business);
   const { serviceStartDate, serviceExpiryDate } = computeIncludedServicePeriod(now, INCLUDED_SERVICE_MONTHS);
 
@@ -168,7 +215,7 @@ export function lifetimeActivationPayload(business, { now = new Date(), referenc
     licenseStatus: LICENSE_STATUS.ACTIVE,
     licensePurchasedAt: toDate(now),
     licensePurchaseReference: reference,
-    licensePurchaseAmountKes: Number.isFinite(amountKes) ? amountKes : LIFETIME_LICENSE_PRICE_KES,
+    ...paymentAmountFields('licensePurchase', { amount, amountKes, currency, unpriced }, LIFETIME_LICENSE_PRICE_KES),
     // Deliberately absent: any licence expiry field. Nothing in FlowBiz
     // may write one, and nothing reads one.
     licenseRevokedAt: null,
@@ -178,7 +225,7 @@ export function lifetimeActivationPayload(business, { now = new Date(), referenc
     graceDays: GRACE_PERIOD_DAYS,
     lastServicePaymentAt: toDate(now),
     lastServicePaymentReference: reference,
-    lastServicePaymentAmountKes: Number.isFinite(amountKes) ? amountKes : LIFETIME_LICENSE_PRICE_KES,
+    ...paymentAmountFields('lastServicePayment', { amount, amountKes, currency, unpriced }, LIFETIME_LICENSE_PRICE_KES),
     renewalCount: 0,
     servicePeriodCount: 1,
     // A fresh purchase clears any historical suspension: somebody who
@@ -201,7 +248,7 @@ export function lifetimeActivationPayload(business, { now = new Date(), referenc
  * renewing early adds twelve months rather than throwing away the days
  * already paid for. See computeRenewedExpiry.
  */
-export function serviceRenewalPayload(business, { now = new Date(), reference = null, amountKes = null } = {}) {
+export function serviceRenewalPayload(business, { now = new Date(), reference = null, amountKes = null, amount = null, currency = null, unpriced = false } = {}) {
   const existing = currentLicensing(business);
   const nextExpiry = computeRenewedExpiry(existing.serviceExpiryDate, now, RENEWAL_SERVICE_MONTHS);
 
@@ -216,7 +263,7 @@ export function serviceRenewalPayload(business, { now = new Date(), reference = 
     graceDays: Number.isFinite(existing.graceDays) ? existing.graceDays : GRACE_PERIOD_DAYS,
     lastServicePaymentAt: toDate(now),
     lastServicePaymentReference: reference,
-    lastServicePaymentAmountKes: Number.isFinite(amountKes) ? amountKes : ANNUAL_SERVICE_PRICE_KES,
+    ...paymentAmountFields('lastServicePayment', { amount, amountKes, currency, unpriced }, ANNUAL_SERVICE_PRICE_KES),
     renewalCount: (Number.isFinite(existing.renewalCount) ? existing.renewalCount : 0) + 1,
     servicePeriodCount: (Number.isFinite(existing.servicePeriodCount) ? existing.servicePeriodCount : 1) + 1,
     // A paid-up business is not left suspended for non-payment. An

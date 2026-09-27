@@ -8,23 +8,36 @@
 
 import { pemToDer, stringToUint8Array, uint8ArrayToBase64Url } from './jwt.js';
 
-let cachedToken = null;
-let cachedTokenExpiry = 0;
+// One cached token per (service account, scope). The Firestore account and
+// the Google Play account can be different identities with different
+// scopes, and a token for one must never be handed to the other.
+const tokenCache = new Map();
 
 async function importPrivateKey(pem) {
   const der = pemToDer(pem);
   return crypto.subtle.importKey('pkcs8', der, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
 }
 
-export async function getGoogleAccessToken(env) {
+/**
+ * @param {object} env
+ * @param {{ secretName?: string, scope?: string }} [options] which secret
+ *   holds the service-account JSON, and the OAuth scope. The defaults are
+ *   the Firestore/Identity Toolkit account every existing caller uses.
+ */
+export async function getGoogleAccessToken(env, {
+  secretName = 'FIREBASE_SERVICE_ACCOUNT_JSON',
+  scope = 'https://www.googleapis.com/auth/cloud-platform',
+} = {}) {
   const now = Date.now();
-  if (cachedToken && now < cachedTokenExpiry) return cachedToken;
+  const cacheKey = `${secretName}|${scope}`;
+  const cached = tokenCache.get(cacheKey);
+  if (cached && now < cached.expiry) return cached.token;
 
   let serviceAccount;
   try {
-    serviceAccount = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT_JSON);
+    serviceAccount = JSON.parse(env[secretName]);
   } catch {
-    throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON secret is missing or not valid JSON.');
+    throw new Error(`${secretName} secret is missing or not valid JSON.`);
   }
 
   const nowSec = Math.floor(now / 1000);
@@ -36,7 +49,7 @@ export async function getGoogleAccessToken(env) {
     // narrower scope name. Actual permissions are still constrained by
     // whatever IAM roles are granted to this service account in Google
     // Cloud — see the deployment README for exactly which roles to grant.
-    scope: 'https://www.googleapis.com/auth/cloud-platform',
+    scope,
     aud: 'https://oauth2.googleapis.com/token',
     iat: nowSec,
     exp: nowSec + 3600,
@@ -63,7 +76,9 @@ export async function getGoogleAccessToken(env) {
     throw new Error(`Failed to mint Google access token: ${await tokenRes.text()}`);
   }
   const tokenData = await tokenRes.json();
-  cachedToken = tokenData.access_token;
-  cachedTokenExpiry = now + (tokenData.expires_in - 120) * 1000; // refresh a bit early
-  return cachedToken;
+  tokenCache.set(cacheKey, {
+    token: tokenData.access_token,
+    expiry: now + (tokenData.expires_in - 120) * 1000, // refresh a bit early
+  });
+  return tokenData.access_token;
 }

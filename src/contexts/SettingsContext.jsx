@@ -13,6 +13,7 @@ import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from './AuthContext';
 import { resolveIndustryConfig } from '../industry/config';
+import { setActiveRegion } from '../lib/region/region.js';
 
 const DEFAULTS = {
   shopName: 'FlowBiz',
@@ -44,6 +45,7 @@ export function SettingsProvider({ children }) {
 
   useEffect(() => {
     if (!businessId) {
+      setActiveRegion(null);
       setSettings(DEFAULTS);
       setLoading(false);
       return;
@@ -53,6 +55,11 @@ export function SettingsProvider({ children }) {
     const unsub = onSnapshot(
       ref,
       (snap) => {
+        // The region is published BEFORE the settings state updates, so
+        // the render this snapshot causes already formats in the right
+        // currency and counts days in the right timezone. Absent region
+        // resolves to Kenya — see lib/region/region.js.
+        setActiveRegion(snap.exists() ? snap.data() : null);
         if (snap.exists()) {
           setSettings({ ...DEFAULTS, ...snap.data(), businessId });
         } else {
@@ -71,6 +78,12 @@ export function SettingsProvider({ children }) {
     );
     return unsub;
   }, [businessId]);
+
+  // A region change arrives as a settings snapshot, so every consumer of
+  // this context re-renders with the new region already active. Components
+  // outside it can subscribe with useRegion(). Nothing is remounted: a
+  // region edited on the owner's phone must not empty a cart mid-sale on
+  // the counter.
 
   // The effective industry configuration. Derived, never fetched: the
   // profile table is static code and the overrides ride on the settings

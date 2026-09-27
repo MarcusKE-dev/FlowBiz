@@ -142,9 +142,84 @@ export const NEVER_WITHDRAWN = ['software.license', 'features.pro', 'features.pr
 /** Currency everything above is quoted in. */
 export const CURRENCY = 'KES';
 
-/** `KES 15,550` — the one formatting of a price in the product. */
-export function formatPrice(amountKes, currency = CURRENCY) {
-  const n = Number(amountKes);
+// ── Regional price books ──────────────────────────────────────────────
+//
+// WHAT A BUSINESS IS CHARGED DEPENDS ON THE COUNTRY IT IS REGISTERED IN,
+// and on nothing else. Kenya keeps the KES prices above, exactly. Every
+// other country pays from the INTERNATIONAL book, in US dollars.
+//
+// These are EXPLICIT PRICES, not conversions. Nothing in FlowBiz fetches
+// an exchange rate: a price a customer saw yesterday is the price they see
+// today, the webhook can check the amount it was paid against a number
+// written here, and a currency swing never changes what somebody owes.
+// The USD figures are rounded from the Kenyan positioning (KES 15,550 ≈
+// USD 120; KES 3,000 ≈ USD 23; KES 599 ≈ USD 4.65) and are a commercial
+// decision to revisit here, in one place.
+//
+// The Worker chooses the book SERVER-SIDE from the business's stored
+// region (businessSettings.region.country), so the browser cannot ask
+// for the cheaper one. A business with no stored region is Kenyan.
+//
+// Amounts are in MAJOR units (dollars, shillings). Payment providers are
+// sent minor units, computed by amountInMinorUnits() — the one place that
+// multiplication happens.
+
+export const PRICING_REGION_KE = 'KE';
+export const PRICING_REGION_INTERNATIONAL = 'INTL';
+
+export const PRICE_BOOKS = {
+  [PRICING_REGION_KE]: {
+    id: PRICING_REGION_KE,
+    currency: 'KES',
+    prices: {
+      pro: PRO_PLAN_PRICE_KES,
+      lifetime: LIFETIME_LICENSE_PRICE_KES,
+      annual_services: ANNUAL_SERVICE_PRICE_KES,
+    },
+  },
+  [PRICING_REGION_INTERNATIONAL]: {
+    id: PRICING_REGION_INTERNATIONAL,
+    currency: 'USD',
+    prices: {
+      pro: 4.99,
+      lifetime: 119,
+      annual_services: 24,
+    },
+  },
+};
+
+/** Which price book a business in `countryCode` buys from. */
+export function pricingRegionForCountry(countryCode) {
+  const code = String(countryCode || 'KE').toUpperCase();
+  return code === 'KE' ? PRICING_REGION_KE : PRICING_REGION_INTERNATIONAL;
+}
+
+/** The price book for a pricing region id, defaulting to Kenya. */
+export function priceBook(pricingRegion) {
+  return PRICE_BOOKS[pricingRegion] || PRICE_BOOKS[PRICING_REGION_KE];
+}
+
+/** { amount, currency } for a plan in a pricing region, or null for an unknown plan. */
+export function planPrice(planId, pricingRegion) {
+  const book = priceBook(pricingRegion);
+  const amount = book.prices[planId];
+  if (!Number.isFinite(amount)) return null;
+  return { amount, currency: book.currency, pricingRegion: book.id };
+}
+
+/**
+ * Major units to the integer a payment provider expects (cents, kobo).
+ * Every currency FlowBiz prices in has two minor digits.
+ */
+export function amountInMinorUnits(amount) {
+  return Math.round((Number(amount) || 0) * 100);
+}
+
+/** `KES 15,550`, `USD 119`, `USD 4.99` — the one formatting of a price in the product. */
+export function formatPrice(amount, currency = CURRENCY) {
+  const n = Number(amount);
   if (!Number.isFinite(n)) return '';
-  return `${currency} ${n.toLocaleString('en-KE')}`;
+  const fraction = Number.isInteger(n) ? 0 : 2;
+  const locale = currency === 'KES' ? 'en-KE' : 'en-US';
+  return `${currency} ${n.toLocaleString(locale, { minimumFractionDigits: fraction, maximumFractionDigits: fraction })}`;
 }

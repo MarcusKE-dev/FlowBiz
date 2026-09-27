@@ -30,6 +30,7 @@ import { formatDateTime } from '../utils/dateRanges';
 import { roundMoney } from '../utils/currency';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+import { currencyCode, digitalReferenceLabel, digitalReferenceMissingMessage, digitalReferenceRequired, tenderLabel } from '../lib/region';
 
 const empty = {
   supplierId: '', productId: '', variantId: '', quantity: '', costPricePerUnit: '',
@@ -148,8 +149,8 @@ export default function Purchases() {
       toast.error('Enter both a quantity and a cost price.');
       return;
     }
-    if (form.paymentStatus === 'paid' && form.paymentMethod === 'M-Pesa' && !form.mpesaCode.trim()) {
-      toast.error('Enter M-Pesa transaction code.');
+    if (form.paymentStatus === 'paid' && form.paymentMethod === 'M-Pesa' && digitalReferenceRequired() && !form.mpesaCode.trim()) {
+      toast.error(digitalReferenceMissingMessage());
       return;
     }
     if (batchesOn && form.expiryDate && !isValidExpiryDate(form.expiryDate)) {
@@ -390,7 +391,7 @@ export default function Purchases() {
           </div>
           <div>
             <label className="label">
-              Cost / {receivingPacks ? packUnitShort : (isMeasuredPurchase ? purchaseUnitShort : 'unit')} (KES)
+              Cost / {receivingPacks ? packUnitShort : (isMeasuredPurchase ? purchaseUnitShort : 'unit')} ({currencyCode()})
             </label>
             <input type="number" min="0" step="0.01" className="input" value={form.costPricePerUnit} onChange={set('costPricePerUnit')} required />
           </div>
@@ -439,13 +440,13 @@ export default function Purchases() {
               <label className="label">Paid via</label>
               <select className="input" value={form.paymentMethod} onChange={set('paymentMethod')}>
                 <option value="Cash">Cash</option>
-                <option value="M-Pesa">M-Pesa</option>
+                <option value="M-Pesa">{tenderLabel('M-Pesa')}</option>
               </select>
             </div>
             {form.paymentMethod === 'M-Pesa' && (
               <div>
-                <label className="label">M-Pesa code</label>
-                <input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} placeholder="e.g. QWE1234567" required />
+                <label className="label">{digitalReferenceLabel()}</label>
+                <input className="input uppercase" value={form.mpesaCode} onChange={set('mpesaCode')} placeholder={digitalReferenceRequired() ? 'e.g. QWE1234567' : ''} required={digitalReferenceRequired()} />
               </div>
             )}
           </div>

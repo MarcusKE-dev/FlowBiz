@@ -1,9 +1,19 @@
-export function formatKES(amount) {
-  const v = Number(amount) || 0;
-  return `KES ${v.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-export function formatKESCompact(amount) {
-  return `KES ${Math.round(Number(amount) || 0).toLocaleString('en-KE')}`;
+// src/utils/currency.js
+//
+// Money formatting now lives in src/lib/region/money.js, which formats in
+// the open business's own currency and locale. These names are kept so the
+// hundred-odd call sites read the same; they are the region formatters.
+//
+// formatPdfMoney is the one to use inside jsPDF: the built-in PDF fonts
+// cannot draw most currency symbols (₦, ₹, ₱, ₩…), so a PDF always prints
+// the ISO code — "NGN 1,234.00" — which every font can.
+
+import { formatMoney, formatMoneyCompact } from '../lib/region/money.js';
+
+export { formatMoney, formatMoneyCompact };
+
+export function formatPdfMoney(amount, options = {}) {
+  return formatMoney(amount, { ...options, display: 'code' });
 }
 
 // FIX (multi-product cart): quantity × unit price, summed across several

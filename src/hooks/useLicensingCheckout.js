@@ -11,6 +11,6 @@
 import { useCheckout } from '../contexts/CheckoutContext';
 
 export function useLicensingCheckout() {
-  const { startCheckout, startCardCheckout, loadingPlan } = useCheckout();
-  return { startCheckout, startCardCheckout, loadingPlan, busy: Boolean(loadingPlan) };
+  const { startCheckout, startCardCheckout, restorePurchases, loadingPlan, provider, storePrices } = useCheckout();
+  return { startCheckout, startCardCheckout, restorePurchases, loadingPlan, provider, storePrices, busy: Boolean(loadingPlan) };
 }

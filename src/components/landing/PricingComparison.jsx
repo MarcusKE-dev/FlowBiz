@@ -1,15 +1,17 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check } from 'lucide-react';
-import {
-  LIFETIME_LICENSE_PRICE_KES,
-  ANNUAL_SERVICE_PRICE_KES,
-  PRO_PLAN_PRICE_KES,
-  formatPrice,
-} from '../../licensing';
+import { formatPrice } from '../../licensing';
+import { usePriceLabels } from '../../hooks/usePriceLabels';
+import { guessCountryFromDevice } from '../../lib/region/countries';
 
-const LIFETIME_PRICE = formatPrice(LIFETIME_LICENSE_PRICE_KES);
-const SERVICE_PRICE = formatPrice(ANNUAL_SERVICE_PRICE_KES);
-const PRO_PRICE = formatPrice(PRO_PLAN_PRICE_KES);
+// A SIGNED-OUT VISITOR HAS NO BUSINESS YET, so the price book shown here is
+// a guess from the device's timezone: Kenyan visitors see the KES prices,
+// everyone else the international USD ones. It is only what the page shows;
+// what a business is charged is decided by the Worker from the country the
+// business registers with. The prices come from the shared price book
+// (PRICE_BOOKS in src/licensing/config.js, the same ANNUAL_SERVICE_PRICE_KES
+// and LIFETIME_LICENSE_PRICE_KES Kenya has always paid), never a component.
 
 const CheckItem = ({ children, tone = 'primary' }) => (
   <li className="flex items-start gap-2.5">
@@ -25,6 +27,8 @@ const CheckItem = ({ children, tone = 'primary' }) => (
 );
 
 export function PricingComparison() {
+  const [country] = useState(() => guessCountryFromDevice());
+  const { licensePrice: LIFETIME_PRICE, servicePrice: SERVICE_PRICE, proPrice: PRO_PRICE, currency } = usePriceLabels({ country });
   return (
     <section
       id="pricing"
@@ -58,7 +62,7 @@ export function PricingComparison() {
 
               <div>
                 <span className="text-3xl font-extrabold text-ink-900">
-                  KES 0
+                  {formatPrice(0, currency)}
                 </span>
               </div>
 
@@ -185,6 +189,11 @@ export function PricingComparison() {
 
                   <p className="mt-0.5 text-label text-ink-500">
                     Cloud services, maintenance, updates &amp; support
+                  </p>
+
+                  <p className="mt-2 text-label text-ink-500">
+                    Renewal is optional. The licence does not expire if you choose not to renew.{' '}
+                    <Link to="/terms" className="font-semibold text-deep-700 underline underline-offset-2">Terms</Link>
                   </p>
                 </div>
               </div>

@@ -1,15 +1,8 @@
 // src/components/ui/format.js
 //
-// Presentation-only money helpers. All actual formatting still comes
-// from utils/currency.js — this just splits the currency prefix off so
-// it can be rendered smaller and muted, with the digits carrying the
-// weight. No arithmetic happens here.
+// Presentation-only money helpers for screens that render the currency
+// marker separately from the digits (muted "KES" or "$" beside the
+// figure). They read the open business's region; see lib/region/money.js.
+// No arithmetic happens here.
 
-import { formatKES } from '../../utils/currency';
-
-export const CURRENCY = 'KES';
-
-// "KES 1,234.00" -> "1,234.00"
-export function amountOnly(value) {
-  return formatKES(value).replace(/^KES\s*/, '');
-}
+export { currencyMarker, formatAmount as amountOnly } from '../../lib/region/money.js';

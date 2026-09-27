@@ -1,10 +1,12 @@
 import { jsPDF } from 'jspdf';
-import { formatKES } from './currency';
+import { formatMoney, formatPdfMoney } from './currency';
 import { formatDateTime } from './dateRanges';
 import { formatQuantityWithUnit } from '../industry/units';
 import { lineItemDetail } from './lineItems';
 import { openWhatsApp, buildReceiptMessage } from './whatsapp';
 import { PDF } from '../theme/tokens';
+import { tenderLabel } from '../lib/region/region.js';
+import { savePdf, openForPrint } from '../platform/files';
 
 export async function loadImageAsDataUrl(url) {
   if (!url) return null;
@@ -163,7 +165,7 @@ async function buildDocument(data, settings, typeLabel) {
     doc.text(splitName, marginX, y);
 
     const lineTotal = item.lineTotal ?? ((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0));
-    doc.text(formatKES(lineTotal), pageWidth, y, { align: 'right' });
+    doc.text(formatPdfMoney(lineTotal), pageWidth, y, { align: 'right' });
 
     y += (splitName.length * 3);
     if (item.quantity) {
@@ -173,7 +175,7 @@ async function buildDocument(data, settings, typeLabel) {
       // "2.5 m x @ KES 120.00" for a measured item, and the unchanged
       // "3 x @ KES 150.00" for anything sold by the piece.
       doc.text(
-        `${formatQuantityWithUnit(item.quantity, item.unit)} x @ ${formatKES(item.unitPrice || 0)}`,
+        `${formatQuantityWithUnit(item.quantity, item.unit)} x @ ${formatPdfMoney(item.unitPrice || 0)}`,
         marginX, y
       );
     }
@@ -208,7 +210,7 @@ async function buildDocument(data, settings, typeLabel) {
     // comes from weight, uppercase and the two solid rules around it.
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...PDF.ink);
-    doc.text(formatKES(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth, y + 3.5, { align: 'right' });
+    doc.text(formatPdfMoney(data.remainingBalance ?? data.totalAmount ?? 0), pageWidth, y + 3.5, { align: 'right' });
     drawRule(y + 7.5);
     y += 12;
   } else {
@@ -219,12 +221,12 @@ async function buildDocument(data, settings, typeLabel) {
     doc.text('TOTAL PAID:', marginX, y + 2.5);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...PDF.ink);
-    doc.text(formatKES(data.totalAmount || data.amount || 0), pageWidth, y + 2.5, { align: 'right' });
+    doc.text(formatPdfMoney(data.totalAmount || data.amount || 0), pageWidth, y + 2.5, { align: 'right' });
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
     doc.setTextColor(...PDF.ink2);
-    const methodStr = `${data.paymentMethod || data.method || 'Cash'}${data.mpesaCode ? ` (${data.mpesaCode})` : ''}`;
+    const methodStr = `${tenderLabel(data.paymentMethod || data.method || 'Cash')}${data.mpesaCode ? ` (${data.mpesaCode})` : ''}`;
     doc.text(`Tender: ${methodStr}`, marginX, y + 6.8);
     drawRule(y + 8.5);
     y += 13.5;
@@ -282,7 +284,7 @@ async function buildDebtPaymentDocument(receipt, settings) {
 
   y += 3.5;
   doc.text(`Customer: ${receipt.customerName || 'Customer'}`, marginX, y);
-  const methodStr = `${receipt.method || 'Cash'}${receipt.mpesaCode ? ` (${receipt.mpesaCode})` : ''}`;
+  const methodStr = `${tenderLabel(receipt.method || 'Cash')}${receipt.mpesaCode ? ` (${receipt.mpesaCode})` : ''}`;
   doc.text(methodStr, pageWidth, y, { align: 'right' });
 
   y += 3.5;
@@ -304,13 +306,13 @@ async function buildDebtPaymentDocument(receipt, settings) {
     y += 4.8;
   };
 
-  row('Previous Total Debt:', formatKES(receipt.previousBalance));
-  row('Payment Received:', `- ${formatKES(receipt.amountPaid)}`, true);
+  row('Previous Total Debt:', formatPdfMoney(receipt.previousBalance));
+  row('Payment Received:', `- ${formatPdfMoney(receipt.amountPaid)}`, true);
 
   drawDivider(y - 1);
   y += 3.5;
 
-  row('Remaining Debt:', formatKES(receipt.remainingBalance), true);
+  row('Remaining Debt:', formatPdfMoney(receipt.remainingBalance), true);
 
   y += 1.5;
   const isCleared = !!receipt.isCleared;
@@ -332,35 +334,32 @@ async function buildDebtPaymentDocument(receipt, settings) {
 
 export async function generateReceiptPDF(sale, settings) {
   const doc = await buildDocument(sale, settings, 'RECEIPT');
-  doc.save(`receipt-${sale.id}.pdf`);
+  return savePdf(doc, `receipt-${sale.id}.pdf`, { title: 'Receipt' });
 }
 
 export async function printReceipt(sale, settings) {
   const doc = await buildDocument(sale, settings, 'RECEIPT');
-  doc.autoPrint();
-  window.open(doc.output('bloburl'), '_blank');
+  return openForPrint(doc, `receipt-${sale.id}.pdf`);
 }
 
 export async function generateInvoicePDF(creditSale, settings) {
   const doc = await buildDocument(creditSale, settings, 'INVOICE');
-  doc.save(`invoice-${creditSale.id}.pdf`);
+  return savePdf(doc, `invoice-${creditSale.id}.pdf`, { title: 'Invoice' });
 }
 
 export async function printInvoice(creditSale, settings) {
   const doc = await buildDocument(creditSale, settings, 'INVOICE');
-  doc.autoPrint();
-  window.open(doc.output('bloburl'), '_blank');
+  return openForPrint(doc, `invoice-${creditSale.id}.pdf`);
 }
 
 export async function generateDebtPaymentReceiptPDF(receipt, settings) {
   const doc = await buildDebtPaymentDocument(receipt, settings);
-  doc.save(`debt-receipt-${Date.now()}.pdf`);
+  return savePdf(doc, `debt-receipt-${Date.now()}.pdf`, { title: 'Payment receipt' });
 }
 
 export async function printDebtPaymentReceipt(receipt, settings) {
   const doc = await buildDebtPaymentDocument(receipt, settings);
-  doc.autoPrint();
-  window.open(doc.output('bloburl'), '_blank');
+  return openForPrint(doc, `debt-receipt-${Date.now()}.pdf`);
 }
 
 export function sendWhatsAppDocument(sale, settings, phone, documentUrl) {
@@ -374,7 +373,7 @@ export function sendWhatsAppDocument(sale, settings, phone, documentUrl) {
     remainingBalance: sale.remainingBalance ?? sale.totalAmount,
     businessPhone: settings.phone,
     documentUrl,
-    formatKES,
+    formatMoney,
     items: sale.items,
   });
   const opened = openWhatsApp(phone, message);

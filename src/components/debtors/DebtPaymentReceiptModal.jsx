@@ -5,7 +5,7 @@ import { Printer, Download, MessageCircle } from 'lucide-react';
 import Modal from '../common/Modal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSettings } from '../../contexts/SettingsContext';
-import { formatKES } from '../../utils/currency';
+import { formatMoney } from '../../utils/currency';
 import { openWhatsApp, buildDebtPaymentReceiptMessage, isValidWhatsAppPhone } from '../../utils/whatsapp';
 import { printDebtPaymentReceipt, generateDebtPaymentReceiptPDF } from '../../utils/documentService';
 import { getOrCreateShareLink } from '../../utils/documentSharing';
@@ -13,6 +13,7 @@ import { useCloudDocuments } from '../../hooks/useCloudDocuments';
 import StatementBlock, { StatementRow } from '../ui/StatementBlock';
 import StatusPill from '../ui/StatusPill';
 import Money from '../ui/Money';
+import { tenderLabel } from '../../lib/region';
 
 // Shown right after a debt repayment is successfully recorded (never
 // before — see CustomerDetail.jsx's handleRepayment).
@@ -70,7 +71,7 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
         remainingBalance: receipt.remainingBalance,
         isCleared: receipt.isCleared,
         documentUrl,
-        formatKES,
+        formatMoney,
       });
       const opened = openWhatsApp(phone, message);
       toast[opened ? 'success' : 'error'](opened ? 'WhatsApp opened.' : 'WhatsApp could not be opened.');
@@ -91,7 +92,7 @@ export default function DebtPaymentReceiptModal({ open, receipt, onClose }) {
           <p className="text-body font-semibold text-ink-800">{receipt.customerName}</p>
           <p className="num text-money text-ink-900"><Money value={receipt.amountPaid} /> received</p>
           <p className="text-secondary font-semibold text-ink-500">
-            {receipt.method}{receipt.mpesaCode ? ` · ${receipt.mpesaCode}` : ''}
+            {tenderLabel(receipt.method)}{receipt.mpesaCode ? ` · ${receipt.mpesaCode}` : ''}
           </p>
         </div>
 

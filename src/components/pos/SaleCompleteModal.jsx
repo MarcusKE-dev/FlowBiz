@@ -12,6 +12,7 @@ import StatusPill from '../ui/StatusPill';
 import Money from '../ui/Money';
 import { formatQuantityWithUnit } from '../../industry/units';
 import { saleQuantityLabel, lineItemDetail } from '../../utils/lineItems';
+import { tenderLabel } from '../../lib/region';
 
 export default function SaleCompleteModal({ open, sale, onClose }) {
   const { settings } = useSettings();
@@ -115,7 +116,7 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
           {sale.isCredit && sale.customerName && <p className="text-secondary text-ink-500">{sale.customerName}</p>}
           <p className="num text-money text-ink-900"><Money value={sale.totalAmount} /></p>
           <p className={`text-secondary font-semibold ${sale.isCredit ? 'text-danger-700' : 'text-ink-500'}`}>
-            {sale.isCredit ? 'Payment status: unpaid' : sale.paymentMethod}
+            {sale.isCredit ? 'Payment status: unpaid' : tenderLabel(sale.paymentMethod)}
           </p>
         </div>
 

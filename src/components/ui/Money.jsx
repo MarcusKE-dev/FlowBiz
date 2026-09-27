@@ -4,7 +4,7 @@
 // tabular digits that carry the weight. `masked` renders the privacy
 // placeholder instead, with no prefix.
 
-import { CURRENCY, amountOnly } from './format';
+import { currencyMarker, formatAmount } from '../../lib/region';
 
 export default function Money({ value, masked = false, tone, className = '' }) {
   const toneClass =
@@ -17,8 +17,8 @@ export default function Money({ value, masked = false, tone, className = '' }) {
 
   return (
     <span className={`num whitespace-nowrap ${toneClass} ${className}`}>
-      <span className="text-[0.85em] font-medium text-ink-400">{CURRENCY}</span>{' '}
-      {amountOnly(value)}
+      <span className="text-[0.85em] font-medium text-ink-400">{currencyMarker()}</span>{' '}
+      {formatAmount(value)}
     </span>
   );
 }

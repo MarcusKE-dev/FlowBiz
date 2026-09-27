@@ -182,9 +182,11 @@ test('NO CUSTOMER-FACING SCREEN PROMISES LIFETIME CLOUD, UPDATES OR SUPPORT', ()
 
 test('the landing page states the annual fee on the same card as the licence price', () => {
   const source = read('src/components/landing/PricingComparison.jsx');
-  assert.match(source, /ANNUAL_SERVICE_PRICE_KES/,
+  // From the shared price book: either the Kenyan constants directly, or
+  // the regional price labels (usePriceLabels), which read the same book.
+  assert.match(source, /ANNUAL_SERVICE_PRICE_KES|servicePrice: SERVICE_PRICE/,
     'the annual fee must be shown, from the shared config');
-  assert.match(source, /LIFETIME_LICENSE_PRICE_KES/);
+  assert.match(source, /LIFETIME_LICENSE_PRICE_KES|licensePrice: LIFETIME_PRICE/);
   assert.match(source, /does not expire if you choose not to renew/i,
     'the card must say the licence survives non-renewal');
   assert.ok(source.indexOf('SERVICE_PRICE') < source.indexOf('Get the Lifetime Licence'),

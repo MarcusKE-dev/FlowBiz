@@ -11,7 +11,41 @@
 import { errorResponse } from './response.js';
 import { verifyFirebaseIdToken } from './firebaseIdToken.js';
 import { getDocument } from './firestore.js';
-import { resolveEntitlements } from './licensing.js';
+import { resolveEntitlements, planCharge, pricingRegionForCountry } from './licensing.js';
+
+/**
+ * The price book a business buys from, decided HERE from its stored
+ * region and never from the request. A business with no region (every
+ * one created before regional settings) is Kenyan.
+ */
+export async function pricingRegionForBusiness(env, businessId) {
+  const settings = await getDocument(env, 'businessSettings', businessId).catch(() => null);
+  return pricingRegionForCountry(settings?.region?.country);
+}
+
+/** The full charge for `plan` for this business: description, amount and currency. */
+export async function chargeForBusiness(env, businessId, plan) {
+  return planCharge(plan, await pricingRegionForBusiness(env, businessId));
+}
+
+/**
+ * Currencies the Paystack account can actually take. Paystack Kenya
+ * accounts take KES by default; USD has to be enabled on the account by
+ * Paystack first. Until PAYSTACK_CURRENCIES lists it, an international
+ * checkout is refused with a clear message instead of failing inside
+ * Paystack with an error nobody can act on. See docs/BILLING.md.
+ */
+export function paystackAcceptsCurrency(env, currency) {
+  const list = String(env.PAYSTACK_CURRENCIES || 'KES').split(',').map((c) => c.trim().toUpperCase()).filter(Boolean);
+  return list.includes(String(currency || '').toUpperCase());
+}
+
+export function currencyUnavailableRefusal(currency) {
+  return errorResponse(
+    `Online payment in ${currency} is not available yet. Please contact FlowBiz support to purchase.`,
+    409,
+  );
+}
 
 /** @returns {Promise<{caller, profile} | {response: Response}>} */
 export async function authorizeBillingOwner(request, env) {

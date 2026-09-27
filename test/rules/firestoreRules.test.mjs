@@ -276,6 +276,22 @@ test('only an owner configures sections, courses and the service charge', async 
   assert.ok(!await write('owner1', `businessSettings/${B}`, { serviceChargeRate: -5 }));
 });
 
+// ── Region ────────────────────────────────────────────────────────────
+
+test('only an owner sets the region, and only in a sane shape', async () => {
+  await setup(null);
+  const us = { country: 'US', currency: 'USD', locale: 'en-US', timezone: 'America/Chicago', phoneCountryCode: '1' };
+  assert.ok(await write('owner1', `businessSettings/${B}`, { region: us }), 'an owner sets a region');
+  assert.ok(await write('owner1', `businessSettings/${B}`, { region: { ...us, digitalTenderLabel: 'Card' } }));
+  assert.ok(!await write('cash1', `businessSettings/${B}`, { region: us }), 'a cashier may not');
+  assert.ok(!await write('owner1', `businessSettings/${B}`, { region: { ...us, currency: 'usd' } }), 'currency is an ISO code');
+  assert.ok(!await write('owner1', `businessSettings/${B}`, { region: { ...us, timezone: '<script>' } }));
+  assert.ok(!await write('owner1', `businessSettings/${B}`, { region: { ...us, phoneCountryCode: '+1' } }));
+  assert.ok(!await write('owner1', `businessSettings/${B}`, { region: { ...us, digitalTenderLabel: 'x'.repeat(25) } }));
+  assert.ok(!await write('owner1', `businessSettings/${B}`, { region: { ...us, fxRate: 130 } }), 'no unknown keys');
+  assert.ok(!await write('owner1', `businessSettings/${B}`, { region: 'US' }));
+});
+
 // ── What an owner grants ─────────────────────────────────────────────
 
 test('a granted permission actually opens the write', async () => {
@@ -533,6 +549,31 @@ test('a business may not be created in somebody else\'s name', async () => {
   assert.ok(
     !await write('attacker', `businesses/FORGED`, { name: 'Forged', createdBy: 'victim1', ownerIds: ['victim1'], subscription: freeSub }),
     'createdBy must be the caller, or the profile rule above is built on sand',
+  );
+});
+
+test('A NEW BUSINESS CANNOT BE BORN LICENSED', async () => {
+  // The create rule only looked at subscription.plan. A sign-up could
+  // write its own business document carrying a lifetime `licensing` map,
+  // and hasProFeatures() — and the app's entitlement resolver — read that
+  // map. Every paid feature, free, for a forged field.
+  await clearDatabase();
+  assert.ok(
+    !await write('newowner', `businesses/FAKELIC`, {
+      name: 'Free Lunch', createdBy: 'newowner', ownerIds: ['newowner'], subscription: freeSub,
+      licensing: { licenseType: 'lifetime', licenseStatus: 'active' },
+    }),
+    'licensing is written by the Worker only, at creation as at update',
+  );
+  assert.ok(
+    !await write('newowner', `businesses/FAKEBILL`, {
+      name: 'Free Lunch', createdBy: 'newowner', ownerIds: ['newowner'], subscription: freeSub,
+      billing: { provider: 'google_play' },
+    }),
+  );
+  assert.ok(
+    await write('newowner', `businesses/HONEST`, { name: 'Honest', createdBy: 'newowner', ownerIds: ['newowner'], subscription: freeSub }),
+    'an ordinary sign-up still works',
   );
 });
 

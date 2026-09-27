@@ -6,8 +6,8 @@ import { useSettings } from '../contexts/SettingsContext';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import ErrorBanner from '../components/common/ErrorBanner';
 import Modal from '../components/common/Modal';
-import { formatKES } from '../utils/currency';
-import { formatDate, formatDateTime, getRangeForPreset, startOfDay, endOfDay, todayKey } from '../utils/dateRanges';
+import { formatPdfMoney } from '../utils/currency';
+import { formatDate, formatDateTime, getRangeForPreset, todayKey, startOfDateInput, endOfDateInput } from '../utils/dateRanges';
 import { computeExpectedTillBalances } from '../utils/financials';
 import { Printer, TrendingUp } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
@@ -19,10 +19,11 @@ import StatementBlock, { StatementRow, StatementResult } from '../components/ui/
 import DataTable from '../components/ui/DataTable';
 import EmptyState from '../components/common/EmptyState';
 import Money from '../components/ui/Money';
-import { amountOnly } from '../components/ui/format';
 import { PDF } from '../theme/tokens';
 import toast from 'react-hot-toast';
 import { roundQuantity } from '../industry/units';
+import { currencyMarker, formatAmount, tenderLabel } from '../lib/region';
+import { savePdf, openForPrint } from '../platform/files';
 
 const PRESETS = [
   { id: 'today', label: 'Today' },
@@ -39,7 +40,7 @@ export default function Reports() {
 
   const { start, end } = useMemo(() => {
     if (preset === 'custom' && cStart && cEnd) {
-      return { start: startOfDay(new Date(cStart)), end: endOfDay(new Date(cEnd)) };
+      return { start: startOfDateInput(cStart), end: endOfDateInput(cEnd) };
     }
     return getRangeForPreset(preset === 'custom' ? 'today' : preset);
   }, [preset, cStart, cEnd]);
@@ -258,45 +259,45 @@ export default function Reports() {
       // 2. Cash Drawer Reconciliation Breakdown
       drawSectionHeader('1. Cash Drawer Shift Reconciliation');
       if (preset === 'today') {
-        drawDataRow('Opening Cash Float', formatKES(session?.openingCashFloat || 0));
+        drawDataRow('Opening Cash Float', formatPdfMoney(session?.openingCashFloat || 0));
       }
-      drawDataRow('+ Cash Sales Received', formatKES(summary.totalCashSales));
-      drawDataRow('+ Debt Repayments Collected (Cash)', formatKES(summary.totalDebtRepaymentsCash));
-      drawDataRow('- Shop Expenses Paid (Cash)', `- ${formatKES(summary.totalExpensesCash)}`);
-      drawDataRow('- Customer Refunds Issued (Cash)', `- ${formatKES(summary.totalRefundsCash)}`);
-      drawDataRow('- Direct Stock Purchases Paid (Cash)', `- ${formatKES(cashPurchases)}`);
-      drawDataRow('- Supplier Debt Payments (Cash)', `- ${formatKES(cashSupplierPay)}`);
-      drawDataRow('= Net Expected Cash in Drawer', formatKES(expectedCashAtClose), true, true, PDF.primary);
+      drawDataRow('+ Cash Sales Received', formatPdfMoney(summary.totalCashSales));
+      drawDataRow('+ Debt Repayments Collected (Cash)', formatPdfMoney(summary.totalDebtRepaymentsCash));
+      drawDataRow('- Shop Expenses Paid (Cash)', `- ${formatPdfMoney(summary.totalExpensesCash)}`);
+      drawDataRow('- Customer Refunds Issued (Cash)', `- ${formatPdfMoney(summary.totalRefundsCash)}`);
+      drawDataRow('- Direct Stock Purchases Paid (Cash)', `- ${formatPdfMoney(cashPurchases)}`);
+      drawDataRow('- Supplier Debt Payments (Cash)', `- ${formatPdfMoney(cashSupplierPay)}`);
+      drawDataRow('= Net Expected Cash in Drawer', formatPdfMoney(expectedCashAtClose), true, true, PDF.primary);
       y += 3;
 
       // 3. M-Pesa Till Reconciliation Breakdown
-      drawSectionHeader('2. M-Pesa Till Shift Reconciliation');
+      drawSectionHeader(`2. ${tenderLabel('M-Pesa')} Shift Reconciliation`);
       if (preset === 'today') {
-        drawDataRow('Opening M-Pesa Balance', formatKES(session?.openingMpesaFloat || 0));
+        drawDataRow(`Opening ${tenderLabel('M-Pesa')} Balance`, formatPdfMoney(session?.openingMpesaFloat || 0));
       }
-      drawDataRow('+ M-Pesa Sales Received', formatKES(summary.totalMpesaSales));
-      drawDataRow('+ Debt Repayments Collected (M-Pesa)', formatKES(summary.totalDebtRepaymentsMpesa));
-      drawDataRow('- Shop Expenses Paid (M-Pesa)', `- ${formatKES(summary.totalExpensesMpesa)}`);
-      drawDataRow('- Customer Refunds Issued (M-Pesa)', `- ${formatKES(summary.totalRefundsMpesa)}`);
-      drawDataRow('- Direct Stock Purchases Paid (M-Pesa)', `- ${formatKES(mpesaPurchases)}`);
-      drawDataRow('- Supplier Debt Payments (M-Pesa)', `- ${formatKES(mpesaSupplierPay)}`);
-      drawDataRow('= Net Expected M-Pesa Till Balance', formatKES(expectedMpesaAtClose), true, true, PDF.primary);
+      drawDataRow(`+ ${tenderLabel('M-Pesa')} Sales Received`, formatPdfMoney(summary.totalMpesaSales));
+      drawDataRow(`+ Debt Repayments Collected (${tenderLabel('M-Pesa')})`, formatPdfMoney(summary.totalDebtRepaymentsMpesa));
+      drawDataRow(`- Shop Expenses Paid (${tenderLabel('M-Pesa')})`, `- ${formatPdfMoney(summary.totalExpensesMpesa)}`);
+      drawDataRow(`- Customer Refunds Issued (${tenderLabel('M-Pesa')})`, `- ${formatPdfMoney(summary.totalRefundsMpesa)}`);
+      drawDataRow(`- Direct Stock Purchases Paid (${tenderLabel('M-Pesa')})`, `- ${formatPdfMoney(mpesaPurchases)}`);
+      drawDataRow(`- Supplier Debt Payments (${tenderLabel('M-Pesa')})`, `- ${formatPdfMoney(mpesaSupplierPay)}`);
+      drawDataRow(`= Net Expected ${tenderLabel('M-Pesa')} Balance`, formatPdfMoney(expectedMpesaAtClose), true, true, PDF.primary);
       y += 3;
 
       // 4. Profit & Loss Statement (Cash-Flow / Operating)
       drawSectionHeader('3. Cash-Flow Profit & Loss Statement');
-      drawDataRow('Recognized Cash-Flow Revenue (Sales + Debt Repaid - Refunds)', formatKES(summary.revenue));
-      drawDataRow('- Cost of Goods Sold (COGS)', `- ${formatKES(summary.costOfGoodsSold)}`);
-      drawDataRow('= Gross Profit', formatKES(summary.grossProfit), true, true, PDF.primary);
-      drawDataRow('- Total Operating Expenses', `- ${formatKES(summary.totalExpenses)}`);
-      drawDataRow('= Net Operating Profit', formatKES(summary.netProfit), true, true, summary.netProfit >= 0 ? PDF.primary : PDF.negative);
+      drawDataRow('Recognized Cash-Flow Revenue (Sales + Debt Repaid - Refunds)', formatPdfMoney(summary.revenue));
+      drawDataRow('- Cost of Goods Sold (COGS)', `- ${formatPdfMoney(summary.costOfGoodsSold)}`);
+      drawDataRow('= Gross Profit', formatPdfMoney(summary.grossProfit), true, true, PDF.primary);
+      drawDataRow('- Total Operating Expenses', `- ${formatPdfMoney(summary.totalExpenses)}`);
+      drawDataRow('= Net Operating Profit', formatPdfMoney(summary.netProfit), true, true, summary.netProfit >= 0 ? PDF.primary : PDF.negative);
       y += 3;
 
       // 5. Purchases & Supplier Restocking Summary
       drawSectionHeader('4. Stock Purchases & Supplier Credit Activity');
-      drawDataRow('Total Stock Purchases (Cash & M-Pesa Paid)', formatKES(cashPurchases + mpesaPurchases));
-      drawDataRow('Stock Taken on Supplier Credit (Payables Added)', formatKES(creditPurchases), false, false, PDF.negative);
-      drawDataRow('Supplier Debt Payments Cleared', formatKES(cashSupplierPay + mpesaSupplierPay));
+      drawDataRow(`Total Stock Purchases (Cash & ${tenderLabel('M-Pesa')} Paid)`, formatPdfMoney(cashPurchases + mpesaPurchases));
+      drawDataRow('Stock Taken on Supplier Credit (Payables Added)', formatPdfMoney(creditPurchases), false, false, PDF.negative);
+      drawDataRow('Supplier Debt Payments Cleared', formatPdfMoney(cashSupplierPay + mpesaSupplierPay));
       // This is the PERIOD's net movement, and it is labelled as such.
       // It used to say "Total Current Supplier Balance Outstanding" while
       // being computed from the date-ranged purchase and payment lists
@@ -306,7 +307,7 @@ export default function Reports() {
       // dropped entirely. What a business owes right now is a balance,
       // not a period figure; the Suppliers page computes it from the
       // whole ledger and remains the place to read it.
-      drawDataRow('Net Change in Supplier Credit This Period', formatKES(creditPurchases - (cashSupplierPay + mpesaSupplierPay)), true);
+      drawDataRow('Net Change in Supplier Credit This Period', formatPdfMoney(creditPurchases - (cashSupplierPay + mpesaSupplierPay)), true);
       y += 3;
 
       // 6. Top Sellers & Low Stock (compact)
@@ -316,7 +317,7 @@ export default function Reports() {
           // Rounded at the point of display: summing decimal quantities
           // across a month accumulates the usual binary noise, and a
           // report that says "50.30900000000001 units" is a bug report.
-          drawDataRow(`${idx + 1}. ${p.name} (${roundQuantity(p.qty, 'metre')} units)`, formatKES(p.revenue));
+          drawDataRow(`${idx + 1}. ${p.name} (${roundQuantity(p.qty, 'metre')} units)`, formatPdfMoney(p.revenue));
         });
         y += 3;
       }
@@ -327,11 +328,13 @@ export default function Reports() {
       doc.text(`Generated on ${formatDateTime(new Date())} · Official Record from FlowBiz Workstation`, marginX, 287);
       doc.text(`Page 1 of 1`, pageWidth - marginX, 287, { align: 'right' });
 
+      // Browser: download or print. Android app: the share sheet, since a
+      // WebView can do neither — see platform/files.js.
+      const fileName = `flowbiz-report-${preset}-${todayKey()}.pdf`;
       if (action === 'download') {
-        doc.save(`flowbiz-report-${preset}-${todayKey()}.pdf`);
+        await savePdf(doc, fileName, { title: 'FlowBiz report' });
       } else {
-        doc.autoPrint();
-        window.open(doc.output('bloburl'), '_blank');
+        await openForPrint(doc, fileName);
       }
       toast.success('Report ready.');
       setPdfModalOpen(false);
@@ -394,23 +397,23 @@ export default function Reports() {
         <>
           <Section title="Position">
             <MetricRail columns={4} bleed>
-              <Metric label="Cash balance"        prefix="KES" value={amountOnly(expectedCashAtClose)} />
-              <Metric label="M-Pesa balance"      prefix="KES" value={amountOnly(expectedMpesaAtClose)} />
-              <Metric label="Credit sales"        prefix="KES" value={amountOnly(summary.totalCreditSales)} />
-              <Metric label="Repayments collected" prefix="KES" value={amountOnly(summary.totalDebtRepayments)} />
+              <Metric label="Cash balance"        prefix={currencyMarker()} value={formatAmount(expectedCashAtClose)} />
+              <Metric label={`${tenderLabel('M-Pesa')} balance`}      prefix={currencyMarker()} value={formatAmount(expectedMpesaAtClose)} />
+              <Metric label="Credit sales"        prefix={currencyMarker()} value={formatAmount(summary.totalCreditSales)} />
+              <Metric label="Repayments collected" prefix={currencyMarker()} value={formatAmount(summary.totalDebtRepayments)} />
             </MetricRail>
           </Section>
 
           <Section title="How the profit is made">
             <StatementBlock>
-              <StatementRow label="Revenue"            prefix="KES" value={amountOnly(summary.revenue)} />
-              <StatementRow label="Cost of goods sold" prefix="KES" value={amountOnly(-summary.costOfGoodsSold)} tone={summary.costOfGoodsSold ? 'negative' : 'muted'} />
-              <StatementRow label="Gross profit"       prefix="KES" value={amountOnly(summary.grossProfit)} strong />
-              <StatementRow label="Total expenses"     prefix="KES" value={amountOnly(-summary.totalExpenses)} tone={summary.totalExpenses ? 'negative' : 'muted'} />
+              <StatementRow label="Revenue"            prefix={currencyMarker()} value={formatAmount(summary.revenue)} />
+              <StatementRow label="Cost of goods sold" prefix={currencyMarker()} value={formatAmount(-summary.costOfGoodsSold)} tone={summary.costOfGoodsSold ? 'negative' : 'muted'} />
+              <StatementRow label="Gross profit"       prefix={currencyMarker()} value={formatAmount(summary.grossProfit)} strong />
+              <StatementRow label="Total expenses"     prefix={currencyMarker()} value={formatAmount(-summary.totalExpenses)} tone={summary.totalExpenses ? 'negative' : 'muted'} />
               <StatementResult
                 label="Net profit"
-                prefix="KES"
-                value={amountOnly(summary.netProfit)}
+                prefix={currencyMarker()}
+                value={formatAmount(summary.netProfit)}
                 tone={summary.netProfit < 0 ? 'negative' : 'positive'}
               />
             </StatementBlock>

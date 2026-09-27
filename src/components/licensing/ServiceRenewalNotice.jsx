@@ -25,8 +25,9 @@ import { useLicensingCheckout } from '../../hooks/useLicensingCheckout';
 import { isDemoMode } from '../../demo/demoMode';
 import { ANNUAL_SERVICE_PLAN_ID } from '../../licensing';
 import {
-  RENEW_BUTTON_LABEL, renewalBody, renewalHeadline, formatServiceDate,
+  renewalBody, renewalHeadline, formatServiceDate,
 } from './licensingCopy';
+import { usePriceLabels } from '../../hooks/usePriceLabels';
 
 const DISMISS_KEY = 'flowbiz_service_notice_dismissed';
 
@@ -61,6 +62,7 @@ const TONES = {
 };
 
 export default function ServiceRenewalNotice() {
+  const { renewButtonLabel } = usePriceLabels();
   const { entitlements, isOwner } = useAuth();
   const { startCheckout, busy } = useLicensingCheckout();
   // The stage the customer last put away, read once. Because the stored
@@ -125,7 +127,7 @@ export default function ServiceRenewalNotice() {
             disabled={busy}
             onClick={() => startCheckout(ANNUAL_SERVICE_PLAN_ID)}
           >
-            {busy ? 'Loading…' : RENEW_BUTTON_LABEL}
+            {busy ? 'Loading…' : renewButtonLabel}
           </button>
         )}
         {isOwner && (

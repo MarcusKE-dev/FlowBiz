@@ -37,7 +37,7 @@
 // atomic Firestore create, so two taps racing each other get one prompt.
 
 import { json, errorResponse } from '../lib/response.js';
-import { authorizeBillingOwner, purchaseRefusal } from '../lib/purchaseGuard.js';
+import { authorizeBillingOwner, purchaseRefusal, chargeForBusiness } from '../lib/purchaseGuard.js';
 import {
   getDocument,
   createDocument,
@@ -184,7 +184,13 @@ export async function handleMpesaCharge(request, env) {
   // say what it is buying is refused rather than guessed at.
   if (!isPurchasablePlan(body?.plan)) return errorResponse('Choose a plan to pay for.', 400);
   const plan = body.plan;
-  const planPrice = PLAN_PRICES[plan];
+  // M-Pesa is a Kenyan rail and charges in shillings, so only a business
+  // on the Kenyan price book may use it. An international business pays
+  // by card through /api/paystack/initialize instead.
+  const planPrice = await chargeForBusiness(env, businessId, plan);
+  if (!planPrice || planPrice.currency !== 'KES') {
+    return errorResponse('M-Pesa payment is only available to businesses registered in Kenya.', 409);
+  }
 
   const msisdn = normalizeKenyanMsisdn(body?.phone);
   if (!msisdn) return errorResponse('Enter a valid Kenyan M-Pesa number.', 400);
@@ -257,7 +263,10 @@ export async function handleMpesaCharge(request, env) {
     kind: planPrice.kind,
     description: planPrice.label,
     amountKes: planPrice.amountKes,
+    amount: planPrice.amount,
     currency: 'KES',
+    pricingRegion: planPrice.pricingRegion,
+    billingPlatform: 'web',
     status: 'pending',
     channel: MPESA_CHANNEL,
     provider: 'mpesa',

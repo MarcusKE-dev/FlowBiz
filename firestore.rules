@@ -271,16 +271,23 @@ service cloud.firestore {
       // create an owner profile against it.
       allow create: if isSignedIn()
                     && request.resource.data.createdBy == request.auth.uid
-                    && request.resource.data.subscription.plan == 'free';
+                    && request.resource.data.subscription.plan == 'free'
+                    // A business is not BORN licensed either. hasProFeatures()
+                    // and the app's entitlement resolver both read
+                    // `licensing`, so a sign-up that could write it at
+                    // creation would grant itself every paid feature.
+                    && !request.resource.data.keys().hasAny(['licensing', 'billing']);
       // NEITHER BILLING RECORD IS CLIENT-WRITABLE. `subscription` is the
       // monthly plan; `licensing` is the perpetual licence, the annual
       // services period, the grace window and the administrative cloud
       // suspension. Both are written only by the Cloudflare Worker
       // through the service account, which bypasses these rules — so a
       // browser cannot grant itself a licence, push its own expiry date
-      // out, or lift a suspension an administrator applied.
+      // out, or lift a suspension an administrator applied. `billing` (which
+      // provider sold the last purchase) is written by the same settlement
+      // and is protected with them.
       allow update: if isOwner() && myBusinessId() == businessId
-                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription', 'licensing']);
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription', 'licensing', 'billing']);
       allow delete: if false;
     }
 
@@ -488,6 +495,42 @@ service cloud.firestore {
              );
     }
 
+    // ── Region: country, currency, locale, timezone, dialling code ────
+    //
+    // Shape and format only. Whether a currency or timezone EXISTS is a
+    // question for Intl, which rules cannot ask, and an unknown value is
+    // harmless: resolveRegion() in src/lib/region falls back to the
+    // country's default. What must not get through is anything that is
+    // not a short, plain code — the timezone and locale end up inside
+    // Intl calls and the tender label on every receipt.
+    //
+    // Absent is valid and means Kenya, which is every business created
+    // before this field existed. See docs/INTERNATIONAL.md.
+    function regionOk(data) {
+      return !('region' in data.keys())
+             || (
+               data.region is map
+               && data.region.keys().hasOnly([
+                 'country', 'currency', 'locale', 'timezone', 'phoneCountryCode',
+                 'digitalTenderLabel', 'currencyDisplay'
+               ])
+               && data.region.get('country', '') is string
+               && data.region.get('country', '').matches('^[A-Z]{2}$')
+               && data.region.get('currency', '') is string
+               && data.region.get('currency', '').matches('^[A-Z]{3}$')
+               && data.region.get('timezone', '') is string
+               && data.region.get('timezone', '').matches('^[A-Za-z0-9_+/-]{1,64}$')
+               && data.region.get('locale', '') is string
+               && data.region.get('locale', '').matches('^[A-Za-z0-9-]{2,35}$')
+               && data.region.get('phoneCountryCode', '') is string
+               && data.region.get('phoneCountryCode', '').matches('^[1-9][0-9]{0,3}$')
+               && (!('digitalTenderLabel' in data.region.keys())
+                   || (data.region.digitalTenderLabel is string && data.region.digitalTenderLabel.size() <= 24))
+               && (!('currencyDisplay' in data.region.keys())
+                   || data.region.currencyDisplay in ['code', 'symbol'])
+             );
+    }
+
     function industryConfigOk(data) {
       return industryProfileOk(data)
              && cashierPermissionsOk(data)
@@ -501,7 +544,8 @@ service cloud.firestore {
              && serviceChargeOk(data)
              && unitOverridesOk(data)
              && dashboardOverridesOk(data)
-             && termOverridesOk(data);
+             && termOverridesOk(data)
+             && regionOk(data);
     }
 
     match /businessSettings/{businessId} {

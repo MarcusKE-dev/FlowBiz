@@ -10,10 +10,12 @@ import { useLicensingCheckout } from '../../hooks/useLicensingCheckout';
 import StatusPill from '../ui/StatusPill';
 import { ANNUAL_SERVICE_PLAN_ID, SERVICE_STATUS } from '../../licensing';
 import {
-  SERVICE_PRICE_PER_YEAR, RENEW_BUTTON_LABEL, formatServiceDate, formatDaysRemaining,
+  formatServiceDate, formatDaysRemaining,
 } from './licensingCopy';
+import { usePriceLabels } from '../../hooks/usePriceLabels';
 
 export default function LicensingSummary() {
+  const { servicePricePerYear, renewButtonLabel } = usePriceLabels();
   const { entitlements, isOwner } = useAuth();
   const { startCheckout, loadingPlan } = useLicensingCheckout();
 
@@ -50,7 +52,7 @@ export default function LicensingSummary() {
         </div>
         <div className="flex items-baseline justify-between gap-4 px-4 py-2.5">
           <span className="text-body text-ink-700">Renewal</span>
-          <span className="num text-secondary font-semibold tabular-nums text-ink-900">{SERVICE_PRICE_PER_YEAR}</span>
+          <span className="num text-secondary font-semibold tabular-nums text-ink-900">{servicePricePerYear}</span>
         </div>
         {service.status === SERVICE_STATUS.ACTIVE && (
           <div className="flex items-baseline justify-between gap-4 px-4 py-2.5">
@@ -65,7 +67,7 @@ export default function LicensingSummary() {
       {lapsed && !suspended && (
         <p className="text-secondary leading-relaxed text-ink-600">
           Your Lifetime Licence remains active. Renew Cloud Services, Maintenance, Updates and Support
-          for {SERVICE_PRICE_PER_YEAR}. Nothing you have recorded is deleted.
+          for {servicePricePerYear}. Nothing you have recorded is deleted.
         </p>
       )}
 
@@ -76,7 +78,7 @@ export default function LicensingSummary() {
           disabled={Boolean(loadingPlan)}
           onClick={() => startCheckout(ANNUAL_SERVICE_PLAN_ID)}
         >
-          {loadingPlan === ANNUAL_SERVICE_PLAN_ID ? 'Loading…' : lapsed ? 'Renew now' : RENEW_BUTTON_LABEL}
+          {loadingPlan === ANNUAL_SERVICE_PLAN_ID ? 'Loading…' : lapsed ? 'Renew now' : renewButtonLabel}
         </button>
       )}
     </div>

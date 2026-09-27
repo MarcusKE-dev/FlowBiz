@@ -13,6 +13,7 @@ import { handleSendVerificationEmail } from './routes/sendVerificationEmail.js';
 import { handleSendPasswordReset } from './routes/sendPasswordResetEmail.js';
 import { handleDeleteOwnProfile } from './routes/deleteOwnProfile.js';
 import { handleLoginEvent } from './routes/authLoginEvent.js';
+import { handleGooglePlayVerify, handleGooglePlayRtdn } from './routes/googlePlayBilling.js';
 
 // Admin Control Center Routes
 import { handleAdminVerify } from './routes/admin/adminVerify.js';
@@ -85,6 +86,16 @@ export default {
         return await handlePaystackWebhook(request, env);
       } catch (err) {
         console.error('Webhook error:', err);
+        return errorResponse('Internal server error.', 500);
+      }
+    }
+
+    // ── Google Play notifications (Pub/Sub push, server-to-server) ─────
+    if (url.pathname === '/api/billing/google-play/rtdn' && request.method === 'POST') {
+      try {
+        return await handleGooglePlayRtdn(request, env, url);
+      } catch (err) {
+        console.error('Play RTDN error:', err);
         return errorResponse('Internal server error.', 500);
       }
     }
@@ -235,10 +246,12 @@ export default {
         response = await handleMpesaCharge(request, env);
       } else if (url.pathname === '/api/paystack/mpesa/status' && request.method === 'GET') {
         response = await handleMpesaStatus(request, env, url);
+      } else if (url.pathname === '/api/billing/google-play/verify' && request.method === 'POST') {
+        response = await handleGooglePlayVerify(request, env);
       } else if (url.pathname === '/api/pro/price' && request.method === 'GET') {
         response = await handleProPrice();
       } else if (url.pathname === '/api/pricing' && request.method === 'GET') {
-        response = await handlePricing();
+        response = await handlePricing(request);
       } else if (url.pathname === '/api/auth/login-event' && request.method === 'POST') {
         response = await handleLoginEvent(request, env);
       } else if (url.pathname === '/api/auth/delete-own-profile' && request.method === 'POST') {

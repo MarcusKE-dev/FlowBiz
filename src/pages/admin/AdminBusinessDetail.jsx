@@ -72,6 +72,7 @@ import {
   CreditCard, Settings as SettingsIcon, ScrollText, Copy, Trash2,
   KeyRound, MailCheck, PauseCircle, PlayCircle, Sparkles, ShieldCheck, Store,
 } from 'lucide-react';
+import { currencyMarker, resolveRegion } from '../../lib/region';
 
 // Tabs are grouped the way a support conversation moves: what the shop
 // is, what it sells, who owes it money, what it spends, and how it is
@@ -455,6 +456,8 @@ export default function AdminBusinessDetail() {
   if (error) return <AdminApiError error={error} onRetry={loadOverview} />;
 
   const { business, settings, metrics, staff } = data;
+  // THIS business's currency and locale, not the operator's.
+  const bizRegion = resolveRegion(settings);
   const isSuspended = business.status === 'suspended';
   // A workspace that is ACTIVE while its people are not. It is the state a
   // suspension performed by an earlier deployment leaves behind — the
@@ -518,8 +521,8 @@ export default function AdminBusinessDetail() {
         <Metric label="Customers" value={(metrics.customersCount ?? 0).toLocaleString('en-KE')} hint="Customer book" />
         <Metric
           label="Outstanding credit"
-          prefix="KES"
-          value={Number(metrics.totalOutstandingDebt || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}
+          prefix={currencyMarker({ region: bizRegion })}
+          value={Number(metrics.totalOutstandingDebt || 0).toLocaleString(bizRegion.locale, { maximumFractionDigits: 0 })}
           hint="Owed to this shop"
         />
       </MetricRail>

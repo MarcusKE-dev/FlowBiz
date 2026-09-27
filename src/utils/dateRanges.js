@@ -1,29 +1,45 @@
-// Africa/Nairobi is a fixed UTC+3 with no DST, so business-day boundaries
-// can be computed with a constant offset instead of the device's own
-// (potentially different) local timezone. This keeps "today" consistent
-// with todayKey() below, which drives dailySessions doc IDs.
-const NAIROBI_OFFSET_MS = 3 * 60 * 60 * 1000;
+// BUSINESS-DAY BOUNDARIES, IN THE BUSINESS'S OWN TIMEZONE.
+//
+// These used to add a fixed UTC+3 to every instant, which was right for
+// Nairobi (no daylight saving) and for nobody else. They now ask
+// src/lib/region/time.js, which uses the IANA timezone from the open
+// business's region settings and handles 23- and 25-hour days. A
+// business with no region stored is on Africa/Nairobi, so every existing
+// Kenyan shop computes exactly the boundaries it always did — the region
+// tests pin that across a whole year.
+//
+// Every function still takes a date and nothing else; an optional last
+// argument names a timezone for the admin console and for tests.
 
-export function startOfDay(date = new Date()) {
-  const nairobiMs = date.getTime() + NAIROBI_OFFSET_MS;
-  const nairobiMidnightMs = Math.floor(nairobiMs / 86400000) * 86400000;
-  return new Date(nairobiMidnightMs - NAIROBI_OFFSET_MS);
+import {
+  startOfBusinessDay, endOfBusinessDay, startOfBusinessWeek, startOfBusinessMonth,
+  startOfNextBusinessDay, businessDayKey, formatInBusinessZone,
+  startOfBusinessDateKey, endOfBusinessDateKey, startOfBusinessDayOffset,
+} from '../lib/region/time.js';
+
+/** A date <input>'s 'YYYY-MM-DD' as the start / end of that business day. */
+export function startOfDateInput(key, timeZone) {
+  return startOfBusinessDateKey(key, timeZone);
 }
-export function endOfDay(date = new Date()) {
-  return new Date(startOfDay(date).getTime() + 86400000 - 1);
+export function endOfDateInput(key, timeZone) {
+  return endOfBusinessDateKey(key, timeZone);
 }
-export function startOfWeek(date = new Date()) {
-  const d = startOfDay(date);
-  const nairobiDate = new Date(d.getTime() + NAIROBI_OFFSET_MS);
-  const dayOfWeek = nairobiDate.getUTCDay();
-  const diff = (dayOfWeek + 6) % 7;
-  return new Date(d.getTime() - diff * 86400000);
+/** Start of the business day `days` calendar days from `date` (negative is back). */
+export function shiftDays(date, days, timeZone) {
+  return startOfBusinessDayOffset(date, days, timeZone);
 }
-export function startOfMonth(date = new Date()) {
-  const nairobiMs = date.getTime() + NAIROBI_OFFSET_MS;
-  const nairobiDate = new Date(nairobiMs);
-  const firstOfMonthUTC = Date.UTC(nairobiDate.getUTCFullYear(), nairobiDate.getUTCMonth(), 1, 0, 0, 0, 0);
-  return new Date(firstOfMonthUTC - NAIROBI_OFFSET_MS);
+
+export function startOfDay(date = new Date(), timeZone) {
+  return startOfBusinessDay(date, timeZone);
+}
+export function endOfDay(date = new Date(), timeZone) {
+  return endOfBusinessDay(date, timeZone);
+}
+export function startOfWeek(date = new Date(), timeZone) {
+  return startOfBusinessWeek(date, timeZone);
+}
+export function startOfMonth(date = new Date(), timeZone) {
+  return startOfBusinessMonth(date, timeZone);
 }
 export function getRangeForPreset(preset) {
   const now = new Date();
@@ -43,17 +59,17 @@ export function toJsDate(value) {
 export function formatDateTime(value) {
   const d = toJsDate(value);
   if (!d) return '-';
-  return d.toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return formatInBusinessZone(d, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 export function formatDate(value) {
   const d = toJsDate(value);
   if (!d) return '-';
-  return d.toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', year: 'numeric' });
+  return formatInBusinessZone(d, { day: '2-digit', month: 'short', year: 'numeric' });
 }
-export function todayKey(date = new Date()) {
-  const f = new Intl.DateTimeFormat('en-KE', { timeZone: 'Africa/Nairobi', year: 'numeric', month: '2-digit', day: '2-digit' });
-  const p = f.formatToParts(date);
-  return `${p.find(x=>x.type==='year').value}-${p.find(x=>x.type==='month').value}-${p.find(x=>x.type==='day').value}`;
+// The business day as 'YYYY-MM-DD'. This is the dailySessions document id,
+// so it must be the business's calendar date and nothing else.
+export function todayKey(date = new Date(), timeZone) {
+  return businessDayKey(date, timeZone);
 }
 
 // ── Added for the Advanced Analytics redesign ──────────────────────────
@@ -74,19 +90,22 @@ export function toMillisValue(value) {
 // display label — used to build trend charts from raw record arrays
 // without inventing any data the app doesn't already have.
 export function buildDateBuckets(start, end, granularity = 'day') {
+  // Steps by CALENDAR days, not by 86,400,000 ms: a daylight-saving day is
+  // 23 or 25 hours long, and a fixed step drifts a bucket into the next day.
   const buckets = [];
-  const stepMs = granularity === 'week' ? 7 * 86400000 : 86400000;
+  const stepDays = granularity === 'week' ? 7 : 1;
   let cursor = startOfDay(start);
   const endBoundary = endOfDay(end);
   while (cursor.getTime() <= endBoundary.getTime()) {
-    const bucketEndMs = Math.min(cursor.getTime() + stepMs - 1, endBoundary.getTime());
-    const bucketEnd = new Date(bucketEndMs);
+    let next = cursor;
+    for (let i = 0; i < stepDays; i += 1) next = startOfNextBusinessDay(next);
+    const bucketEnd = new Date(Math.min(next.getTime() - 1, endBoundary.getTime()));
     buckets.push({
       start: cursor,
       end: bucketEnd,
-      label: cursor.toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short' }),
+      label: formatInBusinessZone(cursor, { day: '2-digit', month: 'short' }),
     });
-    cursor = new Date(cursor.getTime() + stepMs);
+    cursor = next;
   }
   return buckets;
 }

@@ -19,6 +19,7 @@ import Money from '../components/ui/Money';
 import { formatDateTime, todayKey } from '../utils/dateRanges';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+import { currencyCode, digitalReferenceLabel, digitalReferenceMissingMessage, digitalReferenceRequired, tenderLabel } from '../lib/region';
 const emptyForm = { description:'', category:'', amount:'', paymentMethod:'Cash', mpesaCode:'' };
 
 export default function Expenses() {
@@ -57,7 +58,7 @@ export default function Expenses() {
 const handle = async e => {
     e.preventDefault();
     if (!form.description.trim()||!form.amount) return;
-    if (form.paymentMethod==='M-Pesa'&&!form.mpesaCode.trim()) { toast.error('Enter M-Pesa transaction code.'); return; }
+    if (form.paymentMethod==='M-Pesa'&&digitalReferenceRequired()&&!form.mpesaCode.trim()) { toast.error(digitalReferenceMissingMessage()); return; }
     setBusy(true);
     const write = addDoc(tenantCollection('expenses'), withBusiness({
       description:form.description.trim(), category, amount:Number(form.amount),
@@ -111,7 +112,7 @@ const handle = async e => {
             </select>
           </div>
           <div>
-            <label className="label" htmlFor="expense-amount">Amount (KES)</label>
+            <label className="label" htmlFor="expense-amount">Amount ({currencyCode()})</label>
             <input
               id="expense-amount"
               type="number"
@@ -144,7 +145,7 @@ const handle = async e => {
                 {m === 'Cash'
                   ? <Banknote className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
                   : <Smartphone className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />}
-                {m}
+                {tenderLabel(m)}
               </button>
             ))}
           </div>
@@ -153,14 +154,14 @@ const handle = async e => {
         {form.paymentMethod === 'M-Pesa' && (
           <div>
             <label className="label" htmlFor="expense-mpesa">
-              M-Pesa code <span className="text-danger-600" aria-hidden="true">*</span>
+              {digitalReferenceLabel()}{digitalReferenceRequired() && <span className="text-danger-600" aria-hidden="true"> *</span>}
             </label>
             <input
               id="expense-mpesa"
               className="input num uppercase"
               value={form.mpesaCode}
               onChange={set('mpesaCode')}
-              placeholder="QWE1234567"
+              placeholder={digitalReferenceRequired() ? 'QWE1234567' : ''}
             />
           </div>
         )}
@@ -193,7 +194,7 @@ const handle = async e => {
                 render: (e) => <span className="font-medium text-ink-900">{e.description}</span>,
               },
               { key: 'category', header: 'Category', mobileTrailing: true, render: (e) => <span className="text-ink-600">{e.category}</span> },
-              { key: 'paymentMethod', header: 'Method', render: (e) => <span className="text-ink-600">{e.paymentMethod}</span> },
+              { key: 'paymentMethod', header: 'Method', render: (e) => <span className="text-ink-600">{tenderLabel(e.paymentMethod)}</span> },
               { key: 'recordedAt', header: 'Date', render: (e) => <span className="text-ink-600">{formatDateTime(e.recordedAt)}</span> },
               { key: 'recordedByName', header: 'Recorded by', render: (e) => <span className="text-ink-600">{e.recordedByName}</span> },
               {

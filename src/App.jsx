@@ -7,6 +7,8 @@ import { CheckoutProvider } from './contexts/CheckoutContext';
 import AppRouter from './router/AppRouter';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import PwaInstallBanner from './components/common/PwaInstallBanner';
+import NativeShell from './platform/NativeShell';
+import { isNativeApp } from './platform/platform';
 
 function App() {
   return (
@@ -31,10 +33,12 @@ function App() {
             }}
           />
           <CheckoutProvider>
+            <NativeShell />
             <AppRouter />
           </CheckoutProvider>
-          {/* Shows the install popup automatically for visitors on phone or desktop */}
-          <PwaInstallBanner />
+          {/* Shows the install popup automatically for visitors on phone or
+              desktop. Never inside the Android app, which is already installed. */}
+          {!isNativeApp() && <PwaInstallBanner />}
         </SettingsProvider>
       </AuthProvider>
     </ErrorBoundary>

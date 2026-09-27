@@ -23,10 +23,11 @@ import toast from 'react-hot-toast';
 import { Plus, X } from 'lucide-react';
 import Modal from '../common/Modal';
 import Money from '../ui/Money';
-import { formatKES } from '../../utils/currency';
+import { formatMoney } from '../../utils/currency';
 import { raceWithTimeout } from '../../utils/offlineWrite';
 import { friendlyErrorMessage } from '../../utils/errorMessages';
 import { TENDER_METHODS, MAX_TENDERS, normalizeTenders, tendersTotal, tenderProblem } from '../../utils/tenders';
+import { digitalReferenceLabel, digitalReferenceRequired, tenderLabel } from '../../lib/region';
 
 export default function TicketCheckoutModal({
   open, check, customers = [], onClose, onConfirmSale, onConfirmCredit, onCreateCustomer,
@@ -62,7 +63,7 @@ export default function TicketCheckoutModal({
 
   if (!open || !check) return null;
 
-  const needsMpesaCode = !split && method === 'M-Pesa' && !mpesaCode.trim();
+  const needsMpesaCode = !split && method === 'M-Pesa' && digitalReferenceRequired() && !mpesaCode.trim();
   const needsCustomer = !split && method === 'Credit' && !customerId && !(newMode && newName.trim());
   const canSubmit = !submitting && !needsMpesaCode && !needsCustomer && !splitProblem;
 
@@ -138,7 +139,7 @@ export default function TicketCheckoutModal({
           )}
           <div className="flex justify-between border-t border-line pt-1 text-page-title text-ink-900">
             <span className="text-body font-semibold">Total</span>
-            <span className="num font-semibold">{formatKES(total)}</span>
+            <span className="num font-semibold">{formatMoney(total)}</span>
           </div>
         </div>
 
@@ -158,7 +159,7 @@ export default function TicketCheckoutModal({
                         : 'border-line bg-surface text-ink-600 hover:border-ink-300'
                     }`}
                   >
-                    {option}
+                    {tenderLabel(option)}
                   </button>
                 ))}
               </div>
@@ -166,7 +167,7 @@ export default function TicketCheckoutModal({
 
             {method === 'M-Pesa' && (
               <div>
-                <label className="label">M-Pesa code</label>
+                <label className="label">{digitalReferenceLabel()}</label>
                 <input className="input" value={mpesaCode} onChange={(e) => setMpesaCode(e.target.value)} />
               </div>
             )}
@@ -208,7 +209,7 @@ export default function TicketCheckoutModal({
                   value={row.method}
                   onChange={(e) => setRow(index, { method: e.target.value })}
                 >
-                  {TENDER_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+                  {TENDER_METHODS.map((m) => <option key={m} value={m}>{tenderLabel(m)}</option>)}
                 </select>
                 <input
                   type="number" min="0" step="0.01" inputMode="decimal"
@@ -246,7 +247,7 @@ export default function TicketCheckoutModal({
             <div className="flex justify-between border-t border-line pt-2 text-secondary">
               <span className="text-ink-600">Paid</span>
               <span className={`num ${Math.abs(paid - total) < 0.005 ? 'text-ink-900' : 'text-danger-700'}`}>
-                {formatKES(paid)} of {formatKES(total)}
+                {formatMoney(paid)} of {formatMoney(total)}
               </span>
             </div>
             {splitProblem && <p className="text-secondary text-danger-700">{splitProblem}</p>}
@@ -258,7 +259,7 @@ export default function TicketCheckoutModal({
         )}
 
         <button type="button" className="btn-primary w-full" disabled={!canSubmit} onClick={handleConfirm}>
-          {submitting ? 'Charging…' : `Charge ${formatKES(total)}`}
+          {submitting ? 'Charging…' : `Charge ${formatMoney(total)}`}
         </button>
       </div>
     </Modal>

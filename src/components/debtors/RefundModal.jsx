@@ -3,6 +3,7 @@ import Modal from '../common/Modal';
 import { Banknote, Smartphone } from 'lucide-react';
 import StatementBlock, { StatementRow } from '../ui/StatementBlock';
 import Money from '../ui/Money';
+import { tenderLabel } from '../../lib/region';
 
 export default function RefundModal({ open, creditSale, onClose, onSubmit }) {
   const [method, setMethod] = useState('Cash');
@@ -28,7 +29,7 @@ export default function RefundModal({ open, creditSale, onClose, onSubmit }) {
           <div className="grid grid-cols-2 gap-2">
             {['Cash','M-Pesa'].map(m=>(
               <button key={m} type="button" onClick={()=>setMethod(m)} className={`flex items-center justify-center gap-1.5 rounded-control border px-3 py-2.5 text-button transition-colors ${method===m?'border-primary-600 bg-primary-50 text-primary-800':'border-line text-ink-600 hover:bg-ink-50 hover:text-ink-900'}`}>
-                {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{m}
+                {m==='Cash'?<Banknote className="h-4 w-4" strokeWidth={1.75}/>:<Smartphone className="h-4 w-4" strokeWidth={1.75}/>}{tenderLabel(m)}
               </button>
             ))}
           </div>

@@ -13,7 +13,7 @@ import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import useProductImage from '../hooks/useProductImage';
 import { tenantQuery } from '../lib/tenant';
 import LoadingSpinner from '../components/common/LoadingSpinner';
-import { formatKES } from '../utils/currency';
+import { formatMoney } from '../utils/currency';
 import { readRoom } from '../domain/fnb/ticket';
 import { readFloor } from '../domain/fnb/floor';
 import { sellableProducts } from '../domain/fnb/catalog';
@@ -250,7 +250,7 @@ function FeedItem({ entry }) {
           {entry.name}
         </h2>
         <p className="num text-[1.35em] font-bold text-primary-300 lg:text-[1.55em]">
-          {formatKES(entry.price)}
+          {formatMoney(entry.price)}
         </p>
       </div>
     </div>

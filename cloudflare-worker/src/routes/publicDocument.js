@@ -1,5 +1,8 @@
 import { html } from '../lib/response.js';
 import { getDocument } from '../lib/firestore.js';
+import {
+  resolveRegion, formatMoney, formatInBusinessZone, tenderLabel, isMpesaRegion,
+} from '../../../src/lib/region/index.js';
 
 const COLLECTION_BY_TYPE = {
   receipt: 'sales',
@@ -40,18 +43,21 @@ function lineDetail(item) {
   return parts.join(', ');
 }
 
-function formatKES(amount) {
-  const v = Number(amount) || 0;
-  return `KES ${v.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// IN THE BUSINESS'S CURRENCY AND ON ITS CLOCK. The region comes from the
+// businessSettings document this route already reads, resolved by the same
+// pure module the app uses (src/lib/region), and is passed explicitly —
+// never held in module state, because one Worker isolate serves many
+// businesses' receipts at once. Code style ("USD 12.00") because the same
+// strings feed the jsPDF download, whose fonts cannot draw most symbols.
+function formatMoneyFor(amount, region) {
+  return formatMoney(amount, { region, display: 'code' });
 }
 
-function formatDate(isoOrDate) {
+function formatDate(isoOrDate, region) {
   if (!isoOrDate) return '-';
   const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
   if (Number.isNaN(d.getTime())) return '-';
-  return d.toLocaleString('en-KE', {
-    timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
+  return formatInBusinessZone(d, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }, { region });
 }
 
 async function resolveDocument(env, token) {
@@ -71,13 +77,13 @@ async function resolveDocument(env, token) {
   return { documentType, doc, settings };
 }
 
-function buildViewModel(documentType, doc) {
+function buildViewModel(documentType, doc, region) {
   if (documentType === 'debtPaymentReceipt') {
     const receiptNo = `PAY-${(doc.id || '').slice(-6).toUpperCase() || '000000'}`;
     return {
       label: DOCUMENT_LABEL.debtPaymentReceipt,
       receiptNumber: receiptNo,
-      dateLabel: formatDate(doc.paidAt),
+      dateLabel: formatDate(doc.paidAt, region),
       customerName: doc.customerName || '-',
       servedByName: doc.recordedByName || '',
       refLabel: (doc.paymentReferences || []).join(', ') || receiptNo,
@@ -86,8 +92,9 @@ function buildViewModel(documentType, doc) {
       amountPaid: Number(doc.amountPaid) || 0,
       remainingBalance: Number(doc.remainingBalance) || 0,
       isCleared: !!doc.isCleared,
-      method: doc.method || '',
+      method: doc.method ? tenderLabel(doc.method, region) : '',
       mpesaCode: doc.mpesaCode || '',
+      referenceLabel: isMpesaRegion(region) ? 'M-Pesa reference' : 'Reference',
     };
   }
   const isCredit = documentType === 'invoice';
@@ -97,7 +104,7 @@ function buildViewModel(documentType, doc) {
   return {
     label: isCredit ? DOCUMENT_LABEL.invoice : DOCUMENT_LABEL.receipt,
     receiptNumber: receiptNo,
-    dateLabel: formatDate(doc.soldAt),
+    dateLabel: formatDate(doc.soldAt, region),
     customerName: doc.customerName || '',
     servedByName: doc.soldByName || '',
     refLabel: receiptNo,
@@ -109,8 +116,9 @@ function buildViewModel(documentType, doc) {
     soldPricePerUnit: Number(doc.soldPricePerUnit) || 0,
     totalAmount: Number(doc.totalAmount) || 0,
     remainingBalance: Number(doc.remainingBalance ?? doc.totalAmount) || 0,
-    paymentMethod: doc.paymentMethod || '',
+    paymentMethod: doc.paymentMethod ? tenderLabel(doc.paymentMethod, region) : '',
     mpesaCode: doc.mpesaCode || '',
+    referenceLabel: isMpesaRegion(region) ? 'M-Pesa reference' : 'Reference',
   };
 }
 
@@ -250,7 +258,10 @@ function renderShell({ title, bodyHtml, paperWidthMm = 80 }) {
 </html>`;
 }
 
-function renderDocumentBody(vm, settings) {
+function renderDocumentBody(vm, settings, region) {
+  // Shadows nothing global any more: every amount below is in the
+  // business's own currency.
+  const formatKES = (amount) => formatMoneyFor(amount, region);
   const logoHtml = settings.logoUrl
     ? `<img class="logo" src="${escapeHtml(settings.logoUrl)}" alt="" />`
     : '';
@@ -276,7 +287,7 @@ function renderDocumentBody(vm, settings) {
         ${metaRow('Customer', vm.customerName)}
         ${metaRow('Served by', vm.servedByName)}
         ${metaRow('Payment method', paymentMethod)}
-        ${metaRow('M-Pesa reference', vm.mpesaCode)}
+        ${metaRow(vm.referenceLabel || 'Reference', vm.mpesaCode)}
       </dl>`;
 
   // ── The itemised section ────────────────────────────────────────────
@@ -389,6 +400,9 @@ function renderDocumentBody(vm, settings) {
       email: settings.email || '',
       address: settings.address || '',
       logoUrl: settings.logoUrl || null,
+      currency: region.currency,
+      locale: region.locale,
+      currencyDigits: Number.isInteger(region.currencyDigits) ? region.currencyDigits : 2,
     })};</script>
     <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
     <script>${buildPdfScript()}</script>
@@ -410,7 +424,12 @@ function buildPdfScript() {
 
   function formatKES(n) {
     var v = Number(n) || 0;
-    return 'KES ' + v.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    var b = window.__FLOWBIZ_BUSINESS__ || {};
+    var d = typeof b.currencyDigits === 'number' ? b.currencyDigits : 2;
+    var text;
+    try { text = v.toLocaleString(b.locale || 'en-KE', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+    catch (e) { text = v.toFixed(d); }
+    return (b.currency || 'KES') + ' ' + text.replace(/[\u00a0\u202f]/g, ' ');
   }
 
   window.__downloadFlowBizPdf = function () {
@@ -497,7 +516,7 @@ function buildPdfScript() {
     meta('Customer', vm.customerName);
     meta('Served by', vm.servedByName);
     meta('Payment method', isDebt ? vm.method : vm.paymentMethod);
-    meta('M-Pesa reference', vm.mpesaCode);
+    meta(vm.referenceLabel || 'Reference', vm.mpesaCode);
 
     // ── 5. Itemised table ──────────────────────────────────────────
     // Four columns at both paper widths, laid out proportionally so 58mm
@@ -630,12 +649,13 @@ export async function handlePublicDocument(request, env, token) {
   if (!resolved) return renderNotFound();
 
   const { documentType, doc, settings } = resolved;
-  const vm = buildViewModel(documentType, doc);
+  const region = resolveRegion(settings);
+  const vm = buildViewModel(documentType, doc, region);
   const paperWidthMm = settings.receiptPaperWidth === 58 ? 58 : 80;
 
   return html(renderShell({
     title: `${vm.label} (${vm.receiptNumber}) | ${settings.shopName || 'FlowBiz'}`,
-    bodyHtml: renderDocumentBody(vm, settings),
+    bodyHtml: renderDocumentBody(vm, settings, region),
     paperWidthMm,
   }));
 }

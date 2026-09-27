@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { X, Zap, ZapOff, AlertTriangle } from 'lucide-react';
 import { useCameraScanner } from '../../hooks/useCameraScanner';
+import { nativeScannerAvailable, scanNative } from '../../platform/barcode';
 
 export default function ScannerModal({ open, onClose, onDetected }) {
   // Guards against multiple rapid detections firing in the brief window
@@ -18,12 +19,35 @@ export default function ScannerModal({ open, onClose, onDetected }) {
     onDetected(text);
   }, [paused, onDetected]);
 
+  // IN THE ANDROID APP the system code scanner is tried first (see
+  // platform/barcode.js). Only if it is unavailable does this modal fall
+  // back to the in-page camera below, so the web scanner is never started
+  // while the native one is on screen.
+  const [nativeState, setNativeState] = useState('idle'); // idle | running | fallback
+  useEffect(() => {
+    if (!open) { setNativeState('idle'); return undefined; }
+    if (!nativeScannerAvailable()) { setNativeState('fallback'); return undefined; }
+    let alive = true;
+    setNativeState('running');
+    scanNative().then((result) => {
+      if (!alive) return;
+      if (result.status === 'scanned') onDetected(result.text);
+      else if (result.status === 'cancelled') onClose();
+      else setNativeState('fallback');
+    });
+    return () => { alive = false; };
+    // Deliberately only on open: one native scan per opening.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
 const { videoRef, status, torchOn, torchSupported, toggleTorch, retry } = useCameraScanner({
     onDetected: handleDetected,
-    active: open && !paused,
+    active: open && !paused && nativeState === 'fallback',
   });
 
   if (!open) return null;
+  // The system scanner covers the screen itself; nothing to draw under it.
+  if (nativeState === 'running' || nativeState === 'idle') return null;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-ink-950">
@@ -47,7 +71,7 @@ const { videoRef, status, torchOn, torchSupported, toggleTorch, retry } = useCam
           <ScannerMessage
             icon={<AlertTriangle className="h-8 w-8 text-danger-400" strokeWidth={1.75} />}
             title="Camera permission needed"
-            body="Your browser is blocking camera access for FlowBiz. Tap the padlock or (i) icon next to the address bar, then choose Permissions, Camera, Allow, and come back and try again. On some phones this lives under the Chrome menu, then Settings, Site settings, flowbiz.pages.dev."
+            body="Camera access is blocked for FlowBiz. In a browser, tap the padlock or (i) icon next to the address bar, then Permissions, Camera, Allow, and try again. You can always find a product by searching its name or code, or use a plug-in barcode scanner."
             action={<button type="button" onClick={retry} className="btn-primary mt-2">Try again</button>}
           />
         )}

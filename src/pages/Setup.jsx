@@ -23,7 +23,9 @@ import {
   resolveSignupProfile,
   DEFAULT_PROFILE_ID,
 } from '../industry/profiles';
-import { toWhatsAppE164 } from '../lib/whatsapp';
+import {
+  countriesForPicker, guessCountryFromDevice, defaultRegionFor, resolveRegion, toE164, phonePlaceholder,
+} from '../lib/region';
 
 const FLOWBIZ_API_URL =
   import.meta.env.VITE_FLOWBIZ_API_URL ||
@@ -67,6 +69,10 @@ export default function Setup() {
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  // Pre-selected from the device's timezone, shown, and editable. The
+  // owner's choice is what is stored; see lib/region/countries.js.
+  const [country, setCountry] = useState(() => guessCountryFromDevice());
+  const signupRegion = resolveRegion(defaultRegionFor(country));
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -94,7 +100,7 @@ export default function Setup() {
       return;
     }
 
-    if (!toWhatsAppE164(phone)) {
+    if (!toE164(phone, { region: signupRegion })) {
       setError('Enter a valid phone number.');
       return;
     }
@@ -221,7 +227,9 @@ export default function Setup() {
         // shop's public number that prints on receipts, and the two are
         // not the same thing — one is for customers, this one is for
         // reaching the owner. The admin console already reads this field.
-        phone: phone.trim(),
+        // Stored in E.164 (+2547…, +1415…) so the number means the same
+        // thing to anybody reading it, whatever country they are in.
+        phone: toE164(phone, { region: signupRegion }) || phone.trim(),
         role: 'owner',
         businessId,
         active: true,
@@ -234,6 +242,10 @@ export default function Setup() {
         cashierCanRecordExpenses: true,
         industryProfile: resolveSignupProfile(industryProfile),
         capabilityOverrides: {},
+        // Country, currency, timezone, locale and dialling code. A
+        // business without this map is treated as Kenyan (every business
+        // that predates it is), so it is written for every new one.
+        region: defaultRegionFor(country),
       });
 
       await batch.commit();
@@ -331,7 +343,7 @@ export default function Setup() {
             required
             value={businessName}
             onChange={(e) => setBusinessName(e.target.value)}
-            placeholder="e.g. Nairobi Smart Retail"
+            placeholder="e.g. Corner Street Store"
             disabled={submitting}
           />
         </div>
@@ -357,6 +369,24 @@ export default function Setup() {
         </div>
 
         <div>
+          <label className="label" htmlFor="setup-country">Country</label>
+          <select
+            id="setup-country"
+            className="input"
+            value={country}
+            onChange={(e) => setCountry(e.target.value)}
+            disabled={submitting}
+          >
+            {countriesForPicker().map((c) => (
+              <option key={c.code} value={c.code}>{c.name}</option>
+            ))}
+          </select>
+          <p className="mt-1 text-secondary text-ink-500">
+            Prices in {signupRegion.currency}, days on {signupRegion.timezone.replace(/_/g, ' ')} time. You can change this later in Settings.
+          </p>
+        </div>
+
+        <div>
           <label className="label">Your name</label>
           <input
             className="input"
@@ -376,7 +406,7 @@ export default function Setup() {
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="owner@yourbusiness.co.ke"
+            placeholder="owner@yourbusiness.com"
             autoComplete="username"
             disabled={submitting}
           />
@@ -391,7 +421,7 @@ export default function Setup() {
             required
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            placeholder="07xx xxx xxx"
+            placeholder={phonePlaceholder({ region: signupRegion })}
             autoComplete="tel"
             disabled={submitting}
           />

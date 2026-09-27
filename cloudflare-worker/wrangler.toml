@@ -4,10 +4,22 @@ compatibility_date = "2025-01-01"
 
 [vars]
 FIREBASE_PROJECT_ID = "swiftstock-bc6a3"
-ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://flowbiz.pages.dev,https://flowbiz.co.ke,https://admin.flowbiz.co.ke"
+# https://localhost is the FlowBiz ANDROID APP: Capacitor serves the app's
+# bundled assets from that origin inside the WebView. CORS is not what
+# protects the API — every privileged route verifies a Firebase ID token —
+# it only decides which pages may read responses.
+ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://flowbiz.pages.dev,https://flowbiz.co.ke,https://admin.flowbiz.co.ke,https://localhost"
 PAYSTACK_CALLBACK_URL = "https://flowbiz.co.ke/pro"
 APP_BASE_URL = "https://flowbiz.co.ke"
 ADMIN_EMAILS = "admin@flowbiz.co.ke"
+# Currencies the Paystack account accepts. Add USD ONLY after Paystack has
+# enabled it on the account; until then international web checkout is
+# refused with a clear message. See docs/BILLING.md.
+PAYSTACK_CURRENCIES = "KES"
+# Google Play Billing. The package name is public; the service account
+# (GOOGLE_PLAY_SERVICE_ACCOUNT_JSON) and the RTDN token
+# (GOOGLE_PLAY_RTDN_TOKEN) are SECRETS: `wrangler secret put …`.
+GOOGLE_PLAY_PACKAGE_NAME = "com.abcsystems.flowbiz"
 
 # Annual cloud services renewal reminders.
 #

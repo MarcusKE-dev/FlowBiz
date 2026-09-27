@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import Modal from '../common/Modal';
 import PaymentMethodSelect from './PaymentMethodSelect';
-import { formatKES, roundMoney } from '../../utils/currency';
+import { formatMoney, roundMoney } from '../../utils/currency';
 import { productUnit, normalizeQuantity } from '../../utils/lineItems';
 import { DEFAULT_UNIT, unitStep, roundQuantity, getUnit, formatQuantityWithUnit } from '../../industry/units';
 import { raceWithTimeout } from '../../utils/offlineWrite';
 import { friendlyErrorMessage } from '../../utils/errorMessages';
+import { currencyCode, digitalReferenceLabel, digitalReferenceMissingMessage, digitalReferenceRequired } from '../../lib/region';
 
 export default function SaleModal({ open, product, customers, onClose, onConfirmSale, onConfirmCredit, onCreateCustomer }) {
   const [quantity, setQuantity]               = useState(1);
@@ -32,7 +33,7 @@ export default function SaleModal({ open, product, customers, onClose, onConfirm
   const saleQty      = normalizeQuantity(quantity, saleUnit);
   const total        = roundMoney(saleQty * (Number(price) || 0));
   const exceedsStock = product.kind !== 'service' && saleQty > roundQuantity(Number(product.stock) || 0, saleUnit);
-  const needsMpesaCode = method === 'M-Pesa' && !mpesaCode.trim();
+  const needsMpesaCode = method === 'M-Pesa' && digitalReferenceRequired() && !mpesaCode.trim();
   const needsCustomer  = method === 'Credit' && !customerId && !(newMode && newName.trim());
   const canSubmit = saleQty > 0 && !exceedsStock && Number(price) >= 0 && !needsMpesaCode && !needsCustomer && !submitting;
 
@@ -70,7 +71,7 @@ const handleConfirm = async () => {
           <p className="font-semibold text-ink-800">{product.name}</p>
           <p className="text-secondary text-ink-400">
             In stock: <span className="font-semibold">{formatQuantityWithUnit(product.stock, product.unit, { showPiece: true })}</span>
-            {' · '}Default {formatKES(product.sellingPrice)}{saleUnit !== DEFAULT_UNIT ? `/${getUnit(saleUnit).short}` : ''}
+            {' · '}Default {formatMoney(product.sellingPrice)}{saleUnit !== DEFAULT_UNIT ? `/${getUnit(saleUnit).short}` : ''}
           </p>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -92,13 +93,13 @@ const handleConfirm = async () => {
             {exceedsStock && <p className="mt-1 text-secondary font-medium text-danger-600">Only {formatQuantityWithUnit(product.stock, product.unit, { showPiece: true })} left.</p>}
           </div>
           <div>
-            <label className="label">Price / {saleUnit !== DEFAULT_UNIT ? getUnit(saleUnit).short : 'unit'} (KES)</label>
+            <label className="label">Price / {saleUnit !== DEFAULT_UNIT ? getUnit(saleUnit).short : 'unit'} ({currencyCode()})</label>
             <input type="number" min="0" step="0.01" className="input" value={price} onChange={e=>setPrice(e.target.value)} />
           </div>
         </div>
         <div className="flex items-center justify-between rounded-panel border border-divider px-3 py-2.5">
           <span className="text-body font-medium text-ink-500">Total</span>
-          <span className="num font-display text-money font-bold text-ink-900">{formatKES(total)}</span>
+          <span className="num font-display text-money font-bold text-ink-900">{formatMoney(total)}</span>
         </div>
         <div>
           <label className="label">Payment method</label>
@@ -106,9 +107,9 @@ const handleConfirm = async () => {
         </div>
         {method === 'M-Pesa' && (
           <div>
-            <label className="label">M-Pesa transaction code <span className="text-danger-500">*</span></label>
-            <input className="input uppercase" placeholder="e.g. QWE1234567" value={mpesaCode} onChange={e=>setMpesaCode(e.target.value.toUpperCase())} />
-            {needsMpesaCode && <p className="mt-1 text-secondary text-danger-600">Transaction code required for M-Pesa sales.</p>}
+            <label className="label">{digitalReferenceLabel()}{digitalReferenceRequired() && <span className="text-danger-500" aria-hidden="true"> *</span>}</label>
+            <input className="input uppercase" placeholder={digitalReferenceRequired() ? 'e.g. QWE1234567' : ''} value={mpesaCode} onChange={e=>setMpesaCode(e.target.value.toUpperCase())} />
+            {needsMpesaCode && <p className="mt-1 text-secondary text-danger-600">{digitalReferenceMissingMessage()}</p>}
           </div>
         )}
         {method === 'Credit' && (

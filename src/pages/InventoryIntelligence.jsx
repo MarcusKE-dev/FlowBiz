@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { tenantQuery } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { isStockItem } from '../utils/inventory';
-import { formatKES } from '../utils/currency';
+import { formatMoney } from '../utils/currency';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import MiniBarChart from '../components/charts/MiniBarChart';
 import DonutChart from '../components/charts/DonutChart';
@@ -278,11 +278,11 @@ export default function InventoryIntelligence() {
     insights.push({ tone: 'negative', text: `REVENUE LOSS: ${metrics.outOfStock.length} product(s) completely depleted. You are actively losing sales.` });
   }
   if (metrics.overstocked[0]) {
-    insights.push({ tone: 'neutral', text: `CAPITAL TRAP: "${metrics.overstocked[0].name}" alone locks up ${formatKES(metrics.overstocked[0].value)} in inventory.` });
+    insights.push({ tone: 'neutral', text: `CAPITAL TRAP: "${metrics.overstocked[0].name}" alone locks up ${formatMoney(metrics.overstocked[0].value)} in inventory.` });
   }
   if (slowMoving.length > 0) {
     const slowValue = slowMoving.reduce((sum, p) => sum + p.stock * p.costPrice, 0);
-    insights.push({ tone: 'neutral', text: `SLOW-MOVING: ${slowMoving.length} product(s) with no sales in ${LOOKBACK_DAYS} days are holding ${formatKES(slowValue)} in capital.` });
+    insights.push({ tone: 'neutral', text: `SLOW-MOVING: ${slowMoving.length} product(s) with no sales in ${LOOKBACK_DAYS} days are holding ${formatMoney(slowValue)} in capital.` });
   }
   if (reorderPriority.length > 0) {
     insights.push({ tone: 'negative', text: `REORDER NEEDED: ${reorderPriority.length} fast-moving product(s) are running low and should be restocked soon.` });
@@ -308,8 +308,8 @@ export default function InventoryIntelligence() {
 
       <UiSection title="Capital and stock">
         <div className="-mx-4 grid grid-cols-2 gap-px overflow-hidden border-y border-line bg-line sm:-mx-6 lg:grid-cols-4">
-          <KpiCard label="Capital deployed" value={formatKES(metrics.totalCost)} />
-          <KpiCard label="Projected gross profit" value={formatKES(potentialProfit)} />
+          <KpiCard label="Capital deployed" value={formatMoney(metrics.totalCost)} />
+          <KpiCard label="Projected gross profit" value={formatMoney(potentialProfit)} />
           <KpiCard label="Units in stock" value={metrics.unitsInStock.toLocaleString()} />
           <KpiCard label="Active products" value={activeProductsCount.toLocaleString()} />
         </div>
@@ -328,7 +328,7 @@ export default function InventoryIntelligence() {
           <KpiCard label="Low stock" value={metrics.lowStock.length} tone={metrics.lowStock.length > 0 ? 'text-danger-700' : 'text-ink-900'} />
           <KpiCard label="Out of stock" value={metrics.outOfStock.length} tone={metrics.outOfStock.length > 0 ? 'text-danger-700' : 'text-ink-900'} />
           <KpiCard label="Overstocked products" value={metrics.overstocked.length} tone={metrics.overstocked.length > 0 ? 'text-warning-700' : 'text-ink-900'} />
-          <KpiCard label="Capital trapped" value={formatKES(totalOverstockValue)} tone={totalOverstockValue > 0 ? 'text-warning-700' : 'text-ink-900'} />
+          <KpiCard label="Capital trapped" value={formatMoney(totalOverstockValue)} tone={totalOverstockValue > 0 ? 'text-warning-700' : 'text-ink-900'} />
           <KpiCard label="Average days of stock" value={avgDaysOfStock != null ? `${avgDaysOfStock.toFixed(0)} days` : '-'} />
         </div>
       </UiSection>
@@ -345,8 +345,8 @@ export default function InventoryIntelligence() {
           <div className="h-full rounded-pill bg-primary-600 transition-all" style={{ width: `${capitalHealth.pct}%` }} />
         </div>
         <div className="mt-2 flex justify-between text-secondary text-ink-500">
-          <span className="num">Healthy {formatKES(capitalHealth.healthyValue)}</span>
-          <span className="num">At risk {formatKES(capitalHealth.atRiskValue)}</span>
+          <span className="num">Healthy {formatMoney(capitalHealth.healthyValue)}</span>
+          <span className="num">At risk {formatMoney(capitalHealth.atRiskValue)}</span>
         </div>
       </div>
 
@@ -375,7 +375,7 @@ export default function InventoryIntelligence() {
             <div className="pt-2">
               <MiniBarChart
                 orientation="horizontal"
-                formatValue={formatKES}
+                formatValue={formatMoney}
                 data={metrics.overstocked.slice(0, 6).map((p) => ({ label: p.name, value: p.value, color: DEEP }))}
               />
             </div>
@@ -410,7 +410,7 @@ export default function InventoryIntelligence() {
                       <span className={`w-3 shrink-0 text-label font-bold leading-4 ${p.tier === 'A' ? 'text-primary-700' : p.tier === 'B' ? 'text-ink-700' : 'text-ink-400'}`}>{p.tier}</span>
                       <span className="truncate font-medium text-ink-800">{p.name}</span>
                     </div>
-                    <span className="shrink-0 font-semibold text-ink-700">{formatKES(p.valueMoved)}</span>
+                    <span className="shrink-0 font-semibold text-ink-700">{formatMoney(p.valueMoved)}</span>
                   </div>
                 ))}
               </div>
@@ -423,7 +423,7 @@ export default function InventoryIntelligence() {
 
         <Section title="Capital by supplier" subtitle="Current inventory value tied to each supplier">
           {capitalBySupplier.length > 0 ? (
-            <MiniBarChart orientation="horizontal" formatValue={formatKES} data={capitalBySupplier.map((s) => ({ label: s.name, value: s.value, color: PRIMARY }))} />
+            <MiniBarChart orientation="horizontal" formatValue={formatMoney} data={capitalBySupplier.map((s) => ({ label: s.name, value: s.value, color: PRIMARY }))} />
           ) : (
             <NoData>No supplier-linked stock found.</NoData>
           )}
@@ -458,7 +458,7 @@ export default function InventoryIntelligence() {
                     <p className="truncate font-medium text-ink-800">{p.name}</p>
                     <p className="text-secondary text-ink-500">{p.stock} units on the shelf</p>
                   </div>
-                  <span className="shrink-0 font-semibold text-warning-700">{formatKES(p.stock * p.costPrice)}</span>
+                  <span className="shrink-0 font-semibold text-warning-700">{formatMoney(p.stock * p.costPrice)}</span>
                 </div>
               ))}
             </div>

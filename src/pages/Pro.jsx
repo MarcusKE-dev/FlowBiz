@@ -5,15 +5,16 @@ import StatusPill from '../components/ui/StatusPill';
 import LicensingPanel from '../components/licensing/LicensingPanel';
 import BillingHistory from '../components/licensing/BillingHistory';
 import { useAuth } from '../contexts/AuthContext';
-import { usePricing } from '../hooks/usePricing';
+import { usePriceLabels } from '../hooks/usePriceLabels';
 import { useLicensingCheckout } from '../hooks/useLicensingCheckout';
+import LifetimeDisclosure from '../components/licensing/LifetimeDisclosure';
+import { BILLING_PROVIDERS } from '../billing/catalog';
+import { formatInBusinessZone } from '../lib/region/time';
 import { isDemoMode } from '../demo/demoMode';
 import {
-  formatPrice,
   LIFETIME_PLAN_ID,
   PRO_PLAN_ID,
 } from '../licensing';
-import { SERVICE_PRICE_PER_YEAR } from '../components/licensing/licensingCopy';
 import {
   Check,
   X,
@@ -126,7 +127,7 @@ function LifetimeCard({
 
         <p className="mt-2 flex items-baseline gap-1.5">
           <span className="num text-money font-semibold text-ink-900 sm:text-[1.75rem] sm:leading-[2.25rem]">
-            {lifetimePrice != null ? formatPrice(lifetimePrice) : '…'}
+            {lifetimePrice}
           </span>
 
           <span className="text-secondary text-ink-500">
@@ -144,10 +145,7 @@ function LifetimeCard({
           </p>
 
           <p className="mt-3 text-body font-semibold text-ink-900">
-            {servicePrice != null
-              ? formatPrice(servicePrice)
-              : SERVICE_PRICE_PER_YEAR}
-            /year from year two
+            {servicePrice}/year from year two
           </p>
 
           <p className="mt-1 text-secondary text-ink-500">
@@ -156,18 +154,21 @@ function LifetimeCard({
         </div>
       </div>
 
+      {/* What happens in year two, and the Terms and Privacy links, BEFORE
+          the button — a customer reads the renewal terms before committing
+          to year one. src/legal/legalLinks.test.js holds this order. */}
+      <div className="mt-5">
+        <LifetimeDisclosure />
+      </div>
+
       <button
         onClick={() => startCheckout(LIFETIME_PLAN_ID)}
         disabled={Boolean(loadingPlan)}
-        className="mt-6 w-full rounded-panel bg-deep-600 py-3 text-body font-bold text-white transition-colors hover:bg-deep-700 disabled:cursor-not-allowed disabled:opacity-60"
+        className="mt-4 w-full rounded-panel bg-deep-600 py-3 text-body font-bold text-white transition-colors hover:bg-deep-700 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {loadingPlan === LIFETIME_PLAN_ID
           ? 'Loading…'
-          : `Buy Lifetime Licence${
-              lifetimePrice != null
-                ? ` for ${formatPrice(lifetimePrice)}`
-                : ''
-            }`}
+          : `Buy Lifetime Licence for ${lifetimePrice}`}
       </button>
     </div>
   );
@@ -175,24 +176,23 @@ function LifetimeCard({
 
 export default function Pro() {
   const { isPro, isLifetime, subscription } = useAuth();
-  const { pricing } = usePricing();
-  const { startCheckout, loadingPlan } = useLicensingCheckout();
+  const labels = usePriceLabels();
+  const { startCheckout, restorePurchases, loadingPlan, provider, storePrices } = useLicensingCheckout();
   const demo = isDemoMode();
+  const viaPlay = provider === BILLING_PROVIDERS.GOOGLE_PLAY;
 
-  const lifetimePrice = pricing.lifetime?.amountKes;
-  const servicePrice = pricing.annualServices?.amountKes;
-  const proPrice = pricing.pro?.amountKes;
+  // In the Android app the price is GOOGLE PLAY's, localised to the
+  // buyer's Play account, because that is what Play will charge. On the
+  // web it is the business's regional price book.
+  const lifetimePrice = storePrices?.lifetime || labels.licensePrice;
+  const servicePrice = storePrices?.annual_services || labels.servicePrice;
+  const proPrice = storePrices?.pro || labels.proPrice;
 
   const expiresLabel = subscription?.expiresAt
-    ? new Date(
-        subscription.expiresAt.toMillis
-          ? subscription.expiresAt.toMillis()
-          : subscription.expiresAt
-      ).toLocaleDateString('en-KE', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-      })
+    ? formatInBusinessZone(
+        subscription.expiresAt.toMillis ? subscription.expiresAt.toMillis() : subscription.expiresAt,
+        { day: '2-digit', month: 'short', year: 'numeric' },
+      )
     : null;
 
   return (
@@ -247,9 +247,7 @@ export default function Pro() {
 
                 <p className="mt-2 flex items-baseline gap-1.5">
                   <span className="num text-money font-semibold text-ink-900 sm:text-[1.75rem] sm:leading-[2.25rem]">
-                    {proPrice != null
-                      ? formatPrice(proPrice)
-                      : '…'}
+                    {proPrice}
                   </span>
 
                   <span className="text-secondary text-ink-500">
@@ -307,6 +305,18 @@ export default function Pro() {
           </div>
 
           <BillingHistory />
+        </div>
+      )}
+
+      {/* Google Play keeps the licence with the user's Play account, so a
+          new phone or a reinstall restores it from here. Play policy
+          expects this to be reachable. */}
+      {!demo && viaPlay && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-panel border border-line bg-surface px-4 py-3">
+          <p className="text-secondary text-ink-600">Bought FlowBiz on another device, or reinstalled the app?</p>
+          <button type="button" className="btn-secondary" onClick={restorePurchases} disabled={Boolean(loadingPlan)}>
+            {loadingPlan === 'restore' ? 'Restoring…' : 'Restore purchases'}
+          </button>
         </div>
       )}
 
@@ -401,8 +411,11 @@ export default function Pro() {
       </Section>
 
       <div className="flex items-center gap-2 text-secondary text-ink-400">
-        Built for Kenyan shops. Pay in KES via M-Pesa or card, powered by
-        Paystack.
+        {viaPlay
+          ? 'Purchases are made through Google Play and appear on your Play account.'
+          : labels.currency === 'KES'
+            ? 'Pay in KES by M-Pesa or card, powered by Paystack.'
+            : `Pay in ${labels.currency} by card, powered by Paystack.`}
       </div>
     </div>
   );

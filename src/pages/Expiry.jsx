@@ -29,11 +29,11 @@ import EmptyState from '../components/ui/EmptyState';
 import StatusPill from '../components/ui/StatusPill';
 import Money from '../components/ui/Money';
 import SegmentedControl from '../components/ui/SegmentedControl';
-import { amountOnly } from '../components/ui/format';
 import { formatQuantityWithUnit } from '../industry/units';
 import {
   summarizeExpiry, todayISO, DEFAULT_EXPIRY_WARNING_DAYS, EXPIRY_STATUS,
 } from '../utils/batches';
+import { currencyMarker, formatAmount } from '../lib/region';
 
 const WINDOWS = [
   { value: 30, label: '30 days' },
@@ -148,9 +148,9 @@ export default function Expiry() {
 
       <MetricRail columns={4} bleed>
         <Metric label="Expired batches" value={summary.expiredCount} />
-        <Metric label="Value expired" prefix="KES" value={amountOnly(summary.expiredValue)} />
+        <Metric label="Value expired" prefix={currencyMarker()} value={formatAmount(summary.expiredValue)} />
         <Metric label="Expiring soon" value={summary.expiringCount} />
-        <Metric label="Value at risk" prefix="KES" value={amountOnly(summary.expiringValue)} />
+        <Metric label="Value at risk" prefix={currencyMarker()} value={formatAmount(summary.expiringValue)} />
       </MetricRail>
 
       {summary.expiredCount > 0 && (

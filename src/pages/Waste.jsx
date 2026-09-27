@@ -36,7 +36,6 @@ import MetricRail, { Metric } from '../components/ui/MetricRail';
 import DataTable from '../components/ui/DataTable';
 import EmptyState from '../components/ui/EmptyState';
 import Money from '../components/ui/Money';
-import { amountOnly } from '../components/ui/format';
 import { formatDateTime, startOfDay } from '../utils/dateRanges';
 import { formatQuantityWithUnit, unitStep, getUnit, DEFAULT_UNIT, roundQuantity } from '../industry/units';
 import { hasVariants } from '../utils/variants';
@@ -49,6 +48,7 @@ import {
   buildWasteRecord, resolveWasteDeltas, summarizeWaste, wasteByProduct, isWastable,
   wasteReasonLabel,
 } from '../domain/fnb/waste';
+import { currencyMarker, formatAmount } from '../lib/region';
 
 /** The last 30 days: enough to see a pattern, short enough to stay cheap. */
 function thirtyDaysAgo() {
@@ -186,8 +186,8 @@ export default function Waste() {
       />
 
       <MetricRail columns={3} bleed>
-        <Metric label="Wasted, 30 days" prefix="KES" value={amountOnly(summary.totalCost)} />
-        <Metric label="Spoiled or out of date" prefix="KES" value={amountOnly(summary.byReason.spoilage + summary.byReason.expiry)} />
+        <Metric label="Wasted, 30 days" prefix={currencyMarker()} value={formatAmount(summary.totalCost)} />
+        <Metric label="Spoiled or out of date" prefix={currencyMarker()} value={formatAmount(summary.byReason.spoilage + summary.byReason.expiry)} />
         <Metric label="Entries" value={summary.count} />
       </MetricRail>
 

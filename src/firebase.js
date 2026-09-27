@@ -1,5 +1,8 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, connectAuthEmulator } from 'firebase/auth';
+import {
+  getAuth, initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, connectAuthEmulator,
+} from 'firebase/auth';
+import { Capacitor } from '@capacitor/core';
 import { getStorage } from 'firebase/storage';
 import { getFunctions } from 'firebase/functions';
 import {
@@ -20,7 +23,15 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 
-export const auth = getAuth(app);
+// IN THE ANDROID APP, Auth is initialised with explicit on-device
+// persistence and WITHOUT the popup/redirect resolver getAuth() adds.
+// FlowBiz signs in with email and password only, so that resolver would
+// only load a hidden iframe from the auth domain on every launch. The
+// session is kept in the WebView's IndexedDB, which is private to the app
+// and excluded from Android backup (see AndroidManifest.xml).
+export const auth = Capacitor.isNativePlatform()
+  ? initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] })
+  : getAuth(app);
 export const storage = getStorage(app);
 export const functions = getFunctions(app);
 

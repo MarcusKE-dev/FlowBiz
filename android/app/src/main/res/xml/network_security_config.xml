@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  HTTPS only. Firebase, the FlowBiz API and Paystack are all TLS, and the
+  app's own content is served from https://localhost by Capacitor. No
+  cleartext domain is allowed in any build, and only the system CA store is
+  trusted (no user-installed certificates), so a proxy certificate a user
+  was talked into installing cannot read the app's traffic.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

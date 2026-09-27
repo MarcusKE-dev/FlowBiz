@@ -1,8 +1,21 @@
 # FlowBiz — Business Manager
 
-Production-ready POS and business management app for Kenyan SMBs.
+POS, inventory, credit and finance management for small businesses in any
+country — shipped as one React codebase to the **web / PWA** and to
+**Android** (Capacitor). Kenya (KES, M-Pesa) is a first-class market;
+it is no longer the only one.
 
-## Setup
+## Documentation
+
+| Read | For |
+|---|---|
+| `docs/INTERNATIONAL.md` | countries, currencies, locales, timezones, phone numbers |
+| `docs/BILLING.md` | regional pricing, Paystack / M-Pesa / Google Play, entitlements |
+| `docs/ANDROID.md` | the Android app: build, sign, AAB, Play Console, security, test script |
+| `docs/LICENSING.md` | the perpetual licence and annual services model |
+| `docs/ARCHITECTURE.md`, `docs/INDUSTRY.md`, `docs/FNB_ARCHITECTURE.md` | the industry and F&B engines |
+
+## Setup (web)
 
 ```bash
 npm install --legacy-peer-deps
@@ -10,67 +23,37 @@ cp .env.example .env.local   # fill in your Firebase config
 npm run dev
 ```
 
-## Deployment
+## Tests
 
 ```bash
-npm run build
-# Deploy dist/ to Vercel, Netlify, or Firebase Hosting
-# firebase deploy --only hosting
+npm test                 # app unit tests + Cloudflare Worker tests
+npm run test:rules       # Firestore rules against the emulator (port 8080)
+npm run lint
 ```
 
-## First-time Firebase setup
+## Build
 
-1. Create a Firebase project, enable **Authentication → Email/Password** and **Firestore**
-2. Paste the Firestore security rules from `src/firebase.js` into **Console → Firestore → Rules**
-3. Create your owner account in Firebase Console (Auth → Add user), then sign in — first account auto-bootstraps as Admin
-4. Create the Firestore composite indexes listed in `src/firebase.js` (or let the app prompt you via console links)
+```bash
+npm run build            # web + demo builds into dist/
+npm run android:debug    # Android debug APK
+npm run android:bundle   # Android release AAB (needs the upload key; see docs/ANDROID.md)
+```
 
-## PWA Installation (Chrome)
+## Deployment
 
-1. Open the deployed app in Chrome on Android or desktop
-2. Chrome shows "Add to Home Screen" banner, or tap **⋮ → Install app**
-3. iOS Safari: tap Share → Add to Home Screen
+- Web: deploy `dist/` (Cloudflare Pages).
+- API: `cd cloudflare-worker && npx wrangler deploy`. Secrets are set with
+  `wrangler secret put` and never committed — see `docs/BILLING.md` §5 and
+  §7 for the billing ones.
+- Firestore: `firebase deploy --only firestore:rules,firestore:indexes`.
 
-## Fixes applied (v2.0 — full audit pass)
+## Platform layout
 
-| ID   | Fix |
-|------|-----|
-| CR-1 | DebtorDetail missing profile + serverTimestamp imports |
-| CR-2 | Repayment history reads from `repayments` collection (not stale embedded array) |
-| CR-3 | SaleModal missing toast import |
-| CR-4 | Reports missing ErrorBanner import |
-| CR-5 | Login navigation moved into useEffect (no render-time side effects) |
-| CR-6 | Till reconciliation correctly includes debt repayments in expected balances |
-| CR-7 | M-Pesa transaction code enforced in sale canSubmit check |
-| CR-8 | All POS writes use writeBatch + increment() — offline-first, no runTransaction |
-| CR-9 | Staff creation writes profile BEFORE signing admin out |
-| HP-1 | limit() added to unbounded queries |
-| HP-2 | useFinancialsForRange debounced with requestAnimationFrame — 1 render per write |
-| HP-3 | StockTake reads fresh stock inside transaction (no stale-read bugs) |
-| HP-4 | Product performance includes credit sales |
-| HP-5 | CSV export sanitised against formula injection (=, +, -, @) |
-| HP-6 | Users page password input masked (type="password") |
-| HP-7 | CloseDay batch deletion chunked at 400 ops; window.location.reload() removed |
-| HP-8 | Dashboard "today" range recalculated at midnight via setTimeout |
-| HP-9 | ErrorBoundary wraps entire app |
-| MP-1 | Modal + ConfirmDialog close on ESC key |
-| MP-4 | ProductFormModal validates negative prices and selling below cost |
-| MP-5 | Suppliers payment blocked if amount exceeds outstanding balance |
-| MP-6 | RepaymentModal blocks over-repayment |
-| MP-7 | Bootstrap profile avoids serverTimestamp() sentinel in React state |
-| MP-8 | StockTake empty physical count treated as unchanged (not zero) |
-| MP-10| All routes lazy-loaded (React.lazy + Suspense) |
-| MP-11| useDailySession uses onSnapshot for cross-device real-time updates |
-
-## Firestore composite indexes required
-
-| Collection  | Fields              |
-|-------------|---------------------|
-| sales       | soldAt              |
-| creditSales | soldAt              |
-| creditSales | customerId + soldAt |
-| expenses    | recordedAt          |
-| repayments  | paidAt              |
-| repayments  | customerId + paidAt |
-
-Run the app once — Firestore prints console errors with direct auto-create links.
+```
+src/lib/region/    country, currency, time and phone — pure, shared with the Worker
+src/billing/       plan ↔ store product catalogue, provider selection — pure
+src/licensing/     prices, licence and services entitlement — pure
+src/platform/      the only place web and Android differ (files, share, camera, billing, native chrome)
+android/           the Capacitor Android project
+cloudflare-worker/ the API: payments, Play verification, admin, emails
+```

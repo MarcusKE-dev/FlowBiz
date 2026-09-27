@@ -61,6 +61,11 @@ export const EVENT_TYPES = {
   CLOUD_RESTORED: 'licensing.cloud_restored',
   RENEWAL_REMINDER_SENT: 'licensing.reminder_sent',
   RENEWAL_REMINDER_FAILED: 'licensing.reminder_failed',
+
+  // ── Google Play Billing ─────────────────────────────────────────────
+  PLAY_VERIFY_FAILED: 'billing.play_verify_failed',
+  PLAY_ACCOUNT_MISMATCH: 'billing.play_account_mismatch',
+  PLAY_PURCHASE_VOIDED: 'billing.play_purchase_voided',
 };
 
 // type|businessId -> last write time, per isolate.

@@ -12,8 +12,9 @@
 // rectangles it is told about.
 
 import { encodeBarcode } from './barcode.js';
-import { formatKES } from './currency.js';
+import { formatPdfMoney } from './currency.js';
 import { formatQuantityWithUnit } from '../industry/units.js';
+import { savePdf, openForPrint } from '../platform/files.js';
 
 // A4, and a label size that fits four across without crowding the code.
 export const SHEET = {
@@ -118,7 +119,7 @@ function drawLabel(doc, label, { showPrice = true, shopName = '' } = {}) {
 
   if (showPrice) {
     doc.setFontSize(9);
-    doc.text(formatKES(product.sellingPrice), x + padX, y + 4 + name.length * 3.2 + 3);
+    doc.text(formatPdfMoney(product.sellingPrice), x + padX, y + 4 + name.length * 3.2 + 3);
     if (product.unit && product.unit !== 'piece') {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(6);
@@ -172,14 +173,13 @@ async function buildSheetDocument(selection, options = {}) {
 export async function printBarcodeLabels(selection, options = {}) {
   const { doc, sheet } = await buildSheetDocument(selection, options);
   if (sheet.total === 0) return sheet;
-  doc.autoPrint();
-  window.open(doc.output('bloburl'), '_blank');
+  await openForPrint(doc, `barcode-labels-${new Date().toISOString().slice(0, 10)}.pdf`);
   return sheet;
 }
 
 export async function downloadBarcodeLabels(selection, options = {}) {
   const { doc, sheet } = await buildSheetDocument(selection, options);
   if (sheet.total === 0) return sheet;
-  doc.save(`barcode-labels-${new Date().toISOString().slice(0, 10)}.pdf`);
+  await savePdf(doc, `barcode-labels-${new Date().toISOString().slice(0, 10)}.pdf`, { title: 'Barcode labels' });
   return sheet;
 }

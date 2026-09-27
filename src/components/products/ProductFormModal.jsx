@@ -30,6 +30,7 @@ import {
   saveProductImage, deleteProductImage, loadProductImage,
   staticImageUrl, needsSidecarFetch, CLEARED_IMAGE_FIELDS,
 } from '../../utils/productImages';
+import { currencyCode } from '../../lib/region';
 
 const empty = {
   name: '',
@@ -795,7 +796,7 @@ export default function ProductFormModal({
 
         {simplifiedForPurchase ? (
           <div>
-            <label className="label">Selling price (KES)</label>
+            <label className="label">Selling price ({currencyCode()})</label>
             <input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required />
             <p className="mt-1 text-secondary text-ink-400">Stock and cost come from the purchase form.</p>
           </div>
@@ -806,7 +807,7 @@ export default function ProductFormModal({
              problem. The field is removed and the cost stored as zero, so
              a service sale is pure revenue — which is what it is. */
           <div>
-            <label className="label">Price (KES)</label>
+            <label className="label">Price ({currencyCode()})</label>
             <input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required />
             <p className="mt-1 text-secondary text-ink-400">
               A service has no buying price. What you charge is what it earns.
@@ -819,7 +820,7 @@ export default function ProductFormModal({
              above zero, so owners typed a plausible number and it flowed
              straight into margin and menu-performance reporting. */
           <div>
-            <label className="label">Buying price (KES{form.unit !== DEFAULT_UNIT ? ` per ${UNITS[form.unit].short}` : ''})</label>
+            <label className="label">Buying price ({currencyCode()}{form.unit !== DEFAULT_UNIT ? ` per ${UNITS[form.unit].short}` : ''})</label>
             <input type="number" min="0" step="0.01" className="input" value={form.costPrice} onChange={set('costPrice')} disabled={busy} required />
             <p className="mt-1 text-secondary text-ink-400">
               This is what every recipe using it is costed from. An ingredient has no selling price.
@@ -828,11 +829,11 @@ export default function ProductFormModal({
         ) : (
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="label">Buying price (KES{form.unit !== DEFAULT_UNIT ? ` per ${UNITS[form.unit].short}` : ''})</label>
+              <label className="label">Buying price ({currencyCode()}{form.unit !== DEFAULT_UNIT ? ` per ${UNITS[form.unit].short}` : ''})</label>
               <input type="number" min="0" step="0.01" className="input" value={form.costPrice} onChange={set('costPrice')} disabled={busy} required />
             </div>
             <div>
-              <label className="label">Selling price (KES{form.unit !== DEFAULT_UNIT ? ` per ${UNITS[form.unit].short}` : ''})</label>
+              <label className="label">Selling price ({currencyCode()}{form.unit !== DEFAULT_UNIT ? ` per ${UNITS[form.unit].short}` : ''})</label>
               <input type="number" min="0.01" step="0.01" className="input" value={form.sellingPrice} onChange={set('sellingPrice')} disabled={busy} required />
             </div>
           </div>

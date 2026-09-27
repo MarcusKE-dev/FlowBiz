@@ -17,11 +17,10 @@ import MetricRail, { Metric } from '../components/ui/MetricRail';
 import DataTable from '../components/ui/DataTable';
 import StatusPill from '../components/ui/StatusPill';
 import Money from '../components/ui/Money';
-import { amountOnly } from '../components/ui/format';
 import RepaymentModal from '../components/debtors/RepaymentModal';
 import RefundModal from '../components/debtors/RefundModal';
 import DebtPaymentReceiptModal from '../components/debtors/DebtPaymentReceiptModal';
-import { formatKES, roundMoney } from '../utils/currency';
+import { formatMoney, roundMoney } from '../utils/currency';
 import {
   openCreditSales, allocateRepayment, batchAllocations, totalOutstanding, CENT,
 } from '../utils/debtAllocation';
@@ -31,6 +30,7 @@ import { friendlyErrorMessage } from '../utils/errorMessages';
 import { resolveStockDeltas, missingComponentIds, MAX_RECIPE_DEPTH } from '../utils/inventory';
 import { applyStockDeltas } from '../utils/stockWrites';
 import { useIndustry } from '../hooks/useIndustry';
+import { currencyMarker, formatAmount, tenderLabel } from '../lib/region';
 
 export default function CustomerDetail() {
   const { customerId } = useParams();
@@ -87,7 +87,7 @@ export default function CustomerDetail() {
     const { allocations, allocated, surplus } = allocateRepayment(openSales, amount);
     if (surplus > CENT) {
       const owedNow = totalOutstanding(openSales);
-      toast.error(`This customer now owes ${formatKES(owedNow)}. Enter that or less.`);
+      toast.error(`This customer now owes ${formatMoney(owedNow)}. Enter that or less.`);
       throw new Error('Repayment exceeds the outstanding balance.');
     }
     if (!allocations.length) { toast.error('Enter an amount greater than zero.'); return; }
@@ -172,7 +172,7 @@ export default function CustomerDetail() {
       const commit = Promise.all(batches.map((b) => b.commit()));
       const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
       if (error) throw error;
-      toast.success(queuedOffline ? 'Saved offline. It will sync when you reconnect.' : `Recorded ${formatKES(allocated)} repayment`);
+      toast.success(queuedOffline ? 'Saved offline. It will sync when you reconnect.' : `Recorded ${formatMoney(allocated)} repayment`);
       if (queuedOffline) commit.catch((err) => toast.error(`A repayment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
 
       setReceiptData({
@@ -333,8 +333,8 @@ export default function CustomerDetail() {
       <MetricRail columns={3} bleed>
         <Metric
           label="Outstanding"
-          prefix="KES"
-          value={amountOnly(totalOwed)}
+          prefix={currencyMarker()}
+          value={formatAmount(totalOwed)}
         />
         <Metric label="Credit purchases" value={sorted.length} />
         <Metric label="Repayments" value={repayments.length} />
@@ -436,7 +436,7 @@ export default function CustomerDetail() {
                     {r.method === 'Cash'
                       ? <Banknote className="h-4 w-4 text-ink-500" strokeWidth={1.75} aria-hidden="true" />
                       : <Smartphone className="h-4 w-4 text-ink-500" strokeWidth={1.75} aria-hidden="true" />}
-                    {r.method === 'Cash' ? 'Cash' : `M-Pesa${r.mpesaCode ? ` (${r.mpesaCode})` : ''}`}
+                    {r.method === 'Cash' ? 'Cash' : `${tenderLabel('M-Pesa')}${r.mpesaCode ? ` (${r.mpesaCode})` : ''}`}
                   </span>
                 ),
               },

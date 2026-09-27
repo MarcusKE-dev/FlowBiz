@@ -18,6 +18,7 @@ import { lineItemDetail } from '../../utils/lineItems';
 import Modal from '../common/Modal';
 import Money from '../ui/Money';
 import FormField from '../ui/FormField';
+import { tenderLabel } from '../../lib/region';
 
 export default function ReturnSaleModal({ open, sale, onClose, onSubmit }) {
   const [quantities, setQuantities] = useState({});
@@ -129,7 +130,7 @@ export default function ReturnSaleModal({ open, sale, onClose, onSubmit }) {
                   disabled={busy}
                 >
                   <option value="Cash">Cash</option>
-                  <option value="M-Pesa">M-Pesa</option>
+                  <option value="M-Pesa">{tenderLabel('M-Pesa')}</option>
                 </select>
               </FormField>
               <FormField label="Reason" htmlFor="return-reason" hint="For your own records.">

@@ -20,10 +20,9 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useLicensingCheckout } from '../../hooks/useLicensingCheckout';
 import { ANNUAL_SERVICE_PLAN_ID, SERVICE_STATUS } from '../../licensing';
 import {
-  SERVICE_PRICE_PER_YEAR, RENEW_BUTTON_LABEL, WHAT_RENEWAL_PROVIDES,
-  DATA_IS_SAFE, OFFLINE_FALLBACK_SUMMARY,
-  formatServiceDate, formatDaysRemaining,
+  WHAT_RENEWAL_PROVIDES, DATA_IS_SAFE, OFFLINE_FALLBACK_SUMMARY, formatServiceDate, formatDaysRemaining,
 } from './licensingCopy';
+import { usePriceLabels } from '../../hooks/usePriceLabels';
 
 function serviceTone(status, suspended) {
   if (suspended) return 'negative';
@@ -50,6 +49,7 @@ function serviceHeadline(entitlements) {
 }
 
 export default function LicensingPanel({ showRenewButton = true }) {
+  const { servicePricePerYear, renewButtonLabel } = usePriceLabels();
   const { entitlements, isOwner } = useAuth();
   const { startCheckout, loadingPlan } = useLicensingCheckout();
 
@@ -99,7 +99,7 @@ export default function LicensingPanel({ showRenewButton = true }) {
           </div>
 
           <div className="mt-4 divide-y divide-divider rounded-panel border border-line bg-surface">
-            <StatementRow label="Renewal" value={SERVICE_PRICE_PER_YEAR} />
+            <StatementRow label="Renewal" value={servicePricePerYear} />
             {service.status === SERVICE_STATUS.ACTIVE && (
               <StatementRow label="Days remaining" value={formatDaysRemaining(service.daysRemaining)} />
             )}
@@ -129,7 +129,7 @@ export default function LicensingPanel({ showRenewButton = true }) {
               onClick={() => startCheckout(ANNUAL_SERVICE_PLAN_ID)}
             >
               {loadingPlan === ANNUAL_SERVICE_PLAN_ID ? 'Loading…'
-                : lapsed ? 'Renew now' : RENEW_BUTTON_LABEL}
+                : lapsed ? 'Renew now' : renewButtonLabel}
             </button>
           )}
 
@@ -145,7 +145,7 @@ export default function LicensingPanel({ showRenewButton = true }) {
 
       <Section
         title="Included with the annual renewal"
-        hint={`${SERVICE_PRICE_PER_YEAR}. Your Lifetime Licence itself never expires and is never charged again.`}
+        hint={`${servicePricePerYear}. Your Lifetime Licence itself never expires and is never charged again.`}
       >
         <ul className="grid gap-2 sm:grid-cols-2">
           {WHAT_RENEWAL_PROVIDES.map((item) => (

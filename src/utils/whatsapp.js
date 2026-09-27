@@ -1,14 +1,13 @@
+import { toE164Digits } from '../lib/region/phone.js';
+
+// A customer's number as E.164 digits, read in the BUSINESS's country (see
+// lib/region/phone.js): 0741… is Kenyan for a Kenyan shop, (415) 555… is
+// American for an American one. Anything that cannot be read that way is
+// kept as its digits, exactly as before, rather than dropped.
 export function normalizePhone(rawPhone) {
   const digits = String(rawPhone || '').replace(/[^\d]/g, '');
   if (!digits) return '';
-
-  if (digits.startsWith('0') && digits.length === 10) {
-    return '254' + digits.slice(1);
-  }
-  if (digits.length === 9 && (digits.startsWith('7') || digits.startsWith('1'))) {
-    return '254' + digits;
-  }
-  return digits;
+  return toE164Digits(rawPhone) || digits;
 }
 
 export function isValidWhatsAppPhone(rawPhone) {
@@ -32,7 +31,7 @@ export function openWhatsApp(rawPhone, message) {
 // Sleek, Structured WhatsApp Digital Receipts / Invoices
 export function buildReceiptMessage({
   shopName, customerName, productName, quantity, totalAmount,
-  isCredit, remainingBalance, businessPhone, documentUrl, formatKES, items,
+  isCredit, remainingBalance, businessPhone, documentUrl, formatMoney, items,
 }) {
   const label = isCredit ? 'COMMERCIAL INVOICE' : 'OFFICIAL RECEIPT';
   const lines = [
@@ -51,20 +50,20 @@ export function buildReceiptMessage({
   if (Array.isArray(items) && items.length > 1) {
     items.forEach((it) => {
       const lineTotal = it.lineTotal ?? (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0);
-      lines.push(`• ${it.quantity}× ${it.productName} → *${formatKES(lineTotal)}*`);
+      lines.push(`• ${it.quantity}× ${it.productName} → *${formatMoney(lineTotal)}*`);
     });
   } else {
     const singleName = (Array.isArray(items) && items[0]?.productName) || productName;
     const singleQty = (Array.isArray(items) && items[0]?.quantity) || quantity;
-    lines.push(`• ${singleQty}× ${singleName} → *${formatKES(totalAmount)}*`);
+    lines.push(`• ${singleQty}× ${singleName} → *${formatMoney(totalAmount)}*`);
   }
 
   lines.push('──────────────────');
   if (isCredit) {
-    lines.push(`💰 *Total Amount Due:* ${formatKES(remainingBalance)}`);
+    lines.push(`💰 *Total Amount Due:* ${formatMoney(remainingBalance)}`);
     lines.push(`⚠️ *Status:* Payment Pending (Deni)`);
   } else {
-    lines.push(`✅ *Total Amount Paid:* ${formatKES(totalAmount)}`);
+    lines.push(`✅ *Total Amount Paid:* ${formatMoney(totalAmount)}`);
   }
 
   if (documentUrl) {
@@ -85,7 +84,7 @@ export function buildReceiptMessage({
 }
 
 // Professional Debt Reminder
-export function buildDebtReminderMessage({ shopName, customerName, outstandingAmount, businessPhone, formatKES }) {
+export function buildDebtReminderMessage({ shopName, customerName, outstandingAmount, businessPhone, formatMoney }) {
   const lines = [
     `🏬 *${shopName.toUpperCase()}*`,
     '📌 *ACCOUNT STATEMENT & REMINDER*',
@@ -94,7 +93,7 @@ export function buildDebtReminderMessage({ shopName, customerName, outstandingAm
     '',
     `This is a friendly reminder regarding your outstanding balance with *${shopName}*.`,
     '',
-    `💰 *Outstanding Balance:* *${formatKES(outstandingAmount)}*`,
+    `💰 *Outstanding Balance:* *${formatMoney(outstandingAmount)}*`,
     '',
     'Kindly arrange to settle the balance at your earliest convenience.',
   ];
@@ -112,7 +111,7 @@ export function buildDebtReminderMessage({ shopName, customerName, outstandingAm
 
 // Debt Payment Receipt (Clear confirmation)
 export function buildDebtPaymentReceiptMessage({
-  shopName, customerName, amountPaid, previousBalance, remainingBalance, isCleared, documentUrl, formatKES,
+  shopName, customerName, amountPaid, previousBalance, remainingBalance, isCleared, documentUrl, formatMoney,
 }) {
   const lines = [
     `*${shopName.toUpperCase()}*`,
@@ -120,11 +119,11 @@ export function buildDebtPaymentReceiptMessage({
     '──────────────────',
     `Hello *${customerName || 'Customer'}*,`,
     '',
-    `We have received your payment of *${formatKES(amountPaid)}*.`,
+    `We have received your payment of *${formatMoney(amountPaid)}*.`,
     '',
-    `• *Previous Balance:* ${formatKES(previousBalance)}`,
-    `• *Amount Paid:* -${formatKES(amountPaid)}`,
-    `• *Remaining Balance:* *${formatKES(remainingBalance)}*`,
+    `• *Previous Balance:* ${formatMoney(previousBalance)}`,
+    `• *Amount Paid:* -${formatMoney(amountPaid)}`,
+    `• *Remaining Balance:* *${formatMoney(remainingBalance)}*`,
     '',
     isCleared
       ? '*Status: DEBT FULLY CLEARED!*'

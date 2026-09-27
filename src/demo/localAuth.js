@@ -183,3 +183,12 @@ export async function reauthenticateWithCredential() {
 }
 
 export function connectAuthEmulator() {}
+
+// The Android build initialises Auth with explicit persistence (see
+// src/firebase.js). The demo never runs natively, but the names must exist
+// for the alias to resolve.
+export function initializeAuth() {
+  return getAuth();
+}
+export const indexedDBLocalPersistence = { type: 'LOCAL' };
+export const browserLocalPersistence = { type: 'LOCAL' };

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What the FileProvider may hand to another app: the app's own cache, where
+  receipts, reports and exports are written just before they are shared.
+  It used to expose `external-path .` — all of shared storage — which is far
+  more than a share sheet needs.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="shared" path="." />
+</paths>

@@ -30,6 +30,7 @@ import Section from '../../components/ui/Section';
 import MetricRail, { Metric } from '../../components/ui/MetricRail';
 import StatusPill from '../../components/ui/StatusPill';
 import { formatDateTime } from '../../utils/dateRanges';
+import { currencyMarker, resolveRegion } from '../../lib/region';
 
 // The questions support actually gets asked, each pointing at the tab
 // that answers it.
@@ -104,6 +105,8 @@ export default function AdminSupportMode() {
   if (!data) return null;
 
   const { business, settings, metrics, usage } = data;
+  // THIS business's currency and locale, not the operator's.
+  const bizRegion = resolveRegion(settings);
   const shopName = settings.shopName || business.name || 'Unnamed business';
 
   return (
@@ -147,9 +150,9 @@ export default function AdminSupportMode() {
         <Metric label="Sales recorded" value={n(metrics.salesCount)} hint="All time" />
         <Metric
           label="Outstanding credit"
-          prefix="KES"
+          prefix={currencyMarker({ region: bizRegion })}
           value={typeof metrics.totalOutstandingDebt === 'number'
-            ? metrics.totalOutstandingDebt.toLocaleString('en-KE', { maximumFractionDigits: 0 })
+            ? metrics.totalOutstandingDebt.toLocaleString(bizRegion.locale, { maximumFractionDigits: 0 })
             : '-'}
           hint={`${n(metrics.customersCount)} customers`}
         />

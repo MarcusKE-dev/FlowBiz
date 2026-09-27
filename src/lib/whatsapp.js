@@ -19,17 +19,8 @@
 // follow-up arrives from the FlowBiz support line only when the person
 // clicking is signed in to WhatsApp as that line.
 
-// FlowBiz is a Kenyan product and the numbers are Kenyan, so the local
-// forms are what get normalised. Kenya is +254, and a mobile number is
-// nine digits after the country code, beginning 7 (Safaricom, Airtel) or
-// 1 (the 011x range).
-const KE_COUNTRY_CODE = '254';
-const KE_SUBSCRIBER_LENGTH = 9;
-
-// Room for any national number in E.164 (max 15 digits) without letting
-// an obvious typo through as if it were an international number.
-const MIN_INTERNATIONAL_DIGITS = 10;
-const MAX_INTERNATIONAL_DIGITS = 15;
+import { toE164Digits } from './region/phone.js';
+import { DEFAULT_REGION } from './region/region.js';
 
 /**
  * A typed phone number as the digits wa.me needs: country code first, no
@@ -37,39 +28,17 @@ const MAX_INTERNATIONAL_DIGITS = 15;
  * read as a phone number at all, so callers can fall back to plain text
  * rather than rendering a link that opens a chat with nobody.
  *
+ * National forms are read in `region` (see lib/region/phone.js). The admin
+ * console passes nothing, which reads them as Kenyan — the right default
+ * for numbers stored before sign-up recorded E.164; newer owner numbers
+ * are stored with their country code and read the same in any region.
+ *
  *   0741104469      -> 254741104469
  *   +254 741 104469 -> 254741104469
- *   254741104469    -> 254741104469
- *   741104469       -> 254741104469
- *   0111 234 567    -> 254111234567
+ *   +1 415 555 2671 -> 14155552671
  */
-export function toWhatsAppE164(raw) {
-  const digits = String(raw ?? '').replace(/\D/g, '');
-  if (!digits) return null;
-
-  // Already carries the Kenyan country code.
-  if (digits.startsWith(KE_COUNTRY_CODE)
-      && digits.length === KE_COUNTRY_CODE.length + KE_SUBSCRIBER_LENGTH) {
-    return digits;
-  }
-
-  // National format: a leading 0 stands in for the country code.
-  if (digits.startsWith('0') && digits.length === KE_SUBSCRIBER_LENGTH + 1) {
-    return KE_COUNTRY_CODE + digits.slice(1);
-  }
-
-  // Subscriber number alone, as people often say it out loud.
-  if (digits.length === KE_SUBSCRIBER_LENGTH && /^[17]/.test(digits)) {
-    return KE_COUNTRY_CODE + digits;
-  }
-
-  // Not a Kenyan form. If it is long enough to be a full international
-  // number, take it as one rather than refusing a valid foreign customer.
-  if (digits.length >= MIN_INTERNATIONAL_DIGITS && digits.length <= MAX_INTERNATIONAL_DIGITS) {
-    return digits;
-  }
-
-  return null;
+export function toWhatsAppE164(raw, region = DEFAULT_REGION) {
+  return toE164Digits(raw, { region });
 }
 
 /**

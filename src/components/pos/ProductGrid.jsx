@@ -1,11 +1,11 @@
 import { Pencil } from 'lucide-react';
-import { amountOnly, CURRENCY } from '../ui/format';
 import ProductThumb from '../products/ProductThumb';
 import { DEFAULT_UNIT, getUnit } from '../../industry/units';
 import { hasVariants, totalVariantStock } from '../../utils/variants';
 import { tracksOwnStock } from '../../utils/inventory';
 import { useAuth } from '../../contexts/AuthContext';
 import { ENTITLEMENTS } from '../../licensing';
+import { currencyMarker, formatAmount } from '../../lib/region';
 
 // `cartQuantities` is an optional map of productId -> quantity currently
 // in the Counter page's cart. When a product is in the cart, its tile
@@ -102,16 +102,16 @@ export default function ProductGrid({ products, onSelect, isAdmin = false, onEdi
                   <span className="text-secondary font-semibold text-danger-700">Out of stock</span>
                 ) : variantProduct ? (
                   <span className="num text-cell font-semibold text-ink-900">
-                    <span className="text-label font-medium text-ink-400">{CURRENCY}</span>{' '}
-                    {amountOnly(p.sellingPrice)}
+                    <span className="text-label font-medium text-ink-400">{currencyMarker()}</span>{' '}
+                    {formatAmount(p.sellingPrice)}
                     <span className="ml-1 text-label font-medium text-ink-400">
                       · {p.variants.length} version{p.variants.length === 1 ? '' : 's'}
                     </span>
                   </span>
                 ) : (
                   <span className="num text-cell font-semibold text-ink-900">
-                    <span className="text-label font-medium text-ink-400">{CURRENCY}</span>{' '}
-                    {amountOnly(p.sellingPrice)}
+                    <span className="text-label font-medium text-ink-400">{currencyMarker()}</span>{' '}
+                    {formatAmount(p.sellingPrice)}
                     {unit && <span className="text-label font-medium text-ink-400">/{unit.short}</span>}
                   </span>
                 )}

@@ -36,6 +36,7 @@ import {
   serviceRenewalPayload,
   resolveEntitlements,
   toDate,
+  amountInMinorUnits,
 } from './licensing.js';
 
 function addDays(date, days) {
@@ -60,14 +61,32 @@ export async function verifyPaystackTransaction(env, reference) {
  * Returns null when it does, or a description of the mismatch.
  */
 export function transactionMismatch(paymentRecord, reference, tx) {
-  const expectedKobo = Math.round((paymentRecord.amountKes || 0) * 100);
+  // The amount and currency RECORDED AT INITIALISATION are the authority.
+  // A record written before regional pricing has only `amountKes`, and is
+  // a KES charge; every newer record carries `amount` and `currency`.
+  const expectedCurrency = paymentRecord.currency || 'KES';
+  const expectedAmount = Number.isFinite(paymentRecord.amount) ? paymentRecord.amount : (paymentRecord.amountKes || 0);
+  const expectedKobo = amountInMinorUnits(expectedAmount);
   if (tx.reference && tx.reference !== reference) {
     return { expectedKobo, receivedKobo: tx.amount, currency: tx.currency, referenceMismatch: true };
   }
-  if (tx.amount !== expectedKobo || tx.currency !== 'KES') {
+  if (tx.amount !== expectedKobo || tx.currency !== expectedCurrency) {
     return { expectedKobo, receivedKobo: tx.amount, currency: tx.currency };
   }
   return null;
+}
+
+/** What a licensing payload records about the money, from a payment record. */
+function paidAmount(paymentRecord) {
+  // A store purchase (Google Play) is priced by the store, in the buyer's
+  // own currency, and FlowBiz is not told the amount. Recorded as unknown
+  // rather than as the KES list price it was not.
+  if (paymentRecord.unpriced) return { amount: null, amountKes: null, currency: null, unpriced: true };
+  return {
+    amountKes: paymentRecord.amountKes,
+    amount: Number.isFinite(paymentRecord.amount) ? paymentRecord.amount : paymentRecord.amountKes,
+    currency: paymentRecord.currency || 'KES',
+  };
 }
 
 /**
@@ -133,6 +152,9 @@ async function applyClaimed(env, reference, paymentRecord, tx, business, progres
     status: 'success',
     confirmedAt: now,
     paystackTransactionId: String(tx.id || ''),
+    // Provider-neutral copy of the same id (a Play order id, a Paystack
+    // transaction id) for readers that should not care which it is.
+    providerTransactionId: String(tx.id || ''),
     // What Paystack actually used — 'mobile_money' for an STK charge,
     // 'card' and so on for checkout. Reporting reads this.
     paystackChannel: typeof tx.channel === 'string' ? tx.channel.slice(0, 40) : null,
@@ -169,7 +191,7 @@ async function applyClaimed(env, reference, paymentRecord, tx, business, progres
       // rather than reset the licence — resetting would recompute the
       // service period from today and could SHORTEN one already extended.
       updates.licensing = serviceRenewalPayload(business, {
-        now, reference, amountKes: paymentRecord.amountKes,
+        now, reference, ...paidAmount(paymentRecord),
       });
       events.push({
         type: EVENT_TYPES.SERVICE_RENEWED,
@@ -178,7 +200,7 @@ async function applyClaimed(env, reference, paymentRecord, tx, business, progres
       });
     } else {
       updates.licensing = lifetimeActivationPayload(business, {
-        now, reference, amountKes: paymentRecord.amountKes,
+        now, reference, ...paidAmount(paymentRecord),
       });
       // `subscription` is a MIRROR of the licence for every existing
       // reader, never the authority for it.
@@ -216,7 +238,7 @@ async function applyClaimed(env, reference, paymentRecord, tx, business, progres
     }
 
     updates.licensing = serviceRenewalPayload(business, {
-      now, reference, amountKes: paymentRecord.amountKes,
+      now, reference, ...paidAmount(paymentRecord),
     });
     events.push({
       type: EVENT_TYPES.SERVICE_RENEWED,
@@ -229,6 +251,20 @@ async function applyClaimed(env, reference, paymentRecord, tx, business, progres
     const base = currentExpiry && currentExpiry > now ? currentExpiry : now;
     updates.subscription = { plan: 'pro', status: 'active', expiresAt: addDays(base, 30) };
   }
+
+  // THE COMMON BILLING SUMMARY. Which provider, on which platform, bought
+  // what — the same shape whether Paystack, M-Pesa or Google Play took
+  // the money. Entitlement still comes only from `subscription` and
+  // `licensing`; this says where the last purchase came from, so support
+  // and the app can send a customer to the right place to manage it.
+  updates.billing = {
+    provider: paymentRecord.provider || (paymentRecord.channel === 'mpesa_stk' ? 'mpesa' : 'paystack'),
+    platform: paymentRecord.billingPlatform || 'web',
+    productId: paymentRecord.productId || null,
+    plan: paymentRecord.plan,
+    reference,
+    updatedAt: now,
+  };
 
   await patchDocument(env, 'businesses', businessId, updates);
   progress.granted = true;
@@ -251,6 +287,8 @@ async function applyClaimed(env, reference, paymentRecord, tx, business, progres
       context: {
         plan: paymentRecord.plan,
         amountKes: paymentRecord.amountKes || 0,
+        amount: Number.isFinite(paymentRecord.amount) ? paymentRecord.amount : (paymentRecord.amountKes || 0),
+        currency: paymentRecord.currency || 'KES',
         serviceExpiry: updates.licensing?.serviceExpiryDate
           ? new Date(updates.licensing.serviceExpiryDate).toISOString()
           : 'none',

@@ -29,6 +29,7 @@
 import { roundMoney } from './currency.js';
 import { buildLineItem, sumLineTotals, sumLineCosts, summaryQuantity } from './lineItems.js';
 import { modifierRowKey } from './modifiers.js';
+import { formatInBusinessZone } from '../lib/region/time.js';
 
 export const ORDER_STATUS = { OPEN: 'open', COMPLETED: 'completed', CANCELLED: 'cancelled' };
 
@@ -127,7 +128,7 @@ export function tableStates(tableNames, openOrders) {
 export function defaultOrderName({ tableName, at = new Date() } = {}) {
   if (tableName) return tableName;
   const date = at instanceof Date ? at : new Date(at);
-  return date.toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return formatInBusinessZone(date, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 }
 
 /**

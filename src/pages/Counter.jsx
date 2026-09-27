@@ -72,10 +72,11 @@ import Section from '../components/ui/Section';
 import DataTable from '../components/ui/DataTable';
 import StatusPill from '../components/ui/StatusPill';
 import Money from '../components/ui/Money';
-import { formatKES, roundMoney } from '../utils/currency';
+import { formatMoney, roundMoney } from '../utils/currency';
 import { formatDateTime } from '../utils/dateRanges';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
+import { currencyMarker, digitalReferenceLabel, digitalReferenceMissingMessage, digitalReferenceRequired, tenderLabel } from '../lib/region';
 
 // ── Everything below this line down to the component itself is 100%
 // unchanged business logic — no Firestore calls, no auth handling, and
@@ -853,8 +854,8 @@ export default function Counter() {
 
   const runDesktopCheckout = async () => {
     if (cart.length === 0 || desktopSubmitting) return;
-    if (desktopMethod === 'M-Pesa' && !desktopMpesaCode.trim()) {
-      toast.error('Enter M-Pesa transaction code.');
+    if (desktopMethod === 'M-Pesa' && digitalReferenceRequired() && !desktopMpesaCode.trim()) {
+      toast.error(digitalReferenceMissingMessage());
       return;
     }
     if (desktopMethod === 'Credit' && !desktopCustomerId && !(desktopNewMode && desktopNewName.trim())) {
@@ -1314,7 +1315,7 @@ export default function Counter() {
                       header: 'Method',
                       render: (s) => (
                         <span className="text-ink-600">
-                          {s.paymentType === 'Credit' ? `Credit · ${s.customerName}` : s.paymentMethod}
+                          {s.paymentType === 'Credit' ? `Credit · ${s.customerName}` : tenderLabel(s.paymentMethod)}
                           {s.mpesaCode ? ` (${s.mpesaCode})` : ''}
                         </span>
                       ),
@@ -1504,7 +1505,7 @@ export default function Counter() {
                         </div>
 
                         <div className="flex items-center gap-1">
-                          <span className="text-label uppercase text-ink-400">KES</span>
+                          <span className="text-label uppercase text-ink-400">{currencyMarker()}</span>
                           <input
                             type="number"
                             min="0"
@@ -1517,7 +1518,7 @@ export default function Counter() {
                         </div>
 
                         <span className="num shrink-0 text-cell font-semibold text-ink-900">
-                          {formatKES(lineTotal)}
+                          {formatMoney(lineTotal)}
                         </span>
                       </div>
                     </div>
@@ -1535,14 +1536,14 @@ export default function Counter() {
               {desktopMethod === 'M-Pesa' && (
                 <div>
                   <label className="label" htmlFor="counter-mpesa-code">
-                    M-Pesa transaction code <span className="text-danger-600" aria-hidden="true">*</span>
+                    {digitalReferenceLabel()}{digitalReferenceRequired() && <span className="text-danger-600" aria-hidden="true"> *</span>}
                   </label>
                   <input
                     id="counter-mpesa-code"
                     type="text"
                     value={desktopMpesaCode}
                     onChange={(e) => setDesktopMpesaCode(e.target.value.toUpperCase())}
-                    placeholder="e.g. QWE1234567"
+                    placeholder={digitalReferenceRequired() ? 'e.g. QWE1234567' : ''}
                     className="input num uppercase"
                   />
                 </div>
@@ -1667,7 +1668,7 @@ export default function Counter() {
                     <div key={cartRowKey(item) || idx} className="flex items-center justify-between text-secondary text-ink-600">
                       <span>{formatQuantityWithUnit(item.quantity, item.unit)} × {item.productName}</span>
                       <span className="font-semibold text-ink-800">
-                        {formatKES(item.lineTotal ?? (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0))}
+                        {formatMoney(item.lineTotal ?? (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0))}
                       </span>
                     </div>
                   ))
@@ -1680,7 +1681,7 @@ export default function Counter() {
                 <span className="font-semibold text-ink-700">
                   {desktopLastSale.isCredit ? 'Amount due' : 'Total paid'}
                 </span>
-                <span className="font-display font-bold text-ink-900">{formatKES(desktopLastSale.totalAmount)}</span>
+                <span className="font-display font-bold text-ink-900">{formatMoney(desktopLastSale.totalAmount)}</span>
               </div>
 
               <div className="grid grid-cols-2 gap-2">

@@ -86,7 +86,9 @@ export default function BillingHistory() {
                       <span className="block font-mono text-label text-ink-400">{row.id}</span>
                     </td>
                     <td className="num px-3 py-2 text-right font-semibold tabular-nums text-ink-900">
-                      {formatPrice(row.amountKes)}
+                      {row.provider === 'google_play'
+                        ? 'Google Play'
+                        : formatPrice(Number.isFinite(row.amount) ? row.amount : row.amountKes, row.currency || 'KES')}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <StatusPill tone={row.status === 'success' ? 'positive' : row.status === 'pending' ? 'caution' : 'neutral'}>

@@ -15,7 +15,7 @@ import DataTable from '../components/ui/DataTable';
 import StatusPill from '../components/ui/StatusPill';
 import Money from '../components/ui/Money';
 import { createCustomer, updateCustomer } from '../utils/customers';
-import { formatKES } from '../utils/currency';
+import { formatMoney } from '../utils/currency';
 import { formatDate } from '../utils/dateRanges';
 import { openWhatsApp, buildDebtReminderMessage, isValidWhatsAppPhone } from '../utils/whatsapp';
 import { friendlyErrorMessage } from '../utils/errorMessages';
@@ -91,7 +91,7 @@ export default function Customers() {
       customerName: d.name,
       outstandingAmount: d.totalOwed,
       businessPhone: settings.phone,
-      formatKES,
+      formatMoney,
     });
     const opened = openWhatsApp(d.phone, message);
     toast[opened ? 'success' : 'error'](opened ? 'WhatsApp opened.' : 'WhatsApp could not be opened.');

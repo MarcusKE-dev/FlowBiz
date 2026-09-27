@@ -5,8 +5,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useFinancialsForRange } from '../hooks/useFinancials';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { tenantQuery } from '../lib/tenant';
-import { startOfDay, endOfDay, buildDateBuckets, toMillisValue } from '../utils/dateRanges';
-import { formatKES } from '../utils/currency';
+import { startOfDay, endOfDay, buildDateBuckets, toMillisValue, startOfDateInput, endOfDateInput, shiftDays } from '../utils/dateRanges';
+import { formatMoneyCompact, formatMoney } from '../utils/currency';
 import { computeFinancials, isExpenseExcluded } from '../utils/financials';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import PlotFrame from '../components/charts/PlotFrame';
@@ -20,6 +20,8 @@ import Toolbar from '../components/ui/Toolbar';
 import SegmentedControl from '../components/ui/SegmentedControl';
 import PageHeader from '../components/ui/PageHeader';
 import { TrendingUp, TrendingDown, Lock, AlertCircle, CheckCircle2, Info, ArrowLeft, ChartArea, ChartLine, ChartColumn } from 'lucide-react';
+import { businessWeekday, businessDayKey } from '../lib/region/time';
+import { tenderLabel } from '../lib/region';
 
 // How the revenue/profit trend is drawn. Three ways of showing the same
 // two series, because "which shape is readable" is a property of the
@@ -42,9 +44,10 @@ const PERIOD_OPTIONS = [
 ];
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const NAIROBI_OFFSET_MS = 3 * 60 * 60 * 1000;
-function weekdayIndexNairobi(millis) {
-  return new Date(millis + NAIROBI_OFFSET_MS).getUTCDay();
+// Weekday and calendar date on the BUSINESS's clock, not the device's and
+// not UTC — see lib/region/time.js.
+function weekdayIndexForBusiness(millis) {
+  return businessWeekday(millis);
 }
 
 function KpiCard({ label, value, tone = 'text-ink-900', deltaPct, sparkline, sparklineColor = PRIMARY, sparklineCaption }) {
@@ -215,7 +218,7 @@ function DualTrendChart({ data, series, height = 260, ariaLabel, variant = 'area
               <div key={sv.key} className="mt-0.5 flex items-center gap-2 whitespace-nowrap">
                 <span className="h-2 w-2 shrink-0 rounded-pill" style={{ background: sv.color }} aria-hidden="true" />
                 <span className="text-ink-500">{sv.label}</span>
-                <span className="num ml-auto text-ink-900">{formatKES(Number(data[i][sv.key]) || 0)}</span>
+                <span className="num ml-auto text-ink-900">{formatMoney(Number(data[i][sv.key]) || 0)}</span>
               </div>
             ))}
           </>
@@ -256,10 +259,10 @@ export default function AdvancedAnalytics() {
 
   const { start, end } = useMemo(() => {
     if (period === 'custom' && customStart && customEnd) {
-      return { start: startOfDay(new Date(customStart)), end: endOfDay(new Date(customEnd)) };
+      return { start: startOfDateInput(customStart), end: endOfDateInput(customEnd) };
     }
     const days = Number(period) || 30;
-    return { start: startOfDay(new Date(openedAt - (days - 1) * 86400000)), end: endOfDay() };
+    return { start: shiftDays(openedAt, -(days - 1)), end: endOfDay() };
   }, [period, customStart, customEnd, openedAt]);
 
   const prevRange = useMemo(() => {
@@ -271,7 +274,7 @@ export default function AdvancedAnalytics() {
     }
     const days = Number(period) || 30;
     const prevEnd = endOfDay(new Date(start.getTime() - 1));
-    const prevStart = startOfDay(new Date(start.getTime() - days * 86400000));
+    const prevStart = shiftDays(start, -days);
     return { start: prevStart, end: prevEnd };
   }, [start, end, period, customStart, customEnd]);
 
@@ -396,9 +399,9 @@ export default function AdvancedAnalytics() {
     const addRecord = (timestamp, amount) => {
       const t = toMillisValue(timestamp);
       if (t == null) return;
-      const idx = weekdayIndexNairobi(t);
+      const idx = weekdayIndexForBusiness(t);
       totals[idx] += amount;
-      seenDates[idx].add(Math.floor((t + NAIROBI_OFFSET_MS) / 86400000));
+      seenDates[idx].add(businessDayKey(t));
     };
     (sales || []).forEach((s) => { if (!s.isVoided) addRecord(s.soldAt, Number(s.totalAmount) || 0); });
     (creditSales || []).forEach((cs) => { if (cs.status !== 'cancelled' && cs.status !== 'refunded') addRecord(cs.soldAt, Number(cs.totalAmount) || 0); });
@@ -432,10 +435,10 @@ export default function AdvancedAnalytics() {
       list.push({ tone: profitChangePct >= 0 ? 'positive' : 'negative', text: `Net profit is ${profitChangePct >= 0 ? 'up' : 'down'} ${Math.abs(profitChangePct).toFixed(1)}% vs prior period.` });
     }
     if (mostProfitable[0]) {
-      list.push({ tone: 'neutral', text: `"${mostProfitable[0].name}" drove the highest gross profit margin (${formatKES(mostProfitable[0].profit)}).` });
+      list.push({ tone: 'neutral', text: `"${mostProfitable[0].name}" drove the highest gross profit margin (${formatMoney(mostProfitable[0].profit)}).` });
     }
     if (weekdayBest) {
-      list.push({ tone: 'neutral', text: `${weekdayBest.label} is your strongest day, averaging ${formatKES(weekdayBest.value)} in sales per occurrence this period.` });
+      list.push({ tone: 'neutral', text: `${weekdayBest.label} is your strongest day, averaging ${formatMoney(weekdayBest.value)} in sales per occurrence this period.` });
     }
     const salesActivity = summary.revenue + summary.totalCreditSales;
     if (salesActivity > 0 && summary.totalCreditSales > 0) {
@@ -500,9 +503,9 @@ export default function AdvancedAnalytics() {
       <div>
         <h2 className="section-title mb-2">Financial performance</h2>
         <div className="-mx-4 grid grid-cols-2 gap-px overflow-hidden border-y border-line bg-line sm:-mx-6 lg:grid-cols-4">
-          <KpiCard sparklineCaption={sparkCaption} label="Recognised revenue" value={formatKES(summary.revenue)} deltaPct={revenueChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.revenue }))} sparklineColor={PRIMARY} />
-          <KpiCard sparklineCaption={sparkCaption} label="Gross profit" value={formatKES(summary.grossProfit)} tone={summary.grossProfit < 0 ? 'text-danger-700' : 'text-primary-700'} sparkline={trend.map((t) => ({ label: t.label, value: t.grossProfit }))} sparklineColor={PRIMARY} />
-          <KpiCard sparklineCaption={sparkCaption} label="Net profit" value={formatKES(summary.netProfit)} tone={summary.netProfit < 0 ? 'text-danger-700' : 'text-primary-700'} deltaPct={profitChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.netProfit }))} sparklineColor={DEEP} />
+          <KpiCard sparklineCaption={sparkCaption} label="Recognised revenue" value={formatMoney(summary.revenue)} deltaPct={revenueChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.revenue }))} sparklineColor={PRIMARY} />
+          <KpiCard sparklineCaption={sparkCaption} label="Gross profit" value={formatMoney(summary.grossProfit)} tone={summary.grossProfit < 0 ? 'text-danger-700' : 'text-primary-700'} sparkline={trend.map((t) => ({ label: t.label, value: t.grossProfit }))} sparklineColor={PRIMARY} />
+          <KpiCard sparklineCaption={sparkCaption} label="Net profit" value={formatMoney(summary.netProfit)} tone={summary.netProfit < 0 ? 'text-danger-700' : 'text-primary-700'} deltaPct={profitChangePct} sparkline={trend.map((t) => ({ label: t.label, value: t.netProfit }))} sparklineColor={DEEP} />
           <KpiCard sparklineCaption={sparkCaption} label="Profit margin" value={`${margin.toFixed(1)}%`} tone={margin > 20 ? 'text-primary-700' : margin < 10 ? 'text-danger-600' : 'text-ink-900'} sparkline={trend.map((t) => ({ label: t.label, value: t.margin }))} sparklineColor={margin >= 0 ? PRIMARY : NEGATIVE} />
         </div>
       </div>
@@ -510,10 +513,10 @@ export default function AdvancedAnalytics() {
       <div>
         <h2 className="section-title mb-2">Operational metrics</h2>
         <div className="-mx-4 grid grid-cols-2 gap-px overflow-hidden border-y border-line bg-line sm:-mx-6 lg:grid-cols-4">
-          <KpiCard label="Total expenses" value={formatKES(summary.totalExpenses)} tone="text-danger-600" />
-          <KpiCard label="Average transaction size" value={hasSalesData ? formatKES(avgTransactionValue) : 'KES 0'} />
-          <KpiCard label="Credit issued" value={formatKES(summary.totalCreditSales)} tone="text-warning-600" />
-          <KpiCard label="Total outstanding debt" value={formatKES(totalOutstanding)} tone="text-danger-600" />
+          <KpiCard label="Total expenses" value={formatMoney(summary.totalExpenses)} tone="text-danger-600" />
+          <KpiCard label="Average transaction size" value={hasSalesData ? formatMoney(avgTransactionValue) : formatMoneyCompact(0)} />
+          <KpiCard label="Credit issued" value={formatMoney(summary.totalCreditSales)} tone="text-warning-600" />
+          <KpiCard label="Total outstanding debt" value={formatMoney(totalOutstanding)} tone="text-danger-600" />
         </div>
       </div>
 
@@ -551,10 +554,10 @@ export default function AdvancedAnalytics() {
              <DonutChart
                 size={150}
                 stacked
-                formatValue={formatKES}
+                formatValue={formatMoney}
                 segments={[
                   { label: 'Cash', value: summary.totalCashSales, color: PRIMARY },
-                  { label: 'M-Pesa', value: summary.totalMpesaSales, color: DEEP },
+                  { label: tenderLabel('M-Pesa'), value: summary.totalMpesaSales, color: DEEP },
                   { label: 'Credit (uncollected)', value: summary.totalCreditSales, color: CAUTION },
                 ]}
               />
@@ -576,7 +579,7 @@ export default function AdvancedAnalytics() {
         </Section>
         <Section title="Margin drivers" subtitle="The products that earned the most gross profit">
           {mostProfitable.length > 0 ? (
-            <MiniBarChart orientation="horizontal" formatValue={formatKES} data={mostProfitable.map((p) => ({ label: p.name, value: p.profit, color: DEEP }))} />
+            <MiniBarChart orientation="horizontal" formatValue={formatMoney} data={mostProfitable.map((p) => ({ label: p.name, value: p.profit, color: DEEP }))} />
           ) : (
             <NoData>No profit data generated.</NoData>
           )}
@@ -586,7 +589,7 @@ export default function AdvancedAnalytics() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Section title="Sales by day of the week" subtitle="Average sales value per occurrence of that weekday">
           {weekdayBest ? (
-            <MiniBarChart orientation="vertical" formatValue={formatKES} data={weekdayPerformance} ariaLabel="Sales by day of week" />
+            <MiniBarChart orientation="vertical" formatValue={formatMoney} data={weekdayPerformance} ariaLabel="Sales by day of week" />
           ) : (
             <NoData>No sales activity recorded yet this period.</NoData>
           )}
@@ -595,7 +598,7 @@ export default function AdvancedAnalytics() {
           {expenseByCategory.length > 0 ? (
             <DonutChart
               size={150}
-              formatValue={formatKES}
+              formatValue={formatMoney}
               segments={expenseByCategory.map((e, i) => ({ label: e.label, value: e.value, color: CHART_SERIES[i % CHART_SERIES.length] }))}
             />
           ) : (
@@ -609,15 +612,15 @@ export default function AdvancedAnalytics() {
           <div className="space-y-4 pt-1">
             <div className="flex items-center justify-between border-b border-divider pb-3 text-body">
               <span className="text-ink-600 font-medium">Credit Issued (This Period)</span>
-              <span className="font-semibold text-ink-900">{formatKES(summary.totalCreditSales)}</span>
+              <span className="font-semibold text-ink-900">{formatMoney(summary.totalCreditSales)}</span>
             </div>
             <div className="flex items-center justify-between border-b border-divider pb-3 text-body">
               <span className="text-ink-600 font-medium">Debt Collected (This Period)</span>
-              <span className="font-semibold text-primary-700">{formatKES(summary.totalDebtRepayments)}</span>
+              <span className="font-semibold text-primary-700">{formatMoney(summary.totalDebtRepayments)}</span>
             </div>
             <div className="flex items-center justify-between pt-1 text-body bg-danger-50 p-3 rounded-panel border border-danger-100">
               <span className="font-bold text-danger-800 uppercase tracking-wide text-secondary">Total outstanding</span>
-              <span className="num text-money font-bold text-danger-700">{formatKES(totalOutstanding)}</span>
+              <span className="num text-money font-bold text-danger-700">{formatMoney(totalOutstanding)}</span>
             </div>
           </div>
         </Section>
@@ -630,7 +633,7 @@ export default function AdvancedAnalytics() {
                     <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-danger-50 text-secondary font-bold text-danger-700">{i + 1}</span>
                     <span className="truncate text-body font-medium text-ink-800">{d.name}</span>
                   </div>
-                  <span className="shrink-0 text-body font-bold text-danger-600">{formatKES(d.balance)}</span>
+                  <span className="shrink-0 text-body font-bold text-danger-600">{formatMoney(d.balance)}</span>
                 </Link>
               ))}
             </div>
@@ -657,7 +660,7 @@ export default function AdvancedAnalytics() {
                       {i === 0 && <span className="ml-2 text-label font-semibold text-warning-700">Top</span>}
                     </td>
                     <td className="px-4 py-3 text-right text-ink-600">{st.qty.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-primary-700">{formatKES(st.revenue)}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-primary-700">{formatMoney(st.revenue)}</td>
                   </tr>
                 ))}
               </tbody>

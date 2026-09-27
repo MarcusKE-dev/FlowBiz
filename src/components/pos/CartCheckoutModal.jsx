@@ -11,9 +11,10 @@ import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import Modal from '../common/Modal';
 import PaymentMethodSelect from './PaymentMethodSelect';
-import { formatKES, roundMoney } from '../../utils/currency';
+import { formatMoney, roundMoney } from '../../utils/currency';
 import { raceWithTimeout } from '../../utils/offlineWrite';
 import { friendlyErrorMessage } from '../../utils/errorMessages';
+import { digitalReferenceLabel, digitalReferenceMissingMessage, digitalReferenceRequired } from '../../lib/region';
 
 export default function CartCheckoutModal({ open, cart, total, customers, onClose, onConfirmSale, onConfirmCredit, onCreateCustomer }) {
   const [method, setMethod]         = useState('Cash');
@@ -35,7 +36,7 @@ export default function CartCheckoutModal({ open, cart, total, customers, onClos
 
   if (!open || !cart || cart.length === 0) return null;
 
-  const needsMpesaCode = method === 'M-Pesa' && !mpesaCode.trim();
+  const needsMpesaCode = method === 'M-Pesa' && digitalReferenceRequired() && !mpesaCode.trim();
   const needsCustomer  = method === 'Credit' && !customerId && !(newMode && newName.trim());
   const canSubmit = !needsMpesaCode && !needsCustomer && !submitting;
 
@@ -88,7 +89,7 @@ export default function CartCheckoutModal({ open, cart, total, customers, onClos
             </div>
           </div>
           <div className="mt-2 flex justify-end">
-            <span className="num font-display text-money font-bold text-ink-900">{formatKES(editedTotal)}</span>
+            <span className="num font-display text-money font-bold text-ink-900">{formatMoney(editedTotal)}</span>
           </div>
         </div>
 
@@ -99,9 +100,9 @@ export default function CartCheckoutModal({ open, cart, total, customers, onClos
 
         {method === 'M-Pesa' && (
           <div>
-            <label className="label">M-Pesa transaction code <span className="text-danger-500">*</span></label>
-            <input className="input uppercase" placeholder="e.g. QWE1234567" value={mpesaCode} onChange={e => setMpesaCode(e.target.value.toUpperCase())} />
-            {needsMpesaCode && <p className="mt-1 text-secondary text-danger-600">Transaction code required for M-Pesa sales.</p>}
+            <label className="label">{digitalReferenceLabel()}{digitalReferenceRequired() && <span className="text-danger-500" aria-hidden="true"> *</span>}</label>
+            <input className="input uppercase" placeholder={digitalReferenceRequired() ? 'e.g. QWE1234567' : ''} value={mpesaCode} onChange={e => setMpesaCode(e.target.value.toUpperCase())} />
+            {needsMpesaCode && <p className="mt-1 text-secondary text-danger-600">{digitalReferenceMissingMessage()}</p>}
           </div>
         )}
 

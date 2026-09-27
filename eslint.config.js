@@ -9,7 +9,7 @@ export default defineConfig([
   // development service worker and `dist` the production build; both are
   // Workbox's minified code, and linting them produced 41 of the 69
   // errors that made `npm run lint` unusable as a CI gate.
-  globalIgnores(['dist', 'dev-dist', '**/*.min.js']),
+  globalIgnores(['dist', 'dev-dist', '**/*.min.js', 'android', 'resources']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [js.configs.recommended, reactHooks.configs.flat.recommended, reactRefresh.configs.vite],
