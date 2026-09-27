@@ -1,5 +1,5 @@
 // HP-7 FIX: chunk deletions to avoid 500-op batch limit; replace window.location.reload() with React state
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { db } from '../firebase';
@@ -12,17 +12,19 @@ import ErrorBanner from '../components/common/ErrorBanner';
 import PageHeader from '../components/ui/PageHeader';
 import Section from '../components/ui/Section';
 import StatementBlock, { StatementRow, StatementResult } from '../components/ui/StatementBlock';
-import { startOfDay, endOfDay } from '../utils/dateRanges';
 import { computeExpectedTillBalances } from '../utils/financials';
+import { roundMoney } from '../utils/currency';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
 import { currencyMarker, formatAmount, tenderLabel } from '../lib/region';
 
 export default function CloseDay() {
   const { profile } = useAuth();
-  const { session, loading:sessLoad, sessionId, isClosed, reopenSession } = useDailySession();
-  const today = useMemo(() => ({ start:startOfDay(), end:endOfDay() }), []);
-const { loading:finLoad, error:finErr, summary, purchases, supplierPayments } = useFinancialsForRange(today.start, today.end);
+  const { session, loading:sessLoad, sessionId, isClosed, reopenSession, dayStart, dayEnd } = useDailySession();
+  // The range comes from the SAME business day as the session id — see
+  // useDailySession — so the figures below always belong to the session
+  // they are shown against, including across midnight.
+  const { loading:finLoad, error:finErr, summary, purchases, supplierPayments } = useFinancialsForRange(dayStart, dayEnd);
 
 const cashPurchases   = purchases.filter(p => p.paymentStatus === 'paid' && p.paymentMethod === 'Cash').reduce((s,p)=>s+(p.totalCost||0),0);
 const mpesaPurchases  = purchases.filter(p => p.paymentStatus === 'paid' && p.paymentMethod === 'M-Pesa').reduce((s,p)=>s+(p.totalCost||0),0);
@@ -68,15 +70,26 @@ try {
         cashVariance:cashVar, mpesaVariance:mpesaVar,
         closedAt:serverTimestamp(), closedBy:profile.uid,
       });
-      const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+      const { queuedOffline, error } = await raceWithTimeout(write, 4000, { label: 'Closing the day' });
       if (error) throw error;
       toast.success(queuedOffline ? 'Day closed offline. It will sync when you reconnect.' : 'Day closed. See you tomorrow.');
     } catch(err) { toast.error(friendlyErrorMessage(err)); } finally { setSubmit(false); }
   };
 
   if (isClosed) {
-    const closedCashVar  = (session.actualCashAtClose  || 0) - expectedCashAtClose;
-    const closedMpesaVar = (session.actualMpesaAtClose || 0) - expectedMpesaAtClose;
+    // A CLOSED DAY SHOWS WHAT WAS CLOSED. It used to recompute "expected"
+    // from live transactions every time it was opened, so a sale from
+    // another device that synced after the close silently changed the
+    // variance the cashier had already signed off. The figures recorded
+    // at close are the record; anything that arrived since is shown
+    // beside them, as what it is.
+    const stored = (value, live) => (typeof value === 'number' && Number.isFinite(value) ? value : live);
+    const closedExpectedCash  = stored(session.expectedCashAtClose, expectedCashAtClose);
+    const closedExpectedMpesa = stored(session.expectedMpesaAtClose, expectedMpesaAtClose);
+    const closedCashVar  = stored(session.cashVariance,  (session.actualCashAtClose  || 0) - closedExpectedCash);
+    const closedMpesaVar = stored(session.mpesaVariance, (session.actualMpesaAtClose || 0) - closedExpectedMpesa);
+    const lateCash  = roundMoney(expectedCashAtClose  - closedExpectedCash);
+    const lateMpesa = roundMoney(expectedMpesaAtClose - closedExpectedMpesa);
     return (
       <div className="mx-auto max-w-2xl space-y-6">
         <PageHeader
@@ -86,7 +99,7 @@ try {
         />
         <Section title="Cash drawer">
           <StatementBlock>
-            <StatementRow label="Expected cash" prefix={currencyMarker()} value={formatAmount(expectedCashAtClose)} />
+            <StatementRow label="Expected cash" prefix={currencyMarker()} value={formatAmount(closedExpectedCash)} />
             <StatementRow label="Counted cash"  prefix={currencyMarker()} value={formatAmount(session.actualCashAtClose || 0)} />
             <StatementResult
               label={varianceLabel(closedCashVar)}
@@ -98,7 +111,7 @@ try {
         </Section>
         <Section title={`${tenderLabel('M-Pesa')} till`}>
           <StatementBlock>
-            <StatementRow label="Expected balance" prefix={currencyMarker()} value={formatAmount(expectedMpesaAtClose)} />
+            <StatementRow label="Expected balance" prefix={currencyMarker()} value={formatAmount(closedExpectedMpesa)} />
             <StatementRow label="Counted balance"  prefix={currencyMarker()} value={formatAmount(session.actualMpesaAtClose || 0)} />
             <StatementResult
               label={varianceLabel(closedMpesaVar)}
@@ -108,6 +121,15 @@ try {
             />
           </StatementBlock>
         </Section>
+        {(Math.abs(lateCash) >= 0.01 || Math.abs(lateMpesa) >= 0.01) && (
+          <p className="text-secondary text-ink-600">
+            Since this day was closed, activity dated today has arrived from another device or from offline:
+            {Math.abs(lateCash) >= 0.01 && <> <span className="num font-medium">{currencyMarker()} {formatAmount(lateCash)}</span> cash</>}
+            {Math.abs(lateCash) >= 0.01 && Math.abs(lateMpesa) >= 0.01 && ' and'}
+            {Math.abs(lateMpesa) >= 0.01 && <> <span className="num font-medium">{currencyMarker()} {formatAmount(lateMpesa)}</span> {tenderLabel('M-Pesa')}</>}.
+            The closed figures above are unchanged. Reopen the day to count again.
+          </p>
+        )}
       </div>
     );
   }

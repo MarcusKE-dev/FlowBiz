@@ -66,11 +66,10 @@ const handle = async e => {
       recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:new Date(),
     }, businessId));
 
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000, { label: `The expense "${form.description.trim()}"` });
     setBusy(false);
     if (error) { toast.error(friendlyErrorMessage(error)); return; }
     toast.success(queuedOffline ? 'Expense saved offline. It will sync when you reconnect.' : 'Expense recorded');
-    if (queuedOffline) write.catch((err) => toast.error(`An expense from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
     setForm(emptyForm);
   };
 

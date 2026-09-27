@@ -8,6 +8,7 @@ import ErrorBanner from '../components/common/ErrorBanner';
 import Modal from '../components/common/Modal';
 import { formatPdfMoney } from '../utils/currency';
 import { formatDate, formatDateTime, getRangeForPreset, todayKey, startOfDateInput, endOfDateInput } from '../utils/dateRanges';
+import { productPerformance } from '../utils/productPerformance';
 import { computeExpectedTillBalances } from '../utils/financials';
 import { Printer, TrendingUp } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
@@ -53,6 +54,7 @@ export default function Reports() {
     summary,
     purchases,
     supplierPayments,
+    refunds,
   } = useFinancialsForRange(start, end);
 
   const { session } = useDailySession();
@@ -69,39 +71,17 @@ export default function Reports() {
   // Reports no longer streams a shop's entire catalogue, purchase history
   // and open credit book to the device for nothing.
 
-  const bestSellers = useMemo(() => {
-    const map = {};
-    const ensure = (name) => {
-      const key = name || 'Unnamed product';
-      if (!map[key]) map[key] = { name: key, qty: 0, revenue: 0, profit: 0 };
-      return map[key];
-    };
-    (sales || []).forEach((sale) => {
-      if (sale.isVoided) return;
-      if (Array.isArray(sale.items) && sale.items.length > 0) {
-        sale.items.forEach((it) => {
-          const row = ensure(it.productName);
-          row.qty += Number(it.quantity) || 0;
-          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
-          row.profit += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
-        });
-      } else {
-        const row = ensure(sale.productName);
-        row.qty += Number(sale.quantity) || 0;
-        row.revenue += Number(sale.totalAmount) || 0;
-        row.profit += Number(sale.profit) || 0;
-      }
-    });
-    (creditSales || []).forEach((cs) => {
-      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-      if (Array.isArray(cs.items) && cs.items.length > 0) {
-        cs.items.forEach((it) => { ensure(it.productName).qty += Number(it.quantity) || 0; });
-      } else {
-        ensure(cs.productName).qty += Number(cs.quantity) || 0;
-      }
-    });
-    return Object.values(map).sort((a, b) => b.qty - a.qty).slice(0, 8);
-  }, [sales, creditSales]);
+  // Net of returns, and at what each line was actually paid — see
+  // utils/productPerformance.js. The summary above already nets refunds;
+  // the product tables used to show the original sale regardless.
+  const performance = useMemo(
+    () => productPerformance({ sales, creditSales, refunds }),
+    [sales, creditSales, refunds]
+  );
+  const bestSellers = useMemo(
+    () => [...performance].sort((a, b) => b.qty - a.qty).slice(0, 8),
+    [performance]
+  );
 
   // Cash and M-Pesa purchase/supplier payment breakdowns (same as Close Day)
   const cashPurchases = useMemo(
@@ -125,42 +105,7 @@ export default function Reports() {
     [supplierPayments]
   );
 
-  const productPerf = useMemo(() => {
-    const m = {};
-    const ensure = (name) => {
-      if (!m[name]) m[name] = { name, qty: 0, revenue: 0, profit: 0 };
-      return m[name];
-    };
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      if (Array.isArray(s.items) && s.items.length > 0) {
-        s.items.forEach((it) => {
-          const row = ensure(it.productName);
-          row.qty += Number(it.quantity) || 0;
-          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
-          row.profit += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
-        });
-      } else {
-        const row = ensure(s.productName);
-        row.qty += Number(s.quantity) || 0;
-        row.revenue += Number(s.totalAmount) || 0;
-        row.profit += Number(s.profit) || 0;
-      }
-    });
-    (creditSales || []).forEach((cs) => {
-      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-      if (Array.isArray(cs.items) && cs.items.length > 0) {
-        cs.items.forEach((it) => {
-          const row = ensure(it.productName);
-          row.qty += Number(it.quantity) || 0;
-        });
-      } else {
-        const row = ensure(cs.productName);
-        row.qty += Number(cs.quantity) || 0;
-      }
-    });
-    return Object.values(m);
-  }, [sales, creditSales]);
+  const productPerf = performance;
 
   const bestSelling = [...productPerf].sort((a, b) => b.qty - a.qty).slice(0, 5);
 

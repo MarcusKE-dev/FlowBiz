@@ -39,14 +39,14 @@ import Money from '../components/ui/Money';
 import { formatDateTime, startOfDay } from '../utils/dateRanges';
 import { formatQuantityWithUnit, unitStep, getUnit, DEFAULT_UNIT, roundQuantity } from '../industry/units';
 import { hasVariants } from '../utils/variants';
-import { applyStockDeltas } from '../utils/stockWrites';
+import { applyStockDeltas, stockMovement } from '../utils/stockWrites';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
 import { roundMoney } from '../utils/currency';
 import {
   WASTE_REASONS, DEFAULT_WASTE_REASON, MAX_WASTE_NOTE,
   buildWasteRecord, resolveWasteDeltas, summarizeWaste, wasteByProduct, isWastable,
-  wasteReasonLabel,
+  wasteReasonLabel, wasteSubledgerProblem,
 } from '../domain/fnb/waste';
 import { currencyMarker, formatAmount } from '../lib/region';
 
@@ -104,12 +104,20 @@ export default function Waste() {
   const selected = useMemo(() => products.find((p) => p.id === productId) || null, [products, productId]);
   const unit = selected?.unit || DEFAULT_UNIT;
   const qty = roundQuantity(Number(quantity) || 0, unit);
-  const cost = roundMoney(qty * (Number(selected?.costPrice) || 0));
 
   const productBatches = useMemo(
     () => (selected ? batches.filter((b) => b.productId === selected.id && (Number(b.remainingQuantity) || 0) > 0) : []),
     [batches, selected]
   );
+  const chosenBatch = batchId ? productBatches.find((b) => b.id === batchId) : null;
+  const chosenVariant = variantId && selected ? (selected.variants || []).find((v) => v.id === variantId) : null;
+  // What one of the things thrown away cost: its batch's price, else its
+  // version's, else the product's.
+  const unitCost = Number(chosenBatch?.costPrice) || Number(chosenVariant?.costPrice) || Number(selected?.costPrice) || 0;
+  const cost = roundMoney(qty * unitCost);
+  const subledgerProblem = selected
+    ? wasteSubledgerProblem({ variantId, batchId }, selected, { batches: productBatches })
+    : null;
 
   const summary = useMemo(() => summarizeWaste(records), [records]);
   const worst = useMemo(() => wasteByProduct(records).slice(0, 8), [records]);
@@ -134,12 +142,13 @@ export default function Waste() {
   const handleRecord = async (e) => {
     e.preventDefault();
     if (!selected || qty <= 0 || busy || tooMuch) return;
+    if (subledgerProblem) { toast.error(subledgerProblem); return; }
 
     const variant = variantId ? (selected.variants || []).find((v) => v.id === variantId) : null;
     const batch = batchId ? productBatches.find((b) => b.id === batchId) : null;
     const record = buildWasteRecord(
       {
-        quantity: qty, reason, note,
+        quantity: qty, reason, note, unitCost,
         variantId: variantId || null, variantLabel: variant?.label || null,
         batchId: batchId || null, batchLabel: batch?.batchNumber || batch?.expiryDate || null,
       },
@@ -154,13 +163,13 @@ export default function Waste() {
       // adapter every other movement in the product uses. They can never
       // diverge, and offline the whole thing queues as one mutation.
       const batchWrite = writeBatch(db);
-      applyStockDeltas(batchWrite, resolveWasteDeltas([record], products));
-      batchWrite.set(doc(collection(db, 'waste')), withBusiness(record, businessId));
+      const wasteRef = doc(collection(db, 'waste'));
+      applyStockDeltas(batchWrite, resolveWasteDeltas([record], products), { movement: stockMovement('waste', wasteRef.id) });
+      batchWrite.set(wasteRef, withBusiness(record, businessId));
 
       const commit = batchWrite.commit();
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000, { label: `Waste of ${selected.name}` });
       if (error) throw error;
-      if (queuedOffline) commit.catch((err) => toast.error(`Waste couldn't be saved: ${friendlyErrorMessage(err)}`));
 
       toast.success(queuedOffline
         ? 'Recorded offline. It will sync when you reconnect.'
@@ -234,7 +243,7 @@ export default function Waste() {
             <div>
               <label className="label">Which one?</label>
               <select className="input" value={variantId} onChange={(e) => setVariantId(e.target.value)} disabled={busy}>
-                <option value="">All / not specific</option>
+                <option value="" disabled>Choose a version</option>
                 {(selected.variants || []).map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
               </select>
             </div>
@@ -246,7 +255,7 @@ export default function Waste() {
             <div>
               <label className="label">Which batch?</label>
               <select className="input" value={batchId} onChange={(e) => setBatchId(e.target.value)} disabled={busy}>
-                <option value="">Not from a specific batch</option>
+                <option value="" disabled>Choose the batch</option>
                 {productBatches.map((b) => (
                   <option key={b.id} value={b.id}>
                     {[b.batchNumber, b.expiryDate].filter(Boolean).join(' · ')}
@@ -281,7 +290,7 @@ export default function Waste() {
             </div>
           )}
 
-          <button type="submit" className="btn-primary w-full" disabled={busy || !selected || qty <= 0 || tooMuch}>
+          <button type="submit" className="btn-primary w-full" disabled={busy || !selected || qty <= 0 || tooMuch || Boolean(subledgerProblem)}>
             {busy ? 'Recording…' : 'Record waste'}
           </button>
         </form>

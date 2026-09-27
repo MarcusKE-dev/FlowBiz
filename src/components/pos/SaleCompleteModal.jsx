@@ -114,6 +114,14 @@ export default function SaleCompleteModal({ open, sale, onClose }) {
           )}
 
           {sale.isCredit && sale.customerName && <p className="text-secondary text-ink-500">{sale.customerName}</p>}
+          {/* A negotiated total says so, rather than sitting under lines
+              that add up to something else. */}
+          {Number(sale.discountAmount) > 0 && (
+            <p className="text-secondary text-ink-500">Discount <Money value={-Number(sale.discountAmount)} /></p>
+          )}
+          {Number(sale.priceAdjustment) > 0 && (
+            <p className="text-secondary text-ink-500">Price adjustment <Money value={Number(sale.priceAdjustment)} /></p>
+          )}
           <p className="num text-money text-ink-900"><Money value={sale.totalAmount} /></p>
           <p className={`text-secondary font-semibold ${sale.isCredit ? 'text-danger-700' : 'text-ink-500'}`}>
             {sale.isCredit ? 'Payment status: unpaid' : tenderLabel(sale.paymentMethod)}

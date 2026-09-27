@@ -1,7 +1,7 @@
 // src/pages/Counter.jsx
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { doc, addDoc, updateDoc, writeBatch, serverTimestamp, orderBy, where, limit, getDoc, collection } from 'firebase/firestore';
+import { doc, addDoc, setDoc, updateDoc, writeBatch, serverTimestamp, orderBy, where, limit, collection } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import {
   Trash2, Undo2, ShoppingCart, Printer, Download,
@@ -16,20 +16,22 @@ import { tenantQuery, tenantCollection, withBusiness } from '../lib/tenant';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { useDailySession } from '../hooks/useDailySession';
 import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode, isContinuousScanEnabled } from '../utils/scannerService';
+import { findProductByCode, ambiguousScanMessage, isContinuousScanEnabled } from '../utils/scannerService';
 import { searchCatalogue, activeCategories } from '../utils/catalogueSearch';
 import {
   buildLineItem, sumLineTotals, sumLineCosts, summaryQuantity,
   normalizeQuantity, minimumQuantity, productUnit, validateAgainstStock,
-  saleQuantityLabel, applySalePriceOverride,
+  saleQuantityLabel, applySalePriceOverride, allocateSaleTotal,
 } from '../utils/lineItems';
 import { formatQuantityWithUnit, roundQuantity, unitStep, getUnit } from '../industry/units';
 import { hasVariants, findVariant, findVariantByBarcode } from '../utils/variants';
-import { resolveStockDeltas, validateComponentStock } from '../utils/inventory';
-import { applyStockDeltas } from '../utils/stockWrites';
-import { buildRefundDocument, isFullyReturned, returnState } from '../utils/returns';
 import {
-  allocateFefo, allocatedUnitCost, sellableBatchStockFor, todayISO,
+  resolveStockDeltas, resolveReversalDeltas, validateComponentStock, componentUsage, tracksOwnStock,
+} from '../utils/inventory';
+import { applyStockDeltas, stockMovement } from '../utils/stockWrites';
+import { buildRefundDocument, isFullyReturned, returnState, saleLineItems } from '../utils/returns';
+import {
+  allocateFefoAcrossLines, allocatedUnitCost, sellableBatchStockFor, todayISO,
   expiryStatus, daysBetween, EXPIRY_STATUS,
 } from '../utils/batches';
 import { hasModifiers, describeModifiers } from '../utils/modifiers';
@@ -45,6 +47,9 @@ import { createProduct } from '../utils/products';
 // business — see the notes at each call site.
 import { sellableProducts, isIngredientOnly } from '../domain/fnb/catalog';
 import { sellingUnitCost } from '../domain/fnb/costing';
+import { computeCheck, checkSaleFields, normalizeServiceChargeRate } from '../domain/fnb/check';
+import { dominantMethod, tenderSaleFields, normalizeTenders } from '../utils/tenders';
+import TicketCheckoutModal from '../components/pos/TicketCheckoutModal';
 import { printReceipt, generateReceiptPDF, printInvoice, generateInvoicePDF, sendWhatsAppDocument } from '../utils/documentService';
 import { getOrCreateShareLink } from '../utils/documentSharing';
 import { useCloudDocuments } from '../hooks/useCloudDocuments';
@@ -94,6 +99,15 @@ const toLineItem = buildLineItem;
 // are two independently editable lines.
 function cartRowKey(item) {
   return item?.rowKey || item?.productId;
+}
+
+/** Did a ticket's item list change, ignoring order? */
+function itemsChanged(before, after) {
+  const key = (items) => (items || [])
+    .map((i) => `${i.productId}|${i.variantId || ''}|${JSON.stringify(i.modifiers || [])}|${i.quantity}`)
+    .sort()
+    .join('~');
+  return key(before) !== key(after);
 }
 
 function summarizeProductName(lineItems) {
@@ -380,6 +394,9 @@ export default function Counter() {
           ...(variant ? { variantId: variant.id, variantLabel: variant.label } : {}),
           ...(modifiers.length > 0 ? { modifiers } : {}),
           ...(extras?.note ? { note: extras.note } : {}),
+          ...(product.station ? { station: product.station } : {}),
+          ...(product.kitchenName ? { kitchenName: product.kitchenName } : {}),
+          ...(product.routable === false ? { routable: false } : {}),
         },
       ];
     });
@@ -400,7 +417,11 @@ export default function Counter() {
     }
     let qty = normalizeQuantity(rawQty, unit);
     if (qty <= 0) qty = minimumQuantity(unit);
-    if (product && product.kind !== 'service') {
+    // The same rule adding to the cart uses: a service or a dish made to
+    // order has no stock of its own to run out of — its ingredients are
+    // checked at checkout. Checking the dish's own (meaningless) stock here
+    // refused a perfectly valid "3 burgers".
+    if (product && tracksOwnStock(product)) {
       const available = row?.variantId
         ? roundQuantity(Number(findVariant(product, row.variantId)?.stock) || 0, unit)
         : roundQuantity(Number(product.stock) || 0, unit);
@@ -503,6 +524,12 @@ export default function Counter() {
       });
 
       let write;
+      const existing = activeOrderId ? openOrders.find((o) => o.id === activeOrderId) : null;
+      if (activeOrderId && !existing) {
+        // Charged, cancelled or moved on another device since it was
+        // opened here. Writing the cart over it would resurrect it.
+        throw new Error('This ticket was closed on another device. Its items are still in the cart — start a new ticket to keep them.');
+      }
       if (activeOrderId) {
         // Re-saving an existing ticket keeps its identity, its opener and
         // its kitchen state — only the contents, the totals and the
@@ -520,13 +547,25 @@ export default function Counter() {
           tableName: payload.tableName,
           diningMode: payload.diningMode,
           note: payload.note,
+          // THE TICKET'S VERSION. Two devices holding the same ticket each
+          // wrote their whole item list over the other's, so whichever
+          // saved second silently deleted the first one's items.
+          // firestore.rules accepts an item change only as the next
+          // revision after the one the server holds: the stale save is
+          // refused, and the waiter reopens the ticket and sees both.
+          revision: (Number(existing.revision) || 0) + 1,
+          // New items on a ticket the kitchen already finished are new
+          // work. Leaving it "ready" hid them from the kitchen queue.
+          ...(['ready', 'served'].includes(existing.kitchenStatus) && itemsChanged(existing.items, payload.items)
+            ? { kitchenStatus: 'new' }
+            : {}),
           updatedAt: serverTimestamp(),
         });
       } else {
         write = addDoc(tenantCollection('orders'), withBusiness(payload, businessId));
       }
 
-      const { queuedOffline, value, error } = await raceWithTimeout(write, 4000);
+      const { queuedOffline, value, error } = await raceWithTimeout(write, 4000, { label: `The ticket ${payload.name}` });
       if (error) throw error;
       if (!activeOrderId && value?.id) setActiveOrderId(value.id);
 
@@ -534,7 +573,9 @@ export default function Counter() {
       clearCart();
       clearOrderContext();
     } catch (err) {
-      toast.error(friendlyErrorMessage(err));
+      toast.error(friendlyErrorMessage(err, {
+        overrides: { 'permission-denied': 'This ticket was changed on another device. Your items are still in the cart: reopen the ticket to see the latest, then add them again.' },
+      }));
     } finally {
       setSavingOrder(false);
     }
@@ -571,7 +612,11 @@ export default function Counter() {
   // what the cart shows and what Firestore stores cannot disagree by a
   // rounding step.
   const cartLines = useMemo(() => cart.map(toLineItem), [cart]);
+  // A service charge belongs to a food business's bill; a shop has none.
+  const serviceChargeRate = ordersOn ? normalizeServiceChargeRate(settings?.serviceChargeRate) : 0;
+  const cartCheck = useMemo(() => computeCheck(cartLines, { serviceChargeRate }), [cartLines, serviceChargeRate]);
   const cartTotal = useMemo(() => sumLineTotals(cartLines), [cartLines]);
+  const chargeTotal = cartCheck.totalAmount;
   const cartCost = useMemo(() => sumLineCosts(cartLines), [cartLines]);
   const cartEstimatedProfit = Math.max(0, cartTotal - cartCost);
 
@@ -592,15 +637,18 @@ export default function Counter() {
   function withBatchAllocations(lineItems) {
     if (!batchesOn) return lineItems;
     const today = todayISO();
-    return lineItems.map((item) => {
+    // ONE POOL PER CHECKOUT — see allocateFefoAcrossLines(). Only lines of
+    // products that actually have batches take part.
+    const eligible = lineItems.map((item) => {
       const product = products.find((p) => p.id === item.productId);
-      if (!product || product.kind === 'service') return item;
-      const productBatches = batches.filter((b) => b.productId === item.productId);
-      if (productBatches.length === 0) return item;
-
-      const { allocations, shortfall } = allocateFefo(productBatches, item.quantity, {
-        unit: product.unit, today,
-      });
+      return product && product.kind !== 'service' && batches.some((b) => b.productId === item.productId)
+        ? { productId: item.productId, quantity: item.quantity, unit: product.unit }
+        : { productId: null, quantity: 0 };
+    });
+    const results = allocateFefoAcrossLines(eligible, batches, { today });
+    return lineItems.map((item, index) => {
+      if (!eligible[index].productId) return item;
+      const { allocations, shortfall } = results[index];
       if (allocations.length === 0) return item;
 
       // EXPIRY ALERTS at the till. FEFO has already picked the earliest
@@ -645,6 +693,12 @@ export default function Counter() {
   }
 
   function validateCartAgainstStock() {
+    // A cleared quantity box is kept as '' while the cashier types, so it
+    // can reach checkout. It must not become a zero-quantity sale — or,
+    // with an edited total, revenue with nothing sold.
+    const blank = cart.find((row) => normalizeQuantity(row.quantity, row.unit) <= 0);
+    if (blank) throw new Error(`Enter a quantity for ${blank.productName}.`);
+
     const problem = validateAgainstStock(cart, products);
     if (problem) throw new Error(problem);
 
@@ -682,6 +736,12 @@ export default function Counter() {
   // mutation and applies atomically when it syncs.
   function closeActiveOrder(batch, saleId) {
     if (!activeOrderId) return;
+    // firestore.rules refuses to close a ticket that is no longer open, and
+    // the refusal takes the whole batch — sale and stock — with it. Two
+    // devices charging the same ticket therefore record ONE sale.
+    if (!openOrders.some((o) => o.id === activeOrderId)) {
+      throw new Error('This ticket has already been charged or cancelled on another device.');
+    }
     batch.update(doc(db, 'orders', activeOrderId), {
       status: ORDER_STATUS.COMPLETED,
       kitchenStatus: 'served',
@@ -713,11 +773,17 @@ export default function Counter() {
   // decides what moves and utils/stockWrites.js writes it, so the
   // counter, purchases, the stock take, the dashboard and every reversal
   // path go through the same arithmetic instead of four copies of it.
-  function applyCartStock(batch, rows, { reverse = false, only = null } = {}) {
-    const deltas = resolveStockDeltas(rows, products, {
-      recipes: industry.can('recipes'), packSizes: industry.can('packSizes'), reverse,
-    });
-    applyStockDeltas(batch, deltas, { only });
+  function applyCartStock(batch, rows, { reverse = false, movement = null } = {}) {
+    const options = { recipes: industry.can('recipes'), packSizes: industry.can('packSizes') };
+    // A reversal puts back what the lines RECORDED taking — ingredients
+    // included — rather than re-deriving it from today's recipe. A product
+    // deleted since the sale is absent from `products` and is skipped
+    // rather than resurrected; ingredients are no longer filtered out as
+    // collateral of that check, which is what left them deducted forever.
+    const deltas = reverse
+      ? resolveReversalDeltas(rows, products, options)
+      : resolveStockDeltas(rows, products, options);
+    applyStockDeltas(batch, deltas, { movement });
   }
 
   // ── Age-restricted goods ──────────────────────────────────────────
@@ -756,13 +822,47 @@ export default function Counter() {
     setPendingAgeCheck(() => proceed);
   };
 
-  const handleCartSale = ({ paymentMethod, mpesaCode, finalTotalAmount }) => {
+  // Everything a sale and a credit sale share: the lines (with their
+  // batches, and the ingredients each one uses, RECORDED so a later
+  // reversal puts back exactly that), the total, and — when the total was
+  // negotiated at checkout — each line's share of it plus the discount,
+  // so a return refunds what was paid and the discount is reported.
+  function buildSaleLines(finalTotalAmount) {
     validateCartAgainstStock();
-    const lineItems = withBatchAllocations(cart.map(toLineItem));
-    const originalTotalAmount = sumLineTotals(lineItems);
-    const costOfGoodsSold = sumLineCosts(lineItems);
-    const { totalAmount, profit } = applySalePriceOverride({ totalAmount: originalTotalAmount, costOfGoodsSold, finalTotalAmount });
-    const quantity = summaryQuantity(lineItems);
+    const recipesOn = industry.can('recipes');
+    const packSizesOn = industry.can('packSizes');
+    const withUsage = withBatchAllocations(cart.map(toLineItem)).map((item) => {
+      const usage = componentUsage(item, products, { recipes: recipesOn, packSizes: packSizesOn });
+      return usage.length > 0 ? { ...item, componentUsage: usage } : item;
+    });
+    const costOfGoodsSold = sumLineCosts(withUsage);
+    // THE CHECK: the lines plus the business's service charge, when it has
+    // one. It used to be configured on the settings page and applied by
+    // nothing — the counter charged the bare item total.
+    const check = computeCheck(withUsage, { serviceChargeRate });
+    const listTotal = check.totalAmount;
+    const { totalAmount, profit } = applySalePriceOverride({ totalAmount: listTotal, costOfGoodsSold, finalTotalAmount });
+    const lineItems = allocateSaleTotal(withUsage, totalAmount);
+    const pricing = {
+      ...checkSaleFields(check),
+      ...(Math.abs(totalAmount - listTotal) < 0.005 ? {} : {
+        listTotal,
+        ...(totalAmount < listTotal
+          ? { discountAmount: roundMoney(listTotal - totalAmount) }
+          : { priceAdjustment: roundMoney(totalAmount - listTotal) }),
+      }),
+    };
+    return { lineItems, totalAmount, costOfGoodsSold, profit, pricing, quantity: summaryQuantity(lineItems) };
+  }
+
+  const handleCartSale = ({ paymentMethod, mpesaCode, finalTotalAmount, tenders = null }) => {
+    const { lineItems, totalAmount, costOfGoodsSold, profit, pricing, quantity } = buildSaleLines(finalTotalAmount);
+    // A bill settled two ways — 2,000 cash and 1,500 M-Pesa — is one sale
+    // with two tenders. `paymentMethod` stays the method that paid the
+    // larger share, which is what every older reader classifies it by.
+    const splitTenders = tenders ? normalizeTenders(tenders) : [];
+    const method = splitTenders.length > 1 ? dominantMethod(splitTenders) : (paymentMethod || splitTenders[0]?.method || 'Cash');
+    const reference = mpesaCode || splitTenders.find((t) => t.method === 'M-Pesa' && t.reference)?.reference || null;
 
     const saleRef = doc(collection(db, 'sales'));
     const saleData = withBusiness(
@@ -773,11 +873,13 @@ export default function Counter() {
         totalAmount,
         costOfGoodsSold,
         profit,
+        ...pricing,
         ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
         ...(lineItems.length === 1 && lineItems[0].unit ? { unit: lineItems[0].unit } : {}),
         ...orderContextFields(),
-        paymentMethod,
-        mpesaCode: mpesaCode || null,
+        ...tenderSaleFields(splitTenders),
+        paymentMethod: method,
+        mpesaCode: reference,
         soldBy: profile.uid,
         soldByName: profile.displayName,
         soldAt: new Date(),
@@ -788,7 +890,7 @@ export default function Counter() {
     );
 
     const batch = writeBatch(db);
-    applyCartStock(batch, lineItems);
+    applyCartStock(batch, lineItems, { movement: stockMovement('sales', saleRef.id) });
     batch.set(saleRef, saleData);
     closeActiveOrder(batch, saleRef.id);
 
@@ -796,12 +898,7 @@ export default function Counter() {
   };
 
   const handleCartCredit = ({ customerId, customerName, customerPhone, finalTotalAmount }) => {
-    validateCartAgainstStock();
-    const lineItems = withBatchAllocations(cart.map(toLineItem));
-    const originalTotalAmount = sumLineTotals(lineItems);
-    const costOfGoodsSold = sumLineCosts(lineItems);
-    const { totalAmount } = applySalePriceOverride({ totalAmount: originalTotalAmount, costOfGoodsSold, finalTotalAmount });
-    const quantity = summaryQuantity(lineItems);
+    const { lineItems, totalAmount, costOfGoodsSold, pricing, quantity } = buildSaleLines(finalTotalAmount);
 
     const creditRef = doc(collection(db, 'creditSales'));
     const creditData = withBusiness(
@@ -814,12 +911,16 @@ export default function Counter() {
         quantity,
         totalAmount,
         costOfGoodsSold,
+        ...pricing,
         ...(lineItems.length === 1 ? { costPricePerUnit: lineItems[0].costPrice, soldPricePerUnit: lineItems[0].unitPrice } : {}),
         ...(lineItems.length === 1 && lineItems[0].unit ? { unit: lineItems[0].unit } : {}),
         ...orderContextFields(),
         soldBy: profile.uid,
         soldByName: profile.displayName,
-        soldAt: serverTimestamp(),
+        // The moment the sale was MADE, on the same clock a cash sale uses.
+        // A server timestamp here is the moment it SYNCED, so a credit sale
+        // rung up offline at 11 pm landed in tomorrow's books.
+        soldAt: new Date(),
         status: 'pending',
         amountPaid: 0,
         remainingBalance: totalAmount,
@@ -830,15 +931,25 @@ export default function Counter() {
     );
 
     const batch = writeBatch(db);
-    applyCartStock(batch, lineItems);
+    applyCartStock(batch, lineItems, { movement: stockMovement('creditSales', creditRef.id) });
     batch.set(creditRef, creditData);
     closeActiveOrder(batch, creditRef.id);
 
     return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
   };
 
+  // The id is minted on the device and the write is NOT awaited: an
+  // awaited addDoc does not resolve until the server acknowledges it, so
+  // a credit sale to a new customer used to hang at this step on a phone
+  // with no signal, before the sale itself was ever queued. The customer
+  // write is queued first and the sale after it, in that order.
   const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
+    const ref = doc(collection(db, 'customers'));
+    raceWithTimeout(
+      setDoc(ref, withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId)),
+      4000,
+      { label: `The new customer ${name}` }
+    );
     return { id: ref.id, name, phone };
   };
 
@@ -881,12 +992,15 @@ export default function Counter() {
           ? handleCartCredit({ customerId: cId, customerName: cName, customerPhone: cPhone })
           : handleCartSale({ paymentMethod: desktopMethod, mpesaCode: desktopMethod === 'M-Pesa' ? desktopMpesaCode.trim() : null });
 
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      const { queuedOffline, pending, error } = await raceWithTimeout(commit, 4000, {
+        label: `A sale of ${formatMoney(record.totalAmount)}`,
+      });
       if (error) throw error;
 
       if (queuedOffline) {
         toast.success('Sale saved offline. It will sync when you reconnect.');
-        commit.catch((err) => toast.error(`A sale from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
+      } else if (pending) {
+        toast.success('Sale saved on this device. Still confirming with the server.');
       } else {
         toast.success('Sale recorded.');
       }
@@ -952,28 +1066,29 @@ export default function Counter() {
     const sale = pendingVoid;
     setVoiding(true);
     try {
-      const lineItems = Array.isArray(sale.items) && sale.items.length > 0 ? sale.items : [{ productId: sale.productId, quantity: sale.quantity }];
-      const targets = lineItems.filter((item) => item.productId);
-      const snaps = await Promise.all(targets.map((item) => getDoc(doc(db, 'products', item.productId))));
+      // A SALE THAT HAS BEEN RETURNED CANNOT ALSO BE VOIDED. The return
+      // already put its stock back and paid its money out; voiding on top
+      // restored the same stock a second time and removed the revenue the
+      // refund was netted against. What is left of it is returned, not
+      // voided. firestore.rules refuses the same write.
+      if (returnState(sale) !== 'none') {
+        toast.error('Part of this sale has already been returned. Return the rest instead of voiding it.');
+        return;
+      }
+      if (sale.isVoided) {
+        toast.error('This sale is already voided.');
+        return;
+      }
+      const targets = saleLineItems(sale).filter((item) => item.productId);
+      const anyProductMissing = targets.some((item) => !products.some((p) => p.id === item.productId));
 
       const batch = writeBatch(db);
-      let anyProductMissing = false;
       // Voiding puts stock back exactly where the sale took it from —
-      // including the specific version, so voiding a Black / M does not
-      // credit the shirts back to the wrong size.
-      applyCartStock(batch, targets, {
-        reverse: true,
-        only: targets.filter((item, idx) => snaps[idx].exists()).map((item) => item.productId),
-      });
-      targets.forEach((item, idx) => {
-        if (!snaps[idx].exists()) {
-          anyProductMissing = true;
-        }
-      });
-
+      // including the specific version, and the ingredients it recorded.
+      applyCartStock(batch, targets, { reverse: true, movement: stockMovement('sales', sale.id) });
       batch.update(doc(db, 'sales', sale.id), { isVoided: true, voidedAt: serverTimestamp(), voidedBy: profile.uid });
 
-      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000);
+      const { queuedOffline, error } = await raceWithTimeout(batch.commit(), 4000, { label: `Voiding the sale of ${sale.productName}` });
       if (error) throw error;
 
       toast.success(queuedOffline ? 'Sale voided offline.' : anyProductMissing ? 'Sale voided (some deleted products not restored).' : 'Sale voided and stock restored.');
@@ -1001,15 +1116,18 @@ export default function Counter() {
   const handleReturn = async ({ returned, method, reason }) => {
     const sale = returnTarget;
     if (!sale || returned.isEmpty) return;
+    if (sale.isVoided) {
+      toast.error('This sale was voided. There is nothing to return.');
+      return;
+    }
     try {
       const targets = returned.rows.filter((row) => row.productId);
-      const snaps = await Promise.all(targets.map((row) => getDoc(doc(db, 'products', row.productId))));
-      const live = targets.filter((row, idx) => snaps[idx].exists()).map((row) => row.productId);
+      const anyProductMissing = targets.some((row) => !products.some((p) => p.id === row.productId));
 
       const batch = writeBatch(db);
-      applyCartStock(batch, targets, { reverse: true, only: live });
-
       const refundRef = doc(collection(db, 'refunds'));
+      applyCartStock(batch, targets, { reverse: true, movement: stockMovement('refunds', refundRef.id) });
+
       batch.set(refundRef, withBusiness(buildRefundDocument({
         sale, returned, method, reason,
         refundedBy: profile.uid,
@@ -1017,21 +1135,25 @@ export default function Counter() {
       }), businessId));
 
       // How much of each line has now come back, so a second return of
-      // the same shirt cannot refund it twice.
+      // the same shirt cannot refund it twice. `returnCount` is the
+      // sale's version: firestore.rules accepts a return only as the next
+      // one after what the server holds, so two tills returning the same
+      // sale at once cannot both succeed.
       batch.update(doc(db, 'sales', sale.id), {
         returnedQuantities: returned.returnedQuantities,
+        returnCount: (Number(sale.returnCount) || 0) + 1,
+        lastRefundId: refundRef.id,
         lastReturnedAt: serverTimestamp(),
       });
 
       const commit = batch.commit();
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000, { label: `A return of ${formatMoney(returned.amount)}` });
       if (error) throw error;
-      if (queuedOffline) commit.catch((err) => toast.error(`A return from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
 
       toast.success(
         queuedOffline
           ? 'Return saved offline. It will sync when you reconnect.'
-          : live.length < targets.length
+          : anyProductMissing
             ? 'Return recorded (some deleted products were not restored).'
             : 'Return recorded and stock restored.'
       );
@@ -1087,6 +1209,8 @@ export default function Counter() {
 
   const handleScanDetected = (code) => {
     setScannerOpen(false);
+    const ambiguous = ambiguousScanMessage(products, code);
+    if (ambiguous) { toast.error(ambiguous); return; }
     const hit = resolveScan(code);
     if (!hit) {
       setNotFoundCode(code);
@@ -1116,6 +1240,8 @@ export default function Counter() {
   // dock stays open. A miss closes the dock so the "not found" prompt is
   // not buried behind the camera.
   const handleDockScan = (code) => {
+    const ambiguous = ambiguousScanMessage(products, code);
+    if (ambiguous) { setDockOpen(false); toast.error(ambiguous); return; }
     const hit = resolveScan(code);
     if (hit && isIngredientOnly(hit.product)) {
       // Same refusal as the single scan above, and it closes the dock so
@@ -1353,7 +1479,7 @@ export default function Counter() {
                   ]}
                   rowActions={(s) => (
                     <>
-                      {!s.isVoided && !s.isCredit && isAdmin && (
+                      {!s.isVoided && !s.isCredit && isAdmin && returnState(s) === 'none' && (
                         <button
                           type="button"
                           onClick={() => setPendingVoid(s)}
@@ -1596,6 +1722,15 @@ export default function Counter() {
                 </div>
               )}
 
+              {cartCheck.serviceChargeAmount > 0 && (
+                <div className="space-y-1 border-t border-divider pt-3 text-secondary text-ink-600">
+                  <div className="flex justify-between"><span>Items</span><Money value={cartTotal} /></div>
+                  <div className="flex justify-between">
+                    <span>Service charge {cartCheck.serviceChargeRate}%</span>
+                    <Money value={cartCheck.serviceChargeAmount} />
+                  </div>
+                </div>
+              )}
               <div className="flex items-end justify-between gap-3 border-t border-divider pt-3">
                 <div>
                   <p className="text-label uppercase text-ink-500">Total</p>
@@ -1605,7 +1740,7 @@ export default function Counter() {
                     </p>
                   )}
                 </div>
-                <p className="text-money text-ink-900"><Money value={cartTotal} /></p>
+                <p className="text-money text-ink-900"><Money value={chargeTotal} /></p>
               </div>
 
               {/* Two ways out of a food order: park it, or charge it.
@@ -1826,16 +1961,31 @@ export default function Counter() {
       </Modal>
 
       {/* Mobile checkout modal */}
-      <CartCheckoutModal
-        open={checkoutOpen}
-        cart={cart}
-        total={cartTotal}
-        customers={customers}
-        onClose={handleCheckoutClose}
-        onConfirmSale={handleCartSale}
-        onConfirmCredit={handleCartCredit}
-        onCreateCustomer={handleCreateCustomer}
-      />
+      {/* A food business charges a BILL: the check breakdown with its
+          service charge, and split payment across cash and M-Pesa. A shop
+          keeps the basket checkout it has always had. */}
+      {ordersOn ? (
+        <TicketCheckoutModal
+          open={checkoutOpen}
+          check={cartCheck}
+          customers={customers}
+          onClose={handleCheckoutClose}
+          onConfirmSale={handleCartSale}
+          onConfirmCredit={handleCartCredit}
+          onCreateCustomer={handleCreateCustomer}
+        />
+      ) : (
+        <CartCheckoutModal
+          open={checkoutOpen}
+          cart={cart}
+          total={chargeTotal}
+          customers={customers}
+          onClose={handleCheckoutClose}
+          onConfirmSale={handleCartSale}
+          onConfirmCredit={handleCartCredit}
+          onCreateCustomer={handleCreateCustomer}
+        />
+      )}
 
       {/* Mobile sale-complete modal */}
       <SaleCompleteModal open={!!completedSale} sale={completedSale} onClose={() => setCompletedSale(null)} />

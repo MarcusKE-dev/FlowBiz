@@ -54,11 +54,10 @@ export default function CartCheckoutModal({ open, cart, total, customers, onClos
         ? onConfirmCredit({ customerId: cId, customerName: cName, customerPhone: cPhone, finalTotalAmount })
         : onConfirmSale({ paymentMethod: method, mpesaCode: method === 'M-Pesa' ? mpesaCode.trim() : null, finalTotalAmount });
 
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000, { label: `A sale of ${formatMoney(record.totalAmount)}` });
       if (error) throw error;
       if (queuedOffline) {
         toast.success('Sale saved offline. It will sync when you reconnect.');
-        commit.catch((err) => toast.error(`A sale from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
       }
       onClose(record);
     } catch (err) {

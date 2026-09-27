@@ -8,6 +8,7 @@ import { tenantQuery } from '../lib/tenant';
 import { startOfDay, endOfDay, buildDateBuckets, toMillisValue, startOfDateInput, endOfDateInput, shiftDays } from '../utils/dateRanges';
 import { formatMoneyCompact, formatMoney } from '../utils/currency';
 import { computeFinancials, isExpenseExcluded } from '../utils/financials';
+import { productPerformance } from '../utils/productPerformance';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import PlotFrame from '../components/charts/PlotFrame';
 import ChartEmpty from '../components/charts/ChartEmpty';
@@ -278,7 +279,7 @@ export default function AdvancedAnalytics() {
     return { start: prevStart, end: prevEnd };
   }, [start, end, period, customStart, customEnd]);
 
-  const { loading, sales, creditSales, expenses, repayments, summary } = useFinancialsForRange(start, end);
+  const { loading, sales, creditSales, expenses, repayments, refunds, waste, summary } = useFinancialsForRange(start, end);
   const { loading: prevLoading, summary: prevSummary } = useFinancialsForRange(prevRange.start, prevRange.end);
 
   const allCreditSalesQ = useMemo(() => (businessId ? tenantQuery('creditSales', businessId) : null), [businessId]);
@@ -317,12 +318,19 @@ export default function AdvancedAnalytics() {
       const bucketSales = (sales || []).filter((s) => inBucket(s, 'soldAt', bucket));
       const bucketExpenses = (expenses || []).filter((e) => inBucket(e, 'recordedAt', bucket));
       const bucketRepayments = (repayments || []).filter((r) => inBucket(r, 'paidAt', bucket));
+      // Refunds and waste belong to the trend as much as to the headline
+      // figure beside it. Without them a sale refunded the same week
+      // showed as revenue on the chart and as nothing in the summary.
+      const bucketRefunds = (refunds || []).filter((r) => inBucket(r, 'refundedAt', bucket));
+      const bucketWaste = (waste || []).filter((w) => inBucket(w, 'recordedAt', bucket));
       const f = computeFinancials({
         sales: bucketSales,
         creditSales: [],
         allCreditSales,
         expenses: bucketExpenses,
         debtRepayments: bucketRepayments,
+        refunds: bucketRefunds,
+        wasteRecords: bucketWaste,
       });
       return {
         label: bucket.label,
@@ -333,50 +341,14 @@ export default function AdvancedAnalytics() {
         margin: f.revenue > 0 ? (f.grossProfit / f.revenue) * 100 : 0,
       };
     });
-  }, [buckets, sales, expenses, repayments, allCreditSales]);
+  }, [buckets, sales, expenses, repayments, refunds, waste, allCreditSales]);
 
-  // FIX (multi-product cart): a Counter.jsx cart sale can carry several
-  // products on one sale/creditSale doc via `items`. Crediting the whole
-  // doc's aggregate qty/revenue/profit to its (summary) productName would
-  // badly skew Volume/Margin Drivers — each line item is now credited to
-  // its own product when `items` is present; legacy single-product docs
-  // (no `items` field) are read exactly as before.
-  const productPerf = useMemo(() => {
-    const map = {};
-    const ensure = (name) => {
-      if (!map[name]) map[name] = { name, qty: 0, revenue: 0, profit: 0 };
-      return map[name];
-    };
-    (sales || []).forEach((s) => {
-      if (s.isVoided) return;
-      if (Array.isArray(s.items) && s.items.length > 0) {
-        s.items.forEach((it) => {
-          const row = ensure(it.productName);
-          row.qty += Number(it.quantity) || 0;
-          row.revenue += Number(it.lineTotal ?? ((it.quantity || 0) * (it.unitPrice || 0))) || 0;
-          row.profit += Number(it.lineProfit ?? (((it.unitPrice || 0) - (it.costPrice || 0)) * (it.quantity || 0))) || 0;
-        });
-      } else {
-        const row = ensure(s.productName);
-        row.qty += Number(s.quantity) || 0;
-        row.revenue += Number(s.totalAmount) || 0;
-        row.profit += Number(s.profit) || 0;
-      }
-    });
-    (creditSales || []).forEach((cs) => {
-      if (cs.status === 'cancelled' || cs.status === 'refunded') return;
-      if (Array.isArray(cs.items) && cs.items.length > 0) {
-        cs.items.forEach((it) => {
-          const row = ensure(it.productName);
-          row.qty += Number(it.quantity) || 0;
-        });
-      } else {
-        const row = ensure(cs.productName);
-        row.qty += Number(cs.quantity) || 0;
-      }
-    });
-    return Object.values(map);
-  }, [sales, creditSales]);
+  // Per product, net of returns and at what each line was actually paid —
+  // the same figures Reports shows. See utils/productPerformance.js.
+  const productPerf = useMemo(
+    () => productPerformance({ sales, creditSales, refunds }),
+    [sales, creditSales, refunds]
+  );
 
   const bestSelling = useMemo(() => [...productPerf].sort((a, b) => b.qty - a.qty).slice(0, 5), [productPerf]);
   const mostProfitable = useMemo(() => [...productPerf].sort((a, b) => b.profit - a.profit).slice(0, 5), [productPerf]);

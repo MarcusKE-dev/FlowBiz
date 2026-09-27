@@ -87,6 +87,55 @@ const MUST_BE_WIRED = [
     'the customer display must show the menu'],
 ];
 
+// The functions the 2026-09-27 audit found correct and disconnected, or
+// whose screens bypassed them. These are checked for a CALL, not merely a
+// mention — an import that is never invoked is the same orphan.
+const MUST_BE_CALLED = [
+  ['planProduction', 'src/pages/Production.jsx',
+    'a short yield must be costed over what came out, and a missing ingredient refused'],
+  ['productionDeltas', 'src/pages/Production.jsx',
+    'a sub-recipe must be consumed down to its ingredients'],
+  ['buildProductionRecord', 'src/pages/Production.jsx',
+    'the run record must carry its plan and yield'],
+  ['componentUsage', 'src/pages/Counter.jsx',
+    'a sale must record the ingredients it took, so a reversal can put exactly them back'],
+  ['resolveReversalDeltas', 'src/pages/Counter.jsx',
+    'a void or return must restore ingredients, not filter them out'],
+  ['resolveReversalDeltas', 'src/pages/CustomerDetail.jsx',
+    'a cancelled credit sale must restore what it recorded taking'],
+  ['allocateFefoAcrossLines', 'src/pages/Counter.jsx',
+    'two lines of one product must share one batch pool'],
+  ['allocateSaleTotal', 'src/pages/Counter.jsx',
+    'a negotiated total must be spread over the lines, or a return over-refunds'],
+  ['computeCheck', 'src/pages/Counter.jsx',
+    'a configured service charge must reach the bill'],
+  ['productPerformance', 'src/pages/Reports.jsx',
+    'product figures must net out returns'],
+  ['productPerformance', 'src/pages/AdvancedAnalytics.jsx',
+    'product figures must net out returns'],
+  ['wasteSubledgerProblem', 'src/pages/Waste.jsx',
+    'waste must name the version or batch it came from'],
+  ['remapDocumentReferences', 'src/utils/dataImport.js',
+    'a restore into another business must remap nested references'],
+  ['inventoryValue', 'src/pages/Dashboard.jsx',
+    'inventory must be valued at what its batches cost'],
+  ['weightedAverageCost', 'src/pages/Purchases.jsx',
+    'a delivery must average the cost, not overwrite it'],
+];
+
+for (const [fn, file, why] of MUST_BE_CALLED) {
+  test(`${fn}() is CALLED by ${file.split('/').pop()} — ${why}`, () => {
+    assert.match(read(file), new RegExp(`\\b${fn}\\s*\\(`),
+      `${fn} is not called by ${file}. ${why}`);
+  });
+}
+
+test('WASTE REACHES PROFIT: the financial hook subscribes to it and passes it on', () => {
+  const source = read('src/hooks/useFinancials.js');
+  assert.match(source, /tenantQuery\('waste'/);
+  assert.match(source, /wasteRecords:\s*waste/);
+});
+
 for (const [fn, file, why] of MUST_BE_WIRED) {
   test(`${fn} is called by ${file.split('/').pop()} — ${why}`, () => {
     assert.match(read(file), new RegExp(`\\b${fn}\\b`),

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { doc, addDoc, writeBatch, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
+import { doc, addDoc, setDoc, writeBatch, serverTimestamp, orderBy, where, collection } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -9,11 +9,15 @@ import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { useDailySession } from '../hooks/useDailySession';
 import { useFinancialsForRange } from '../hooks/useFinancials';
 import { useHardwareScanner } from '../hooks/useHardwareScanner';
-import { findProductByCode } from '../utils/scannerService';
+import { findProductByCode, ambiguousScanMessage } from '../utils/scannerService';
 import { createProduct, updateProduct } from '../utils/products';
 import { saleQuantityLabel, productUnit, normalizeQuantity } from '../utils/lineItems';
-import { isStockItem, isService, resolveStockDeltas } from '../utils/inventory';
-import { applyStockDeltas } from '../utils/stockWrites';
+import {
+  isStockItem, isService, resolveStockDeltas, validateComponentStock, componentUsage, inventoryValue,
+} from '../utils/inventory';
+import { applyStockDeltas, stockMovement } from '../utils/stockWrites';
+import { isIngredientOnly } from '../domain/fnb/catalog';
+import { sellingUnitCost } from '../domain/fnb/costing';
 import { hasVariants } from '../utils/variants';
 import { requiresModifierChoice } from '../utils/modifiers';
 import { useIndustry } from '../hooks/useIndustry';
@@ -119,7 +123,16 @@ export default function Dashboard() {
   // on its price list.
   const stockItems = useMemo(() => products.filter(isStockItem), [products]);
   const lowStock = stockItems.filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
-  const totalInventoryValue = stockItems.reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice || 0), 0);
+  // Valued from the batch ledger where there is one — see inventoryValue().
+  const valuationBatchesQ = useMemo(
+    () => (businessId && industry.can('batches') ? tenantQuery('productBatches', businessId) : null),
+    [businessId, industry]
+  );
+  const { data: valuationBatches } = useFirestoreCollection(valuationBatchesQ);
+  const totalInventoryValue = useMemo(
+    () => inventoryValue(stockItems, valuationBatches),
+    [stockItems, valuationBatches]
+  );
   const debtorsQuery = useMemo(() => businessId ? tenantQuery('creditSales', businessId) : null, [businessId]);
   const { data: allCreditSales } = useFirestoreCollection(debtorsQuery);
   const totalOutstanding = allCreditSales.reduce((acc, cs) => acc + (Number(cs.remainingBalance) || 0), 0);
@@ -195,8 +208,14 @@ export default function Dashboard() {
     }).slice(0, 8);
   }, [sales, repayments, creditSales]);
 
+  // Minted on the device and not awaited — see Counter.handleCreateCustomer.
   const handleCreateCustomer = async ({ name, phone }) => {
-    const ref = await addDoc(tenantCollection('customers'), withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId));
+    const ref = doc(collection(db, 'customers'));
+    raceWithTimeout(
+      setDoc(ref, withBusiness({ name, phone, email: '', address: '', notes: '', createdAt: serverTimestamp() }, businessId)),
+      4000,
+      { label: `The new customer ${name}` }
+    );
     return { id: ref.id, name, phone };
   };
 
@@ -206,13 +225,28 @@ export default function Dashboard() {
   // through the same foundation the counter uses, so a salon's haircut
   // moves no stock, a made-to-order dish takes its ingredients, and a
   // pharmacy's sale is still refused a shortcut past FEFO below.
-  const applyQuickSaleStock = (batch, product, qty) => {
+  const applyQuickSaleStock = (batch, product, qty, movement) => {
     const deltas = resolveStockDeltas(
       [{ productId: product.id, quantity: qty }],
       products,
       { recipes: industry.can('recipes'), packSizes: industry.can('packSizes') }
     );
-    applyStockDeltas(batch, deltas);
+    applyStockDeltas(batch, deltas, { movement });
+  };
+
+  // What a quick sale of this product needs checked and recorded, the same
+  // way the counter does it: a dish made to order is limited by its
+  // INGREDIENTS (not by its own stock, which it does not have), costs what
+  // its recipe costs, and records what it took so a void puts exactly that
+  // back.
+  const quickSaleBasis = (product, qty) => {
+    const recipes = industry.can('recipes');
+    const row = { productId: product.id, quantity: qty };
+    const problem = validateComponentStock([row], products, { recipes });
+    if (problem) throw new Error(problem);
+    const unitCost = sellingUnitCost(product, products);
+    const usage = componentUsage(row, products, { recipes, packSizes: industry.can('packSizes') });
+    return { unitCost, usage };
   };
 
   // Quick sell is a ONE-TAP path with no version picker, no modifier
@@ -224,6 +258,9 @@ export default function Dashboard() {
     if (hasVariants(product)) return `${product.name} is sold by size or colour. Ring it up at the counter so the right one comes off the shelf.`;
     if (industry.can('batches') && !isService(product)) return `${product.name} is tracked by batch. Ring it up at the counter so it comes out of the right one.`;
     if (requiresModifierChoice(product)) return `${product.name} needs its options chosen. Ring it up at the counter.`;
+    // An ingredient is stocked, bought and counted — never sold. The
+    // counter already refuses a scanned one; so does this.
+    if (isIngredientOnly(product)) return `${product.name} is an ingredient, not something you sell.`;
     return null;
   };
 
@@ -233,11 +270,14 @@ export default function Dashboard() {
     // units a quantity can be 0.333, and 0.333 × 33.33 is not a price.
     const unit = productUnit(product);
     const qty = normalizeQuantity(quantity, unit);
+    if (qty <= 0) throw new Error('Enter a quantity.');
+    const { unitCost, usage } = quickSaleBasis(product, qty);
     const totalAmount = roundMoney(qty * soldPricePerUnit);
-    const costOfGoodsSold = roundMoney(qty * (Number(product.costPrice) || 0));
+    const costOfGoodsSold = roundMoney(qty * unitCost);
     const saleData = withBusiness({
       productId: product.id, productName: product.name, quantity: qty,
-      costPricePerUnit: product.costPrice, soldPricePerUnit,
+      costPricePerUnit: unitCost, soldPricePerUnit,
+      ...(usage.length > 0 ? { componentUsage: usage } : {}),
       ...(unit !== DEFAULT_UNIT ? { unit } : {}),
       totalAmount,
       costOfGoodsSold,
@@ -248,7 +288,7 @@ export default function Dashboard() {
     }, businessId);
 
     const batch = writeBatch(db);
-    applyQuickSaleStock(batch, product, qty);
+    applyQuickSaleStock(batch, product, qty, stockMovement('sales', saleRef.id));
     batch.set(saleRef, saleData);
 
     return { record: { id: saleRef.id, ...saleData, soldAt: new Date() }, commit: batch.commit() };
@@ -257,21 +297,24 @@ export default function Dashboard() {
   const handleConfirmCredit = ({ product, quantity, soldPricePerUnit, customerId, customerName, customerPhone }) => {
     const unit = productUnit(product);
     const qty = normalizeQuantity(quantity, unit);
+    if (qty <= 0) throw new Error('Enter a quantity.');
+    const { unitCost, usage } = quickSaleBasis(product, qty);
     const totalAmount = roundMoney(qty * soldPricePerUnit);
     const creditRef = doc(collection(db, 'creditSales'));
     const creditData = withBusiness({
       customerId, customerName, customerPhone: customerPhone || '',
       productId: product.id, productName: product.name, quantity: qty,
-      costPricePerUnit: product.costPrice, soldPricePerUnit, totalAmount,
-      costOfGoodsSold: roundMoney(qty * (Number(product.costPrice) || 0)),
+      costPricePerUnit: unitCost, soldPricePerUnit, totalAmount,
+      costOfGoodsSold: roundMoney(qty * unitCost),
+      ...(usage.length > 0 ? { componentUsage: usage } : {}),
       ...(unit !== DEFAULT_UNIT ? { unit } : {}),
-      soldBy: profile.uid, soldByName: profile.displayName, soldAt: serverTimestamp(),
+      soldBy: profile.uid, soldByName: profile.displayName, soldAt: new Date(),
       status: 'pending', amountPaid: 0, remainingBalance: totalAmount, paymentHistory: [],
       isCredit: true
     }, businessId);
 
     const batch = writeBatch(db);
-    applyQuickSaleStock(batch, product, qty);
+    applyQuickSaleStock(batch, product, qty, stockMovement('creditSales', creditRef.id));
     batch.set(creditRef, creditData);
 
     return { record: { id: creditRef.id, ...creditData, soldAt: new Date() }, commit: batch.commit() };
@@ -308,6 +351,8 @@ export default function Dashboard() {
 
   const handleScanDetected = (code) => {
     setScannerOpen(false);
+    const ambiguous = ambiguousScanMessage(products, code);
+    if (ambiguous) { toast.error(ambiguous); return; }
     const found = findProductByCode(products, code);
     if (found) {
       const blocked = quickSaleBlockedReason(found);

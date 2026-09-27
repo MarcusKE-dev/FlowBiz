@@ -1,5 +1,5 @@
 // src/App.jsx
-import { Toaster } from 'react-hot-toast';
+import toast, { Toaster } from 'react-hot-toast';
 import { PRIMARY, NEGATIVE, INK, SURFACE, LINE } from './theme/tokens';
 import { AuthProvider } from './contexts/AuthContext';
 import { SettingsProvider } from './contexts/SettingsContext';
@@ -9,6 +9,19 @@ import ErrorBoundary from './components/common/ErrorBoundary';
 import PwaInstallBanner from './components/common/PwaInstallBanner';
 import NativeShell from './platform/NativeShell';
 import { isNativeApp } from './platform/platform';
+import { setLateRejectionHandler } from './utils/offlineWrite';
+import { friendlyErrorMessage } from './utils/errorMessages';
+
+// A write the screen already reported as saved, refused later by the
+// server. It stays on screen until dismissed: the cashier has moved on to
+// the next customer, and a three-second toast about the last one is a
+// message nobody reads.
+setLateRejectionHandler((err, label) => {
+  toast.error(
+    `${label || 'A change'} was NOT saved: ${friendlyErrorMessage(err)} Check it and enter it again.`,
+    { duration: Infinity, id: `late-${label || 'change'}-${Date.now()}` }
+  );
+});
 
 function App() {
   return (

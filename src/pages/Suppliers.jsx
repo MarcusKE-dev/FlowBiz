@@ -48,14 +48,16 @@ export default function Suppliers() {
   const [paying, setPaying]     = useState(false);
 
   const owedList = useMemo(
-    () => computeSupplierBalances(purchases, spayments, suppliers),
+    () => computeSupplierBalances(purchases, spayments, suppliers, { includeCredits: true }),
     [purchases, spayments, suppliers]
   );
   const owedMap = useMemo(
     () => Object.fromEntries(owedList.map((o) => [o.supplierId, o.balance])),
     [owedList]
   );
-  const totalOwed = owedList.reduce((a, o) => a + o.balance, 0);
+  // What is OWED. A supplier paid ahead is shown on its own row as in
+  // credit, and does not reduce what is owed to everybody else.
+  const totalOwed = owedList.reduce((a, o) => a + Math.max(0, o.balance), 0);
 
   const [deleting, setDeleting] = useState(false);
 
@@ -103,18 +105,30 @@ export default function Suppliers() {
     if (payMethod==='M-Pesa'&&digitalReferenceRequired()&&!payCode.trim()) { toast.error(digitalReferenceMissingMessage()); return; }
     setPaying(true);
     const batch = writeBatch(db);
-    const expRef = doc(collection(db,'expenses'));
-    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null,
-     recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:new Date() }, businessId));
     const payRef = doc(collection(db,'supplierPayments'));
+    const expRef = doc(collection(db,'expenses'));
+    // The expense MIRROR names the payment it mirrors, so the rules can
+    // let whoever may pay a supplier write it — without that, paying a
+    // supplier also demanded the separate expense permission — and so the
+    // two can always be matched up afterwards.
+    batch.set(expRef, withBusiness({ description:`Supplier payment to ${selSupp.name}`, category:'Supplier Payment', amount, paymentMethod:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null,
+     supplierPaymentId: payRef.id,
+     recordedBy:profile.uid, recordedByName:profile.displayName, recordedAt:new Date() }, businessId));
     batch.set(payRef, withBusiness({ supplierId:selSupp.id, supplierName:selSupp.name, amount, method:payMethod, mpesaCode:payMethod==='M-Pesa'?payCode.trim():null, paidAt:new Date(), recordedBy:profile.uid, recordedByName:profile.displayName }, businessId));
+    // One payment revision per supplier: two devices paying the same
+    // supplier's balance at once each passed the "no more than is owed"
+    // check against the same balance. firestore.rules accepts only the
+    // next revision, so the second is refused instead of overpaying.
+    batch.update(doc(db,'suppliers',selSupp.id), {
+      paymentRevision: (Number((rawSuppliers.find((x) => x.id === selSupp.id) || selSupp).paymentRevision) || 0) + 1,
+      lastPaymentId: payRef.id,
+    });
 
     const commit = batch.commit();
-    const { queuedOffline, error: commitError } = await raceWithTimeout(commit, 4000);
+    const { queuedOffline, error: commitError } = await raceWithTimeout(commit, 4000, { label: `A supplier payment of ${formatMoney(amount)}` });
     setPaying(false);
     if (commitError) { toast.error(friendlyErrorMessage(commitError)); return; }
     toast.success(queuedOffline ? 'Payment saved offline. It will sync when you reconnect.' : `Payment of ${formatMoney(amount)} recorded for ${selSupp.name}.`);
-    if (queuedOffline) commit.catch((err) => toast.error(`A supplier payment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
     setPayModal(false); setPayAmt(''); setPayCode('');
   };
 
@@ -167,6 +181,13 @@ export default function Suppliers() {
               mobileTrailing: true,
               render: (s) => {
                 const balance = owedMap[s.id] || 0;
+                if (balance < -0.005) {
+                  return (
+                    <span className="text-secondary text-ink-600">
+                      Paid ahead <Money value={-balance} tone="positive" />
+                    </span>
+                  );
+                }
                 return (
                   <span className="font-semibold">
                     <Money value={balance} tone={balance > 0 ? 'negative' : 'muted'} />

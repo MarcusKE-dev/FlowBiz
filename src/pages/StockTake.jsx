@@ -53,7 +53,7 @@ import { useHardwareScanner } from '../hooks/useHardwareScanner';
 import { findProductByCode } from '../utils/scannerService';
 import { productUnit } from '../utils/lineItems';
 import { isStockItem, resolveCountDeltas } from '../utils/inventory';
-import { applyStockDeltas } from '../utils/stockWrites';
+import { applyStockDeltas, stockMovement } from '../utils/stockWrites';
 import { variantsOf } from '../utils/variants';
 import { sortFefo, remainingOf } from '../utils/batches';
 import { useIndustry } from '../hooks/useIndustry';
@@ -258,12 +258,28 @@ export default function StockTake() {
         products,
         { batches }
       );
-      applyStockDeltas(batch, deltas);
+      const adjRefs = changed.map(() => doc(collection(db, 'stockAdjustments')));
+      // A COUNT IS A CORRECTION AGAINST WHAT THIS SCREEN LOADED. Two
+      // devices counting the same shelf at once would each add the same
+      // difference, and the shelf would be corrected twice. Every counted
+      // product's `stockCountRevision` moves up by exactly one, and
+      // firestore.rules accepts only the next revision after the one the
+      // server holds — so the second of two simultaneous counts is refused
+      // rather than applied on top of the first.
+      const productFields = {};
+      for (const productId of Object.keys(deltas)) {
+        const product = products.find((p) => p.id === productId);
+        productFields[productId] = { stockCountRevision: (Number(product?.stockCountRevision) || 0) + 1 };
+      }
+      applyStockDeltas(batch, deltas, {
+        productFields,
+        movement: adjRefs.length > 0 ? stockMovement('stockAdjustments', adjRefs[0].id) : null,
+      });
 
-      for (const row of changed) {
+      for (const [index, row] of changed.entries()) {
         const physicalQty = roundQuantity(Number(getPhysical(row)) || 0, row.unit);
         const difference = diffFor(row);
-        const adjRef = doc(collection(db, 'stockAdjustments'));
+        const adjRef = adjRefs[index];
 
         // The adjustment record keeps the shape every existing reader
         // expects — productId, productName, systemQty, physicalQty,
@@ -289,7 +305,8 @@ export default function StockTake() {
 
       const { queuedOffline, error } = await raceWithTimeout(
         batch.commit(),
-        4000
+        4000,
+        { label: 'A stock count' }
       );
 
       if (error) {

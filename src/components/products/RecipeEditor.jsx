@@ -14,13 +14,15 @@
 import { useMemo } from 'react';
 import { Plus, X } from 'lucide-react';
 import Money from '../ui/Money';
-import { getUnit, unitStep, DEFAULT_UNIT } from '../../industry/units';
-import { productionUnitCost } from '../../utils/inventory';
+import { getUnit, unitStep, unitDecimals, DEFAULT_UNIT } from '../../industry/units';
+import { recipeProblem } from '../../utils/inventory';
 import { recipeComponentGroups } from '../../domain/fnb/catalog';
+import { recipeUnitCost } from '../../domain/fnb/costing';
 
 export default function RecipeEditor({
   recipe, onChange, products = [], productId = null,
   producedInAdvance = false, onProducedInAdvanceChange, showProduction = false,
+  recipeYield = '', onRecipeYieldChange, shelfLifeDays = '', onShelfLifeDaysChange,
   disabled = false,
 }) {
   // A product can never be an ingredient of itself, and a component list
@@ -39,10 +41,22 @@ export default function RecipeEditor({
   );
   const candidates = useMemo(() => groups.flatMap((g) => g.items), [groups]);
 
+  // Followed down through sub-recipes: a loaf made from a dough made from
+  // flour costs the flour, not whatever number sits on the dough.
   const unitCost = useMemo(
-    () => productionUnitCost({ recipe }, 1, products),
+    () => recipeUnitCost({ recipe: recipe.map((l) => ({ ...l, quantity: Number(l.quantity) || 0 })) }, products).cost,
     [recipe, products]
   );
+
+  // A recipe that points at itself through another item, or at something
+  // since deleted, cannot be sold or made — say so while it is being built.
+  const problem = useMemo(() => recipeProblem(
+    {
+      id: productId || '__new__', name: 'This item',
+      recipe: recipe.filter((l) => l.componentId).map((l) => ({ ...l, quantity: Number(l.quantity) || 0 })),
+    },
+    products,
+  ), [recipe, products, productId]);
 
   const update = (index, patch) =>
     onChange(recipe.map((line, i) => (i === index ? { ...line, ...patch } : line)));
@@ -79,7 +93,13 @@ export default function RecipeEditor({
       {recipe.map((line, index) => {
         const component = products.find((p) => p.id === line.componentId);
         const unit = component?.unit || DEFAULT_UNIT;
+        const quantity = Number(line.quantity) || 0;
+        // Half an egg per muffin is a real recipe. Stock of a whole-unit
+        // ingredient is then tracked in fractions, which is right — but
+        // worth saying, so a count of "11.5 eggs" is not a surprise.
+        const fractional = component && unitDecimals(unit) === 0 && quantity > 0 && !Number.isInteger(quantity);
         return (
+          <div key={index} className="space-y-1">
           <div key={index} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,8rem)_auto]">
             <select
               className="input"
@@ -120,8 +140,16 @@ export default function RecipeEditor({
               <X className="h-4 w-4" strokeWidth={1.75} />
             </button>
           </div>
+          {fractional && (
+            <p className="text-secondary text-ink-500">
+              {component.name} is counted in whole {getUnit(unit).label.toLowerCase()}s; its stock will go down in fractions.
+            </p>
+          )}
+          </div>
         );
       })}
+
+      {problem && <p className="text-secondary font-medium text-danger-700">{problem}</p>}
 
       {recipe.length > 0 && (
         <>
@@ -144,6 +172,35 @@ export default function RecipeEditor({
                 something assembled to order, where the ingredients come out at the sale.
               </span>
             </label>
+          )}
+
+          {showProduction && producedInAdvance && (
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div>
+                <label className="label">One batch makes</label>
+                <input
+                  type="number" min="1" step="1" inputMode="numeric"
+                  className="input num"
+                  value={recipeYield}
+                  onChange={(e) => onRecipeYieldChange?.(e.target.value)}
+                  placeholder="1"
+                  disabled={disabled}
+                />
+                <p className="mt-1 text-secondary text-ink-500">The quantities above are per single item.</p>
+              </div>
+              <div>
+                <label className="label">Sellable for (days)</label>
+                <input
+                  type="number" min="1" step="1" inputMode="numeric"
+                  className="input num"
+                  value={shelfLifeDays}
+                  onChange={(e) => onShelfLifeDaysChange?.(e.target.value)}
+                  placeholder="No limit"
+                  disabled={disabled}
+                />
+                <p className="mt-1 text-secondary text-ink-500">Each run is dated, and the oldest sells first.</p>
+              </div>
+            </div>
           )}
         </>
       )}

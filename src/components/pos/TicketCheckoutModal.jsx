@@ -100,11 +100,10 @@ export default function TicketCheckoutModal({
           mpesaCode: !split && method === 'M-Pesa' ? mpesaCode.trim() : null,
         });
       }
-      const { queuedOffline, error } = await raceWithTimeout(result.commit, 4000);
+      const { queuedOffline, error } = await raceWithTimeout(result.commit, 4000, { label: 'A sale' });
       if (error) throw error;
       if (queuedOffline) {
         toast.success('Charged offline. It will sync when you reconnect.');
-        result.commit.catch((err) => toast.error(`A sale couldn't be saved: ${friendlyErrorMessage(err)}`));
       }
       onClose(result.record);
     } catch (err) {

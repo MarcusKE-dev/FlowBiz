@@ -27,8 +27,9 @@ import {
 import { formatDateTime } from '../utils/dateRanges';
 import { raceWithTimeout } from '../utils/offlineWrite';
 import { friendlyErrorMessage } from '../utils/errorMessages';
-import { resolveStockDeltas, missingComponentIds, MAX_RECIPE_DEPTH } from '../utils/inventory';
-import { applyStockDeltas } from '../utils/stockWrites';
+import { resolveReversalDeltas, missingComponentIds, MAX_RECIPE_DEPTH } from '../utils/inventory';
+import { applyStockDeltas, stockMovement } from '../utils/stockWrites';
+import { saleLineItems } from '../utils/returns';
 import { useIndustry } from '../hooks/useIndustry';
 import { currencyMarker, formatAmount, tenderLabel } from '../lib/region';
 
@@ -97,27 +98,51 @@ export default function CustomerDetail() {
     try {
       // One batch per 200 settled sales. A single lump sum from a
       // wholesale customer can clear hundreds of invoices, and each one
-      // costs two writes — past 249 sales the old single batch broke
-      // Firestore's 500-operation ceiling and the payment could not be
-      // recorded at all. Every batch is built before any is committed,
-      // and they are committed together, so offline they queue as one
-      // ordered run exactly as a single batch did.
+      // costs two writes — past 249 sales a single batch breaks
+      // Firestore's 500-operation ceiling.
+      //
+      // EACH BATCH STANDS ON ITS OWN. Batches commit independently, so a
+      // receipt placed only in the last one could land without the
+      // repayments it described, or be lost while they landed. Every batch
+      // now carries its own receipt for exactly the invoices in it — part
+      // 1 of 2, part 2 of 2 — so whichever parts land, the receipts, the
+      // repayments and the balances agree with each other. For every
+      // payment under 200 invoices, which is nearly all of them, there is
+      // one batch and one receipt, exactly as before.
+      //
+      // EACH INVOICE MOVES ON ITS OWN REVISION. Two tills taking a payment
+      // from the same customer at once each read "owes 1,000" and each
+      // wrote "owes 750", so 500 was collected and 250 came off the debt.
+      // Every update now carries `revision: current + 1`, and
+      // firestore.rules accepts only the next revision after what the
+      // server holds: the second till's payment is refused, and says so,
+      // rather than silently overwriting the first.
       const groups = batchAllocations(allocations);
       const batches = groups.map(() => writeBatch(db));
       const paymentReferences = [];
+      const receiptRefs = [];
+      const paidAt = new Date();
+      const paymentGroupId = doc(collection(db, 'debtPaymentReceipts')).id;
+      let balanceBefore = previousBalance;
 
       groups.forEach((group, groupIndex) => {
         const batch = batches[groupIndex];
+        const groupReferences = [];
+        let groupPaid = 0;
         for (const { sale: cs, portion, newPaid, newBalance, status } of group) {
-          batch.update(doc(db,'creditSales',cs.id), { amountPaid: newPaid, remainingBalance: newBalance, status });
-
           const repRef = doc(collection(db,'repayments'));
+          batch.update(doc(db,'creditSales',cs.id), {
+            amountPaid: newPaid, remainingBalance: newBalance, status,
+            revision: (Number(cs.revision) || 0) + 1,
+            lastRepaymentId: repRef.id,
+          });
+
           // Reuses Firestore's own unique doc id for traceability rather than
-          // introducing a second, parallel counter/ID system (Part 18) —
-          // adapted to this app's existing ID conventions rather than
-          // literally implementing PAY-000381-style sequential numbering.
+          // introducing a second, parallel counter/ID system (Part 18).
           const paymentReference = `PAY-${repRef.id.slice(-6).toUpperCase()}`;
           paymentReferences.push(paymentReference);
+          groupReferences.push(paymentReference);
+          groupPaid = roundMoney(groupPaid + portion);
           batch.set(repRef, {
             businessId,
             creditSaleId: cs.id,
@@ -128,55 +153,48 @@ export default function CustomerDetail() {
             method,
             mpesaCode: mpesaCode || null,
             paymentReference,
-            paidAt: serverTimestamp(),
+            // The moment the money changed hands, on the same clock a cash
+            // sale uses. A server timestamp is the moment it SYNCED, so a
+            // payment taken offline before midnight landed in tomorrow.
+            paidAt,
             recordedBy: profile.uid,
             recordedByName: profile.displayName,
           });
         }
-      });
 
-      // Persist an immutable snapshot of the receipt itself (Parts 8/9/15
-      // of the WhatsApp/document-sharing spec). A debt payment can span
-      // several credit sales, so there's no single existing Firestore
-      // document that already IS "the receipt" the way a sale or credit
-      // sale doc already represents its own receipt — this is that
-      // missing piece. It goes in the LAST batch, after the repayments it
-      // summarises, so it can never be the only thing that landed.
-      //
-      // The figure on it is `allocated`, which the refusal above has
-      // already proved equals the amount handed over. The receipt and the
-      // `repayments` collection therefore always agree, which is what
-      // makes the till reconcile.
+        const balanceAfter = Math.max(0, roundMoney(balanceBefore - groupPaid));
+        const receiptRef = groupIndex === 0 ? doc(db, 'debtPaymentReceipts', paymentGroupId) : doc(collection(db, 'debtPaymentReceipts'));
+        receiptRefs.push(receiptRef);
+        batch.set(receiptRef, {
+          businessId,
+          customerId,
+          customerName: displayName,
+          customerPhone: displayPhone,
+          amountPaid: groupPaid,
+          previousBalance: balanceBefore,
+          remainingBalance: balanceAfter,
+          isCleared: balanceAfter <= CENT,
+          method,
+          mpesaCode: mpesaCode || null,
+          paymentReferences: groupReferences,
+          ...(groups.length > 1 ? { paymentGroupId, part: groupIndex + 1, parts: groups.length } : {}),
+          paidAt,
+          recordedBy: profile.uid,
+          recordedByName: profile.displayName,
+        });
+        balanceBefore = balanceAfter;
+      });
       const newTotalOwed = Math.max(0, roundMoney(previousBalance - allocated));
-      const receiptRef = doc(collection(db, 'debtPaymentReceipts'));
-      batches[batches.length - 1].set(receiptRef, {
-        businessId,
-        customerId,
-        customerName: displayName,
-        customerPhone: displayPhone,
-        amountPaid: allocated,
-        previousBalance,
-        remainingBalance: newTotalOwed,
-        isCleared: newTotalOwed <= CENT,
-        method,
-        mpesaCode: mpesaCode || null,
-        paymentReferences,
-        paidAt: new Date(),
-        recordedBy: profile.uid,
-        recordedByName: profile.displayName,
-      });
 
-      // Committed together and awaited as one, so the offline path is
-      // unchanged: Firestore's mutation queue is ordered, so these apply
-      // in the order they were built when the connection returns.
       const commit = Promise.all(batches.map((b) => b.commit()));
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000, {
+        label: `A repayment of ${formatMoney(allocated)} from ${displayName}`,
+      });
       if (error) throw error;
       toast.success(queuedOffline ? 'Saved offline. It will sync when you reconnect.' : `Recorded ${formatMoney(allocated)} repayment`);
-      if (queuedOffline) commit.catch((err) => toast.error(`A repayment from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
 
       setReceiptData({
-        receiptDocId: receiptRef.id,
+        receiptDocId: receiptRefs[0].id,
         customerId,
         customerName: displayName,
         customerPhone: displayPhone,
@@ -186,10 +204,15 @@ export default function CustomerDetail() {
         isCleared: newTotalOwed <= CENT,
         method,
         mpesaCode,
-        paidAt: new Date(),
+        paidAt,
         paymentReferences,
       });
-    } catch (err) { toast.error(friendlyErrorMessage(err)); throw err; }
+    } catch (err) {
+      toast.error(friendlyErrorMessage(err, {
+        overrides: { 'permission-denied': 'Another payment for this customer was recorded at the same moment. Check the new balance and try again.' },
+      }));
+      throw err;
+    }
   };
 
   // Cancelling or refunding a credit sale puts stock back through the ONE
@@ -216,7 +239,12 @@ export default function CustomerDetail() {
   //
   // A product deleted since the sale is skipped rather than resurrected.
   const loadProductsFor = async (rows) => {
-    const seen = new Set(rows.map((row) => row.productId).filter(Boolean));
+    // The line itself, and every ingredient it RECORDED using — which is
+    // what a reversal now puts back.
+    const seen = new Set([
+      ...rows.map((row) => row.productId),
+      ...rows.flatMap((row) => (Array.isArray(row.componentUsage) ? row.componentUsage.map((u) => u.productId) : [])),
+    ].filter(Boolean));
     const fetchAll = async (ids) => {
       const snaps = await Promise.all(ids.map((id) => getDoc(doc(db, 'products', id))));
       return snaps
@@ -238,26 +266,25 @@ export default function CustomerDetail() {
     return live;
   };
 
-  const restoreStock = async (batch, cs) => {
-    const lineItems = Array.isArray(cs.items) && cs.items.length > 0
-      ? cs.items
-      : [{ productId: cs.productId, quantity: cs.quantity, variantId: cs.variantId, batchAllocations: cs.batchAllocations }];
-    const targets = lineItems.filter((item) => item.productId);
+  const restoreStock = async (batch, cs, movement) => {
+    const targets = saleLineItems(cs).filter((item) => item.productId);
     const live = await loadProductsFor(targets);
 
-    const deltas = resolveStockDeltas(targets, live, {
-      recipes: industry.can('recipes'), packSizes: industry.can('packSizes'), reverse: true,
+    const deltas = resolveReversalDeltas(targets, live, {
+      recipes: industry.can('recipes'), packSizes: industry.can('packSizes'),
     });
-    applyStockDeltas(batch, deltas);
+    applyStockDeltas(batch, deltas, { movement });
   };
 
   const handleCancel = async (cs) => {
     setCancelTarget(null);
     try {
+      if (cs.status === 'cancelled' || cs.status === 'refunded') { toast.error('This sale has already been reversed.'); return; }
       const batch = writeBatch(db);
-      await restoreStock(batch, cs);
+      await restoreStock(batch, cs, stockMovement('creditSales', cs.id));
       batch.update(doc(db,'creditSales',cs.id), {
         status: 'cancelled', remainingBalance: 0,
+        revision: (Number(cs.revision) || 0) + 1,
         cancelledAt: serverTimestamp(), cancelledBy: profile.uid,
       });
       // Queued like every other write in the product, so cancelling a
@@ -265,9 +292,8 @@ export default function CustomerDetail() {
       // it syncs. This path used to await the commit directly, which left
       // an offline owner watching a spinner that would never resolve.
       const commit = batch.commit();
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000, { label: `Cancelling ${cs.productName}` });
       if (error) throw error;
-      if (queuedOffline) commit.catch((err) => toast.error(`A cancellation from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
       toast.success(queuedOffline
         ? 'Cancelled offline. It will sync when you reconnect.'
         : 'Credit sale cancelled and stock restored.');
@@ -278,13 +304,15 @@ export default function CustomerDetail() {
   // sale that had some amount already paid on it).
   const handleRefund = async (cs, { method }) => {
     try {
+      if (cs.status === 'cancelled' || cs.status === 'refunded') { toast.error('This sale has already been reversed.'); return; }
       const batch = writeBatch(db);
-      await restoreStock(batch, cs);
+      const refundRef = doc(collection(db,'refunds'));
+      await restoreStock(batch, cs, stockMovement('refunds', refundRef.id));
       batch.update(doc(db,'creditSales',cs.id), {
         status: 'refunded', remainingBalance: 0,
+        revision: (Number(cs.revision) || 0) + 1,
         refundedAt: serverTimestamp(), refundedBy: profile.uid,
       });
-      const refundRef = doc(collection(db,'refunds'));
       batch.set(refundRef, {
         businessId,
         creditSaleId: cs.id, customerId: cs.customerId, customerName: cs.customerName,
@@ -292,9 +320,8 @@ export default function CustomerDetail() {
         refundedAt: new Date(), refundedBy: profile.uid, refundedByName: profile.displayName,
       });
       const commit = batch.commit();
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000, { label: `Refunding ${cs.productName}` });
       if (error) throw error;
-      if (queuedOffline) commit.catch((err) => toast.error(`A refund from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
       toast.success(queuedOffline
         ? 'Refunded offline. It will sync when you reconnect.'
         : 'Sale refunded and stock restored.');

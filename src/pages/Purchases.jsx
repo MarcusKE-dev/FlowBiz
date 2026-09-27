@@ -13,8 +13,8 @@ import { useIndustry } from '../hooks/useIndustry';
 import { buildBatchDocument, isValidExpiryDate, todayISO } from '../utils/batches';
 import { createProduct } from '../utils/products';
 import { variantsOf } from '../utils/variants';
-import { resolveReceiptDeltas, hasPackSize, packSizeOf, packUnitOf, toBaseQuantity } from '../utils/inventory';
-import { applyStockDeltas } from '../utils/stockWrites';
+import { resolveReceiptDeltas, hasPackSize, packSizeOf, packUnitOf, toBaseQuantity, weightedAverageCost } from '../utils/inventory';
+import { applyStockDeltas, stockMovement } from '../utils/stockWrites';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
 import ProductFormModal from '../components/products/ProductFormModal';
@@ -188,7 +188,21 @@ export default function Purchases() {
       // Price and supplier are a plain overwrite rather than a movement,
       // so they ride along in the SAME product update rather than as a
       // second write to the same document.
-      const productFields = { [form.productId]: { costPrice: cost } };
+      // The cost price becomes the WEIGHTED AVERAGE of the stock already on
+      // the shelf and this delivery. Overwriting it with the newest price
+      // revalued every older unit at today's price, so inventory value and
+      // the COGS of the next sale of old stock were both wrong.
+      const purchRef = doc(collection(db, 'purchases'));
+      const productFields = {
+        [form.productId]: {
+          costPrice: weightedAverageCost({
+            currentStock: selProd?.stock,
+            currentCost: selProd?.costPrice,
+            receivedQuantity: qty,
+            receivedCost: cost,
+          }),
+        },
+      };
       if (form.supplierId) productFields[form.productId].supplierId = form.supplierId;
 
       applyStockDeltas(
@@ -203,7 +217,7 @@ export default function Purchases() {
           [selProd],
           { packSizes: packSizesOn }
         ),
-        { productFields }
+        { productFields, movement: stockMovement('purchases', purchRef.id) }
       );
 
       // With batch tracking on, receiving stock ALSO creates the batch
@@ -228,7 +242,6 @@ export default function Purchases() {
         }), businessId));
       }
 
-      const purchRef = doc(collection(db, 'purchases'));
       batch.set(
         purchRef,
         withBusiness(
@@ -262,11 +275,10 @@ export default function Purchases() {
       );
 
       const commit = batch.commit();
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000, { label: 'A purchase' });
       if (error) throw error;
 
       toast.success(queuedOffline ? 'Purchase saved offline. It will sync when you reconnect.' : 'Purchase recorded and stock updated');
-      if (queuedOffline) commit.catch((err) => toast.error(`A purchase from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
 
       setForm(empty);
     } catch (err) {

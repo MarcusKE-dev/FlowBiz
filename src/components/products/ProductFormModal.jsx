@@ -160,6 +160,8 @@ export default function ProductFormModal({
   const [modifierGroups, setModifierGroups] = useState([]);
   const [recipe, setRecipe] = useState([]);
   const [producedInAdvance, setProducedInAdvance] = useState(false);
+  const [recipeYield, setRecipeYield] = useState('');
+  const [shelfLifeDays, setShelfLifeDays] = useState('');
   // WHAT THIS ROW IS FOR: sold, cooked with, or both. Absent on every
   // product that predates the field, and `catalogRoleOf` reads absent as
   // `sellable`, so an existing catalogue in any industry opens exactly as
@@ -270,6 +272,8 @@ export default function ProductFormModal({
     setModifierGroups(open && Array.isArray(initialProduct?.modifierGroups) ? initialProduct.modifierGroups : []);
     setRecipe(open && Array.isArray(initialProduct?.recipe) ? initialProduct.recipe : []);
     setProducedInAdvance(open ? initialProduct?.producedInAdvance === true : false);
+    setRecipeYield(open && Number(initialProduct?.recipeYield) > 0 ? String(initialProduct.recipeYield) : '');
+    setShelfLifeDays(open && Number(initialProduct?.shelfLifeDays) > 0 ? String(initialProduct.shelfLifeDays) : '');
     setCatalogRole(open ? catalogRoleOf(initialProduct) : CATALOG_ROLES.SELLABLE);
     setKitchenName(open ? String(initialProduct?.kitchenName || '') : '');
     setStation(open ? String(initialProduct?.station || DEFAULT_STATION.id) : DEFAULT_STATION.id);
@@ -409,7 +413,7 @@ export default function ProductFormModal({
       categoryWritePayload(updated, industry.profileId),
       { merge: true }
     );
-    const { queuedOffline, error } = await raceWithTimeout(write, 4000);
+    const { queuedOffline, error } = await raceWithTimeout(write, 4000, { label: `The category "${trimmed}"` });
     setSavingCategory(false);
     if (error) {
       toast.error(friendlyErrorMessage(error));
@@ -419,9 +423,6 @@ export default function ProductFormModal({
     setShowAddCategory(false);
     setNewCategoryName('');
     toast.success(queuedOffline ? 'Saved offline. It will sync when you reconnect.' : 'Category added');
-    if (queuedOffline) {
-      write.catch((err) => toast.error(`"${trimmed}" could not be saved: ${friendlyErrorMessage(err)}`));
-    }
   };
 
   const handle = async (e) => {
@@ -578,6 +579,15 @@ export default function ProductFormModal({
             ...(line.unit && line.unit !== DEFAULT_UNIT ? { unit: line.unit } : {}),
           }));
         payload.producedInAdvance = showProduction ? producedInAdvance === true : false;
+        // Batch size and shelf life only mean anything for an item made in
+        // advance. Absent means one per batch and no shelf life, which is
+        // what every item had before these existed.
+        const yieldValue = Math.floor(Number(recipeYield));
+        const shelfValue = Math.floor(Number(shelfLifeDays));
+        if (payload.producedInAdvance && yieldValue > 1) payload.recipeYield = Math.min(10000, yieldValue);
+        else if (isEditing && initialProduct?.recipeYield) payload.recipeYield = null;
+        if (payload.producedInAdvance && shelfValue > 0) payload.shelfLifeDays = Math.min(3650, shelfValue);
+        else if (isEditing && initialProduct?.shelfLifeDays) payload.shelfLifeDays = null;
       }
 
       // Variants. `stock` becomes the SUM of the variant quantities, so
@@ -586,6 +596,16 @@ export default function ProductFormModal({
       // without knowing variants exist. Existing variant stock is carried
       // through generateVariants(); nothing here can zero it.
       if (showVariants && (variantOptions.length > 0 || hasVariants(initialProduct))) {
+        // VERSIONS CANNOT BE ADDED ON TOP OF STOCK NO VERSION HOLDS. Every
+        // new version starts at zero, so ten shirts already on the shelf
+        // would stay in the product total with no size behind them — and
+        // the total and the sizes would never agree again.
+        const unassigned = Number(initialProduct?.stock) || 0;
+        if (isEditing && !hasVariants(initialProduct) && variantOptions.length > 0 && unassigned > 0) {
+          toast.error(`${initialProduct.name} has ${unassigned} in stock that no version holds. Count it to zero with a stock take first, then add the versions and count each one in.`);
+          setBusy(false);
+          return;
+        }
         const generated = generateVariants(variantOptions, initialProduct || {});
         payload.variantOptions = generated.options;
         payload.variants = generated.variants;
@@ -1045,7 +1065,13 @@ export default function ProductFormModal({
             <span className="label">
               Choices <span className="font-normal normal-case text-ink-400">(optional)</span>
             </span>
-            <ModifierEditor groups={modifierGroups} onChange={setModifierGroups} disabled={busy} />
+            <ModifierEditor
+              groups={modifierGroups}
+              onChange={setModifierGroups}
+              products={allProducts}
+              showRecipes={showRecipes}
+              disabled={busy}
+            />
           </div>
         )}
 
@@ -1061,6 +1087,10 @@ export default function ProductFormModal({
               productId={initialProduct?.id || null}
               producedInAdvance={producedInAdvance}
               onProducedInAdvanceChange={setProducedInAdvance}
+              recipeYield={recipeYield}
+              onRecipeYieldChange={setRecipeYield}
+              shelfLifeDays={shelfLifeDays}
+              onShelfLifeDaysChange={setShelfLifeDays}
               showProduction={showProduction}
               disabled={busy}
             />

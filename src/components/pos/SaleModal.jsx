@@ -4,6 +4,7 @@ import Modal from '../common/Modal';
 import PaymentMethodSelect from './PaymentMethodSelect';
 import { formatMoney, roundMoney } from '../../utils/currency';
 import { productUnit, normalizeQuantity } from '../../utils/lineItems';
+import { tracksOwnStock } from '../../utils/inventory';
 import { DEFAULT_UNIT, unitStep, roundQuantity, getUnit, formatQuantityWithUnit } from '../../industry/units';
 import { raceWithTimeout } from '../../utils/offlineWrite';
 import { friendlyErrorMessage } from '../../utils/errorMessages';
@@ -32,7 +33,9 @@ export default function SaleModal({ open, product, customers, onClose, onConfirm
   const saleUnit     = productUnit(product);
   const saleQty      = normalizeQuantity(quantity, saleUnit);
   const total        = roundMoney(saleQty * (Number(price) || 0));
-  const exceedsStock = product.kind !== 'service' && saleQty > roundQuantity(Number(product.stock) || 0, saleUnit);
+  // Only something with stock of its own can run out of it. A dish made to
+  // order is limited by its ingredients, which the sale itself checks.
+  const exceedsStock = tracksOwnStock(product) && saleQty > roundQuantity(Number(product.stock) || 0, saleUnit);
   const needsMpesaCode = method === 'M-Pesa' && digitalReferenceRequired() && !mpesaCode.trim();
   const needsCustomer  = method === 'Credit' && !customerId && !(newMode && newName.trim());
   const canSubmit = saleQty > 0 && !exceedsStock && Number(price) >= 0 && !needsMpesaCode && !needsCustomer && !submitting;
@@ -50,11 +53,10 @@ const handleConfirm = async () => {
         ? onConfirmCredit({ product, quantity: saleQty, soldPricePerUnit: Number(price), customerId: cId, customerName: cName, customerPhone: cPhone })
         : onConfirmSale({ product, quantity: saleQty, soldPricePerUnit: Number(price), paymentMethod: method, mpesaCode: method === 'M-Pesa' ? mpesaCode.trim() : null });
 
-      const { queuedOffline, error } = await raceWithTimeout(commit, 4000);
+      const { queuedOffline, error } = await raceWithTimeout(commit, 4000, { label: `A sale of ${product.name}` });
       if (error) throw error;
       if (queuedOffline) {
         toast.success('Sale saved offline. It will sync when you reconnect.');
-        commit.catch((err) => toast.error(`A sale from earlier couldn't be saved: ${friendlyErrorMessage(err)}`));
       }
       onClose(record);
     } catch (err) {
