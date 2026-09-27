@@ -161,6 +161,35 @@ export function allocateFefo(batches, quantity, {
 }
 
 /**
+ * Allocate a WHOLE CART, line by line, from one shared pool.
+ *
+ * Two rows of the same product — the same drug with two different
+ * instructions, a burger with and without cheese — used to be allocated
+ * independently against the same batch list, so both took batch A: A was
+ * overdrawn, B sat untouched, and the COGS of the second row was A's.
+ * What an earlier line takes is gone for the lines after it.
+ *
+ * `lines` are `{ productId, quantity, unit? }`; returns, per line, the same
+ * `{ allocations, allocated, shortfall, usedExpired }` allocateFefo gives.
+ */
+export function allocateFefoAcrossLines(lines, batches, { today = todayISO(), allowExpired = false } = {}) {
+  const taken = new Map();
+  return (lines || []).map((line) => {
+    const unit = line?.unit || DEFAULT_UNIT;
+    const pool = (batches || [])
+      .filter((b) => b?.productId === line?.productId)
+      .map((b) => (taken.has(b.id)
+        ? { ...b, remainingQuantity: roundQuantity(remainingOf(b, unit) - taken.get(b.id), unit) }
+        : b));
+    const result = allocateFefo(pool, line?.quantity, { unit, today, allowExpired });
+    for (const allocation of result.allocations) {
+      taken.set(allocation.batchId, roundQuantity((taken.get(allocation.batchId) || 0) + allocation.quantity, unit));
+    }
+    return result;
+  });
+}
+
+/**
  * The true cost of a line, from the batches it was actually taken from.
  * A pharmacy that bought the same drug at two prices should see the
  * profit on the box it actually sold, not on an average nobody paid.
@@ -203,12 +232,15 @@ export function summarizeExpiry(batches, products = [], {
   today = todayISO(), warningDays = DEFAULT_EXPIRY_WARNING_DAYS,
 } = {}) {
   const costByProduct = new Map((products || []).map((p) => [p.id, Number(p.costPrice) || 0]));
+  const unitByProduct = new Map((products || []).map((p) => [p.id, p.unit || DEFAULT_UNIT]));
   const groups = { expired: [], expiring: [], ok: [], unknown: [] };
   let expiredValue = 0;
   let expiringValue = 0;
 
   for (const batch of batches || []) {
-    const remaining = remainingOf(batch);
+    // In the batch's own unit. Read as pieces, half a litre of syrup
+    // truncated to nothing and vanished from the expiry report entirely.
+    const remaining = remainingOf(batch, batch?.unit || unitByProduct.get(batch?.productId) || DEFAULT_UNIT);
     if (remaining <= 0) continue;
     const status = expiryStatus(batch, { today, warningDays });
     const row = {

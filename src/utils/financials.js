@@ -49,15 +49,15 @@ function getCostOfSale(row) {
   return costPerUnit * quantity;
 }
 
+// A supplier payment writes an expense MIRROR (Suppliers.jsx) so it shows
+// in the expense list — but its money is already counted as a supplier
+// outflow, so the mirror is left out here. Identified by CATEGORY only:
+// every mirror FlowBiz has ever written carries it, and neither category
+// is offered in the expense picker. Matching on the description too meant
+// an ordinary "Taxi for stock purchase" vanished from profit and the till.
 export function isExpenseExcluded(expense) {
-  const category = String(expense?.category || '').toLowerCase();
-  const description = String(expense?.description || '').toLowerCase();
-  return (
-    category === 'stock purchase' ||
-    category === 'supplier payment' ||
-    description.includes('stock purchase') ||
-    description.includes('supplier payment')
-  );
+  const category = String(expense?.category || '').trim().toLowerCase();
+  return category === 'stock purchase' || category === 'supplier payment';
 }
 
 function isCreditSaleReversed(creditSale) {
@@ -237,7 +237,15 @@ export function computeExpectedTillBalances({
   };
 }
 
-export function computeSupplierBalances(purchases = [], supplierPayments = [], suppliers = []) {
+/**
+ * What is owed to each supplier: credit purchases less payments.
+ *
+ * `includeCredits` also returns suppliers the business has OVERPAID —
+ * a negative balance, money sitting with the supplier. They used to be
+ * filtered out along with the settled ones, so a payment made twice from
+ * two devices simply vanished from the screen that should have shown it.
+ */
+export function computeSupplierBalances(purchases = [], supplierPayments = [], suppliers = [], { includeCredits = false } = {}) {
   const balanceById = {};
 
   (purchases || []).forEach((p) => {
@@ -246,7 +254,11 @@ export function computeSupplierBalances(purchases = [], supplierPayments = [], s
   });
 
   (supplierPayments || []).forEach((sp) => {
-    if (!sp?.supplierId || balanceById[sp.supplierId] === undefined) return;
+    if (!sp?.supplierId) return;
+    if (balanceById[sp.supplierId] === undefined) {
+      if (!includeCredits) return;
+      balanceById[sp.supplierId] = 0;
+    }
     balanceById[sp.supplierId] -= Number(sp.amount) || 0;
   });
 
@@ -254,7 +266,7 @@ export function computeSupplierBalances(purchases = [], supplierPayments = [], s
   (suppliers || []).forEach((s) => { nameById[s.id] = s.name; });
 
   return Object.entries(balanceById)
-    .filter(([, balance]) => (Number(balance) || 0) > 0.005)
+    .filter(([, balance]) => (includeCredits ? Math.abs(Number(balance) || 0) : (Number(balance) || 0)) > 0.005)
     .map(([supplierId, balance]) => ({
       supplierId,
       supplierName:

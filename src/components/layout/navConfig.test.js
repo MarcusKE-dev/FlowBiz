@@ -55,10 +55,11 @@ test('a restaurant gets Orders, and no Expiry or Production', () => {
   assert.ok(!nav.includes('/production'));
 });
 
-test('a bakery gets Production, and no Orders', () => {
+test('a bakery gets Production, Orders for pre-orders, and Expiry for dated runs', () => {
   const nav = paths(owner('BAKERY'));
   assert.ok(nav.includes('/production'));
-  assert.ok(!nav.includes('/orders'));
+  assert.ok(nav.includes('/orders'), 'the cake ordered on Tuesday for Saturday');
+  assert.ok(nav.includes('/expiry'), 'bread made on Monday is not Thursday\'s bread');
 });
 
 test('a pharmacy gets Expiry, and no Orders or Production', () => {

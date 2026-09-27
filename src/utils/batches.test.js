@@ -263,3 +263,59 @@ test('after a batch-allocated sale, the batch ledger still sums to the product s
   assert.equal(batchStockFor(applied, 'amox'), 140 - 45);
   assert.equal(sellableBatchStockFor(applied, 'amox', { today: TODAY }), 120 - 45);
 });
+
+test('a fractional batch stays on the expiry report at its real value (M05)', () => {
+  const summary = summarizeExpiry(
+    [{ id: 'b', productId: 'syrup', expiryDate: '2026-01-01', remainingQuantity: 0.5, costPrice: 100, unit: 'litre' }],
+    [{ id: 'syrup', unit: 'litre', costPrice: 100 }],
+    { today: '2026-09-27' }
+  );
+  assert.equal(summary.expiredCount, 1);
+  assert.equal(summary.expired[0].remaining, 0.5);
+  assert.equal(summary.expiredValue, 50);
+});
+
+test('a batch with no unit of its own is read in its product\'s unit', () => {
+  const summary = summarizeExpiry(
+    [{ id: 'b', productId: 'flour', expiryDate: '2026-01-01', remainingQuantity: 2.25, costPrice: 80 }],
+    [{ id: 'flour', unit: 'kilogram' }],
+    { today: '2026-09-27' }
+  );
+  assert.equal(summary.expired[0].remaining, 2.25);
+  assert.equal(summary.expiredValue, 180);
+});
+
+test('expiry is decided on the BUSINESS calendar, the same one the books use (M06)', () => {
+  // 22:00 UTC on the 26th is already the 27th in Nairobi.
+  assert.equal(todayISO(new Date('2026-09-26T22:00:00Z')), '2026-09-27');
+});
+
+// ── One pool per checkout (H11) ───────────────────────────────────────
+
+import { allocateFefoAcrossLines } from './batches.js';
+
+test('two lines of the same product share ONE pool: the second takes batch B, not A again', () => {
+  const batches = [
+    { id: 'A', productId: 'drug', expiryDate: '2027-01-01', remainingQuantity: 2, costPrice: 10 },
+    { id: 'B', productId: 'drug', expiryDate: '2027-06-01', remainingQuantity: 2, costPrice: 20 },
+  ];
+  const [first, second] = allocateFefoAcrossLines(
+    [{ productId: 'drug', quantity: 2 }, { productId: 'drug', quantity: 2 }],
+    batches,
+    { today: '2026-09-27' }
+  );
+  assert.deepEqual(first.allocations.map((a) => [a.batchId, a.quantity]), [['A', 2]]);
+  assert.deepEqual(second.allocations.map((a) => [a.batchId, a.quantity]), [['B', 2]]);
+  assert.equal(second.shortfall, 0);
+});
+
+test('a third line with nothing left is reported short rather than overdrawing', () => {
+  const batches = [{ id: 'A', productId: 'drug', expiryDate: '2027-01-01', remainingQuantity: 3, costPrice: 10 }];
+  const results = allocateFefoAcrossLines(
+    [{ productId: 'drug', quantity: 2 }, { productId: 'drug', quantity: 2 }],
+    batches,
+    { today: '2026-09-27' }
+  );
+  assert.equal(results[1].allocated, 1);
+  assert.equal(results[1].shortfall, 1);
+});

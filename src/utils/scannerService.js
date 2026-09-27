@@ -15,16 +15,32 @@ export function normalizeCode(raw) {
 // (manufacturer barcodes are numeric strings); internal code match is
 // case-insensitive (FB-000001 vs fb-000001 should both work when typed).
 export function findProductByCode(products, rawCode) {
+  return findProductsByCode(products, rawCode)[0] || null;
+}
+
+/**
+ * EVERY product a code matches, manufacturer barcodes first. More than one
+ * means two products claim the same code — a barcode entered twice on two
+ * devices, or an old clock-derived internal code — and a till must not
+ * guess which one to sell, because guessing wrong sells and deducts the
+ * wrong stock. Archived products never match.
+ */
+export function findProductsByCode(products, rawCode) {
   const code = normalizeCode(rawCode);
-  if (!code) return null;
+  if (!code) return [];
   const lower = code.toLowerCase();
-  return (
-    (products || []).find(
-      (p) =>
-        (p.barcode && p.barcode === code) ||
-        (p.internalCode && p.internalCode.toLowerCase() === lower)
-    ) || null
-  );
+  const live = (products || []).filter((p) => p && !p.deleted);
+  const byBarcode = live.filter((p) => p.barcode && p.barcode === code);
+  const byInternal = live.filter((p) => p.internalCode && p.internalCode.toLowerCase() === lower && !byBarcode.includes(p));
+  return [...byBarcode, ...byInternal];
+}
+
+/** The message a till shows when a scan is ambiguous, or null. */
+export function ambiguousScanMessage(products, rawCode) {
+  const matches = findProductsByCode(products, rawCode);
+  if (matches.length < 2) return null;
+  const names = matches.slice(0, 3).map((p) => p.name).join(', ');
+  return `${normalizeCode(rawCode)} belongs to more than one product (${names}). Give each its own code in Products before selling it.`;
 }
 
 // The barcode-uniqueness ADVISORY behind the product form's warning.

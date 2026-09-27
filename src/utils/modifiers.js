@@ -63,11 +63,24 @@ export function normalizeModifierGroups(rawGroups) {
       while (usedOptionIds.has(optionId)) optionId = `${optionId}-${options.length + 1}`;
       usedOptionIds.add(optionId);
       const delta = Number(option?.priceDelta);
+      // An ingredient adjustment is kept only when it names an ingredient
+      // and moves it by a real, non-zero amount. A half-filled row from
+      // the editor is dropped rather than stored as a line that consumes
+      // nothing.
+      const recipe = (Array.isArray(option?.recipe) ? option.recipe : [])
+        .map((line) => ({
+          componentId: String(line?.componentId || ''),
+          componentName: String(line?.componentName || '').slice(0, 64),
+          quantity: Number(line?.quantity),
+          ...(line?.unit ? { unit: String(line.unit) } : {}),
+        }))
+        .filter((line) => line.componentId && Number.isFinite(line.quantity) && line.quantity !== 0)
+        .slice(0, 10);
       options.push({
         id: optionId,
         name: optionName,
         priceDelta: Number.isFinite(delta) ? roundMoney(delta) : 0,
-        ...(Array.isArray(option?.recipe) && option.recipe.length > 0 ? { recipe: option.recipe } : {}),
+        ...(recipe.length > 0 ? { recipe } : {}),
       });
     }
     if (options.length === 0) continue;

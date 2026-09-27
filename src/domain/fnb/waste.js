@@ -39,6 +39,7 @@
 import { roundMoney } from '../../utils/currency.js';
 import { roundQuantity, DEFAULT_UNIT } from '../../industry/units.js';
 import { tracksOwnStock } from '../../utils/inventory.js';
+import { hasVariants } from '../../utils/variants.js';
 
 /**
  * WHY IT WAS THROWN AWAY. A short, fixed list, because the point of the
@@ -110,7 +111,12 @@ export function buildWasteRecord(row, product, {
   if (quantity <= 0) return null;
 
   const reason = isKnownWasteReason(row?.reason) ? row.reason : DEFAULT_WASTE_REASON;
-  const unitCost = roundMoney(Math.max(0, Number(product.costPrice) || 0));
+  // The cost of the thing ACTUALLY thrown away: a batch bought at 20 is
+  // not worth the product's current 12, and a version may carry its own
+  // price. The caller passes that when it knows it; otherwise the
+  // product's cost is the best figure there is.
+  const stated = Number(row?.unitCost);
+  const unitCost = roundMoney(Math.max(0, Number.isFinite(stated) && row?.unitCost !== null && row?.unitCost !== '' ? stated : (Number(product.costPrice) || 0)));
 
   const record = {
     productId: product.id,
@@ -149,6 +155,23 @@ export function buildWasteRecord(row, product, {
  * written by the same single adapter, so there is still exactly one
  * answer to "how does stock get written".
  */
+/**
+ * Why a waste entry cannot be recorded as entered, or null.
+ *
+ * A product with versions keeps a quantity PER VERSION alongside its
+ * total, and one tracked by batch keeps one per batch. Waste that moved
+ * only the total left the version map and the batch ledger claiming stock
+ * that had been thrown in the bin — so the version, or the batch, has to
+ * be named.
+ */
+export function wasteSubledgerProblem(row, product, { batches = [] } = {}) {
+  if (!product) return 'Choose what was thrown away.';
+  if (hasVariants(product) && !row?.variantId) return `Choose which version of ${product.name} was thrown away.`;
+  const lots = (batches || []).filter((b) => b?.productId === product.id && (Number(b.remainingQuantity ?? b.quantity) || 0) > 0);
+  if (lots.length > 0 && !row?.batchId) return `Choose which batch of ${product.name} was thrown away.`;
+  return null;
+}
+
 export function resolveWasteDeltas(records, products) {
   const byId = new Map((products || []).map((p) => [p.id, p]));
   const deltas = {};

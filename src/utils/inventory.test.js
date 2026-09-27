@@ -436,3 +436,58 @@ test('no id, no catalogue, no dependents', () => {
   assert.deepEqual(recipeDependents(null, CATALOGUE), []);
   assert.deepEqual(recipeDependents('patty', undefined), []);
 });
+
+// ── Audit regressions: precision, recipes, reversal, valuation ─────────
+
+import {
+  recipeProblem, componentUsage, resolveReversalDeltas, inventoryValue, weightedAverageCost,
+} from './inventory.js';
+
+test('M04: half an egg per muffin consumes the same eggs however the muffins are rung up', () => {
+  const products = [
+    { id: 'muffin', name: 'Muffin', recipe: [{ componentId: 'egg', quantity: 0.5 }] },
+    { id: 'egg', name: 'Egg', stock: 12 },
+  ];
+  const one = resolveStockDeltas([{ productId: 'muffin', quantity: 1 }], products, { recipes: true });
+  const two = resolveStockDeltas([{ productId: 'muffin', quantity: 2 }], products, { recipes: true });
+  assert.equal(one.egg.total, -0.5, 'one muffin is not zero eggs');
+  assert.equal(two.egg.total, -1);
+});
+
+test('H06: a recipe naming a missing ingredient, or itself, is refused out loud', () => {
+  const bread = { id: 'bread', name: 'Bread', recipe: [{ componentId: 'flour', componentName: 'Flour', quantity: 0.5 }] };
+  assert.match(recipeProblem(bread, [bread]), /no longer exists/);
+  const a = { id: 'a', name: 'A', recipe: [{ componentId: 'b', quantity: 1 }] };
+  const b = { id: 'b', name: 'B', recipe: [{ componentId: 'a', quantity: 1 }] };
+  assert.match(recipeProblem(a, [a, b]), /circle/);
+  assert.equal(recipeProblem(bread, [bread, { id: 'flour', name: 'Flour', stock: 5 }]), null);
+  assert.match(validateComponentStock([{ productId: 'bread', quantity: 1 }], [bread], { recipes: true }), /no longer exists/);
+});
+
+test('H03: a counter reversal restores the ingredients the sale RECORDED, whatever the recipe says now', () => {
+  const products = [
+    { id: 'burger', name: 'Burger', recipe: [{ componentId: 'bun', quantity: 1 }, { componentId: 'beef', quantity: 0.15 }] },
+    { id: 'bun', name: 'Bun', stock: 10 },
+    { id: 'beef', name: 'Beef', unit: 'kilogram', stock: 5 },
+  ];
+  const line = { productId: 'burger', quantity: 3 };
+  const usage = componentUsage(line, products, { recipes: true });
+  assert.deepEqual(usage, [{ productId: 'bun', quantity: 3 }, { productId: 'beef', quantity: 0.45 }]);
+
+  const changed = [{ ...products[0], recipe: [{ componentId: 'bun', quantity: 2 }] }, products[1], products[2]];
+  const back = resolveReversalDeltas([{ ...line, componentUsage: usage }], changed, { recipes: true });
+  assert.equal(back.bun.total, 3);
+  assert.equal(back.beef.total, 0.45);
+});
+
+test('H13: stock is valued at what its batches cost, and receipts average the cost', () => {
+  const products = [{ id: 'p', stock: 20, costPrice: 20 }];
+  const batches = [
+    { productId: 'p', remainingQuantity: 10, costPrice: 10 },
+    { productId: 'p', remainingQuantity: 10, costPrice: 20 },
+  ];
+  assert.equal(inventoryValue(products, batches), 300);
+  assert.equal(inventoryValue(products), 400, 'without batches, the parent cost is all there is');
+  assert.equal(weightedAverageCost({ currentStock: 10, currentCost: 10, receivedQuantity: 10, receivedCost: 20 }), 15);
+  assert.equal(weightedAverageCost({ currentStock: 0, currentCost: 10, receivedQuantity: 5, receivedCost: 20 }), 20);
+});

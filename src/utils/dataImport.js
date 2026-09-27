@@ -1,5 +1,6 @@
 import { doc, writeBatch, getDocs, query, collection, where, limit } from 'firebase/firestore';
 import { db } from '../firebase';
+import { remapDocumentReferences } from './importRemap';
 
 export const IMPORT_COLLECTIONS = [
   'businessSettings',
@@ -117,6 +118,11 @@ export async function importBusinessData(businessId, manifest, { onProgress } = 
   const barcodeEntries = [];
   const manifestBusinessId = manifest.businessId || null;
   const isCrossTenant = Boolean(manifestBusinessId && manifestBusinessId !== businessId);
+  // Stamped on every restored document. It is how firestore.rules tells a
+  // restore — history written back as it was: voided sales, settled debts,
+  // other people's sales — from a live transaction, which must obey the
+  // business transitions. Only an owner may write it.
+  const restoredAt = new Date();
 
   for (let i = 0; i < IMPORT_COLLECTIONS.length; i++) {
     const name = IMPORT_COLLECTIONS[i];
@@ -134,20 +140,14 @@ export async function importBusinessData(businessId, manifest, { onProgress } = 
         if (!id) return;
         const revived = reviveDoc(rest);
         revived.businessId = businessId;
+        revived.restoredAt = restoredAt;
 
-        // Remap cross-references if restoring across different business IDs
-        if (isCrossTenant) {
-          if (revived.productId) revived.productId = resolveTargetId('products', revived.productId, businessId, manifestBusinessId);
-          if (revived.supplierId) revived.supplierId = resolveTargetId('suppliers', revived.supplierId, businessId, manifestBusinessId);
-          if (revived.customerId) revived.customerId = resolveTargetId('customers', revived.customerId, businessId, manifestBusinessId);
-          if (revived.creditSaleId) revived.creditSaleId = resolveTargetId('creditSales', revived.creditSaleId, businessId, manifestBusinessId);
-          if (Array.isArray(revived.items)) {
-            revived.items = revived.items.map((item) => ({
-              ...item,
-              productId: item.productId ? resolveTargetId('products', item.productId, businessId, manifestBusinessId) : item.productId,
-            }));
-          }
-        }
+        // Remap EVERY cross-reference when restoring into a different
+        // business — nested ones included. See utils/importRemap.js.
+        const remapped = isCrossTenant
+          ? remapDocumentReferences(name, revived, (collectionName, oldId) => resolveTargetId(collectionName, oldId, businessId, manifestBusinessId))
+          : revived;
+        Object.assign(revived, remapped);
 
         const targetId = resolveTargetId(name, id, businessId, manifestBusinessId, revived);
         batch.set(doc(db, name, targetId), revived);
@@ -166,7 +166,7 @@ export async function importBusinessData(businessId, manifest, { onProgress } = 
     const chunk = barcodeEntries.slice(start, start + 350);
     const batch = writeBatch(db);
     chunk.forEach((entry) => {
-      batch.set(doc(db, 'barcodeIndex', `${businessId}__${entry.barcode}`), entry);
+      batch.set(doc(db, 'barcodeIndex', `${businessId}__${entry.barcode}`), { ...entry, restoredAt });
     });
     await batch.commit();
   }

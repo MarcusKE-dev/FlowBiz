@@ -163,15 +163,30 @@ export function describePacks(product, baseQuantity) {
   return { packs, loose, packSize: size, packUnit };
 }
 
+// COMPONENT PRECISION. A recipe that uses half an egg per muffin is a
+// real recipe, and consuming it through roundQuantity('piece') truncated
+// every single-muffin sale to ZERO eggs while a sale of two took one — the
+// same muffins consumed different stock depending on how they were rung
+// up, and the difference vanished from the books. Ingredients consumed
+// through a recipe are therefore tracked to three decimals whatever their
+// unit, so equivalent sales always consume equivalent stock.
+export const COMPONENT_DECIMALS = 3;
+
+export function roundComponent(value) {
+  const n = Number(value) || 0;
+  const factor = 10 ** COMPONENT_DECIMALS;
+  return Math.round((n + (n >= 0 ? 1e-9 : -1e-9)) * factor) / factor;
+}
+
 function ensure(deltas, productId) {
   if (!deltas[productId]) deltas[productId] = { total: 0, variants: {}, batches: {} };
   return deltas[productId];
 }
 
-function take(deltas, product, quantity, { variantId = null, batchId = null } = {}) {
+function take(deltas, product, quantity, { variantId = null, batchId = null, precise = false } = {}) {
   const unit = product?.unit || DEFAULT_UNIT;
   const entry = ensure(deltas, product.id);
-  entry.total = roundQuantity(entry.total - quantity, unit);
+  entry.total = precise ? roundComponent(entry.total - quantity) : roundQuantity(entry.total - quantity, unit);
   if (variantId && hasVariants(product)) {
     entry.variants[variantId] = roundQuantity((entry.variants[variantId] || 0) - quantity, unit);
   }
@@ -277,10 +292,7 @@ export function resolveStockDeltas(rows, products, {
         if (!componentProduct) continue;
         const perUnit = Number(component?.quantity) || 0;
         if (perUnit <= 0) continue;
-        const needed = roundQuantity(
-          quantity * perUnit,
-          componentProduct.unit || DEFAULT_UNIT
-        );
+        const needed = roundComponent(quantity * perUnit);
         consume(componentProduct, needed, {}, level + 1);
       }
       if (level === 0 && Array.isArray(row?.modifiers)) {
@@ -290,12 +302,12 @@ export function resolveStockDeltas(rows, products, {
             if (!compProduct) continue;
             const perUnit = Number(line?.quantity) || 0;
             if (perUnit === 0) continue;
-            const deltaQty = roundQuantity(quantity * perUnit, compProduct.unit || DEFAULT_UNIT);
+            const deltaQty = roundComponent(quantity * perUnit);
             if (deltaQty > 0) {
               consume(compProduct, deltaQty, {}, level + 1);
             } else if (deltaQty < 0) {
               const entry = ensure(deltas, compProduct.id);
-              entry.total = roundQuantity(entry.total + Math.abs(deltaQty), compProduct.unit || DEFAULT_UNIT);
+              entry.total = roundComponent(entry.total + Math.abs(deltaQty));
             }
           }
         }
@@ -310,12 +322,12 @@ export function resolveStockDeltas(rows, products, {
           if (!compProduct) continue;
           const perUnit = Number(line?.quantity) || 0;
           if (perUnit === 0) continue;
-          const deltaQty = roundQuantity(quantity * perUnit, compProduct.unit || DEFAULT_UNIT);
+          const deltaQty = roundComponent(quantity * perUnit);
           if (deltaQty > 0) {
             consume(compProduct, deltaQty, {}, level + 1);
           } else if (deltaQty < 0) {
             const entry = ensure(deltas, compProduct.id);
-            entry.total = roundQuantity(entry.total + Math.abs(deltaQty), compProduct.unit || DEFAULT_UNIT);
+            entry.total = roundComponent(entry.total + Math.abs(deltaQty));
           }
         }
       }
@@ -323,6 +335,9 @@ export function resolveStockDeltas(rows, products, {
 
     if (!tracksOwnStock(product)) return;
 
+    // An ingredient reached through a recipe (level > 0) is tracked to
+    // component precision; a product sold directly keeps its unit's.
+    const precise = level > 0;
     const allocations = Array.isArray(row?.batchAllocations) ? row.batchAllocations : null;
     if (allocations && allocations.length > 0) {
       for (const allocation of allocations) {
@@ -333,7 +348,7 @@ export function resolveStockDeltas(rows, products, {
       return;
     }
 
-    take(deltas, product, quantity, { variantId: row?.variantId });
+    take(deltas, product, quantity, { variantId: row?.variantId, precise });
   };
 
   for (const row of rows || []) {
@@ -546,15 +561,219 @@ export function productionUnitCost(product, quantity, products) {
 export function validateComponentStock(rows, products, { recipes = false } = {}) {
   if (!recipes) return null;
   const byId = new Map((products || []).map((p) => [p.id, p]));
+  // A dish whose recipe points at an ingredient that no longer exists, or
+  // at itself, would sell while consuming nothing. Refused here, where the
+  // counter and the order screen already ask, rather than discovered at
+  // the next stock take.
+  for (const row of rows || []) {
+    const problem = recipeProblem(byId.get(row?.productId), products);
+    if (problem) return problem;
+  }
   const deltas = resolveStockDeltas(rows, products, { recipes });
   for (const [productId, entry] of Object.entries(deltas)) {
     const product = byId.get(productId);
     if (!product || entry.total >= 0) continue;
-    const unit = product.unit || DEFAULT_UNIT;
-    const available = roundQuantity(Number(product.stock) || 0, unit);
-    if (available + entry.total < 0) {
-      return `Not enough ${product.name}. ${available} left, ${-entry.total} needed.`;
+    const available = roundComponent(Number(product.stock) || 0);
+    if (roundComponent(available + entry.total) < 0) {
+      return `Not enough ${product.name}. ${available} left, ${roundComponent(-entry.total)} needed.`;
     }
   }
   return null;
+}
+
+/**
+ * What is wrong with a product's recipe, as a sentence, or null.
+ *
+ * resolveStockDeltas() skips a component it cannot find and stops
+ * recursing at MAX_RECIPE_DEPTH, both silently. That is the right
+ * behaviour for a function that must never throw at the till, and the
+ * wrong one for the question "can this be sold or made at all?" — so
+ * that question is asked here and answered out loud. Only a made-to-order
+ * or made-in-advance recipe item is checked; anything else has no recipe
+ * to be wrong about.
+ */
+export function recipeProblem(product, products) {
+  if (!isRecipeItem(product)) return null;
+  const byId = new Map((products || []).map((p) => [p.id, p]));
+  const walk = (item, trail) => {
+    for (const component of item.recipe) {
+      if ((Number(component?.quantity) || 0) === 0) continue;
+      const id = component?.componentId;
+      const found = byId.get(id);
+      if (!found || found.deleted === true) {
+        return `${product.name} uses ${component?.componentName || 'an ingredient'} that no longer exists. Fix its recipe first.`;
+      }
+      if (trail.includes(id)) {
+        return `${product.name}'s recipe goes round in a circle through ${found.name}. Fix its recipe first.`;
+      }
+      // A component made to order is consumed through ITS recipe, so its
+      // recipe has to be sound too. One made in advance is taken from its
+      // own finished stock and stops the walk.
+      if (isRecipeItem(found) && !isProducedInAdvance(found)) {
+        if (trail.length >= MAX_RECIPE_DEPTH) {
+          return `${product.name}'s recipe is nested more than ${MAX_RECIPE_DEPTH} levels deep. Simplify it first.`;
+        }
+        const nested = walk(found, [...trail, id]);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  };
+  return walk(product, [product.id]);
+}
+
+/** Add one delta map into another, in place. */
+export function mergeDeltas(target, source) {
+  for (const [productId, entry] of Object.entries(source || {})) {
+    const into = ensure(target, productId);
+    into.total = roundComponent(into.total + (entry.total || 0));
+    for (const [id, value] of Object.entries(entry.variants || {})) {
+      into.variants[id] = roundComponent((into.variants[id] || 0) + value);
+    }
+    for (const [id, value] of Object.entries(entry.batches || {})) {
+      into.batches[id] = roundComponent((into.batches[id] || 0) + value);
+    }
+  }
+  return target;
+}
+
+/**
+ * WHAT A LINE ACTUALLY TOOK FROM ITS INGREDIENTS, recorded on the line at
+ * the moment of sale: `[{ productId, quantity }]`, quantity positive for
+ * stock consumed.
+ *
+ * A reversal used to RE-RESOLVE the line against today's recipe. A
+ * burger sold with a 150 g patty and voided after the recipe changed to
+ * 180 g put back 180 g that never left; a recipe removed since put back
+ * nothing at all. Stock moves are history, and history is recorded, not
+ * recomputed. The product's own stock (and its version and batch) is not
+ * in here — that is already on the line itself.
+ */
+export function componentUsage(row, products, { recipes = false, packSizes = false } = {}) {
+  if (!recipes) return [];
+  const deltas = resolveStockDeltas([row], products, { recipes: true, packSizes });
+  const usage = [];
+  for (const [productId, entry] of Object.entries(deltas)) {
+    if (productId === row?.productId) continue;
+    const quantity = roundComponent(-(entry.total || 0));
+    if (quantity !== 0) usage.push({ productId, quantity });
+  }
+  return usage;
+}
+
+/**
+ * The stock a REVERSAL puts back — a void, a return, a cancelled or
+ * refunded credit sale.
+ *
+ * A row that carries `componentUsage` (every line sold since it was
+ * recorded) restores exactly those ingredient quantities, plus its own
+ * stock through the ordinary resolver with recipes off. A row sold before
+ * usage was recorded falls back to resolving against the current recipe,
+ * which is the best information there is for it.
+ *
+ * A product missing from `products` — deleted since the sale — is skipped
+ * rather than resurrected, so the caller never updates a missing
+ * document.
+ */
+export function resolveReversalDeltas(rows, products, { recipes = false, packSizes = false } = {}) {
+  const byId = new Map((products || []).map((p) => [p.id, p]));
+  const moved = {};
+  for (const row of rows || []) {
+    if (Array.isArray(row?.componentUsage)) {
+      mergeDeltas(moved, resolveStockDeltas([row], products, { recipes: false, packSizes }));
+      for (const use of row.componentUsage) {
+        const component = byId.get(use?.productId);
+        const quantity = roundComponent(Number(use?.quantity) || 0);
+        if (!component || !tracksOwnStock(component) || quantity === 0) continue;
+        const entry = ensure(moved, component.id);
+        entry.total = roundComponent(entry.total - quantity);
+      }
+    } else {
+      mergeDeltas(moved, resolveStockDeltas([row], products, { recipes, packSizes }));
+    }
+  }
+  for (const [productId, entry] of Object.entries(moved)) {
+    const still = Object.values(entry.variants).every((v) => v === 0)
+      && Object.values(entry.batches).every((v) => v === 0);
+    if (entry.total === 0 && still) delete moved[productId];
+  }
+  return negateDeltas(moved);
+}
+
+/** Scale a recorded usage list to a part of the line, cumulatively. */
+export function scaleComponentUsage(usage, { sold, from, to }) {
+  if (!Array.isArray(usage)) return undefined;
+  const total = Number(sold) || 0;
+  if (total <= 0) return [];
+  return usage
+    .map((use) => {
+      const whole = Number(use?.quantity) || 0;
+      const quantity = roundComponent(roundComponent(whole * (to / total)) - roundComponent(whole * (from / total)));
+      return { productId: use.productId, quantity };
+    })
+    .filter((use) => use.quantity !== 0);
+}
+
+/**
+ * WHAT THE STOCK ON HAND IS WORTH.
+ *
+ * It used to be `stock × costPrice` for every product, and `costPrice` is
+ * the LATEST price paid — so ten units bought at 10 and ten at 20 were
+ * valued at 400 while the batch ledger behind them said 300. Where a
+ * product has batches, each batch is valued at what it actually cost; any
+ * stock not covered by a batch (a shop mid-migration to batches) is valued
+ * at the product's cost, which purchases and production now maintain as a
+ * weighted average rather than overwriting.
+ *
+ * `batches` is optional; without it every product is valued the old way,
+ * which for a business that does not track batches is the only way.
+ */
+export function inventoryValue(products, batches = []) {
+  const byProduct = new Map();
+  for (const batch of batches || []) {
+    if (!batch?.productId) continue;
+    const list = byProduct.get(batch.productId) || [];
+    list.push(batch);
+    byProduct.set(batch.productId, list);
+  }
+  let total = 0;
+  for (const product of products || []) {
+    if (!tracksOwnStock(product)) continue;
+    const stock = Number(product.stock) || 0;
+    if (stock <= 0) continue;
+    const cost = Number(product.costPrice) || 0;
+    const lots = byProduct.get(product.id) || [];
+    let covered = 0;
+    let lotValue = 0;
+    for (const lot of lots) {
+      const remaining = Math.max(0, Number(lot.remainingQuantity ?? lot.quantity) || 0);
+      if (remaining <= 0) continue;
+      const take = Math.min(remaining, stock - covered);
+      if (take <= 0) break;
+      covered += take;
+      lotValue += take * (Number(lot.costPrice) || cost);
+    }
+    total += lotValue + Math.max(0, stock - covered) * cost;
+  }
+  return Math.round((total + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * The cost price after receiving stock, as a WEIGHTED AVERAGE of what was
+ * already on the shelf and what just arrived. Overwriting it with the
+ * newest price revalued every old unit at today's price, and every later
+ * sale of old stock booked COGS at a price nobody paid for it.
+ *
+ * Stock at or below zero has no value to average against, so the new
+ * price simply applies.
+ */
+export function weightedAverageCost({ currentStock, currentCost, receivedQuantity, receivedCost }) {
+  const onHand = Number(currentStock) || 0;
+  const added = Number(receivedQuantity) || 0;
+  const oldCost = Number(currentCost) || 0;
+  const newCost = Number(receivedCost) || 0;
+  if (added <= 0) return Math.round((oldCost + Number.EPSILON) * 100) / 100;
+  if (onHand <= 0) return Math.round((newCost + Number.EPSILON) * 100) / 100;
+  const value = onHand * oldCost + added * newCost;
+  return Math.round(((value / (onHand + added)) + Number.EPSILON) * 100) / 100;
 }

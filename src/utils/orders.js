@@ -190,6 +190,9 @@ export function orderToCart(order) {
     variantLabel: item.variantLabel,
     modifiers: item.modifiers || [],
     note: item.note || '',
+    ...(item.station ? { station: item.station } : {}),
+    ...(item.kitchenName ? { kitchenName: item.kitchenName } : {}),
+    ...(item.routable === false ? { routable: false } : {}),
   }));
 }
 

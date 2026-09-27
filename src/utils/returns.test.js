@@ -314,3 +314,107 @@ test('a sale with nothing on it has no return state to report', () => {
     assert.equal(returnState(sale), 'none');
   }
 });
+
+// ── Audit regressions: negotiated totals, batches, cumulative rounding ──
+
+import { allocateSaleTotal, sumLineTotals } from './lineItems.js';
+import { resolveReversalDeltas } from './inventory.js';
+
+test('A NEGOTIATED SALE NEVER REFUNDS MORE THAN WAS COLLECTED (H01)', () => {
+  // Listed at 1,000, cost 600, settled at 800.
+  const line = { productId: 'p', productName: 'Chair', quantity: 1, unitPrice: 1000, costPrice: 600, lineTotal: 1000, lineCost: 600 };
+  const sale = { id: 's', totalAmount: 800, costOfGoodsSold: 600, items: [line], isVoided: false, paymentMethod: 'Cash' };
+  const returned = buildReturn(sale, { 0: 1 });
+  assert.equal(returned.amount, 800, 'refund what was paid, not the shelf price');
+  assert.equal(returned.costOfGoodsSold, 600);
+
+  const refund = buildRefundDocument({ sale, returned, method: 'Cash', reason: '' });
+  const summary = computeFinancials({ sales: [sale], refunds: [refund] });
+  assert.equal(summary.revenue, 0);
+  assert.equal(summary.costOfGoodsSold, 0);
+  assert.equal(summary.grossProfit, 0);
+});
+
+test('a sale recorded with netLineTotal refunds each line its own share', () => {
+  const items = allocateSaleTotal([
+    { productId: 'a', quantity: 1, unitPrice: 600, lineTotal: 600, lineCost: 300 },
+    { productId: 'b', quantity: 1, unitPrice: 400, lineTotal: 400, lineCost: 200 },
+  ], 900);
+  assert.equal(items[0].netLineTotal, 540);
+  assert.equal(items[1].netLineTotal, 360);
+  assert.equal(sumLineTotals(items), 1000, 'the list prices are left as they were');
+  const sale = { id: 's', totalAmount: 900, items };
+  assert.equal(buildReturn(sale, { 1: 1 }).amount, 360);
+  assert.equal(buildReturn(sale, { 0: 1, 1: 1 }).amount, 900);
+});
+
+test('an unedited total adds nothing to the lines', () => {
+  const items = [{ productId: 'a', quantity: 2, unitPrice: 50, lineTotal: 100 }];
+  assert.equal(allocateSaleTotal(items, 100), items);
+});
+
+test('SUCCESSIVE PARTIAL RETURNS RESTORE THE LOTS THE UNITS CAME FROM (H12)', () => {
+  const sale = {
+    id: 's', totalAmount: 400,
+    items: [{
+      productId: 'drug', productName: 'Drug', quantity: 4, unitPrice: 100, lineTotal: 400,
+      costPrice: 15, lineCost: 60,
+      batchAllocations: [
+        { batchId: 'A', quantity: 2, costPrice: 10 },
+        { batchId: 'B', quantity: 2, costPrice: 20 },
+      ],
+    }],
+  };
+  const first = buildReturn(sale, { 0: 2 });
+  assert.deepEqual(first.rows[0].batchAllocations.map((a) => [a.batchId, a.quantity]), [['A', 2]]);
+  assert.equal(first.costOfGoodsSold, 20, 'the first two came from A at 10');
+
+  const second = buildReturn({ ...sale, returnedQuantities: first.returnedQuantities }, { 0: 2 });
+  assert.deepEqual(second.rows[0].batchAllocations.map((a) => [a.batchId, a.quantity]), [['B', 2]]);
+  assert.equal(second.costOfGoodsSold, 40, 'the last two came from B at 20');
+
+  const products = [{ id: 'drug', name: 'Drug', stock: 0 }];
+  const a = resolveReversalDeltas(first.rows, products);
+  const b = resolveReversalDeltas(second.rows, products);
+  assert.deepEqual(a.drug.batches, { A: 2 });
+  assert.deepEqual(b.drug.batches, { B: 2 });
+});
+
+test('CUMULATIVE PARTIAL REFUNDS ADD UP TO THE LINE, NEVER MORE (L01)', () => {
+  const sale = {
+    id: 's', totalAmount: 1.01,
+    items: [{ productId: 'x', quantity: 3, unitPrice: 0.3367, lineTotal: 1.01, costPrice: 0.3333, lineCost: 1.0 }],
+  };
+  let current = sale;
+  let refunded = 0;
+  let cost = 0;
+  for (let i = 0; i < 3; i++) {
+    const r = buildReturn(current, { 0: 1 });
+    refunded = Math.round((refunded + r.amount) * 100) / 100;
+    cost = Math.round((cost + r.costOfGoodsSold) * 100) / 100;
+    current = { ...current, returnedQuantities: r.returnedQuantities };
+  }
+  assert.equal(refunded, 1.01);
+  assert.equal(cost, 1.0);
+});
+
+test('a returned recipe line puts back the ingredients it RECORDED using, not today\'s recipe', () => {
+  const sale = {
+    id: 's', totalAmount: 1500,
+    items: [{
+      productId: 'burger', productName: 'Burger', quantity: 3, unitPrice: 500, lineTotal: 1500,
+      componentUsage: [{ productId: 'bun', quantity: 3 }, { productId: 'beef', quantity: 0.45 }],
+    }],
+  };
+  // The recipe has since changed to 200 g of beef. It must not matter.
+  const products = [
+    { id: 'burger', name: 'Burger', recipe: [{ componentId: 'bun', quantity: 1 }, { componentId: 'beef', quantity: 0.2 }] },
+    { id: 'bun', name: 'Bun', stock: 0 },
+    { id: 'beef', name: 'Beef', unit: 'kilogram', stock: 0 },
+  ];
+  const one = buildReturn(sale, { 0: 1 });
+  const deltas = resolveReversalDeltas(one.rows, products, { recipes: true });
+  assert.equal(deltas.bun.total, 1);
+  assert.equal(deltas.beef.total, 0.15);
+  assert.equal(deltas.burger, undefined, 'a dish made to order has no stock of its own');
+});

@@ -196,10 +196,28 @@ test('10. Expenses exclude supplier payments and stock purchases to prevent doub
     { id: 'e1', category: 'Rent', amount: 15000, paymentMethod: 'Cash' },
     { id: 'e2', category: 'Electricity', amount: 2500, paymentMethod: 'M-Pesa' },
     { id: 'e3', category: 'Supplier Payment', description: 'Supplier payment to Alpha', amount: 6000, paymentMethod: 'Cash' },
-    { id: 'e4', category: 'Other', description: 'Stock Purchase direct', amount: 4000, paymentMethod: 'Cash' },
+    { id: 'e4', category: 'Stock Purchase', description: 'Direct', amount: 4000, paymentMethod: 'Cash' },
   ];
   const summary = computeFinancials({ expenses });
   assert.equal(summary.totalExpenses, 17500);
   assert.equal(summary.totalExpensesCash, 15000);
   assert.equal(summary.totalExpensesMpesa, 2500);
+});
+
+test('10b. A real expense whose DESCRIPTION mentions a stock purchase is still an expense', () => {
+  const expenses = [
+    { id: 'e1', category: 'Transport', description: 'Taxi for stock purchase', amount: 200, paymentMethod: 'Cash' },
+    { id: 'e2', category: 'Other', description: 'Bank fee on supplier payment', amount: 50, paymentMethod: 'M-Pesa' },
+  ];
+  const summary = computeFinancials({ expenses });
+  assert.equal(summary.totalExpenses, 250);
+  assert.equal(summary.totalExpensesCash, 200);
+  assert.equal(summary.netProfit, -250);
+});
+test('10c. A supplier paid more than it is owed is shown as in credit, not hidden', () => {
+  const purchases = [{ supplierId: 'a', paymentStatus: 'pending_supplier_credit', totalCost: 1000 }];
+  const payments = [{ supplierId: 'a', amount: 700 }, { supplierId: 'a', amount: 700 }];
+  assert.equal(computeSupplierBalances(purchases, payments).length, 0, 'the owed list stays owed-only');
+  const all = computeSupplierBalances(purchases, payments, [], { includeCredits: true });
+  assert.equal(all[0].balance, -400);
 });

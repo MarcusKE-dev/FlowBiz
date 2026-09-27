@@ -53,6 +53,11 @@ export function saleLineItems(sale) {
     lineTotal: Number(sale.totalAmount) || 0,
     lineCost: Number(sale.costOfGoodsSold) || 0,
     unit: sale.unit,
+    // What the sale recorded moving, carried so a reversal of a one-line
+    // sale puts back exactly what the sale took.
+    ...(sale.variantId ? { variantId: sale.variantId } : {}),
+    ...(Array.isArray(sale.batchAllocations) ? { batchAllocations: sale.batchAllocations } : {}),
+    ...(Array.isArray(sale.componentUsage) ? { componentUsage: sale.componentUsage } : {}),
   }];
 }
 
@@ -123,17 +128,30 @@ export function returnState(sale) {
  * than refused, so a fat-fingered box can never refund more than was
  * paid or restore more stock than left the shop.
  *
- * The money is worked out from the line's OWN unit price and cost, not
- * from a proportion of the sale total. A three-line sale where one line
- * is returned must refund that line's price exactly, and reverse that
- * line's cost exactly — proportioning would be wrong the moment the lines
- * have different margins, which is every sale in a real shop.
+ * THREE RULES about the money, each of which used to be broken:
+ *
+ *   A LINE REFUNDS WHAT WAS PAID FOR IT, not its shelf price. A sale
+ *   negotiated from 1,000 down to 800 refunds 800 when fully returned.
+ *   The paid figure is the line's `netLineTotal` when the sale recorded
+ *   one, and otherwise the line's share of the sale's collected total —
+ *   which, for every sale that was never discounted, is its line total.
+ *
+ *   REFUNDS ARE CUMULATIVE, NOT PER-RETURN. Each return refunds
+ *   `paid × returnedSoFar/sold − paid × returnedBefore/sold`, each term
+ *   rounded, so however many pieces a line is returned in, the pieces add
+ *   up to exactly what was paid for it — never a cent more.
+ *
+ *   COST FOLLOWS THE BOXES. A batched line's allocations are consumed in
+ *   the order they were dispensed, so the Nth unit returned goes back to
+ *   the batch the Nth unit came from — a second partial return no longer
+ *   restores the first batch again — and its cost is that batch's cost.
  */
 export function buildReturn(sale, quantities) {
   const lines = returnableLines(sale);
   const rows = [];
   const items = [];
   const returnedQuantities = { ...alreadyReturned(sale) };
+  const paid = paidLineTotals(sale);
   let amount = 0;
   let costOfGoodsSold = 0;
 
@@ -142,23 +160,49 @@ export function buildReturn(sale, quantities) {
     const quantity = roundQuantity(Math.min(Math.max(0, asked), line.returnable), line.unit);
     if (quantity <= 0) continue;
 
-    const unitPrice = Number(line.item.unitPrice) || 0;
-    const unitCost = Number(line.item.costPrice) || 0;
-    const lineTotal = roundMoney(quantity * unitPrice);
-    const lineCost = roundMoney(quantity * unitCost);
+    const from = line.already;
+    const to = roundQuantity(line.already + quantity, line.unit);
+    const sold = line.sold;
 
-    // What the inventory engine reverses. The batch allocations ride
-    // along so a partial return of a batched line goes back to the very
-    // boxes it came out of — scaled to the quantity actually returned,
-    // earliest batch first, which is the order it was taken in.
-    rows.push({
+    const linePaid = paid[line.index];
+    const lineTotal = roundMoney(
+      cumulativeShare(linePaid, to, sold) - cumulativeShare(linePaid, from, sold)
+    );
+
+    const allocations = Array.isArray(line.item.batchAllocations) && line.item.batchAllocations.length > 0
+      ? line.item.batchAllocations
+      : null;
+    const lineCost = allocations
+      ? roundMoney(
+        allocationCostUpTo(allocations, to, line.unit, line.item.costPrice)
+        - allocationCostUpTo(allocations, from, line.unit, line.item.costPrice)
+      )
+      : roundMoney(
+        cumulativeShare(lineCostOf(line.item), to, sold) - cumulativeShare(lineCostOf(line.item), from, sold)
+      );
+
+    const unitPrice = Number(line.item.unitPrice) || 0;
+    const unitCost = quantity > 0 ? roundMoney(lineCost / quantity) : 0;
+
+    // What the inventory engine reverses: the right slice of the batches,
+    // and the right slice of the ingredients this line recorded using.
+    const row = {
       productId: line.item.productId,
       productName: line.item.productName,
       quantity,
       variantId: line.item.variantId,
       unit: line.item.unit,
-      batchAllocations: scaleAllocations(line.item.batchAllocations, quantity, line.unit),
-    });
+      batchAllocations: allocations ? sliceAllocations(allocations, from, to, line.unit) : undefined,
+    };
+    if (Array.isArray(line.item.componentUsage)) {
+      row.componentUsage = scaleUsage(line.item.componentUsage, { sold, from, to });
+    } else if (Array.isArray(line.item.modifiers)) {
+      // A line sold before usage was recorded is reversed against the
+      // current recipe — and its modifiers have to ride along, or the
+      // extra shot of espresso is never put back.
+      row.modifiers = line.item.modifiers;
+    }
+    rows.push(row);
 
     items.push({
       productId: line.item.productId,
@@ -172,7 +216,7 @@ export function buildReturn(sale, quantities) {
       ...(line.item.variantId ? { variantId: line.item.variantId, variantLabel: line.item.variantLabel } : {}),
     });
 
-    returnedQuantities[line.index] = roundQuantity(line.already + quantity, line.unit);
+    returnedQuantities[line.index] = to;
     amount = roundMoney(amount + lineTotal);
     costOfGoodsSold = roundMoney(costOfGoodsSold + lineCost);
   }
@@ -188,26 +232,109 @@ export function buildReturn(sale, quantities) {
 }
 
 /**
- * Spread a partial return across the batches the line was taken from,
- * earliest first — the same order FEFO dispensed them in, so returning
- * two of five puts them back where the first two came from.
+ * What each line of a sale actually brought in, by index.
  *
- * Returns null when the line had no batch allocation, which is every line
- * in a shop that does not track batches.
+ * A line with `netLineTotal` says so itself. For an older sale whose
+ * total was edited at checkout, the lines are allocated the collected
+ * total in proportion to their list totals, the last line taking the
+ * rounding residual — the same rule allocateSaleTotal() now applies at the
+ * moment of sale — so the shares always add up to what was collected.
  */
-function scaleAllocations(allocations, quantity, unit) {
-  if (!Array.isArray(allocations) || allocations.length === 0) return undefined;
-  const out = [];
-  let remaining = roundQuantity(quantity, unit);
+export function paidLineTotals(sale) {
+  const items = saleLineItems(sale);
+  if (items.some((item) => Number.isFinite(Number(item?.netLineTotal)))) {
+    return items.map((item) => lineNetTotal(item));
+  }
+  const list = roundMoney(items.reduce((sum, item) => sum + lineListTotal(item), 0));
+  const collected = Number(sale?.totalAmount);
+  if (!Number.isFinite(collected) || Math.abs(collected - list) < 0.005) {
+    return items.map((item) => lineListTotal(item));
+  }
+  let assigned = 0;
+  return items.map((item, index) => {
+    const share = index === items.length - 1
+      ? roundMoney(collected - assigned)
+      : roundMoney(list > 0 ? (lineListTotal(item) / list) * collected : collected / items.length);
+    assigned = roundMoney(assigned + share);
+    return share;
+  });
+}
+
+function lineListTotal(item) {
+  const stated = Number(item?.lineTotal);
+  if (Number.isFinite(stated)) return stated;
+  return roundMoney((Number(item?.quantity) || 0) * (Number(item?.unitPrice) || 0));
+}
+
+function lineNetTotal(item) {
+  const net = Number(item?.netLineTotal);
+  return Number.isFinite(net) ? net : lineListTotal(item);
+}
+
+function lineCostOf(item) {
+  const stated = Number(item?.lineCost);
+  if (Number.isFinite(stated)) return stated;
+  return (Number(item?.costPrice) || 0) * (Number(item?.quantity) || 0);
+}
+
+/** `whole × part/sold`, rounded as money; exactly `whole` when part = sold. */
+function cumulativeShare(whole, part, sold) {
+  const total = Number(whole) || 0;
+  if (!(sold > 0) || part <= 0) return 0;
+  if (part >= sold) return roundMoney(total);
+  return roundMoney((total * part) / sold);
+}
+
+/**
+ * The cost of the first `upTo` units taken across the allocations. Units
+ * beyond what the batches covered — a line sold while batch records were
+ * incomplete — carry the line's own cost, not zero.
+ */
+function allocationCostUpTo(allocations, upTo, unit, fallbackCost = 0) {
+  let remaining = roundQuantity(upTo, unit);
+  let cost = 0;
   for (const allocation of allocations) {
     if (remaining <= 0) break;
     const available = roundQuantity(Number(allocation?.quantity) || 0, unit);
     if (available <= 0) continue;
-    const take = roundQuantity(Math.min(available, remaining), unit);
-    out.push({ ...allocation, quantity: take });
+    const take = Math.min(available, remaining);
+    cost += take * (Number(allocation?.costPrice) || 0);
     remaining = roundQuantity(remaining - take, unit);
   }
+  if (remaining > 0) cost += remaining * (Number(fallbackCost) || 0);
+  return roundMoney(cost);
+}
+
+/**
+ * The units `from`..`to` of a line, located in the batches they came out
+ * of, in dispensing order. Returning units 3–4 of a line that took two
+ * from batch A and two from batch B returns them to B.
+ */
+function sliceAllocations(allocations, from, to, unit) {
+  const out = [];
+  let cursor = 0;
+  for (const allocation of allocations) {
+    const size = roundQuantity(Number(allocation?.quantity) || 0, unit);
+    if (size <= 0) continue;
+    const start = cursor;
+    const end = roundQuantity(cursor + size, unit);
+    cursor = end;
+    const take = roundQuantity(Math.min(end, to) - Math.max(start, from), unit);
+    if (take > 0) out.push({ ...allocation, quantity: take });
+  }
   return out.length > 0 ? out : undefined;
+}
+
+function scaleUsage(usage, { sold, from, to }) {
+  if (!(sold > 0)) return [];
+  const round3 = (v) => Math.round(((Number(v) || 0) + 1e-9) * 1000) / 1000;
+  return usage
+    .map((use) => {
+      const whole = Number(use?.quantity) || 0;
+      const at = (part) => (part >= sold ? round3(whole) : round3((whole * part) / sold));
+      return { productId: use.productId, quantity: round3(at(to) - at(from)) };
+    })
+    .filter((use) => use.quantity !== 0);
 }
 
 /**

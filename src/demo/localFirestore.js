@@ -156,13 +156,27 @@ function publish(names) {
 
 function isSentinel(v, kind) { return !!v && typeof v === 'object' && v.__sentinel === kind; }
 
-function resolveWriteData(data, base) {
+// A DOTTED KEY IS A PATH, as it is in Firestore: `variantStock.black__m`
+// updates one entry inside the `variantStock` map. It used to be stored as
+// a literal key with a dot in it, so in demo mode a sale of a size never
+// moved that size's quantity and every version showed its opening stock.
+function resolveWriteData(data, base, { paths = false } = {}) {
   const out = base ? { ...base } : {};
-  Object.entries(data).forEach(([k, v]) => {
-    if (isSentinel(v, 'serverTimestamp')) out[k] = makeTimestamp(Date.now());
-    else if (isSentinel(v, 'increment')) out[k] = (typeof out[k] === 'number' ? out[k] : 0) + v.n;
-    else if (isSentinel(v, 'deleteField')) delete out[k];
-    else out[k] = v;
+  Object.entries(data).forEach(([key, v]) => {
+    // Only an UPDATE reads a dot as a path; a set stores the key as given.
+    const path = paths ? key.split('.') : [key];
+    let target = out;
+    for (const part of path.slice(0, -1)) {
+      target[part] = target[part] && typeof target[part] === 'object' && !Array.isArray(target[part])
+        ? { ...target[part] }
+        : {};
+      target = target[part];
+    }
+    const k = path[path.length - 1];
+    if (isSentinel(v, 'serverTimestamp')) target[k] = makeTimestamp(Date.now());
+    else if (isSentinel(v, 'increment')) target[k] = (typeof target[k] === 'number' ? target[k] : 0) + v.n;
+    else if (isSentinel(v, 'deleteField')) delete target[k];
+    else target[k] = v;
   });
   return out;
 }
@@ -263,7 +277,7 @@ export async function setDoc(ref, data, opts) {
 export async function updateDoc(ref, data) {
   const existing = getRaw(ref.name, ref.id);
   if (!existing) throw new Error(`[demo] No document to update at ${ref.name}/${ref.id}`);
-  writeRaw(ref.name, ref.id, resolveWriteData(data, existing));
+  writeRaw(ref.name, ref.id, resolveWriteData(data, existing, { paths: true }));
   publish([ref.name]);
 }
 export async function deleteDoc(ref) {
@@ -313,7 +327,7 @@ export function writeBatch() {
           writeRaw(op.ref.name, op.ref.id, resolveWriteData(op.data, base));
         } else if (op.type === 'update') {
           const existing = getRaw(op.ref.name, op.ref.id) || {};
-          writeRaw(op.ref.name, op.ref.id, resolveWriteData(op.data, existing));
+          writeRaw(op.ref.name, op.ref.id, resolveWriteData(op.data, existing, { paths: true }));
         } else if (op.type === 'delete') {
           deleteRaw(op.ref.name, op.ref.id);
         }
@@ -335,7 +349,7 @@ export async function runTransaction(_db, updateFn) {
     },
     update(ref, data) {
       const existing = getRaw(ref.name, ref.id) || {};
-      writeRaw(ref.name, ref.id, resolveWriteData(data, existing));
+      writeRaw(ref.name, ref.id, resolveWriteData(data, existing, { paths: true }));
       touched.add(ref.name);
     },
     delete(ref) { deleteRaw(ref.name, ref.id); touched.add(ref.name); },

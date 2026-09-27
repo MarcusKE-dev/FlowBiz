@@ -31,8 +31,20 @@ import { stockWriteOps } from './inventory';
  * the void and return paths, where a product that has since been deleted
  * must be skipped rather than resurrected by an update to a missing
  * document.
+ *
+ * `movement` — `{ kind, id }`, the document that CAUSED this movement
+ * (`sales/abc`, `waste/xyz`), written in the same batch. It is stamped on
+ * every product and batch this touches as `lastMovement`, and
+ * firestore.rules refuses a staff member's stock change that does not
+ * name a movement document created in the very same commit. Stock no
+ * longer changes because somebody typed a number; it changes because a
+ * sale, a return, a delivery, a count or a waste record says so.
  */
-export function applyStockDeltas(batch, deltas, { only = null, productFields = null } = {}) {
+export function stockMovement(kind, id) {
+  return { kind, id };
+}
+
+export function applyStockDeltas(batch, deltas, { only = null, productFields = null, movement = null } = {}) {
   const allowed = only ? new Set(only) : null;
   const written = new Set();
 
@@ -42,6 +54,7 @@ export function applyStockDeltas(batch, deltas, { only = null, productFields = n
     // credited for stock the product document never got back.
     if (allowed && !allowed.has(op.productId ?? op.id)) continue;
     const update = { updatedAt: serverTimestamp() };
+    if (movement) update.lastMovement = movement;
     for (const [field, value] of Object.entries(op.fields)) {
       // A dotted path updates one key inside a map without rewriting the
       // rest of it, which is what makes two tills selling two different
@@ -65,6 +78,10 @@ export function applyStockDeltas(batch, deltas, { only = null, productFields = n
   for (const [productId, fields] of Object.entries(productFields || {})) {
     if (written.has(productId)) continue;
     if (allowed && !allowed.has(productId)) continue;
-    batch.update(doc(db, 'products', productId), { ...fields, updatedAt: serverTimestamp() });
+    batch.update(doc(db, 'products', productId), {
+      ...fields,
+      ...(movement ? { lastMovement: movement } : {}),
+      updatedAt: serverTimestamp(),
+    });
   }
 }

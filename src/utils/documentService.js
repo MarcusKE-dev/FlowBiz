@@ -198,6 +198,24 @@ async function buildDocument(data, settings, typeLabel) {
   drawDivider(y);
   y += 4.5;
 
+  // WHAT TURNS THE LINES INTO THE TOTAL. A total negotiated at checkout, a
+  // discount on a bill or a service charge made the printed lines add up
+  // to something other than the total beneath them, with nothing on the
+  // receipt to say why. Each one that applies is printed as its own row.
+  const adjustments = [
+    Number(data.discountAmount) > 0 ? ['DISCOUNT:', -Number(data.discountAmount)] : null,
+    Number(data.priceAdjustment) > 0 ? ['PRICE ADJUSTMENT:', Number(data.priceAdjustment)] : null,
+    Number(data.serviceChargeAmount) > 0 ? ['SERVICE CHARGE:', Number(data.serviceChargeAmount)] : null,
+  ].filter(Boolean);
+  for (const [label, amount] of adjustments) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(...PDF.ink2);
+    doc.text(label, marginX, y);
+    doc.text(`${amount < 0 ? '- ' : '+ '}${formatPdfMoney(Math.abs(amount))}`, pageWidth, y, { align: 'right' });
+    y += 4.5;
+  }
+
   if (data.isCredit) {
     drawRule(y - 3);
     doc.setFont('helvetica', 'normal');

@@ -31,6 +31,31 @@
 // connectivity. Treating it as evidence is what produced the "saved
 // offline" toast on a perfectly good connection.
 
+// A REJECTION THAT ARRIVES AFTER THE UI MOVED ON. Once this helper has
+// resolved as `pending`, the caller has shown its success message and
+// usually cleared its form — so if the server later refuses the write,
+// nobody is waiting on the promise any more. Callers used to attach their
+// own `.catch` only when `queuedOffline` was true, which left the
+// slow-but-online case (the timeout fired, the device never went offline)
+// with a receipt for a sale that was then silently refused.
+//
+// Every pending write now reports a late rejection through ONE handler,
+// registered by the app shell, with the caller's `label` so the message
+// can say WHAT was not saved.
+let lateRejectionHandler = null;
+
+export function setLateRejectionHandler(handler) {
+  lateRejectionHandler = typeof handler === 'function' ? handler : null;
+}
+
+function reportLate(err, label) {
+  try {
+    if (lateRejectionHandler) lateRejectionHandler(err, label);
+  } catch {
+    // A broken reporter must never turn into an unhandled rejection.
+  }
+}
+
 const MIN_TIMEOUT_MS = 1000;
 const MAX_TIMEOUT_MS = 15000;
 
@@ -38,7 +63,7 @@ function isOffline() {
   return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
 
-export function raceWithTimeout(promise, timeoutMs = 4000) {
+export function raceWithTimeout(promise, timeoutMs = 4000, { label = null } = {}) {
   // A non-number (or NaN) is a caller mistake and falls back to the
   // default; a real number is clamped rather than rejected, so no caller
   // can hang the UI forever or skip the wait entirely.
@@ -53,7 +78,7 @@ export function raceWithTimeout(promise, timeoutMs = 4000) {
     // every offline action with a fixed stall.
     if (isOffline()) {
       resolve({ queuedOffline: true, pending: true });
-      promise.catch(() => {}); // still observed, just not blocking anything
+      promise.catch((err) => reportLate(err, label));
       return;
     }
 
@@ -76,7 +101,12 @@ export function raceWithTimeout(promise, timeoutMs = 4000) {
       },
       (err) => {
         clearTimeout(timer);
-        if (settled) return;
+        if (settled) {
+          // Already reported to the caller as pending: this refusal is
+          // news nobody is waiting for, so it goes to the one handler.
+          reportLate(err, label);
+          return;
+        }
         settled = true;
         resolve({ queuedOffline: false, pending: false, error: err });
       }

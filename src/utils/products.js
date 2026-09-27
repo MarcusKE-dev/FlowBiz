@@ -1,4 +1,4 @@
-import { collection, doc, writeBatch, updateDoc, deleteField, serverTimestamp, getDoc, setDoc } from 'firebase/firestore';
+import { collection, doc, writeBatch, updateDoc, deleteField, serverTimestamp, getDoc, setDoc, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 import { raceWithTimeout } from './offlineWrite';
 import { PRODUCT_IMAGES, productImageDocId, forgetProductImage } from './productImages';
@@ -40,7 +40,12 @@ export async function createProduct(data, businessId) {
   if (!businessId) throw new Error('createProduct() called with no businessId');
   const barcode = data.barcode ? String(data.barcode).trim() : null;
   const newProductRef = doc(collection(db, 'products'));
-  const internalCode = `FB-${Math.floor(Date.now() / 1000).toString().slice(-6)}`;
+  // Derived from the document's own random id rather than the clock. The
+  // last six digits of the current second gave two products created in
+  // the same second — an import, a fast owner, two tills — the SAME code,
+  // and a scan of it sold whichever the catalogue listed first. The id is
+  // minted on the device, so this stays unique offline too.
+  const internalCode = internalCodeFor(newProductRef.id);
 
   const batch = writeBatch(db);
   batch.set(newProductRef, {
@@ -63,12 +68,29 @@ export async function createProduct(data, businessId) {
   return { id: newProductRef.id, queuedOffline };
 }
 
+/** A product's internal scan code: FB- and eight characters of its id. */
+export function internalCodeFor(productId) {
+  const cleaned = String(productId || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  return `FB-${cleaned.slice(0, 8).padEnd(8, '0')}`;
+}
+
 export async function updateProduct(productId, data, previousBarcode, businessId) {
   if (!businessId) throw new Error('updateProduct() called with no businessId');
   const nextBarcode = data.barcode ? String(data.barcode).trim() : null;
   const prevBarcode = previousBarcode ? String(previousBarcode).trim() : null;
   const productRef = doc(db, 'products', productId);
-  const { stock, businessId: _ignored, ...updatePayload } = data;
+  const { stock, variantStock, businessId: _ignored, ...updatePayload } = data;
+
+  // QUANTITIES ARE NOT A CATALOGUE EDIT. `stock` was already dropped here;
+  // `variantStock` was not, so saving a name change from an editor opened
+  // before a sale wrote the editor's stale map back over it — the size
+  // sold on another till reappeared on the shelf while the product total
+  // still said it had gone. Each version is now written as increment(0):
+  // a version that does not exist yet is created at zero, and one that
+  // does is left exactly as the sales, purchases and counts left it.
+  for (const variantId of Object.keys(variantStock || {})) {
+    updatePayload[`variantStock.${variantId}`] = increment(0);
+  }
 
   const batch = writeBatch(db);
   batch.update(productRef, { ...updatePayload, barcode: nextBarcode || null, updatedAt: serverTimestamp() });

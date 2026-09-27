@@ -106,7 +106,9 @@ export const PROFILES = {
     label: 'Supermarket',
     family: 'RETAIL',
     tagline: 'High item counts, fast barcode checkout, tight stock control.',
-    capabilities: { barcodeLabels: true, units: true },
+    // Waste on: a supermarket bins more produce than most kitchens, and a
+    // stock-take correction is not where spoilage belongs.
+    capabilities: { barcodeLabels: true, units: true, waste: true },
     terms: {},
     units: [DEFAULT_UNIT, 'kilogram', 'gram', 'litre', 'millilitre', 'box', 'carton'],
     categories: [
@@ -217,7 +219,9 @@ export const PROFILES = {
     capabilities: {
       orders: true, tables: true, modifiers: true, diningModes: true,
       kitchen: true, kitchenStations: true, courses: true, recipes: true,
-      waste: true,
+      // Units on, because recipes are: a burger uses 150 g of beef and
+      // 20 g of sauce, and with units off every ingredient was a piece.
+      units: true, waste: true,
     },
     terms: {
       catalogue: 'Menu',
@@ -241,7 +245,7 @@ export const PROFILES = {
     tagline: 'Counter service with modifiers, and tables when you want them.',
     capabilities: {
       orders: true, tables: false, modifiers: true, diningModes: true,
-      kitchen: true, kitchenStations: true, recipes: true, waste: true,
+      kitchen: true, kitchenStations: true, recipes: true, units: true, waste: true,
     },
     terms: {
       catalogue: 'Menu',
@@ -287,7 +291,14 @@ export const PROFILES = {
     label: 'Bakery',
     family: 'FOOD',
     tagline: 'Bake in advance: ingredients out, finished goods in.',
-    capabilities: { recipes: true, production: true, units: true, waste: true },
+    // Orders for the cake ordered on Tuesday for Saturday; batches and
+    // expiry alerts because bread made on Monday is not Thursday's bread —
+    // a production run of an item with a shelf life creates a dated batch,
+    // and the till sells the oldest first.
+    capabilities: {
+      recipes: true, production: true, units: true, waste: true,
+      orders: true, batches: true, expiryAlerts: true,
+    },
     terms: {
       catalogueDescription: 'Ingredients and finished goods, what they cost and what is left.',
     },

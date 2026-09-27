@@ -37,7 +37,10 @@
 
 import { roundMoney } from '../../utils/currency.js';
 import { roundQuantity, DEFAULT_UNIT } from '../../industry/units.js';
-import { isRecipeItem, isProducedInAdvance } from '../../utils/inventory.js';
+import {
+  isRecipeItem, isProducedInAdvance, resolveStockDeltas, validateComponentStock, recipeProblem,
+  mergeDeltas, roundComponent,
+} from '../../utils/inventory.js';
 import { recipeYieldOf, recipeUnitCost } from './costing.js';
 import { todayISO, isValidExpiryDate } from '../../utils/batches.js';
 
@@ -115,14 +118,24 @@ export function planProduction(product, products, {
     const componentProduct = byId.get(line?.componentId);
     const componentUnit = componentProduct?.unit || line?.unit || DEFAULT_UNIT;
     // Consumption follows the PLAN: the full recipe went in, whatever
-    // came out of the oven.
-    const needed = roundQuantity(plannedQuantity * perUnit, componentUnit);
-    const available = roundQuantity(Number(componentProduct?.stock) || 0, componentUnit);
+    // came out of the oven. Tracked to component precision, so half an
+    // egg per loaf is half an egg, not zero.
+    const needed = roundComponent(plannedQuantity * perUnit);
+    // A component MADE TO ORDER — a dough with no stock of its own — is
+    // consumed through its own recipe, down to the flour. Checking or
+    // deducting the dough's own stock number moved a figure nobody keeps.
+    const nested = Boolean(componentProduct) && isRecipeItem(componentProduct) && !isProducedInAdvance(componentProduct);
+    const available = nested ? null : roundComponent(Number(componentProduct?.stock) || 0);
     const unitCost = componentProduct
-      ? (isRecipeItem(componentProduct) && !isProducedInAdvance(componentProduct)
+      ? (nested
           ? recipeUnitCost(componentProduct, products).cost
           : Math.max(0, Number(componentProduct.costPrice) || 0))
       : 0;
+    const short = !componentProduct
+      ? false
+      : nested
+        ? validateComponentStock([{ productId: componentProduct.id, quantity: needed }], products, { recipes: true }) !== null
+        : needed > available;
     componentCost += needed * unitCost;
     components.push({
       componentId: line.componentId,
@@ -130,10 +143,11 @@ export function planProduction(product, products, {
       unit: componentUnit,
       quantity: needed,
       available,
+      nested,
       unitCost: roundMoney(unitCost),
       lineCost: roundMoney(needed * unitCost),
-      missing: !componentProduct,
-      short: Boolean(componentProduct) && needed > available,
+      missing: !componentProduct || componentProduct.deleted === true,
+      short,
     });
   }
 
@@ -159,6 +173,9 @@ export function planProduction(product, products, {
     shortYieldCost: yieldVariance < 0 ? roundMoney(-yieldVariance * unitCost) : 0,
     shortfall: components.some((c) => c.short),
     missing: components.some((c) => c.missing),
+    // Missing ingredients, a circular recipe, or one nested too deep: a
+    // run that cannot be costed or consumed honestly is not recorded.
+    problem: product ? recipeProblem(product, products) : null,
     expiryDate: expiryFromShelfLife(product, { producedOn }),
   };
 }
@@ -173,7 +190,7 @@ export function planProduction(product, products, {
  * goes through the identical writer, so there is still one answer to how
  * stock is written.
  */
-export function productionDeltas(plan) {
+export function productionDeltas(plan, products = []) {
   const deltas = {};
   // NOTHING IS PRODUCED THAT IS NOT MADE. A product with no recipe has
   // nothing to consume, so adding to its stock here would create it out
@@ -181,14 +198,32 @@ export function productionDeltas(plan) {
   // has no stock, and the reason the one inventory foundation refuses
   // that too. The screen only offers producible items; this is the guard
   // on the WRITE, which is where it has to be.
-  if (!plan?.product || plan.quantity <= 0 || !isProducible(plan.product)) return deltas;
+  //
+  // NOR IS ANYTHING PRODUCED FROM INGREDIENTS THAT DO NOT EXIST. A run
+  // with a missing component used to add twenty finished loaves and take
+  // nothing for the missing flour, at a computed cost of zero.
+  if (!plan?.product || !isProducible(plan.product)) return deltas;
+  if (plan.missing || plan.problem) return deltas;
+  if (plan.plannedQuantity <= 0 && plan.quantity <= 0) return deltas;
 
-  deltas[plan.product.id] = { total: plan.quantity, variants: {}, batches: {} };
+  // A batch that came out at NOTHING still used its ingredients. It adds
+  // no finished goods, but the flour is gone all the same.
+  if (plan.quantity > 0) deltas[plan.product.id] = { total: plan.quantity, variants: {}, batches: {} };
 
   for (const component of plan.components) {
     if (component.missing || component.quantity <= 0) continue;
+    if (component.nested) {
+      // Down through the component's own recipe, exactly as a sale of it
+      // would consume it.
+      mergeDeltas(deltas, resolveStockDeltas(
+        [{ productId: component.componentId, quantity: component.quantity }],
+        products,
+        { recipes: true }
+      ));
+      continue;
+    }
     const existing = deltas[component.componentId] || { total: 0, variants: {}, batches: {} };
-    existing.total = roundQuantity(existing.total - component.quantity, component.unit);
+    existing.total = roundComponent(existing.total - component.quantity);
     deltas[component.componentId] = existing;
   }
   return deltas;

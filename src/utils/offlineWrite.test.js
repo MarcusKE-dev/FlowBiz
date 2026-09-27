@@ -116,3 +116,58 @@ test('a write that settles after the timeout cannot resolve the result twice', (
     await new Promise((r) => setTimeout(r, 20));
     assert.equal(result.value, undefined, 'the already-returned result must not mutate');
   }));
+
+// ── A late refusal of a write already reported as pending (H15) ────────
+
+import { setLateRejectionHandler } from './offlineWrite.js';
+
+test('a SLOW-ONLINE write refused after the timeout is still reported, with its label', async () => {
+  const seen = [];
+  setLateRejectionHandler((err, label) => seen.push([err.message, label]));
+  try {
+    await withOnline(true, async () => {
+      let reject;
+      const write = new Promise((_, r) => { reject = r; });
+      const result = await raceWithTimeout(write, 1000, { label: 'A sale' });
+      assert.equal(result.pending, true);
+      assert.equal(result.queuedOffline, false, 'still online: not "saved offline"');
+      reject(new Error('permission-denied'));
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    assert.deepEqual(seen, [['permission-denied', 'A sale']]);
+  } finally {
+    setLateRejectionHandler(null);
+  }
+});
+
+test('an OFFLINE write refused on reconnect is reported too', async () => {
+  const seen = [];
+  setLateRejectionHandler((err, label) => seen.push(label));
+  try {
+    await withOnline(false, async () => {
+      let reject;
+      const write = new Promise((_, r) => { reject = r; });
+      const result = await raceWithTimeout(write, 1000, { label: 'A return' });
+      assert.equal(result.queuedOffline, true);
+      reject(new Error('rejected'));
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    assert.deepEqual(seen, ['A return']);
+  } finally {
+    setLateRejectionHandler(null);
+  }
+});
+
+test('a rejection the caller was waiting for is NOT also reported late', async () => {
+  const seen = [];
+  setLateRejectionHandler(() => seen.push('late'));
+  try {
+    await withOnline(true, async () => {
+      const result = await raceWithTimeout(Promise.reject(new Error('no')), 1000, { label: 'x' });
+      assert.equal(result.error.message, 'no');
+    });
+    assert.deepEqual(seen, []);
+  } finally {
+    setLateRejectionHandler(null);
+  }
+});

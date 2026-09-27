@@ -93,3 +93,25 @@ test('findProductByCode still matches barcode and internal code', () => {
   assert.equal(findProductByCode(catalogue, 'fb-000002')?.id, 'p2');
   assert.equal(findProductByCode(catalogue, 'nothing')?.id, undefined);
 });
+
+// ── Two products, one code (M08) ─────────────────────────────────────
+
+import { findProductsByCode, ambiguousScanMessage } from './scannerService.js';
+
+test('a code two products share is reported, never silently resolved to the first', () => {
+  const products = [
+    { id: 'a', name: 'Sugar 1kg', barcode: '6001' },
+    { id: 'b', name: 'Salt 1kg', barcode: '6001' },
+  ];
+  assert.equal(findProductsByCode(products, '6001').length, 2);
+  assert.match(ambiguousScanMessage(products, '6001'), /more than one product/);
+});
+
+test('an archived duplicate does not make a scan ambiguous', () => {
+  const products = [
+    { id: 'a', name: 'Sugar', barcode: '6001' },
+    { id: 'b', name: 'Old sugar', barcode: '6001', deleted: true },
+  ];
+  assert.equal(ambiguousScanMessage(products, '6001'), null);
+  assert.equal(findProductsByCode(products, '6001')[0].id, 'a');
+});

@@ -110,6 +110,14 @@ export function buildLineItem(row) {
   if (row?.basePrice !== undefined && Number(row.basePrice) !== unitPrice) {
     item.basePrice = Math.max(0, Number(row.basePrice) || 0);
   }
+  // WHERE A KITCHEN SENDS IT. A coffee goes to the bar and a burger to the
+  // grill; that routing lives on the product, and a ticket line that did
+  // not carry it arrived at the kitchen screen with nowhere to go. Absent
+  // on every line of every business that does not route, so a retail sale
+  // is unchanged.
+  if (row?.station) item.station = String(row.station).slice(0, 32);
+  if (row?.kitchenName) item.kitchenName = String(row.kitchenName).slice(0, 64);
+  if (row?.routable === false) item.routable = false;
   return item;
 }
 
@@ -163,6 +171,43 @@ export function applySalePriceOverride({ totalAmount, costOfGoodsSold, finalTota
     costOfGoodsSold: roundMoney(costOfGoodsSold),
     profit: roundMoney(normalizedTotal - roundMoney(costOfGoodsSold)),
   };
+}
+
+/**
+ * SPREAD A NEGOTIATED TOTAL ACROSS THE LINES THAT MADE IT.
+ *
+ * A checkout that settles 1,000 of goods for 800 used to change the sale
+ * total and nothing else, so every line still claimed its full price. A
+ * later return of that line refunded 1,000 for goods the customer paid
+ * 800 for, and every line-based report disagreed with the till.
+ *
+ * Each line gets `netLineTotal` — its share of what was actually
+ * collected, in proportion to its list total, with the last line taking
+ * the rounding residual so the shares add up to the sale total exactly.
+ * `lineTotal` is left alone: it is the price that was on the shelf, and a
+ * receipt still shows it. When the total was not changed, nothing is
+ * added and the lines are returned untouched.
+ */
+export function allocateSaleTotal(lineItems, totalAmount) {
+  const lines = lineItems || [];
+  const list = sumLineTotals(lines);
+  const target = roundMoney(totalAmount);
+  if (lines.length === 0 || Math.abs(target - list) < 0.005) return lines;
+  let assigned = 0;
+  return lines.map((item, index) => {
+    const own = Number(item?.lineTotal) || 0;
+    const share = index === lines.length - 1
+      ? roundMoney(target - assigned)
+      : roundMoney(list > 0 ? (own / list) * target : target / lines.length);
+    assigned = roundMoney(assigned + share);
+    return { ...item, netLineTotal: share };
+  });
+}
+
+/** What a line actually brought in: its share of the total if one was set. */
+export function lineNetTotal(item) {
+  const net = Number(item?.netLineTotal);
+  return Number.isFinite(net) ? net : (Number(item?.lineTotal) || 0);
 }
 
 /**
