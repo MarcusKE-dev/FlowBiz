@@ -151,13 +151,18 @@ export async function verifyAdminAuth(request, env) {
 
   const uid = caller.uid;
   const email = (caller.email || '').toLowerCase().trim();
+  // An email address is proof of nothing until Firebase has verified that
+  // the account holder can read mail sent to it. Without this, anyone who
+  // could register an allow-listed address that had not been claimed yet —
+  // with a password, no inbox required — was bootstrapped SUPER_ADMIN.
+  const emailVerified = caller.claims?.email_verified === true;
 
   // 1. Environment-configured bootstrap admins (the platform owner).
   const adminEmails = (env.ADMIN_EMAILS || '')
     .split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
   const adminUids = (env.ADMIN_UIDS || '')
     .split(',').map((u) => u.trim()).filter(Boolean);
-  const isEnvAdmin = (email && adminEmails.includes(email)) || (uid && adminUids.includes(uid));
+  const isEnvAdmin = (email && emailVerified && adminEmails.includes(email)) || (uid && adminUids.includes(uid));
 
   // 2. Custom claims on the verified token.
   const claimRole = roleFromClaims(caller.claims);

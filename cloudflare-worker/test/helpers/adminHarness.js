@@ -21,11 +21,12 @@ const saKeys = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const publicJwk = idKeys.publicKey.export({ format: 'jwk' });
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
 
-export function mintIdToken({ uid = 'admin-uid', email = 'ops@flowbiz.co.ke', kid = KID, aud = PROJECT } = {}) {
+export function mintIdToken({ uid = 'admin-uid', email = 'ops@flowbiz.co.ke', kid = KID, aud = PROJECT, emailVerified } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid }));
   const payload = b64url(JSON.stringify({
     sub: uid, email, aud,
+    ...(emailVerified === undefined ? {} : { email_verified: emailVerified }),
     iss: `https://securetoken.google.com/${aud}`,
     iat: now - 10, exp: now + 3600,
   }));
