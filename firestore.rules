@@ -229,6 +229,108 @@ service cloud.firestore {
       return invite.claimed == false && invite.businessId == businessId && invite.role == role;
     }
 
+    // ── Business transitions ────────────────────────────────────────────
+    //
+    // THE HOLE THESE CLOSE. Every rule below this used to ask "may this
+    // person write to this collection?" and nothing else. A cashier who
+    // could sell could also set any product's stock to any number, and a
+    // cashier who could collect a debt could rewrite a credit sale's
+    // total, its cost and its balance. Permission to SELL is not
+    // permission to edit the books.
+    //
+    // So a money or stock change now has to arrive WITH the document that
+    // explains it, created in the same commit: a product's stock moves
+    // only alongside the sale, return, delivery, count, waste record or
+    // production run that moved it; a debt goes down only by the amount of
+    // the repayment written beside it. getAfter()/existsAfter() see the
+    // commit as proposed, which is what makes an atomic batch checkable.
+    //
+    // And a document that two devices can race on carries a revision: a
+    // write is accepted only as the NEXT revision after the one the server
+    // holds, so the second of two simultaneous repayments, returns,
+    // ticket saves or stock counts is refused instead of silently
+    // overwriting the first.
+
+    function docAt(collectionName, docId) {
+      return /databases/$(database)/documents/$(collectionName)/$(docId);
+    }
+
+    /** A document that does not exist yet and will once this commit lands. */
+    function createdInThisWrite(collectionName, docId) {
+      return docId is string && docId.size() > 0
+             && !exists(docAt(collectionName, docId))
+             && existsAfter(docAt(collectionName, docId));
+    }
+
+    // A BACKUP BEING RESTORED writes history as it was — voided sales,
+    // paid credit sales, refunds, other staff's sales — which no live
+    // transition would produce. The importer stamps `restoredAt` on every
+    // document it writes, and only an owner may do that.
+    function isRestoreCreate(incoming) {
+      return isOwner() && incoming.get('restoredAt', null) != null;
+    }
+
+    function isRestoreUpdate(existing, incoming) {
+      return isOwner() && affects(existing, incoming, ['restoredAt']);
+    }
+
+    function revisionIsNext(existing, incoming, field) {
+      return incoming.get(field, 0) == existing.get(field, 0) + 1;
+    }
+
+    function approxEqual(a, b) {
+      return math.abs(a - b) < 0.011;
+    }
+
+    // What caused a stock movement: `lastMovement: { kind, id }`, stamped
+    // by utils/stockWrites.js on every product and batch it touches.
+    function freshMovement(incoming) {
+      let m = incoming.get('lastMovement', null);
+      return m is map
+             && m.get('kind', '') in ['sales', 'creditSales', 'refunds', 'waste', 'productions', 'purchases', 'stockAdjustments']
+             && createdInThisWrite(m.get('kind', ''), m.get('id', ''));
+    }
+
+    // A sale, a credit sale or waste can only take stock away; a return or
+    // a delivery can only add it. A production run does both (finished in,
+    // ingredients out) and a count goes either way.
+    function stockDirectionOk(existing, incoming) {
+      let kind = incoming.lastMovement.kind;
+      let before = existing.get('stock', 0);
+      let after = incoming.get('stock', 0);
+      return (kind in ['sales', 'creditSales', 'waste'] && after <= before)
+             || (kind in ['refunds', 'purchases'] && after >= before)
+             || kind in ['productions', 'stockAdjustments'];
+    }
+
+    /** A staff member's stock change, tied to the document that caused it. */
+    function stockMovementOk(existing, incoming) {
+      return onlyAffects(existing, incoming,
+               ['stock', 'variantStock', 'lastMovement', 'updatedAt', 'stockCountRevision', 'costPrice', 'supplierId'])
+             && freshMovement(incoming)
+             && stockDirectionOk(existing, incoming)
+             // Only a delivery or a production run reprices a product.
+             && (!affects(existing, incoming, ['costPrice', 'supplierId'])
+                 || incoming.lastMovement.kind in ['purchases', 'productions'])
+             // A count is a count: it always moves the count revision, and
+             // nothing else may.
+             && ((incoming.lastMovement.kind == 'stockAdjustments')
+                 == affects(existing, incoming, ['stockCountRevision']));
+    }
+
+    /**
+     * A catalogue edit — name, price, category, recipe, versions — which
+     * never touches a quantity. A new version may be ADDED (at zero); an
+     * existing version's quantity may not be changed from a form.
+     */
+    function catalogueEditOk(existing, incoming) {
+      return !affects(existing, incoming, ['stock', 'lastMovement', 'stockCountRevision'])
+             && (!affects(existing, incoming, ['variantStock'])
+                 || (incoming.variantStock is map
+                     && incoming.variantStock.diff(existing.get('variantStock', {})).changedKeys().size() == 0
+                     && incoming.variantStock.diff(existing.get('variantStock', {})).removedKeys().size() == 0));
+    }
+
     // ── Platform Administrative Collections (Locked to Backend Worker) ──
     match /systemAdmins/{adminId} {
       allow read, write: if false; // Accessible only by backend Service Account
@@ -296,10 +398,28 @@ service cloud.firestore {
     // updateProduct() write in the same batch as the product. Whoever may
     // manage the catalogue must be able to write them, or every product
     // save with a barcode fails half-way.
+    //
+    // The index is keyed `{businessId}__{barcode}`, and a key is a claim.
+    // UPDATING one used to check only the INCOMING document, so another
+    // business could overwrite a known key with its own businessId and take
+    // the claim; and any update could point a claimed barcode at a
+    // different product, which is how two products ended up answering to
+    // one scan. An update must now come from the business that holds the
+    // key, and may move the claim only off a product that is gone.
+    function barcodeClaimReleased(data) {
+      let productPath = docAt('products', data.get('productId', 'none'));
+      return !exists(productPath) || get(productPath).data.get('deleted', false) == true;
+    }
+
     match /barcodeIndex/{docId} {
       allow read: if owns(resource.data) && may('catalogue.manage', false);
-      allow create: if owns(request.resource.data) && may('catalogue.manage', false);
-      allow update: if owns(request.resource.data) && may('catalogue.manage', false);
+      allow create: if owns(request.resource.data) && may('catalogue.manage', false)
+                    && docId.split('__')[0] == myBusinessId();
+      allow update: if ownsUpdate(resource.data, request.resource.data) && may('catalogue.manage', false)
+                    && docId.split('__')[0] == myBusinessId()
+                    && (request.resource.data.get('productId', '') == resource.data.get('productId', '')
+                        || barcodeClaimReleased(resource.data)
+                        || isRestoreUpdate(resource.data, request.resource.data));
       allow delete: if isOwner() && owns(resource.data);
     }
 
@@ -550,8 +670,17 @@ service cloud.firestore {
 
     match /businessSettings/{businessId} {
       allow read: if isStaff() && myBusinessId() == businessId;
+      // CREATED BY THE BUSINESS'S OWN FOUNDER, in the sign-up commit, or by
+      // its owner later. Any signed-in account could once create the
+      // settings — permission map included — of a business whose settings
+      // document happened to be missing.
       allow create: if isSignedIn() && request.resource.data.businessId == businessId
-                    && industryConfigOk(request.resource.data);
+                    && industryConfigOk(request.resource.data)
+                    && (
+                      (existsAfter(docAt('businesses', businessId))
+                       && getAfter(docAt('businesses', businessId)).data.get('createdBy', '') == request.auth.uid)
+                      || (isOwner() && myBusinessId() == businessId)
+                    );
       allow update: if isOwner() && myBusinessId() == businessId
                     && industryConfigOk(request.resource.data);
       allow delete: if false;
@@ -689,11 +818,26 @@ service cloud.firestore {
       // below. Without it a Starter business could not store a photo but
       // could still point its product at one — a URL it already had, or
       // somebody else's — and the counter would render it.
+      //
+      // A QUANTITY MOVES ONLY WITH ITS CAUSE — see stockMovementOk() above.
+      // The old allowance let anyone who could sell set any product's stock
+      // to any figure with no sale, no count and no record at all. The
+      // owner is not asked, because the owner IS the books; everyone else
+      // edits the catalogue (with `catalogue.manage`) or moves stock
+      // through a movement document, and never both in one write.
+      //
+      // Two simultaneous stock counts are serialised by
+      // `stockCountRevision` for the owner too: a count applies a
+      // difference, and the same difference applied twice is wrong for
+      // anyone.
       allow update: if ownsUpdate(resource.data, request.resource.data)
         && photoClaimAllowed(resource.data, request.resource.data)
+        && (!affects(resource.data, request.resource.data, ['stockCountRevision'])
+            || revisionIsNext(resource.data, request.resource.data, 'stockCountRevision'))
         && (
-          may('catalogue.manage', false) ||
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'variantStock', 'updatedAt'])
+          isOwner()
+          || (may('catalogue.manage', false) && catalogueEditOk(resource.data, request.resource.data))
+          || stockMovementOk(resource.data, request.resource.data)
         );
       allow delete: if isOwner() && owns(resource.data);
     }
@@ -747,8 +891,42 @@ service cloud.firestore {
     match /suppliers/{id} {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data) && may('stock.suppliers', false);
-      allow update: if ownsUpdate(resource.data, request.resource.data) && may('stock.suppliers', false);
+      // A payment moves the supplier's `paymentRevision` up by one, beside
+      // the payment itself, so two devices paying the same balance at once
+      // cannot both succeed.
+      allow update: if ownsUpdate(resource.data, request.resource.data) && (
+                      isRestoreUpdate(resource.data, request.resource.data)
+                      || (may('stock.suppliers', false)
+                       && !affects(resource.data, request.resource.data, ['paymentRevision', 'lastPaymentId']))
+                      ||
+                      ((may('stock.receive', false) || may('stock.suppliers', false))
+                       && onlyAffects(resource.data, request.resource.data, ['paymentRevision', 'lastPaymentId'])
+                       && revisionIsNext(resource.data, request.resource.data, 'paymentRevision')
+                       && createdInThisWrite('supplierPayments', request.resource.data.get('lastPaymentId', '')))
+                    );
       allow delete: if isOwner() && owns(resource.data);
+    }
+
+    // A RETURN: how much of each line has come back, stamped in the same
+    // commit as the refund that paid for it, as the next return after the
+    // one the server holds — so two tills returning the same sale cannot
+    // both succeed — and never on a voided sale.
+    function saleReturnOk(existing, incoming) {
+      return onlyAffects(existing, incoming, ['returnedQuantities', 'returnCount', 'lastRefundId', 'lastReturnedAt'])
+             && revisionIsNext(existing, incoming, 'returnCount')
+             && existing.get('isVoided', false) != true
+             && createdInThisWrite('refunds', incoming.get('lastRefundId', ''));
+    }
+
+    // A VOID: once, and never after a return. A returned sale has already
+    // put its stock back and paid its money out; voiding it too restored
+    // the same stock twice and removed revenue a refund was netted against.
+    function saleVoidOk(existing, incoming) {
+      return onlyAffects(existing, incoming, ['isVoided', 'voidedAt', 'voidedBy'])
+             && incoming.isVoided == true
+             && existing.get('isVoided', false) != true
+             && existing.get('returnCount', 0) == 0
+             && existing.get('returnedQuantities', {}).size() == 0;
     }
 
     match /sales/{id} {
@@ -756,8 +934,23 @@ service cloud.firestore {
       // Selling is the counter's whole job, so it is ON by default — but
       // it is still a permission, so an owner can stand a cashier down
       // without deleting their account.
-      allow create: if owns(request.resource.data) && may('sales.record', true);
-      allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
+      //
+      // A sale is BORN a sale: not voided, not returned, sold by whoever is
+      // writing it, and never for less than nothing.
+      allow create: if owns(request.resource.data) && (isRestoreCreate(request.resource.data) || (may('sales.record', true)
+                    && request.resource.data.get('isVoided', false) != true
+                    && !request.resource.data.keys().hasAny(['returnedQuantities', 'returnCount', 'lastRefundId', 'voidedAt', 'voidedBy'])
+                    && request.resource.data.get('soldBy', request.auth.uid) == request.auth.uid
+                    && request.resource.data.get('totalAmount', 0) is number
+                    && request.resource.data.get('totalAmount', 0) >= 0));
+      allow update: if ownsUpdate(resource.data, request.resource.data) && (
+                      isRestoreUpdate(resource.data, request.resource.data)
+                      || (may('sales.return', false) && saleReturnOk(resource.data, request.resource.data))
+                      || (isOwner() && saleVoidOk(resource.data, request.resource.data))
+                      || (isOwner() && !affects(resource.data, request.resource.data,
+                            ['isVoided', 'voidedAt', 'voidedBy', 'returnedQuantities', 'returnCount', 'lastRefundId',
+                             'totalAmount', 'costOfGoodsSold', 'items', 'tenders', 'paymentMethod']))
+                    );
       allow delete: if isOwner() && owns(resource.data);
     }
 
@@ -777,10 +970,19 @@ service cloud.firestore {
     // cost or the source, which are the parts that are a record.
     match /productBatches/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data) && may('stock.receive', false);
+      //
+      // A production run of something with a shelf life creates its dated
+      // lot, so `stock.production` may create one — but only alongside the
+      // run that made it.
+      allow create: if owns(request.resource.data) && (
+                      may('stock.receive', false)
+                      || (may('stock.production', false)
+                          && createdInThisWrite('productions', request.resource.data.get('productionId', '')))
+                    );
       allow update: if ownsUpdate(resource.data, request.resource.data) && (
         isOwner() ||
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['remainingQuantity', 'updatedAt'])
+        (onlyAffects(resource.data, request.resource.data, ['remainingQuantity', 'updatedAt', 'lastMovement'])
+         && freshMovement(request.resource.data))
       );
       allow delete: if isOwner() && owns(resource.data);
     }
@@ -810,11 +1012,41 @@ service cloud.firestore {
       // else writes — cancelling stamps `cancelledAt`/`cancelledBy` and
       // never these — so they are the fields the rule watches, exactly as
       // `dailySessions` watches `closedAt`/`closedBy` below.
-      allow update: if ownsUpdate(resource.data, request.resource.data)
-                    && may('orders.update', true)
-                    && (
-                      may('orders.close', true)
-                      || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['saleId', 'closedAt'])
+      //
+      // THREE MORE THINGS, each a race this rule now settles:
+      //
+      //   A ticket that is no longer OPEN cannot be charged, cancelled or
+      //   amended again. Two devices charging the same ticket used to
+      //   write two sales; the second one's batch — sale, stock and all —
+      //   is now refused.
+      //
+      //   The whole-ticket `items` list moves only as the NEXT `revision`.
+      //   Two devices each saving the ticket used to overwrite each
+      //   other's additions.
+      //
+      //   The kitchen's own status belongs to `kitchen.update`. The
+      //   amendment branch could move it anywhere; now it may only send a
+      //   ticket back to the kitchen ('new') when items are added, or mark
+      //   it served as it is charged.
+      function orderKitchenOnly(existing, incoming) {
+        return onlyAffects(existing, incoming, ['kitchenStatus', 'kitchenStatusAt', 'updatedAt']);
+      }
+      allow update: if ownsUpdate(resource.data, request.resource.data) && (
+                      isRestoreUpdate(resource.data, request.resource.data)
+                      || (orderKitchenOnly(resource.data, request.resource.data)
+                       && resource.data.get('status', 'open') == 'open'
+                       && may('kitchen.update', true))
+                      ||
+                      (may('orders.update', true)
+                       && resource.data.get('status', 'open') == 'open'
+                       && (may('orders.close', true)
+                           || !affects(resource.data, request.resource.data, ['saleId', 'closedAt']))
+                       && (!affects(resource.data, request.resource.data, ['items'])
+                           || revisionIsNext(resource.data, request.resource.data, 'revision'))
+                       && (!affects(resource.data, request.resource.data, ['kitchenStatus'])
+                           || may('kitchen.update', true)
+                           || request.resource.data.kitchenStatus == 'new'
+                           || request.resource.data.get('status', 'open') == 'completed'))
                     );
       allow delete: if isOwner() && owns(resource.data);
     }
@@ -894,10 +1126,13 @@ service cloud.firestore {
          && !affects(resource.data, request.resource.data,
               ['voided', 'voidedAt', 'voidedBy', 'voidedByName', 'voidReason']))
         ||
-        // AMEND — everything else, and explicitly NOT a void or a move.
+        // AMEND — everything else, and explicitly NOT a void, a move, or
+        // the kitchen's own progress: an amendment that could also mark a
+        // line ready made `kitchen.update` a permission nobody needed.
         (may('orders.update', true)
          && !affects(resource.data, request.resource.data,
-              ['voided', 'voidedAt', 'voidedBy', 'voidedByName', 'voidReason', 'orderId']))
+              ['voided', 'voidedAt', 'voidedBy', 'voidedByName', 'voidReason', 'orderId',
+               'fulfillment', 'firedAt', 'readyAt', 'servedAt']))
       );
 
       // A line is VOIDED, never deleted — the void is the record of what
@@ -919,7 +1154,14 @@ service cloud.firestore {
     // This collection had no rule either, and its index has also shipped.
     match /waste/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data) && may('stock.waste', true);
+      // A production run that came out at nothing records its lost
+      // ingredients as waste in the same commit, under the production
+      // permission that recorded the run.
+      allow create: if owns(request.resource.data) && (
+                      may('stock.waste', true)
+                      || (may('stock.production', false)
+                          && createdInThisWrite('productions', request.resource.data.get('productionId', '')))
+                    );
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
@@ -943,18 +1185,67 @@ service cloud.firestore {
       allow delete: if isOwner() && owns(resource.data);
     }
 
+    // A REPAYMENT moves exactly three numbers on the credit sale — paid up,
+    // balance down, status — and by exactly the amount of the repayment
+    // document written beside it. `debtors.collect` used to permit any
+    // change at all: the total, the cost, the customer, the balance.
+    function repaymentOk(creditSaleId, existing, incoming) {
+      let repaymentId = incoming.get('lastRepaymentId', '');
+      let paid = getAfter(docAt('repayments', repaymentId)).data.get('amount', 0);
+      let balance = incoming.get('remainingBalance', 0);
+      return onlyAffects(existing, incoming, ['amountPaid', 'remainingBalance', 'status', 'revision', 'lastRepaymentId', 'updatedAt'])
+             && createdInThisWrite('repayments', repaymentId)
+             && getAfter(docAt('repayments', repaymentId)).data.get('creditSaleId', '') == creditSaleId
+             && paid is number && paid > 0
+             && existing.get('status', 'pending') in ['pending', 'partial']
+             && approxEqual(incoming.get('amountPaid', 0) - existing.get('amountPaid', 0), paid)
+             && approxEqual(existing.get('remainingBalance', 0) - balance, paid)
+             && balance >= -0.01
+             && ((balance <= 0.005 && incoming.get('status', '') == 'paid')
+                 || (balance > 0.005 && incoming.get('status', '') == 'partial'));
+    }
+
+    // Cancelling or refunding a credit sale is the owner's, once.
+    function creditReversalOk(existing, incoming) {
+      return onlyAffects(existing, incoming,
+               ['status', 'remainingBalance', 'revision', 'cancelledAt', 'cancelledBy', 'refundedAt', 'refundedBy', 'updatedAt'])
+             && incoming.get('status', '') in ['cancelled', 'refunded']
+             && !(existing.get('status', 'pending') in ['cancelled', 'refunded']);
+    }
+
     match /creditSales/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data) && may('sales.credit', true);
-      // A repayment reduces what is owed on the credit sale it is paying
-      // off, in the same batch as the repayment document.
-      allow update: if ownsUpdate(resource.data, request.resource.data) && may('debtors.collect', true);
+      // Born owing its whole total, with nothing yet paid.
+      allow create: if owns(request.resource.data) && (isRestoreCreate(request.resource.data) || (may('sales.credit', true)
+                    && request.resource.data.get('amountPaid', 0) == 0
+                    && request.resource.data.get('status', 'pending') == 'pending'
+                    && request.resource.data.get('totalAmount', 0) is number
+                    && request.resource.data.get('totalAmount', 0) >= 0
+                    && request.resource.data.get('remainingBalance', request.resource.data.get('totalAmount', 0))
+                       == request.resource.data.get('totalAmount', 0)
+                    && request.resource.data.get('soldBy', request.auth.uid) == request.auth.uid));
+      // Every change to what is owed is the NEXT revision, so two tills
+      // taking a payment at once cannot both write "owes 750".
+      allow update: if ownsUpdate(resource.data, request.resource.data) && (
+                      isRestoreUpdate(resource.data, request.resource.data)
+                      || (revisionIsNext(resource.data, request.resource.data, 'revision')
+                       && ((may('debtors.collect', true) && repaymentOk(id, resource.data, request.resource.data))
+                           || (isOwner() && creditReversalOk(resource.data, request.resource.data))))
+                      || (isOwner() && !affects(resource.data, request.resource.data,
+                            ['amountPaid', 'remainingBalance', 'status', 'revision', 'lastRepaymentId',
+                             'totalAmount', 'costOfGoodsSold', 'items']))
+                    );
       allow delete: if isOwner() && owns(resource.data);
     }
 
     match /repayments/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data) && may('debtors.collect', true);
+      // Only as the payment the credit sale beside it records.
+      allow create: if owns(request.resource.data) && (isRestoreCreate(request.resource.data) || (may('debtors.collect', true)
+                    && request.resource.data.get('amount', 0) is number
+                    && request.resource.data.get('amount', 0) > 0
+                    && getAfter(docAt('creditSales', request.resource.data.get('creditSaleId', 'none'))).data
+                         .get('lastRepaymentId', '') == id));
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
@@ -987,14 +1278,47 @@ service cloud.firestore {
     // not, so the boundary existed in the UI alone.
     match /refunds/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data) && may('sales.return', false);
+      //
+      // And a refund is always OF something: a return, stamped on the sale
+      // in the same commit, or the refund of a credit sale that this very
+      // commit marks refunded. A free-standing refund is money leaving the
+      // till with nothing to say why.
+      allow create: if owns(request.resource.data) && (isRestoreCreate(request.resource.data) || (may('sales.return', false)
+                    && request.resource.data.get('amount', 0) is number
+                    && request.resource.data.get('amount', 0) >= 0
+                    && (
+                      (request.resource.data.get('saleId', null) is string
+                       && getAfter(docAt('sales', request.resource.data.saleId)).data.get('lastRefundId', '') == id)
+                      ||
+                      (request.resource.data.get('creditSaleId', null) is string
+                       && getAfter(docAt('creditSales', request.resource.data.creditSaleId)).data.get('status', '') == 'refunded'
+                       && get(docAt('creditSales', request.resource.data.creditSaleId)).data.get('status', '') != 'refunded')
+                    )));
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
 
+    // The two expense categories that financials.js leaves OUT of profit,
+    // because their money is already counted elsewhere. Only the mirror a
+    // supplier payment writes may use them — otherwise any expense could
+    // be hidden from the books by giving it one of these names.
+    function reservedExpenseCategory(data) {
+      return data.get('category', '') is string
+             && data.get('category', '').trim().lower() in ['stock purchase', 'supplier payment'];
+    }
+
     match /expenses/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data) && mayRecordExpenses();
+      allow create: if owns(request.resource.data) && (
+                      isRestoreCreate(request.resource.data)
+                      || (!reservedExpenseCategory(request.resource.data) && mayRecordExpenses())
+                      ||
+                      // The supplier-payment mirror is authorised by the
+                      // payment it mirrors, not by the expense permission.
+                      (reservedExpenseCategory(request.resource.data)
+                       && createdInThisWrite('supplierPayments', request.resource.data.get('supplierPaymentId', ''))
+                       && (may('stock.receive', false) || may('stock.suppliers', false) || mayRecordExpenses()))
+                    );
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
@@ -1008,7 +1332,12 @@ service cloud.firestore {
 
     match /supplierPayments/{id} {
       allow read: if owns(resource.data);
-      allow create: if owns(request.resource.data) && may('stock.receive', false);
+      allow create: if owns(request.resource.data) && (isRestoreCreate(request.resource.data) || (
+                    (may('stock.receive', false) || may('stock.suppliers', false))
+                    && request.resource.data.get('amount', 0) is number
+                    && request.resource.data.get('amount', 0) > 0
+                    && getAfter(docAt('suppliers', request.resource.data.get('supplierId', 'none'))).data
+                         .get('lastPaymentId', '') == id));
       allow update: if isOwner() && ownsUpdate(resource.data, request.resource.data);
       allow delete: if isOwner() && owns(resource.data);
     }
@@ -1062,9 +1391,16 @@ service cloud.firestore {
     match /dailySessions/{id} {
       allow read: if owns(resource.data);
       allow create: if owns(request.resource.data) && may('day.open', true);
+      //
+      // Without `day.close` a session may be OPENED — its floats and who
+      // opened it — and nothing more. The counted cash, the expected
+      // figures and the variances are the close, and the close is
+      // `day.close`'s; the broader allowance let anyone rewrite a closed
+      // day's recorded variance.
       allow update: if ownsUpdate(resource.data, request.resource.data) && (
         may('day.close', false) ||
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['closedAt', 'closedBy'])
+        onlyAffects(resource.data, request.resource.data,
+          ['openingCashFloat', 'openingMpesaFloat', 'openedBy', 'openedAt', 'date', 'businessId'])
       );
       allow delete: if isOwner() && owns(resource.data);
     }

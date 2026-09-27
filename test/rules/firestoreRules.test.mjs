@@ -41,7 +41,7 @@ function token(uid) {
 const toValue = (v) =>
   typeof v === 'string' ? { stringValue: v }
   : typeof v === 'boolean' ? { booleanValue: v }
-  : typeof v === 'number' ? { integerValue: String(v) }
+  : typeof v === 'number' ? (Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v })
   : v === null || v === undefined ? { nullValue: null }
   : Array.isArray(v) ? { arrayValue: { values: v.map(toValue) } }
   : { mapValue: { fields: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, toValue(x)])) } };
@@ -73,6 +73,28 @@ async function write(uid, path, data) {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${token(uid)}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ fields: fields(data) }),
+  });
+  return res.status === 200;
+}
+
+/**
+ * A BATCHED write as `uid` — several documents in one atomic commit, which
+ * is how every sale, return, repayment and count reaches Firestore. Each
+ * entry is `[path, data]` (a merge, like the app's updates) or
+ * `[path, data, { create: true }]` (a whole new document). Returns true if
+ * the rules allowed the whole commit.
+ */
+async function commit(uid, writes) {
+  const body = {
+    writes: writes.map(([path, data, opts = {}]) => ({
+      update: { name: `projects/${PROJECT}/databases/(default)/documents/${path}`, fields: fields(data) },
+      ...(opts.create ? {} : { updateMask: { fieldPaths: Object.keys(data) } }),
+    })),
+  };
+  const res = await fetch(`http://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents:commit`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token(uid)}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
   return res.status === 200;
 }
@@ -112,7 +134,11 @@ test('a cashier may do the counter job by default', async () => {
   assert.ok(await write('cash1', 'sales/s1', { businessId: B, total: 100 }), 'sell');
   assert.ok(await write('cash1', 'creditSales/cs1', { businessId: B, total: 100 }), 'sell on credit');
   assert.ok(await write('cash1', 'customers/c2', { businessId: B, name: 'New' }), 'add a customer');
-  assert.ok(await write('cash1', 'repayments/rp1', { businessId: B, amount: 50 }), 'take a repayment');
+  await seed('creditSales/owed', { businessId: B, totalAmount: 100, amountPaid: 0, remainingBalance: 100, status: 'pending' });
+  assert.ok(await commit('cash1', [
+    ['creditSales/owed', { amountPaid: 50, remainingBalance: 50, status: 'partial', revision: 1, lastRepaymentId: 'rp1' }],
+    ['repayments/rp1', { businessId: B, creditSaleId: 'owed', amount: 50 }, { create: true }],
+  ]), 'take a repayment');
   assert.ok(await write('cash1', 'expenses/e1', { businessId: B, amount: 50 }), 'record an expense');
   assert.ok(await write('cash1', 'orders/o1', { businessId: B, status: 'open' }), 'open an order');
   assert.ok(await write('cash1', `dailySessions/${B}_x`, { businessId: B, date: 'x' }), 'open the counter');
@@ -129,15 +155,20 @@ test('a cashier may NOT do the owner\'s job by default', async () => {
   assert.ok(!await write('cash1', 'productBatches/b1', { businessId: B, batchNo: 'X' }), 'receive a batch');
 });
 
-test('a cashier may change a product\'s STOCK but nothing else about it', async () => {
+test('a cashier moves STOCK only with the sale that moved it, and nothing else about a product', async () => {
   await setup(null);
-  assert.ok(await write('cash1', 'products/p1', { stock: 9 }), 'a sale has to move the quantity');
+  assert.ok(!await write('cash1', 'products/p1', { stock: 9 }), 'a bare stock change has no cause (C01)');
+  assert.ok(await commit('cash1', [
+    ['sales/s1', { businessId: B, totalAmount: 100, soldBy: 'cash1' }, { create: true }],
+    ['products/p1', { stock: 9, lastMovement: { kind: 'sales', id: 's1' } }],
+  ]), 'a sale moves its own stock');
   assert.ok(!await write('cash1', 'products/p1', { sellingPrice: 1 }), 'a price is not a quantity');
 });
 
 test('a cashier may not close the day by default, and may still work the session', async () => {
   await setup(null);
-  assert.ok(await write('cash1', `dailySessions/${B}_2026-09-04`, { totalCashSales: 500 }), 'ordinary session updates');
+  assert.ok(await write('cash1', `dailySessions/${B}_2026-09-04`, { openingCashFloat: 500 }), 'opening the counter');
+  assert.ok(!await write('cash1', `dailySessions/${B}_2026-09-04`, { totalCashSales: 500 }), 'the close figures are the close\'s');
   assert.ok(!await write('cash1', `dailySessions/${B}_2026-09-04`, { closedAt: '2026-09-04T18:00:00Z' }), 'closing');
 });
 
@@ -296,7 +327,11 @@ test('only an owner sets the region, and only in a sane shape', async () => {
 
 test('a granted permission actually opens the write', async () => {
   await setup({ 'sales.return': true, 'catalogue.manage': true, 'stock.receive': true, 'day.close': true });
-  assert.ok(await write('cash1', 'refunds/r1', { businessId: B, amount: 100 }));
+  await seed('sales/sold', { businessId: B, totalAmount: 100 });
+  assert.ok(await commit('cash1', [
+    ['refunds/r1', { businessId: B, saleId: 'sold', amount: 100 }, { create: true }],
+    ['sales/sold', { returnedQuantities: { 0: 1 }, returnCount: 1, lastRefundId: 'r1' }],
+  ]));
   assert.ok(await write('cash1', 'products/p2', { businessId: B, name: 'New' }));
   assert.ok(await write('cash1', 'products/p1', { sellingPrice: 250 }));
   assert.ok(await write('cash1', 'purchases/pu1', { businessId: B, total: 500 }));
@@ -338,7 +373,11 @@ test('an owner holds everything, whatever the permission map says', async () => 
   assert.ok(await write('owner1', 'sales/s1', { businessId: B, total: 100 }));
   assert.ok(await write('owner1', 'expenses/e1', { businessId: B, amount: 10 }));
   assert.ok(await write('owner1', 'products/p3', { businessId: B, name: 'N' }));
-  assert.ok(await write('owner1', 'refunds/r1', { businessId: B, amount: 10 }));
+  await seed('sales/sold', { businessId: B, totalAmount: 100 });
+  assert.ok(await commit('owner1', [
+    ['refunds/r1', { businessId: B, saleId: 'sold', amount: 10 }, { create: true }],
+    ['sales/sold', { returnedQuantities: { 0: 1 }, returnCount: 1, lastRefundId: 'r1' }],
+  ]));
   assert.ok(await write('owner1', `dailySessions/${B}_2026-09-04`, { closedAt: 'x' }));
 });
 
@@ -489,25 +528,10 @@ test('an owner may store the category diff; a cashier may not', async () => {
 
 const DOC_ROOT = `projects/${PROJECT}/databases/(default)/documents`;
 
-/**
- * Several writes committed ATOMICALLY as `uid`, which is what sign-up
- * actually does. It matters here because the business does not exist yet
- * when the profile write is evaluated, so the rule has to reason about the
- * state the commit is proposing rather than the state on disk.
- */
-async function commit(uid, writes) {
-  const res = await fetch(`${BASE}:commit`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token(uid)}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      writes: writes.map(([path, data]) => ({
-        update: { name: `${DOC_ROOT}/${path}`, fields: fields(data) },
-        updateMask: { fieldPaths: Object.keys(data) },
-      })),
-    }),
-  });
-  return res.status === 200;
-}
+// Sign-up is several writes committed ATOMICALLY — see commit() above.
+// It matters here because the business does not exist yet when the
+// profile write is evaluated, so the rule has to reason about the state
+// the commit is proposing rather than the state on disk.
 
 const freeSub = { plan: 'free', status: 'active', expiresAt: null };
 
@@ -1037,4 +1061,190 @@ test('the M-Pesa lock and settlement claim are Worker-only, in both directions',
   assert.ok(!await write('owner1', `paymentLocks/${B}`, { reference: 'fbm-x', plan: 'lifetime' }));
   assert.ok(!await read('owner1', `paymentLocks/${B}`));
   assert.ok(!await read('owner1', 'paymentSettlements/fbm-1'));
+});
+
+// ══ Business transitions (audit C01, C02, H02, H18, M01) ═══════════════
+//
+// A permission says WHO may act. These say WHAT a legitimate act looks
+// like: a stock change arrives with the document that caused it, a debt
+// goes down by exactly the repayment beside it, and a document two devices
+// can race on accepts only the next revision.
+
+const sale = (id, extra = {}) => [`sales/${id}`, { businessId: B, totalAmount: 100, soldBy: 'cash1', ...extra }, { create: true }];
+
+test('C01: a stock change cannot reuse an old movement, or go the wrong way', async () => {
+  await setup(null);
+  await seed('sales/old', { businessId: B, totalAmount: 100 });
+  assert.ok(!await write('cash1', 'products/p1', { stock: 500, lastMovement: { kind: 'sales', id: 'old' } }),
+    'a movement that already exists explains nothing new');
+  assert.ok(!await commit('cash1', [sale('s2'), ['products/p1', { stock: 500, lastMovement: { kind: 'sales', id: 's2' } }]]),
+    'a sale cannot ADD stock');
+  assert.ok(!await commit('cash1', [sale('s3'), ['products/p1', { stock: 9, costPrice: 1, lastMovement: { kind: 'sales', id: 's3' } }]]),
+    'a sale cannot reprice a product');
+});
+
+test('C01: a large cart moves every product in one commit, within the rules\' read budget', async () => {
+  await setup(null);
+  const products = Array.from({ length: 12 }, (_, i) => `bulk${i}`);
+  for (const id of products) await seed(`products/${id}`, { businessId: B, name: id, stock: 10 });
+  assert.ok(await commit('cash1', [
+    sale('big'),
+    ...products.map((id) => [`products/${id}`, { stock: 9, lastMovement: { kind: 'sales', id: 'big' } }]),
+  ]));
+});
+
+test('C01: debtors.collect cannot rewrite a credit sale, only pay it down by the repayment beside it', async () => {
+  await setup(null);
+  await seed('creditSales/cs', { businessId: B, totalAmount: 1000, costOfGoodsSold: 600, amountPaid: 0, remainingBalance: 1000, status: 'pending' });
+  assert.ok(!await write('cash1', 'creditSales/cs', { remainingBalance: 0, status: 'paid', revision: 1 }), 'erase a debt');
+  assert.ok(!await write('cash1', 'creditSales/cs', { totalAmount: 1, revision: 1 }), 'rewrite the total');
+  assert.ok(!await commit('cash1', [
+    ['creditSales/cs', { amountPaid: 250, remainingBalance: 0, status: 'paid', revision: 1, lastRepaymentId: 'r1' }],
+    ['repayments/r1', { businessId: B, creditSaleId: 'cs', amount: 250 }, { create: true }],
+  ]), 'pay 250 and clear 1,000');
+  assert.ok(!await write('cash1', 'repayments/free', { businessId: B, creditSaleId: 'cs', amount: 250 }), 'a repayment with no debt movement');
+  assert.ok(await commit('cash1', [
+    ['creditSales/cs', { amountPaid: 250, remainingBalance: 750, status: 'partial', revision: 1, lastRepaymentId: 'r1' }],
+    ['repayments/r1', { businessId: B, creditSaleId: 'cs', amount: 250 }, { create: true }],
+  ]), 'a real repayment');
+});
+
+test('C02: two tills taking the same debt payment — the second is refused', async () => {
+  await setup(null);
+  await seed('creditSales/cs', { businessId: B, totalAmount: 1000, amountPaid: 0, remainingBalance: 1000, status: 'pending' });
+  const pay = (rid) => commit('cash1', [
+    ['creditSales/cs', { amountPaid: 250, remainingBalance: 750, status: 'partial', revision: 1, lastRepaymentId: rid }],
+    ['repayments/' + rid, { businessId: B, creditSaleId: 'cs', amount: 250 }, { create: true }],
+  ]);
+  assert.ok(await pay('first'));
+  assert.ok(!await pay('second'), 'both read "owes 1,000"; only one may write "owes 750"');
+});
+
+test('C02: two tills returning the same sale — the second is refused', async () => {
+  await setup({ 'sales.return': true });
+  await seed('sales/s', { businessId: B, totalAmount: 100 });
+  const ret = (rid) => commit('cash1', [
+    [`refunds/${rid}`, { businessId: B, saleId: 's', amount: 100 }, { create: true }],
+    ['sales/s', { returnedQuantities: { 0: 1 }, returnCount: 1, lastRefundId: rid }],
+  ]);
+  assert.ok(await ret('ra'));
+  assert.ok(!await ret('rb'));
+  assert.ok(!await write('cash1', 'refunds/loose', { businessId: B, saleId: 's', amount: 100 }), 'a refund of nothing');
+});
+
+test('C02: a ticket is charged once, and a stale ticket save is refused', async () => {
+  await setup(null);
+  await seed('orders/t', { businessId: B, status: 'open', items: [], revision: 0 });
+  const charge = (sid) => commit('cash1', [
+    sale(sid),
+    ['orders/t', { status: 'completed', saleId: sid, kitchenStatus: 'served' }],
+  ]);
+  assert.ok(await charge('c1'));
+  assert.ok(!await charge('c2'), 'the second device\'s sale is refused with the close');
+
+  await seed('orders/u', { businessId: B, status: 'open', items: [], revision: 3 });
+  assert.ok(await write('cash1', 'orders/u', { items: [{ productId: 'p1', quantity: 1 }], revision: 4 }));
+  assert.ok(!await write('cash1', 'orders/u', { items: [{ productId: 'p2', quantity: 1 }], revision: 4 }), 'stale revision');
+});
+
+test('C02: two simultaneous stock counts of one product — the second is refused', async () => {
+  await setup({ 'stock.count': true });
+  const count = (aid, stock) => commit('cash1', [
+    [`stockAdjustments/${aid}`, { businessId: B, productId: 'p1', difference: 2 }, { create: true }],
+    ['products/p1', { stock, stockCountRevision: 1, lastMovement: { kind: 'stockAdjustments', id: aid } }],
+  ]);
+  assert.ok(await count('a1', 12));
+  assert.ok(!await count('a2', 14));
+});
+
+test('H02: a sale that has been returned cannot also be voided, and a void happens once', async () => {
+  await setup(null);
+  await seed('sales/returned', { businessId: B, totalAmount: 100, returnedQuantities: { 0: 1 }, returnCount: 1 });
+  assert.ok(!await write('owner1', 'sales/returned', { isVoided: true }));
+  await seed('sales/plain', { businessId: B, totalAmount: 100, isVoided: false });
+  assert.ok(await write('owner1', 'sales/plain', { isVoided: true }));
+  assert.ok(!await write('owner1', 'sales/plain', { isVoided: true, voidedBy: 'again' }));
+  assert.ok(!await write('cash1', 'sales/x', { businessId: B, totalAmount: 100, isVoided: true }), 'born voided');
+});
+
+test('H18: another business cannot take over a barcode claim or initialise settings', async () => {
+  await setup({ 'catalogue.manage': true });
+  await seed('users/own2', { uid: 'own2', businessId: OTHER, role: 'owner', active: true });
+  await seed(`barcodeIndex/${B}__6001`, { businessId: B, barcode: '6001', productId: 'p1' });
+  assert.ok(!await write('own2', `barcodeIndex/${B}__6001`, { businessId: OTHER, productId: 'theirs' }), 'cross-tenant takeover');
+  assert.ok(!await write('cash1', `barcodeIndex/${B}__6001`, { productId: 'another' }), 'a live claim cannot move to another product');
+  assert.ok(!await write('own2', `barcodeIndex/${B}__7001`, { businessId: OTHER, productId: 'x' }), 'a key in someone else\'s namespace');
+
+  await clearDatabase();
+  await seed('users/stranger', { uid: 'stranger', businessId: 'MINE', role: 'owner', active: true });
+  await seed('businesses/VICTIM', { createdBy: 'victim' });
+  assert.ok(!await write('stranger', 'businessSettings/VICTIM', { businessId: 'VICTIM', cashierPermissions: { 'sales.return': true } }));
+});
+
+test('M01: a granted permission completes its WHOLE workflow', async () => {
+  // Receiving stock reprices the product in the same commit.
+  await setup({ 'stock.receive': true });
+  assert.ok(await commit('cash1', [
+    ['purchases/pu', { businessId: B, productId: 'p1', totalCost: 500 }, { create: true }],
+    ['products/p1', { stock: 20, costPrice: 55, supplierId: 'sup', lastMovement: { kind: 'purchases', id: 'pu' } }],
+  ]), 'receive stock with stock.receive alone');
+
+  // Paying a supplier writes its expense mirror without the expense permission.
+  await setup({ 'stock.receive': true, 'expenses.record': false });
+  await seed('suppliers/sup', { businessId: B, name: 'Alpha' });
+  assert.ok(await commit('cash1', [
+    ['supplierPayments/sp', { businessId: B, supplierId: 'sup', amount: 300 }, { create: true }],
+    ['expenses/mirror', { businessId: B, category: 'Supplier Payment', amount: 300, supplierPaymentId: 'sp' }, { create: true }],
+    ['suppliers/sup', { paymentRevision: 1, lastPaymentId: 'sp' }],
+  ]), 'pay a supplier');
+
+  // Returning a sale restores its stock and stamps the sale.
+  await setup({ 'sales.return': true });
+  await seed('sales/s', { businessId: B, totalAmount: 100 });
+  assert.ok(await commit('cash1', [
+    ['refunds/rf', { businessId: B, saleId: 's', amount: 100 }, { create: true }],
+    ['sales/s', { returnedQuantities: { 0: 1 }, returnCount: 1, lastRefundId: 'rf' }],
+    ['products/p1', { stock: 11, lastMovement: { kind: 'refunds', id: 'rf' } }],
+  ]), 'return a sale');
+});
+
+test('an ordinary expense may not hide itself under a supplier-payment category', async () => {
+  await setup(null);
+  assert.ok(!await write('cash1', 'expenses/hidden', { businessId: B, category: 'Supplier Payment', amount: 5000 }));
+  assert.ok(await write('cash1', 'expenses/taxi', { businessId: B, category: 'Transport', amount: 200 }));
+});
+
+test('an amendment cannot move a ticket line through the kitchen', async () => {
+  await setup({ 'kitchen.update': false });
+  await seedLine();
+  assert.ok(!await write('cash1', 'orderLines/l1', { quantity: 2, fulfillment: 'ready' }));
+  assert.ok(await write('cash1', 'orderLines/l1', { quantity: 2 }));
+});
+
+test('a backup restore writes history as it was — for the owner only', async () => {
+  await setup(null);
+  const at = '2026-09-27T10:00:00Z';
+  assert.ok(await commit('owner1', [
+    ['sales/old', { businessId: B, totalAmount: 100, soldBy: 'someone-else', isVoided: true, restoredAt: at }, { create: true }],
+    ['creditSales/paid', { businessId: B, totalAmount: 100, amountPaid: 100, remainingBalance: 0, status: 'paid', restoredAt: at }, { create: true }],
+    ['refunds/oldr', { businessId: B, saleId: 'gone', amount: 10, restoredAt: at }, { create: true }],
+    ['repayments/oldp', { businessId: B, creditSaleId: 'paid', amount: 100, restoredAt: at }, { create: true }],
+  ]), 'an owner restores');
+  assert.ok(await write('owner1', 'creditSales/paid', { amountPaid: 50, remainingBalance: 50, restoredAt: '2026-09-28T10:00:00Z' }),
+    'restoring over an existing record');
+  assert.ok(!await write('cash1', 'sales/fake', { businessId: B, totalAmount: 100, isVoided: true, restoredAt: at }),
+    'a cashier cannot pass a write off as a restore');
+  assert.ok(!await write('cash1', 'creditSales/paid', { remainingBalance: 0, restoredAt: 'x' }));
+});
+
+test('a padded reserved category is still reserved, and a failed bake records its loss', async () => {
+  await setup(null);
+  assert.ok(!await write('cash1', 'expenses/padded', { businessId: B, category: ' supplier payment ', amount: 50 }));
+
+  await setup({ 'stock.production': true, 'stock.waste': false });
+  assert.ok(await commit('cash1', [
+    ['productions/run', { businessId: B, productId: 'p1', quantity: 0 }, { create: true }],
+    ['waste/loss', { businessId: B, productId: 'p1', totalCost: 400, productionId: 'run' }, { create: true }],
+  ]));
+  assert.ok(!await write('cash1', 'waste/other', { businessId: B, productId: 'p1', totalCost: 1 }), 'waste on its own is still stock.waste');
 });
