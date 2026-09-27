@@ -226,7 +226,7 @@ export async function handleGooglePlayRtdn(request, env, url) {
     return errorResponse('Forbidden.', 403);
   }
   const envelope = await request.json().catch(() => null);
-  let note = null;
+  let note;
   try {
     note = JSON.parse(atob(envelope?.message?.data || ''));
   } catch {

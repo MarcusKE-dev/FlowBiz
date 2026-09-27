@@ -15,7 +15,7 @@
     "emulators": "firebase emulators:start --only firestore,auth --project flowbiz-audit-test",
     "build:web": "vite build",
     "build:android": "vite build --mode android && cap sync android",
-    "android:assets": "node scripts/android/generate-assets.mjs && capacitor-assets generate --android --assetPath resources --iconBackgroundColor '#286EB6' --splashBackgroundColor '#F4F6F9'",
+    "android:assets": "node scripts/android/generate-assets.mjs && capacitor-assets generate --android --assetPath resources --iconBackgroundColor '#286EB6' --splashBackgroundColor '#F4F6F9' && git checkout -- android/app/src/main/res/mipmap-anydpi-v26",
     "android:open": "cap open android",
     "android:debug": "npm run build:android && cd android && ./gradlew assembleDebug",
     "android:bundle": "npm run build:android && cd android && ./gradlew bundleRelease",

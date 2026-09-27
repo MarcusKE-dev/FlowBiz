@@ -46,7 +46,7 @@ import {
   queryCollection,
 } from '../lib/firestore.js';
 import { recordOpsEvent, EVENT_TYPES } from '../lib/opsEvents.js';
-import { PLAN_PRICES, isPurchasablePlan } from '../lib/licensing.js';
+import { isPurchasablePlan } from '../lib/licensing.js';
 import {
   MPESA_IN_FLIGHT_MS,
   MPESA_VERIFY_INTERVAL_MS,

@@ -276,6 +276,14 @@
   .bottom-nav-safe {
     padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
   }
+
+  /* ANDROID APP: while the on-screen keyboard is up, the fixed bottom nav
+     would ride on top of it and cover the field being typed into and the
+     checkout buttons under it. NativeShell toggles this class from the
+     Keyboard plugin's events; in a browser it is never set. */
+  .keyboard-open .bottom-nav-safe {
+    display: none;
+  }
 }
 
 @layer utilities {
