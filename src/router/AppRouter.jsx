@@ -8,6 +8,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { prefetchRoutes } from './routePrefetch';
 import RequireOpenSession from '../components/common/RequireOpenSession';
 import LandingPage from '../pages/LandingPage';
+import { isDemoMode, enterDemoMode } from '../demo/demoMode';
+import { resetDemoData, demoProfileId } from '../demo/seedData';
+import { appPath } from '../lib/appUrl';
 
 // Admin Control Center
 import AdminProtectedRoute from '../components/admin/AdminProtectedRoute';
@@ -200,6 +203,24 @@ function RoutePrefetcher() {
   return null;
 }
 
+function DemoProfileRoute({ profileId }) {
+  useEffect(() => {
+    if (!isDemoMode()) {
+      enterDemoMode();
+    }
+    if (demoProfileId() !== profileId) {
+      resetDemoData(profileId);
+      window.location.href = appPath('/counter');
+    }
+  }, [profileId]);
+
+  const { isAdmin } = useAuth();
+  if (demoProfileId() !== profileId) {
+    return <AuthResolving />;
+  }
+  return <Navigate to={isAdmin ? '/dashboard' : '/counter'} replace />;
+}
+
 export default function AppRouter() {
   return (
     <Suspense fallback={<LoadingSpinner label="Loading..." />}>
@@ -207,6 +228,14 @@ export default function AppRouter() {
       <Routes>
         {/* Root Route */}
         <Route path="/" element={<RootRoute />} />
+
+        {/* Direct Demo Entry Routes */}
+        <Route path="/restaurant" element={<DemoProfileRoute profileId="RESTAURANT" />} />
+        <Route path="/demo/restaurant" element={<DemoProfileRoute profileId="RESTAURANT" />} />
+        <Route path="/shop" element={<DemoProfileRoute profileId="GENERAL_RETAIL" />} />
+        <Route path="/demo/shop" element={<DemoProfileRoute profileId="GENERAL_RETAIL" />} />
+        <Route path="/general-retail" element={<DemoProfileRoute profileId="GENERAL_RETAIL" />} />
+        <Route path="/demo/general-retail" element={<DemoProfileRoute profileId="GENERAL_RETAIL" />} />
 
         {/* Public Authentication & Setup */}
         <Route path="/setup" element={<Setup />} />
