@@ -72,6 +72,8 @@ const INTENTIONAL_ESCAPES = {
   ],
   'src/components/landing/HeroSection.jsx': [
     '/demo/',   // the landing page's way IN to the demo
+    '/demo/shop',
+    '/demo/restaurant',
   ],
 };
 

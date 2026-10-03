@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { CheckCircle2, ArrowRight } from 'lucide-react';
+import { CheckCircle2, ArrowRight, Store, Utensils } from 'lucide-react';
 
 const HERO_PHOTO_URL = '/hero-photo.webp';
 
@@ -105,27 +105,63 @@ export function HeroSection() {
 
       {/* Demo Section - Matched exact classes from HowItWorks section */}
       <div id="demo" className="py-16 md:py-24 border-t border-line scroll-mt-14">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-8">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-8">
           
           <div className="space-y-4 sm:space-y-5">
             <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-ink-900 tracking-tight">
               See FlowBiz in action
             </h2>
             <p className="text-body sm:text-base text-ink-600 leading-relaxed max-w-2xl mx-auto">
-              A working account, preloaded with sample products, sales, and customers. Try the
-              counter, the dashboard, credit sales, and M-Pesa reconciliation.
+              Working demo accounts preloaded with sample products, trading history, and business workflows. Select a demo trade below to try it instantly.
               <br className="hidden sm:inline" /> Nothing you do here touches a real business.
             </p>
           </div>
 
-          <div className="pt-2 flex flex-col items-center gap-3">
-            <a
-              href="/demo/"
-              className="inline-flex items-center justify-center gap-2 bg-primary-600 hover:bg-primary-500 text-white px-8 py-3.5 rounded-panel font-bold text-body shadow-md shadow-primary-600/20 hover:shadow-lg hover:shadow-primary-600/30 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0"
-            >
-              <span>Try the Free Demo</span>
-              <ArrowRight className="w-4 h-4" />
-            </a>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-3xl mx-auto pt-2 text-left">
+            {/* General Shop Demo Card */}
+            <div className="bg-white p-6 rounded-panel border border-line flex flex-col justify-between space-y-4 hover:border-primary-500/40 hover:shadow-md transition-all">
+              <div className="space-y-2.5">
+                <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-100 text-ink-700 text-xs font-semibold">
+                  <Store className="w-3.5 h-3.5 text-primary-600" />
+                  <span>General Retail</span>
+                </div>
+                <h3 className="text-lg font-bold text-ink-900">Shops & Retail Demo</h3>
+                <p className="text-xs sm:text-sm text-ink-600 leading-relaxed">
+                  Electronics counter with stock control, suppliers, credit customers, and ten weeks of trading history.
+                </p>
+              </div>
+              <a
+                href="/demo/shop"
+                className="inline-flex items-center justify-center gap-2 bg-primary-600 hover:bg-primary-500 text-white px-5 py-3 rounded-panel font-bold text-sm shadow-sm transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0"
+              >
+                <span>Try Shops Demo</span>
+                <ArrowRight className="w-4 h-4" />
+              </a>
+            </div>
+
+            {/* Restaurant Demo Card */}
+            <div className="bg-white p-6 rounded-panel border border-line flex flex-col justify-between space-y-4 hover:border-primary-500/40 hover:shadow-md transition-all">
+              <div className="space-y-2.5">
+                <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 text-xs font-semibold">
+                  <Utensils className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Restaurant & Grill</span>
+                </div>
+                <h3 className="text-lg font-bold text-ink-900">Restaurant Demo</h3>
+                <p className="text-xs sm:text-sm text-ink-600 leading-relaxed">
+                  Ngong Road Grill with floor plan, live tables, kitchen display screen, and recipes costed from raw ingredients.
+                </p>
+              </div>
+              <a
+                href="/demo/restaurant"
+                className="inline-flex items-center justify-center gap-2 bg-ink-900 hover:bg-ink-800 text-white px-5 py-3 rounded-panel font-bold text-sm shadow-sm transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0"
+              >
+                <span>Try Restaurant Demo</span>
+                <ArrowRight className="w-4 h-4" />
+              </a>
+            </div>
+          </div>
+
+          <div className="pt-2">
             <span className="text-secondary text-ink-500 text-xs sm:text-sm">
               No sign-in needed &middot; Free demo trial &middot; Nothing is saved to a real account
             </span>
